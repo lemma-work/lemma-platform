@@ -469,3 +469,52 @@ async def test_slack_url_verification_echoes_nothing_but_a_short_token(
     with pytest.raises(SurfaceWebhookAuthenticationError) as refused:
         await _handshake(_slack_handshake(challenge), None)
     assert refused.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_surface_webhook_body_limit_rejects_declared_oversize_before_reading(
+    monkeypatch,
+):
+    from app.modules.agent_surfaces.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_SURFACE_WEBHOOK_BODY_BYTES", 8)
+    request, receive_calls = _streaming_request(
+        [b"123456789"],
+        headers=[(b"content-length", b"9")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await webhook_controller._read_surface_webhook_body(
+            request, endpoint="test"
+        )
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 0
+
+
+@pytest.mark.asyncio
+async def test_surface_webhook_body_limit_bounds_chunked_requests(monkeypatch):
+    from app.modules.agent_surfaces.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_SURFACE_WEBHOOK_BODY_BYTES", 8)
+    request, receive_calls = _streaming_request([b"12345678", b"9", b"unread"])
+
+    with pytest.raises(HTTPException) as rejected:
+        await webhook_controller._read_surface_webhook_body(
+            request, endpoint="test"
+        )
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 2
+
+
+@pytest.mark.asyncio
+async def test_surface_webhook_body_limit_accepts_the_exact_boundary(monkeypatch):
+    from app.modules.agent_surfaces.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_SURFACE_WEBHOOK_BODY_BYTES", 8)
+    request, _ = _streaming_request([b"1234", b"5678"])
+
+    assert await webhook_controller._read_surface_webhook_body(
+        request, endpoint="test"
+    ) == b"12345678"
