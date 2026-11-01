@@ -153,3 +153,22 @@ async def test_resend_bounce_deactivates_only_permanent_failures(
 
     assert response.status_code == 204
     assert deactivated == expected
+
+
+@pytest.mark.parametrize("signature", ["sha256=ü", "sha256=" + chr(0xD800)])
+def test_bounce_webhook_rejects_unencodable_signature_without_raising(signature):
+    """Attacker-controlled signature text must become a 401, not an unhandled 500.
+
+    HTTP headers can contain non-ASCII Latin-1 bytes, and the comparison helper
+    also treats lone surrogates from direct callers as a mismatch. The shared
+    constant-time comparator handles both without raising TypeError.
+    """
+    with pytest.raises(HTTPException) as invalid:
+        verify_bounce_signature(
+            timestamp=str(int(time.time())),
+            signature=signature,
+            body=b'{}',
+            secret="bounce-secret",
+        )
+    assert invalid.value.status_code == 401
+    assert invalid.value.detail == "Invalid webhook signature"
