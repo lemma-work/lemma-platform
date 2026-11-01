@@ -89,7 +89,7 @@ describe("readSSE", () => {
 
   it("ignores event fields containing a NUL character", async () => {
     const input = new TextEncoder().encode(
-      "event: first\nevent: invalid\\u0000name\\ndata: ready\\n\\n",
+      "event: first\nevent: invalid\u0000name\ndata: ready\n\n",
     );
 
     const events = await collect(readable([input]));
