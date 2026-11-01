@@ -46,14 +46,21 @@ async def queue_wait_if_full(
     engine: "WorkflowEngine", flow: WorkflowEntity, run: WorkflowRunEntity
 ) -> WaitRequest | None:
     """The wait that parks a new run, or None when it may start now."""
-    if flow.max_concurrent_runs is None:
+    # The caller may have loaded flow before a concurrent workflow edit.
+    # Read the limit from the row we lock, not that potentially stale snapshot:
+    # in particular, a stale None must not bypass a newly configured cap.
+    # NO KEY UPDATE is compatible with the run's FK KEY SHARE lock.
+    locked_flow = await engine.flow_repo.get_for_update(flow.id)
+    if locked_flow is None or locked_flow.max_concurrent_runs is None:
         return None
-    # Locked so two starts cannot both see the last free place.
-    await engine.flow_repo.get_for_update(flow.id)
-    admitted = await engine.run_repo.count_admitted(flow.id, excluding=run.id)
-    if admitted < flow.max_concurrent_runs:
+    admitted = await engine.run_repo.count_admitted(
+        locked_flow.id, excluding=run.id
+    )
+    if admitted < locked_flow.max_concurrent_runs:
         return None
-    return WaitRequest(wait_type=WorkflowRunWaitType.QUEUED, external_ref=str(flow.id))
+    return WaitRequest(
+        wait_type=WorkflowRunWaitType.QUEUED, external_ref=str(locked_flow.id)
+    )
 
 
 async def admit_queued_runs(engine: "WorkflowEngine", flow_id: UUID) -> int:
