@@ -43,11 +43,11 @@ def strip_jsonc(text: str) -> str:
         if ch == "/" and i + 1 < n and text[i + 1] == "*":
             comment_start = i
             while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
-                out.append("\\n" if text[i] == "\\n" else " ")
+                out.append("\n" if text[i] == "\n" else " ")
                 i += 1
             if i >= n:
-                line = text.count("\\n", 0, comment_start) + 1
-                last_newline = text.rfind("\\n", 0, comment_start)
+                line = text.count("\n", 0, comment_start) + 1
+                last_newline = text.rfind("\n", 0, comment_start)
                 column = comment_start - last_newline
                 raise ValueError(
                     f"Unterminated block comment at line {line}, column {column}."
