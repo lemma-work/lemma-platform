@@ -46,7 +46,7 @@ async def test_missing_epoch_keys_are_seeded_with_decimal_values(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_epoch_repair_does_not_overwrite_a_concurrent_permission_bump(
+async def test_epoch_repair_does_not_overwrite_a_concurrent_repair(
     monkeypatch,
 ):
     keys = ["authz:epoch:global", "authz:epoch:pod:1", "authz:epoch:files:1"]
@@ -60,7 +60,7 @@ async def test_epoch_repair_does_not_overwrite_a_concurrent_permission_bump(
             return await redis.mget(requested_keys)
 
         async def eval(self, script: str, numkeys: int, *args: object):
-            # Model a concurrent permission mutation after MGET but before the
+            # Model another process repairing the epoch after MGET but before the
             # repair script reaches Redis.
             await redis.set(keys[0], b"789")
             return await redis.eval(script, numkeys, *args)
