@@ -264,6 +264,7 @@ class TestSourceEventId:
         the handler, while an id derived from `None` would silently collapse
         every such delivery onto one."""
         assert source_event_id("push", "1", 2, {}) is None
+        assert source_event_id("push", "1", 2, {"after": "sha-one"}) is None
         assert source_event_id("unknown_event", "1", 2, {"after": "x"}) is None
 
 
