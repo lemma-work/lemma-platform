@@ -42,17 +42,22 @@ async def _read_bounded_body(request: Request, *, source: str) -> bytes:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid webhook content length",
             )
-        declared_size = int(content_length)
-        if declared_size > MAX_WEBHOOK_BODY_BYTES:
+        normalized_length = content_length.lstrip("0") or "0"
+        maximum_length = str(MAX_WEBHOOK_BODY_BYTES)
+        if len(normalized_length) > len(maximum_length) or (
+            len(normalized_length) == len(maximum_length)
+            and normalized_length > maximum_length
+        ):
             logger.warning(
                 "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
                 source=source,
-                size=declared_size,
+                size=normalized_length,
             )
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="Webhook payload is too large",
             )
+        declared_size = int(normalized_length)
 
     body = bytearray()
     async for chunk in request.stream():
