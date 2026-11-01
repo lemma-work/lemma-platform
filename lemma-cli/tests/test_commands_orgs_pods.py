@@ -167,3 +167,55 @@ def test_pods_list_json_output(monkeypatch, org_flag):
     assert "items" in payload
     assert any(item["id"] == POD_UUID for item in payload["items"])
     assert fake_pods_obj._calls["list"]["org_id"] == ORG_UUID
+
+
+def test_resolve_pod_id_stops_when_the_server_repeats_a_page_token(monkeypatch):
+    class RepeatingPods:
+        def __init__(self):
+            self.tokens = []
+
+        def list(self, *, org_id=None, limit=100, page_token=None):
+            self.tokens.append(page_token)
+            return {
+                "items": [{"id": f"pod-{len(self.tokens)}", "name": "other"}],
+                "next_page_token": "cursor-a",
+            }
+
+    client = SimpleNamespace(pods=RepeatingPods())
+    state = SimpleNamespace(config={"defaults": {"org_id": ORG_UUID}})
+
+    def fail(message):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(pods, "fail", fail)
+
+    with pytest.raises(RuntimeError, match="repeated page token 'cursor-a'"):
+        pods.resolve_pod_id(client, state, "wanted-pod")
+
+    assert client.pods.tokens == [None, "cursor-a"]
+
+
+def test_resolve_pod_id_still_follows_distinct_pages(monkeypatch):
+    class TwoPagePods:
+        def __init__(self):
+            self.tokens = []
+
+        def list(self, *, org_id=None, limit=100, page_token=None):
+            self.tokens.append(page_token)
+            if page_token is None:
+                return {
+                    "items": [{"id": "pod-other", "name": "other"}],
+                    "next_page_token": "cursor-a",
+                }
+            return {
+                "items": [{"id": "pod-target", "name": "wanted-pod"}],
+                "next_page_token": None,
+            }
+
+    client = SimpleNamespace(pods=TwoPagePods())
+    state = SimpleNamespace(config={"defaults": {"org_id": ORG_UUID}})
+
+    result = pods.resolve_pod_id(client, state, "wanted-pod")
+
+    assert result == "pod-target"
+    assert client.pods.tokens == [None, "cursor-a"]
