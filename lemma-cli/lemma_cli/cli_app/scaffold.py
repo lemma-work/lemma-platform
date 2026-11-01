@@ -36,8 +36,22 @@ class ScaffoldResult:
 # name helpers
 # --------------------------------------------------------------------------- #
 def _ascii_name(name: str) -> str:
-    """Normalize accented Latin names before deriving ASCII resource identifiers."""
-    return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    """Transliterate common Latin letters before deriving ASCII identifiers.
+
+    NFKD handles combining accents (é -> e), but several Latin letters do not
+    decompose (for example ł, ø, æ, and ß). Map those explicitly so names do
+    not silently lose their leading or distinguishing characters.
+    """
+    special = str.maketrans(
+        {
+            "Æ": "AE", "æ": "ae", "Œ": "OE", "œ": "oe",
+            "Ø": "O", "ø": "o", "Ł": "L", "ł": "l",
+            "Đ": "D", "đ": "d", "Ð": "D", "ð": "d",
+            "Þ": "Th", "þ": "th", "ß": "ss",
+        }
+    )
+    normalized = unicodedata.normalize("NFKD", name.translate(special))
+    return normalized.encode("ascii", "ignore").decode("ascii")
 
 
 def slugify(name: str) -> str:
@@ -281,22 +295,46 @@ README_MD = """# __NAME__
 
 TODO: what this pod does and who operates it.
 
-## Build loop
+## First run
+
+Authenticate and select the organization and pod that should receive this bundle.
+These selections are saved as your defaults for later CLI commands.
+
 ```bash
-lemma pods import ./__NAME__ --dry-run   # validate
-lemma pods import ./__NAME__             # upsert by resource name
+lemma auth login
+lemma orgs select --save-default
+lemma pods select --save-default
 ```
 
-## Non-bundled setup (do these after import)
-- Upload any required files: `lemma files upload ./doc.pdf /knowledge/doc.pdf`
-- Connect connectors/accounts: `lemma connectors ...`
-- Flip schedules/surfaces to active once their targets exist.
+## Build loop
+
+Run the validation first. It checks the bundle without applying changes. Then import
+it to create or update resources in the selected pod.
+
+```bash
+lemma pods import ./__NAME__ --dry-run
+lemma pods import ./__NAME__
+```
+
+The bundle is the source of truth for the resources it contains. Edit the files here
+and re-import to apply changes. Review the import summary before continuing.
+
+## Non-bundled setup
+
+Some setup is intentionally outside the bundle import:
+
+- Upload required files: `lemma files upload ./doc.pdf /knowledge/doc.pdf`
+- Connect external accounts: use the appropriate `lemma connectors` commands.
+- Enable schedules and surfaces only after their targets and credentials are ready.
 
 ## Verify
+
 ```bash
 lemma pods describe
 lemma agents chat hello "what can you do in this pod?"
 ```
+
+If the starter agent was removed or renamed, replace `hello` with the agent you created.
 """
 
 AGENTS_MD = """# Building this Lemma pod
