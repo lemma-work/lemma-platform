@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
 from app.modules.agent_surfaces.tests.e2e.test_web_widgets_e2e import (
     SHOP,
     _as,
+    _contact_of,
     _latest_code,
     _page,
     _say,
@@ -171,6 +172,47 @@ async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
     )
     assert after.status_code == 404
     assert len(await _rows(authenticated_client, pod_id, table)) == 1
+
+
+async def test_a_first_anonymous_row_opens_a_contact_and_keeps_the_same_visitor(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    pod_id = test_pod["id"]
+    table = await _signups(authenticated_client, pod_id, "first_write")
+    assert (await _open(authenticated_client, pod_id, table)).status_code == 200
+    widget = await _widget(authenticated_client, pod_id, name="First write door")
+    key = widget["public_key"]
+
+    added = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={"table": table, "values": {"full_name": "Ana Ruiz"}},
+        headers=_page(),
+    )
+    assert added.status_code == 201, added.text
+    started = added.json()["session"]
+    assert started["access_token"]
+    assert started["secret"]
+    assert started["is_contact"] is False
+
+    contacts = await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    assert contacts.status_code == 200, contacts.text
+    assert len(contacts.json()["items"]) == 1
+    contact_id = UUID(contacts.json()["items"][0]["id"])
+
+    conversation_id = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=started,
+        text="I just submitted the form. Can you help?",
+        owner=UUID(fixed_test_user["id"]),
+        pod_id=pod_id,
+        script=[script_text("Of course, Ana.")],
+    )
+    assert await _contact_of(db_session, conversation_id) == contact_id
 
 
 async def test_a_table_opens_only_in_a_way_that_can_work(
