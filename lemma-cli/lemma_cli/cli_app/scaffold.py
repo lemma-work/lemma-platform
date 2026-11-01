@@ -12,6 +12,7 @@ stay literal (no f-string/`.format` escaping).
 from __future__ import annotations
 
 import json
+import keyword
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -51,7 +52,12 @@ def _ascii_name(name: str) -> str:
         }
     )
     normalized = unicodedata.normalize("NFKD", name.translate(special))
-    return normalized.encode("ascii", "ignore").decode("ascii")
+    # Keep unsupported characters as separators rather than deleting them:
+    # "east—west" must remain distinct from the existing "eastwest" resource.
+    return "".join(
+        ch if ord(ch) < 128 else ("" if unicodedata.combining(ch) else " ")
+        for ch in normalized
+    )
 
 
 def slugify(name: str) -> str:
@@ -69,7 +75,9 @@ def snakeify(name: str) -> str:
     snake = re.sub(r"[^a-zA-Z0-9]+", "_", normalized).strip("_").lower()
     if not snake or not re.match(r"^[a-z_][a-z0-9_]*$", snake):
         raise ScaffoldError(f"Cannot derive a code-safe name from {name!r}.")
-    return snake
+    # Transliteration can turn a formerly harmless name into a Python keyword.
+    # Preserve the name while making the generated function identifier valid.
+    return f"{snake}_" if keyword.iskeyword(snake) else snake
 
 
 def pascalify(name: str) -> str:
@@ -302,18 +310,21 @@ These selections are saved as your defaults for later CLI commands.
 
 ```bash
 lemma auth login
-lemma orgs select --save-default
-lemma pods select --save-default
+eval "$(lemma orgs select --save-default -x)"
+# If this organization has no pod yet, create one before selecting:
+# lemma pods create __NAME__
+eval "$(lemma pods select --save-default -x)"
 ```
 
 ## Build loop
 
 Run the validation first. It checks the bundle without applying changes. Then import
-it to create or update resources in the selected pod.
+it to create or update resources in the selected pod. Run these commands from this
+bundle directory (the directory containing `pod.json`).
 
 ```bash
-lemma pods import ./__NAME__ --dry-run
-lemma pods import ./__NAME__
+lemma pods import . --dry-run
+lemma pods import .
 ```
 
 The bundle is the source of truth for the resources it contains. Edit the files here
@@ -537,7 +548,9 @@ def init_resource(
 
     if resource_type in {"function", "functions"}:
         slug = snakeify(name)
-        pascal = pascalify(name)
+        pascal = pascalify(slug)
+        if not pascal.isidentifier() or keyword.iskeyword(pascal):
+            pascal = f"Function{pascal}"
         rdir = base / "functions" / slug
         files = [
             _write(
