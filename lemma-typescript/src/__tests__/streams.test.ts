@@ -24,19 +24,26 @@ async function collect(
 }
 
 describe("readSSE", () => {
-  it("dispatches a final event whose last line has no newline", async () => {
+  it("discards an event that is not terminated by a blank line", async () => {
     const input = new TextEncoder().encode(
       'event: message\ndata: {"ok":true}',
     );
 
     const events = await collect(readable([input]));
 
+    expect(events).toEqual([]);
+  });
+
+  it("dispatches events separated by CR-only line endings", async () => {
+    const input = new TextEncoder().encode("event: update\rdata: ready\r\r");
+
+    const events = await collect(readable([input]));
+
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      event: "message",
-      data: '{"ok":true}',
+      event: "update",
+      data: "ready",
     });
-    expect(parseSSEJson<{ ok: boolean }>(events[0])).toEqual({ ok: true });
   });
 
   it("removes only one optional space after an SSE field colon", async () => {
@@ -51,9 +58,9 @@ describe("readSSE", () => {
     expect(events[0].data).toBe("  indented  ");
   });
 
-  it("flushes a UTF-8 code point split at the end of the stream", async () => {
-    const input = new TextEncoder().encode("data: café");
-    const splitAt = input.length - 1;
+  it("decodes a UTF-8 code point split across chunks", async () => {
+    const input = new TextEncoder().encode("data: café\n\n");
+    const splitAt = input.indexOf(0xc3) + 1;
 
     const events = await collect(
       readable([input.slice(0, splitAt), input.slice(splitAt)]),
@@ -61,5 +68,6 @@ describe("readSSE", () => {
 
     expect(events).toHaveLength(1);
     expect(events[0].data).toBe("café");
+    expect(parseSSEJson(events[0])).toBeNull();
   });
 });
