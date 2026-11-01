@@ -5,6 +5,7 @@ authorization decisions, so verify the pure (de)serialization round-trips exactl
 including None scopes and the nested PrincipalRef sets.
 """
 
+import json
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -168,3 +169,37 @@ async def test_invalidate_drops_the_snapshots_before_it_moves_the_epoch(monkeypa
     await cache_module.invalidate_role_snapshot_cache(pod_id=uuid4())
 
     assert order == ["snapshots dropped", "epoch moved"]
+
+
+@pytest.mark.parametrize("malformed", ["false", "true", 0, 1, None, [], {}])
+def test_role_snapshot_deserializer_rejects_non_boolean_deleted_flag(malformed):
+    snapshot = RoleSnapshot(
+        organization_id=None,
+        pod_id=None,
+        role_ids=frozenset(),
+        role_names=frozenset(),
+        permission_ids=frozenset(),
+        principal_refs=frozenset(),
+        grant_principal_sets=(),
+    )
+    payload = json.loads(_serialize(snapshot))
+    payload["pod_is_deleted"] = malformed
+
+    with pytest.raises(ValueError, match="pod_is_deleted"):
+        _deserialize(json.dumps(payload))
+
+
+def test_role_snapshot_deserializer_preserves_legacy_missing_deleted_flag():
+    snapshot = RoleSnapshot(
+        organization_id=None,
+        pod_id=None,
+        role_ids=frozenset(),
+        role_names=frozenset(),
+        permission_ids=frozenset(),
+        principal_refs=frozenset(),
+        grant_principal_sets=(),
+    )
+    payload = json.loads(_serialize(snapshot))
+    del payload["pod_is_deleted"]
+
+    assert _deserialize(json.dumps(payload)) == snapshot
