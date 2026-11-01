@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from app.core.config import reveal_secret
+from app.core.log.log import get_logger
 from app.core.api.callback_page import (
     message_html,
     render_callback_page,
@@ -70,6 +71,8 @@ from app.modules.agent_surfaces.services.telegram_manager_service import (
 from app.modules.agent_surfaces.services.webhook_security_service import (
     SurfaceWebhookAuthenticationError,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
 
