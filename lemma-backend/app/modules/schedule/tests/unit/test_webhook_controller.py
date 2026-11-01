@@ -1,12 +1,12 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.modules.connectors.infrastructure.webhook_sources.composio import (
     _reshape as _normalize_composio_payload,
 )
-from fastapi import HTTPException
-from starlette.requests import Request
 
 from app.modules.schedule.api.controllers.webhook_controller import (
     MAX_WEBHOOK_BODY_BYTES,
@@ -165,7 +165,9 @@ def test_the_published_verification_is_async_so_it_can_offload() -> None:
     assert inspect.iscoroutinefunction(verify_webhook)
 
 
-def _streaming_request(chunks: list[bytes], *, headers: list[tuple[bytes, bytes]] | None = None):
+def _streaming_request(
+    chunks: list[bytes], *, headers: list[tuple[bytes, bytes]] | None = None
+):
     calls = 0
 
     async def receive():
@@ -207,7 +209,7 @@ async def test_webhook_body_limit_rejects_declared_oversize_before_reading():
 
 
 @pytest.mark.asyncio
-async def test_webhook_body_limit_also_bounds_chunked_or_underreported_bodies():
+async def test_webhook_body_limit_also_bounds_underreported_bodies():
     request, receive_calls = _streaming_request(
         [b"x" * MAX_WEBHOOK_BODY_BYTES, b"y", b"unread"],
         headers=[(b"content-length", b"1")],
@@ -229,3 +231,17 @@ async def test_webhook_body_limit_accepts_exact_limit():
     )
 
     assert await _read_bounded_body(request, source="composio") == payload
+
+
+@pytest.mark.asyncio
+async def test_webhook_body_limit_handles_extremely_long_content_length_safely():
+    request, receive_calls = _streaming_request(
+        [b"{}"],
+        headers=[(b"content-length", b"9" * 5000)],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await _read_bounded_body(request, source="composio")
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 0
