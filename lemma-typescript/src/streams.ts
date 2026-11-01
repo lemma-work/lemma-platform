@@ -81,14 +81,14 @@ export async function* readSSE(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-  
+
       buffer += decoder.decode(value, { stream: true });
       // Keep a trailing CR until the next chunk determines whether it is CRLF.
       buffer = buffer.replace(/\r\n/g, "\n").replace(/\r(?!$)/g, "\n");
-  
+
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
-  
+
       for (const line of lines) {
         const event = processLine(line);
         if (event) {
@@ -96,7 +96,7 @@ export async function* readSSE(
         }
       }
     }
-  
+
     // Finish decoding and accept a final standalone CR as a line ending. Any
     // remaining non-terminated line/event is intentionally discarded: SSE
     // dispatch requires a terminating blank line.
@@ -104,7 +104,7 @@ export async function* readSSE(
     buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const finalLines = buffer.split("\n");
     buffer = finalLines.pop() || "";
-  
+
     for (const line of finalLines) {
       const event = processLine(line);
       if (event) {
