@@ -200,6 +200,19 @@ def parse_delegation_claims(payload: dict[str, Any]) -> DelegationClaims | None:
     actor_id = payload.get(CLAIM_ACTOR_ID)
 
     if actor_type is None and actor_id is None:
+        # A plain person token has none of the delegation namespace. If any
+        # companion claim is present, do not silently downgrade a partial
+        # delegated token to a person context.
+        companion_claims = {
+            CLAIM_ACTOR_NAME,
+            CLAIM_POD_ID,
+            CLAIM_SESSION_ID,
+            CLAIM_SCOPE,
+            CLAIM_INVOKED_BY_USER_ID,
+            CLAIM_DELEGATION_VERSION,
+        }
+        if companion_claims.intersection(payload):
+            raise DelegationClaimsError("Incomplete delegated claims")
         return None
 
     required = {
