@@ -85,6 +85,9 @@ def test_pascalify():
     [
         ("  Crème Brûlée  ", "creme-brulee"),
         ("München Ops", "munchen-ops"),
+        ("Łódź", "lodz"),
+        ("Æther", "aether"),
+        ("Straße", "strasse"),
     ],
 )
 def test_slugify_normalizes_accented_names(raw, expected):
