@@ -118,6 +118,7 @@ def test_init_pod_creates_parsable_bundle(tmp_path: Path):
     assert "lemma auth login" in readme_text
     assert "lemma orgs select --save-default" in readme_text
     assert "lemma pods select --save-default" in readme_text
+    assert "Run these commands from the directory containing `demo-ops`." in readme_text
     assert "lemma pods import ./demo-ops --dry-run" in readme_text
     assert "lemma pods import ./demo-ops" in readme_text
 
