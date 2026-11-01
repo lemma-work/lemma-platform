@@ -472,6 +472,7 @@ async def web_read_rows(
 async def web_add_row(
     body: RowRequest,
     request: Request,
+    response: Response,
     widget: PublicWidgetDep,
     visitor: OptionalVisitorDep,
     address: VisitorAddressDep,
@@ -511,6 +512,8 @@ async def web_add_row(
     await chat.add_visitor_row(
         widget, visitor, table=body.table, answers=body.values, address=address
     )
+    if started is not None and started.secret and kept_chats.keeps_chats(request):
+        kept_chats.keep(response, widget, started.secret)
     return RowAccepted(
         session=_session_response(started, title=None) if started is not None else None
     )
