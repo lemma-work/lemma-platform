@@ -34,7 +34,15 @@ describe("readSSE", () => {
     expect(events).toEqual([]);
   });
 
-  it("does not dispatch an event with an empty data buffer", async () => {\n    const input = new TextEncoder().encode("data:\\n\\n");\n\n    const events = await collect(readable([input]));\n\n    expect(events).toEqual([]);\n  });\n\n  it("dispatches events separated by CR-only line endings", async () => {
+  it("does not dispatch an event with an empty data buffer", async () => {
+    const input = new TextEncoder().encode("data:\n\n");
+
+    const events = await collect(readable([input]));
+
+    expect(events).toEqual([]);
+  });
+
+  it("dispatches events separated by CR-only line endings", async () => {
     const input = new TextEncoder().encode("event: update\rdata: ready\r\r");
 
     const events = await collect(readable([input]));
