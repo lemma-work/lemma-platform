@@ -46,11 +46,8 @@ def strip_jsonc(text: str) -> str:
                 out.append("\n" if text[i] == "\n" else " ")
                 i += 1
             if i >= n:
-                line = text.count("\n", 0, comment_start) + 1
-                last_newline = text.rfind("\n", 0, comment_start)
-                column = comment_start - last_newline
-                raise ValueError(
-                    f"Unterminated block comment at line {line}, column {column}."
+                raise json.JSONDecodeError(
+                    "Unterminated block comment", text, comment_start
                 )
             # consume the closing */
             i += 2
