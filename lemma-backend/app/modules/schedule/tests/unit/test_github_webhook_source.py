@@ -666,18 +666,41 @@ class TestSourceEventIdRejectsIncompletePayloads:
     @pytest.mark.parametrize(
         ("event", "payload"),
         [
-            ("pull_request", {"action": "opened", "pull_request": {"head": {"sha": "abc"}}}),
-            ("pull_request_review", {"action": "submitted", "review": {"state": "approved"}}),
-            ("pull_request_review_comment", {"action": "created", "comment": {"updated_at": "2026-11-01T00:00:00Z"}}),
+            (
+                "pull_request",
+                {"action": "opened", "pull_request": {"head": {"sha": "abc"}}},
+            ),
+            (
+                "pull_request_review",
+                {"action": "submitted", "review": {"state": "approved"}},
+            ),
+            (
+                "pull_request_review_comment",
+                {
+                    "action": "created",
+                    "comment": {"updated_at": "2026-11-01T00:00:00Z"},
+                },
+            ),
             ("issues", {"action": "opened", "issue": {}}),
             ("issue_comment", {"action": "created", "comment": {}}),
-            ("workflow_run", {"action": "completed", "workflow_run": {"status": "completed"}}),
-            ("check_suite", {"action": "rerequested", "check_suite": {"id": 1, "status": "queued"}}),
-            ("check_run", {"action": "completed", "check_run": {"status": "completed"}}),
+            (
+                "workflow_run",
+                {"action": "completed", "workflow_run": {"status": "completed"}},
+            ),
+            (
+                "check_suite",
+                {"action": "rerequested", "check_suite": {"id": 1, "status": "queued"}},
+            ),
+            (
+                "check_run",
+                {"action": "completed", "check_run": {"status": "completed"}},
+            ),
             ("release", {"action": "published", "release": {}}),
         ],
     )
-    def test_missing_event_identity_fields_do_not_create_shared_ids(self, event, payload):
+    def test_missing_event_identity_fields_do_not_create_shared_ids(
+        self, event, payload
+    ):
         assert source_event_id(event, "1", 2, payload) is None
 
     @pytest.mark.parametrize(
@@ -706,5 +729,7 @@ class TestSourceEventIdRejectsIncompletePayloads:
             ("release", {"action": "published", "release": []}),
         ],
     )
-    def test_malformed_nested_objects_are_dropped_without_exceptions(self, event, payload):
+    def test_malformed_nested_objects_are_dropped_without_exceptions(
+        self, event, payload
+    ):
         assert source_event_id(event, "1", 2, payload) is None
