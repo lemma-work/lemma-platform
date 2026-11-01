@@ -76,12 +76,17 @@ def _epoch_value(value: bytes | str | None) -> str | None:
     if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
         return None
     normalized = value.lstrip("0") or "0"
+    # Do not merely normalize the returned cache key: the stored Redis value
+    # must itself be safe for INCR. Repair non-canonical integer strings via
+    # the compare-and-set path before any caller can rely on them.
+    if normalized != value:
+        return None
     if len(normalized) > len(_MAX_INCREMENTABLE_EPOCH) or (
         len(normalized) == len(_MAX_INCREMENTABLE_EPOCH)
         and normalized >= _MAX_INCREMENTABLE_EPOCH
     ):
         return None
-    return normalized
+    return value
 
 
 _REPAIR_INVALID_EPOCH = """
