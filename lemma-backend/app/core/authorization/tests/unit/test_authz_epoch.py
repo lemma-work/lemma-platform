@@ -83,3 +83,37 @@ async def test_epoch_value_rejects_noncanonical_leading_zeroes_and_incr_overflow
     assert authz_epoch._epoch_value(b"9223372036854775806") == "9223372036854775806"
     assert authz_epoch._epoch_value(b"9223372036854775807") is None
     assert authz_epoch._epoch_value(b"9223372036854775808") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformed",
+    [b"not-a-number", b"\xff", b"", b"000123", b"9223372036854775807"],
+)
+async def test_bump_repairs_invalid_counters_before_incrementing(
+    monkeypatch, malformed
+):
+    key = "authz:epoch:global"
+    redis = fakeredis.FakeAsyncRedis()
+    await redis.set(key, malformed)
+    monkeypatch.setattr(authz_epoch, "get_redis", lambda **kwargs: redis)
+    monkeypatch.setattr(authz_epoch, "_seed", lambda: "123456789")
+
+    await authz_epoch._bump(key, None)
+
+    stored = await redis.get(key)
+    assert authz_epoch._epoch_value(stored) == "123456790"
+    await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bump_increments_a_valid_counter_without_reseeding(monkeypatch):
+    key = "authz:epoch:global"
+    redis = fakeredis.FakeAsyncRedis()
+    await redis.set(key, "123")
+    monkeypatch.setattr(authz_epoch, "get_redis", lambda **kwargs: redis)
+
+    await authz_epoch._bump(key, None)
+
+    assert await redis.get(key) == b"124"
+    await redis.aclose()
