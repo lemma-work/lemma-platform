@@ -31,9 +31,11 @@ from app.modules.agent_surfaces.tests.e2e.test_web_widgets_e2e import (
     _latest_code,
     _page,
     _say,
+    _session_id,
     _session,
     _widget,
 )
+from app.modules.contacts.infrastructure.visitor_sessions import VisitorSessionModel
 from app.modules.datastore.contracts.contact_rows import rows_for_contact
 from app.modules.test_support.e2e.row_bound_records import row_bound_records
 
@@ -197,10 +199,11 @@ async def test_a_first_anonymous_row_opens_a_contact_and_keeps_the_same_visitor(
     assert started["secret"]
     assert started["is_contact"] is False
 
-    contacts = await authenticated_client.get(f"/pods/{pod_id}/contacts")
-    assert contacts.status_code == 200, contacts.text
-    assert len(contacts.json()["items"]) == 1
-    contact_id = UUID(contacts.json()["items"][0]["id"])
+    db_session.expire_all()
+    visitor_session = await db_session.get(VisitorSessionModel, _session_id(started))
+    assert visitor_session is not None
+    assert visitor_session.contact_id is not None
+    contact_id = visitor_session.contact_id
 
     conversation_id = await _say(
         authenticated_client,
