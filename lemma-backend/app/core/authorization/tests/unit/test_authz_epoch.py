@@ -179,7 +179,10 @@ async def test_epoch_reads_use_raw_redis_responses_for_malformed_utf8(monkeypatc
 
     epoch = await authz_epoch._epoch_of([key])
 
-    assert observed == {"url": authz_epoch.settings.redis_url, "decode_responses": False}
+    assert observed == {
+        "url": authz_epoch.settings.redis_url,
+        "decode_responses": False,
+    }
     assert epoch is not None
     assert authz_epoch._epoch_value(await redis.get(key)) is not None
     await redis.aclose()
@@ -201,6 +204,9 @@ async def test_epoch_bumps_use_raw_redis_responses_for_malformed_utf8(monkeypatc
 
     await authz_epoch._bump(key, None)
 
-    assert observed == {"url": authz_epoch.settings.redis_url, "decode_responses": False}
+    assert observed == {
+        "url": authz_epoch.settings.redis_url,
+        "decode_responses": False,
+    }
     assert await redis.get(key) == b"123456790"
     await redis.aclose()
