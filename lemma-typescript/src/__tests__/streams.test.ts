@@ -55,7 +55,7 @@ describe("readSSE", () => {
   });
 
   it("handles a CRLF pair split across chunks", async () => {
-    const input = new TextEncoder().encode("data: split\\r\\n\\r\\n");
+    const input = new TextEncoder().encode("data: split\r\n\r\n");
     const splitAt = input.indexOf(13) + 1;
 
     const events = await collect(
