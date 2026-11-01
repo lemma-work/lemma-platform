@@ -953,3 +953,47 @@ def test_every_api_field_reaches_the_scaffold(resource, module, model):
         f"Add a line (commented out is fine) to the scaffold in cli_app/scaffold.py, "
         f"or record a reason in UNDOCUMENTED_SCAFFOLD_FIELDS."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Pod scaffold regression cases: bare bundles and partial-directory recovery.
+# --------------------------------------------------------------------------- #
+
+def test_init_pod_without_starter_creates_bare_bundle(tmp_path: Path):
+    root = tmp_path / "bare"
+    result = init_pod(root, "Bare Pod", with_starter=False)
+
+    assert result.name == "bare-pod"
+    assert {path.name for path in result.files} == {
+        "pod.json",
+        "README.md",
+        "AGENTS.md",
+    }
+    assert (root / "pod.json").is_file()
+    assert (root / "README.md").is_file()
+    assert (root / "AGENTS.md").is_file()
+    assert not (root / "tables").exists()
+    assert not (root / "agents").exists()
+
+
+def test_init_pod_force_overwrites_partial_bundle_and_preserves_unrelated_files(tmp_path: Path):
+    root = tmp_path / "partial"
+    root.mkdir()
+    (root / "pod.json").write_text("stale manifest", encoding="utf-8")
+    (root / "README.md").write_text("stale readme", encoding="utf-8")
+    unrelated = root / "notes.txt"
+    unrelated.write_text("keep this file", encoding="utf-8")
+
+    result = init_pod(root, "Fresh Pod", force=True)
+
+    assert result.name == "fresh-pod"
+    assert '"name": "fresh-pod"' in (root / "pod.json").read_text(encoding="utf-8")
+    assert "# fresh-pod" in (root / "README.md").read_text(encoding="utf-8")
+    assert (root / "tables" / "items" / "items.json").is_file()
+    assert (root / "agents" / "hello" / "hello.json").is_file()
+    assert unrelated.read_text(encoding="utf-8") == "keep this file"
+
+
+# --------------------------------------------------------------------------- #
+# init_resource
+# --------------------------------------------------------------------------- #
