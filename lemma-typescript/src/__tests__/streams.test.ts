@@ -87,6 +87,16 @@ describe("readSSE", () => {
     expect(events[0].data).toBe("  indented  ");
   });
 
+  it("treats an empty event field as the default message event", async () => {
+    const input = new TextEncoder().encode("event: custom\\nevent:\\ndata: ready\\n\\n");
+
+    const events = await collect(readable([input]));
+
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBeUndefined();
+    expect(events[0].data).toBe("ready");
+  });
+
   it("ignores event fields containing a NUL character", async () => {
     const input = new TextEncoder().encode(
       "event: first\nevent: invalid\u0000name\ndata: ready\n\n",
