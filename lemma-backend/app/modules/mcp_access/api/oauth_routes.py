@@ -150,20 +150,36 @@ def _bounded(handler: Handler) -> Handler:
 
     async def endpoint(request: Request) -> Response:
         declared = request.headers.get("content-length")
-        if declared is not None and (
-            not declared.isdigit() or int(declared) > MAX_BODY_BYTES
-        ):
-            return _too_large()
+        if declared is not None:
+            if not declared.isascii() or not declared.isdecimal():
+                return _invalid_content_length()
+            normalized_length = declared.lstrip("0") or "0"
+            maximum_length = str(MAX_BODY_BYTES)
+            if len(normalized_length) > len(maximum_length) or (
+                len(normalized_length) == len(maximum_length)
+                and normalized_length > maximum_length
+            ):
+                return _too_large()
         body = bytearray()
         async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > MAX_BODY_BYTES:
+            if len(body) + len(chunk) > MAX_BODY_BYTES:
                 return _too_large()
+            body.extend(chunk)
         # Starlette serves `form()` and `json()` from `_body` once it is set.
         request._body = bytes(body)
         return await handler(request)
 
     return endpoint
+
+
+def _invalid_content_length() -> Response:
+    return JSONResponse(
+        {
+            "error": "invalid_request",
+            "error_description": "Invalid Content-Length header",
+        },
+        status_code=400,
+    )
 
 
 def _too_large() -> Response:
