@@ -253,3 +253,34 @@ async def test_webhook_body_limit_handles_extremely_long_content_length_safely()
 
     assert rejected.value.status_code == 413
     assert receive_calls() == 0
+
+
+@pytest.mark.asyncio
+async def test_github_webhook_uses_its_provider_payload_ceiling(monkeypatch):
+    from app.modules.schedule.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_GITHUB_WEBHOOK_BODY_BYTES", 8)
+    request, _ = _streaming_request(
+        [b"x" * 8],
+        headers=[(b"content-length", b"8")],
+    )
+
+    assert await _read_bounded_body(request, source="github") == b"x" * 8
+
+
+@pytest.mark.asyncio
+async def test_non_github_sources_keep_the_smaller_body_ceiling(monkeypatch):
+    from app.modules.schedule.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_WEBHOOK_BODY_BYTES", 8)
+    monkeypatch.setattr(webhook_controller, "MAX_GITHUB_WEBHOOK_BODY_BYTES", 16)
+    request, receive_calls = _streaming_request(
+        [b"x" * 9],
+        headers=[(b"content-length", b"9")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await _read_bounded_body(request, source="composio")
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 0
