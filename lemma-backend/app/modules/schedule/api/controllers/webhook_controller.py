@@ -28,6 +28,49 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 MAX_WEBHOOK_BODY_BYTES = 1_048_576
 
 
+async def _read_bounded_body(request: Request, *, source: str) -> bytes:
+    """Read no more than the configured webhook body limit into memory.
+
+    Content-Length is an early rejection hint, not a trusted bound: requests
+    without it, or with a smaller declared length, are still capped as chunks
+    arrive. This keeps the memory cost of an unauthenticated delivery bounded.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        if not content_length.isascii() or not content_length.isdecimal():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid webhook content length",
+            )
+        declared_size = int(content_length)
+        if declared_size > MAX_WEBHOOK_BODY_BYTES:
+            logger.warning(
+                "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
+                source=source,
+                size=declared_size,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Webhook payload is too large",
+            )
+
+    body = bytearray()
+    async for chunk in request.stream():
+        observed_size = len(body) + len(chunk)
+        if observed_size > MAX_WEBHOOK_BODY_BYTES:
+            logger.warning(
+                "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
+                source=source,
+                size=observed_size,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Webhook payload is too large",
+            )
+        body.extend(chunk)
+    return bytes(body)
+
+
 @router.post(
     "/{source}",
     operation_id="webhook.handle",
@@ -58,17 +101,7 @@ async def handle_webhook(
             detail="Unsupported or unverified webhook source",
         )
 
-    raw_body = await request.body()
-    if len(raw_body) > MAX_WEBHOOK_BODY_BYTES:
-        logger.warning(
-            "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
-            source=source,
-            size=len(raw_body),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Webhook payload is too large",
-        )
+    raw_body = await _read_bounded_body(request, source=source)
 
     delivery = WebhookDelivery(
         source=source,
