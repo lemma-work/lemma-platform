@@ -245,6 +245,8 @@ def parse_delegation_claims(payload: dict[str, Any]) -> DelegationClaims | None:
     actor_name_raw = payload.get(CLAIM_ACTOR_NAME)
     if actor_name_raw not in (None, "") and not isinstance(actor_name_raw, str):
         raise DelegationClaimsError("Invalid delegated actor name")
+    if isinstance(actor_name_raw, str) and actor_name_raw and not actor_name_raw.strip():
+        raise DelegationClaimsError("Invalid delegated actor name")
 
     scope = _coerce_scope(payload.get(CLAIM_SCOPE))
     version = payload.get(CLAIM_DELEGATION_VERSION, DELEGATION_VERSION)
