@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,9 +35,15 @@ class ScaffoldResult:
 # --------------------------------------------------------------------------- #
 # name helpers
 # --------------------------------------------------------------------------- #
+def _ascii_name(name: str) -> str:
+    """Normalize accented Latin names before deriving ASCII resource identifiers."""
+    return unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+
+
 def slugify(name: str) -> str:
     """Lowercase, hyphen-separated identifier (agents, workflows, surfaces)."""
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip()).strip("-").lower()
+    normalized = _ascii_name(name.strip())
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
     if not slug:
         raise ScaffoldError(f"Cannot derive a resource name from {name!r}.")
     return slug
@@ -44,7 +51,8 @@ def slugify(name: str) -> str:
 
 def snakeify(name: str) -> str:
     """snake_case identifier (functions, tables — must be valid SQL/Python)."""
-    snake = re.sub(r"[^a-zA-Z0-9]+", "_", name.strip()).strip("_").lower()
+    normalized = _ascii_name(name.strip())
+    snake = re.sub(r"[^a-zA-Z0-9]+", "_", normalized).strip("_").lower()
     if not snake or not re.match(r"^[a-z_][a-z0-9_]*$", snake):
         raise ScaffoldError(f"Cannot derive a code-safe name from {name!r}.")
     return snake
