@@ -164,7 +164,10 @@ async def test_email_bounce_body_limit_accepts_exact_boundary(monkeypatch):
     )
     request, _ = _streaming_request([b"1234", b"5678"])
 
-    assert await email_bounce_controller._read_bounded_webhook_body(request) == b"12345678"
+    assert (
+        await email_bounce_controller._read_bounded_webhook_body(request)
+        == b"12345678"
+    )
 
 
 @pytest.mark.asyncio
