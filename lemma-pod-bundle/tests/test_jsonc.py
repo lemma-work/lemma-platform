@@ -70,3 +70,9 @@ def test_loads_jsonc_plain_json_passthrough():
 def test_loads_jsonc_invalid_still_raises():
     with pytest.raises(json.JSONDecodeError):
         loads_jsonc('{"a": }')
+
+def test_strip_jsonc_reports_unterminated_block_comment_location():
+    text = '{\n  "a": 1,\n  /* missing terminator\n}'
+    with pytest.raises(ValueError, match=r"line 3, column 3"):
+        strip_jsonc(text)
+
