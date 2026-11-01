@@ -57,7 +57,6 @@ async def _read_bounded_body(request: Request, *, source: str) -> bytes:
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="Webhook payload is too large",
             )
-        declared_size = int(normalized_length)
 
     body = bytearray()
     async for chunk in request.stream():
