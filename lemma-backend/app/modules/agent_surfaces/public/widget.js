@@ -1153,6 +1153,11 @@
   function addRow(table, values) {
     return withSession(function () {
       return call("/rows", { body: { table: table, values: values } });
+    }).then(function (data) {
+      // A page that writes without an existing session receives one with its
+      // first row; adopt it so any later chat message is the same visitor.
+      if (data && data.session && data.session.access_token) adopt(data.session);
+      return data;
     });
   }
 
