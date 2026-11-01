@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.modules.agent_surfaces.api.controllers.webhook_controller import (
@@ -469,6 +470,35 @@ async def test_slack_url_verification_echoes_nothing_but_a_short_token(
     with pytest.raises(SurfaceWebhookAuthenticationError) as refused:
         await _handshake(_slack_handshake(challenge), None)
     assert refused.value.status_code == 400
+
+
+def _streaming_request(
+    chunks: list[bytes], *, headers: list[tuple[bytes, bytes]] | None = None
+):
+    calls = 0
+
+    async def receive():
+        nonlocal calls
+        index = calls
+        calls += 1
+        if index >= len(chunks):
+            return {"type": "http.disconnect"}
+        return {
+            "type": "http.request",
+            "body": chunks[index],
+            "more_body": index < len(chunks) - 1,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/surfaces/webhooks/test",
+            "headers": headers or [],
+        },
+        receive,
+    )
+    return request, lambda: calls
 
 
 @pytest.mark.asyncio
