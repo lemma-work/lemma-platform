@@ -74,3 +74,27 @@ def test_accepts_current_claim_shape_and_legacy_single_scope_string() -> None:
     assert claims is not None
     assert claims.scope == ["agent.read"]
     assert claims.delegation_version == DELEGATION_VERSION
+
+
+@pytest.mark.parametrize(
+    "partial_claim",
+    [
+        CLAIM_ACTOR_NAME,
+        CLAIM_POD_ID,
+        CLAIM_SESSION_ID,
+        CLAIM_SCOPE,
+        CLAIM_INVOKED_BY_USER_ID,
+        CLAIM_DELEGATION_VERSION,
+    ],
+)
+def test_rejects_companion_claims_without_delegated_actor_identity(
+    partial_claim: str,
+) -> None:
+    payload: dict[str, object] = {partial_claim: "present"}
+
+    with pytest.raises(DelegationClaimsError, match="Incomplete delegated claims"):
+        parse_delegation_claims(payload)
+
+
+def test_plain_person_claims_without_delegation_namespace_remain_plain() -> None:
+    assert parse_delegation_claims({"sub": "user-1", "exp": 2_000_000_000}) is None
