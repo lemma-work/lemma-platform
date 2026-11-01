@@ -253,7 +253,10 @@ class TestSourceEventId:
 
     def test_a_run_that_advances_status_is_a_new_event(self):
         def run(status: str) -> dict:
-            return {"workflow_run": {"id": 30433642, "status": status}}
+            return {
+                "action": "completed" if status == "completed" else "in_progress",
+                "workflow_run": {"id": 30433642, "status": status},
+            }
 
         assert source_event_id(
             "workflow_run", "1", 2, run("in_progress")
@@ -657,3 +660,33 @@ class TestInstallationBinding:
         source = GitHubWebhookSource(bound_organization=_unbound)
         verified = await source.verify(_delivery(_pull_request(), event="pull_request"))
         assert source.normalize(verified) is None
+
+
+class TestSourceEventIdRejectsIncompletePayloads:
+    @pytest.mark.parametrize(
+        ("event", "payload"),
+        [
+            ("pull_request", {"action": "opened", "pull_request": {"head": {"sha": "abc"}}}),
+            ("pull_request_review", {"action": "submitted", "review": {"state": "approved"}}),
+            ("pull_request_review_comment", {"action": "created", "comment": {"updated_at": "2026-11-01T00:00:00Z"}}),
+            ("issues", {"action": "opened", "issue": {}}),
+            ("issue_comment", {"action": "created", "comment": {}}),
+            ("workflow_run", {"action": "completed", "workflow_run": {"status": "completed"}}),
+            ("check_suite", {"action": "rerequested", "check_suite": {"id": 1, "status": "queued"}}),
+            ("check_run", {"action": "completed", "check_run": {"status": "completed"}}),
+            ("release", {"action": "published", "release": {}}),
+        ],
+    )
+    def test_missing_event_identity_fields_do_not_create_shared_ids(self, event, payload):
+        assert source_event_id(event, "1", 2, payload) is None
+
+    @pytest.mark.parametrize(
+        ("installation_id", "repository_id"),
+        [(None, 2), ("", 2), ("1", None), ("1", True), ("1", 0)],
+    )
+    def test_missing_or_invalid_tenant_and_repository_ids_are_rejected(
+        self, installation_id, repository_id
+    ):
+        assert source_event_id(
+            "pull_request", installation_id, repository_id, _pull_request()
+        ) is None
