@@ -39,7 +39,7 @@ describe("readSSE", () => {
     expect(parseSSEJson<{ ok: boolean }>(events[0])).toEqual({ ok: true });
   });
 
-  it("flushes a UTF-8 code point split at the end of the stream", async () => {
+  it("removes only one optional space after an SSE field colon", async () => {\n    const input = new TextEncoder().encode(\n      "event:  custom\\ndata:   indented  \\n\\n",\n    );\n\n    const events = await collect(readable([input]));\n\n    expect(events).toHaveLength(1);\n    expect(events[0].event).toBe(" custom");\n    expect(events[0].data).toBe("  indented  ");\n  });\n\n  it("flushes a UTF-8 code point split at the end of the stream", async () => {
     const input = new TextEncoder().encode("data: café");
     const splitAt = input.length - 1;
 
