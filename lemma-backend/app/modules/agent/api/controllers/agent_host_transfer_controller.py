@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -129,13 +129,21 @@ async def _authenticated_host(
 async def _body(request: Request, limit: int) -> bytes:
     """The request body, refused as soon as it passes ``limit``."""
     declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > limit:
-        raise TransferRefused(TransferRefusal.TOO_LARGE, f"at most {limit} bytes")
+    if declared is not None:
+        if not declared.isascii() or not declared.isdecimal():
+            raise HTTPException(status_code=400, detail="invalid content length")
+        normalized_length = declared.lstrip("0") or "0"
+        maximum_length = str(limit)
+        if len(normalized_length) > len(maximum_length) or (
+            len(normalized_length) == len(maximum_length)
+            and normalized_length > maximum_length
+        ):
+            raise TransferRefused(TransferRefusal.TOO_LARGE, f"at most {limit} bytes")
     body = bytearray()
     async for piece in request.stream():
-        body.extend(piece)
-        if len(body) > limit:
+        if len(body) + len(piece) > limit:
             raise TransferRefused(TransferRefusal.TOO_LARGE, f"at most {limit} bytes")
+        body.extend(piece)
     return bytes(body)
 
 
