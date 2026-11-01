@@ -62,6 +62,18 @@ def _seed() -> str:
     return str(time.time_ns())
 
 
+def _epoch_value(value: bytes | str | None) -> str | None:
+    """A Redis epoch must be the decimal string that INCR can advance."""
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+        return None
+    return value
+
+
 async def _epoch_of(keys: list[str]) -> str | None:
     redis = get_redis(url=settings.redis_url)
     try:
@@ -71,15 +83,31 @@ async def _epoch_of(keys: list[str]) -> str | None:
                 await redis.set(keys[index], _seed(), ex=_EPOCH_TTL_SECONDS, nx=True)
         if any(value is None for value in values):
             values = await redis.mget(keys)
+        invalid_indexes = [
+            index
+            for index, value in enumerate(values)
+            if _epoch_value(value) is None
+        ]
+        for index in invalid_indexes:
+            # A non-decimal value cannot be advanced by Redis INCR. Replace it
+            # with a fresh, time-derived epoch so old cache entries are retired
+            # and subsequent permission mutations can invalidate normally.
+            await redis.set(keys[index], _seed(), ex=_EPOCH_TTL_SECONDS)
+        if invalid_indexes:
+            logger.warning(
+                "authorization.epoch_value_repaired.degraded",
+                invalid_key_count=len(invalid_indexes),
+            )
+            values = await redis.mget(keys)
     except (RedisError, OSError) as exc:
         _incident.record_failure(error_type=type(exc).__name__)
         return None
-    _incident.record_success()
-    if any(value is None for value in values):
+    decoded = [_epoch_value(value) for value in values]
+    if any(value is None for value in decoded):
+        _incident.record_failure(error_type="InvalidEpochValue")
         return None
-    return ":".join(
-        value.decode() if isinstance(value, bytes) else str(value) for value in values
-    )
+    _incident.record_success()
+    return ":".join(value for value in decoded if value is not None)
 
 
 async def pod_authz_epoch(pod_id: UUID) -> str | None:
