@@ -31,14 +31,24 @@ def _request(chunks: list[bytes], *, content_length: str | None = None) -> Reque
         else []
     )
     return Request(
-        {"type": "http", "method": "POST", "path": "/oauth/register", "headers": headers},
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/oauth/register",
+            "headers": headers,
+        },
         receive,
     )
 
 
 async def test_oauth_body_rejects_oversized_chunk_before_extending(monkeypatch):
+    instances = []
+
     class TrackingBuffer(bytearray):
-        extend_calls = 0
+        def __init__(self, *args):
+            super().__init__(*args)
+            self.extend_calls = 0
+            instances.append(self)
 
         def extend(self, value):
             self.extend_calls += 1
@@ -57,7 +67,7 @@ async def test_oauth_body_rejects_oversized_chunk_before_extending(monkeypatch):
 
     assert response.status_code == 413
     assert called == []
-    assert TrackingBuffer.extend_calls == 0
+    assert instances[0].extend_calls == 0
 
 
 @pytest.mark.parametrize("content_length", ["²", "+1", "1.0", ""])
@@ -78,7 +88,9 @@ async def test_oauth_body_accepts_exact_limit_and_passes_buffered_body():
     async def handler(request):
         return Response(content=await request.body())
 
-    response = await oauth_routes._bounded(handler)(_request([expected[:17], expected[17:]]))
+    response = await oauth_routes._bounded(handler)(
+        _request([expected[:17], expected[17:]])
+    )
 
     assert response.status_code == 200
     assert response.body == expected
