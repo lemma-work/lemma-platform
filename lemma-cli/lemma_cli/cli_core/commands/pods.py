@@ -83,12 +83,21 @@ def resolve_pod_id(client, state, explicit: str | None = None) -> str:  # type: 
     # is the wrong tool anyway, so we say so instead of paging forever.
     items: list[dict] = []
     page_token: str | None = None
+    seen_page_tokens: set[str] = set()
     for _page in range(_MAX_POD_LOOKUP_PAGES):
         response = client.pods.list(org_id=org_id, limit=200, page_token=page_token)
         items.extend(list_items(response))
-        page_token = str(to_plain(response).get("next_page_token") or "") or None
-        if not page_token:
+        next_page_token = str(to_plain(response).get("next_page_token") or "") or None
+        if not next_page_token:
             break
+        if next_page_token in seen_page_tokens:
+            fail(
+                f"Pod lookup pagination repeated page token '{next_page_token}' "
+                f"after searching {len(items)} pods. Retry the command or pass "
+                "the pod id instead."
+            )
+        seen_page_tokens.add(next_page_token)
+        page_token = next_page_token
     else:
         if page_token:
             fail(
