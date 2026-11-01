@@ -60,12 +60,8 @@ export async function* readSSE(
     }
 
     const colon = line.indexOf(":");
-    if (colon === -1) {
-      return null;
-    }
-
-    const field = line.slice(0, colon);
-    const value = fieldValue(line, field);
+    const field = colon === -1 ? line : line.slice(0, colon);
+    const value = colon === -1 ? "" : fieldValue(line, field);
 
     if (field === "event") {
       eventName = value;
