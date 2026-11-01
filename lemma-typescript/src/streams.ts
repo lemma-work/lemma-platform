@@ -45,19 +45,26 @@ export async function* readSSE(
   };
 
   const processLine = (line: string): SseRawEvent | null => {
-    const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
-
-    if (trimmed === "") {
+    if (line === "") {
       return flush();
     }
 
-    if (trimmed.startsWith("event:")) {
-      eventName = fieldValue(trimmed, "event");
+    if (line.startsWith(":")) {
       return null;
     }
 
-    if (trimmed.startsWith("data:")) {
-      dataLines.push(fieldValue(trimmed, "data"));
+    const colon = line.indexOf(":");
+    if (colon === -1) {
+      return null;
+    }
+
+    const field = line.slice(0, colon);
+    const value = fieldValue(line, field);
+
+    if (field === "event") {
+      eventName = value;
+    } else if (field === "data") {
+      dataLines.push(value);
     }
 
     return null;
@@ -68,6 +75,9 @@ export async function* readSSE(
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
+    // Keep a trailing CR until the next chunk determines whether it is CRLF.
+    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r(?!$)/g, "\n");
+
     const lines = buffer.split("\n");
     buffer = lines.pop() || "";
 
@@ -79,20 +89,19 @@ export async function* readSSE(
     }
   }
 
-  // TextDecoder may still hold a partial UTF-8 code point from the final chunk.
+  // Finish decoding and accept a final standalone CR as a line ending. Any
+  // remaining non-terminated line/event is intentionally discarded: SSE
+  // dispatch requires a terminating blank line.
   buffer += decoder.decode();
+  buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const finalLines = buffer.split("\n");
+  buffer = finalLines.pop() || "";
 
-  // Process a final line that was not terminated by a line feed.
-  if (buffer !== "") {
-    const event = processLine(buffer);
+  for (const line of finalLines) {
+    const event = processLine(line);
     if (event) {
       yield event;
     }
-  }
-
-  const event = flush();
-  if (event) {
-    yield event;
   }
 }
 
