@@ -106,7 +106,7 @@ async def _read_surface_webhook_body(request: Request, *, endpoint: str) -> byte
             logger.warning(
                 "agent_surfaces.webhook.rejecting_oversized_delivery.degraded",
                 endpoint=endpoint,
-                size=normalized_length,
+                size=MAX_SURFACE_WEBHOOK_BODY_BYTES + 1,
             )
             raise HTTPException(
                 status_code=413,
