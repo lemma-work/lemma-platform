@@ -1,8 +1,8 @@
 """Admission uses the locked workflow limit, not a caller's stale snapshot."""
 
 from types import SimpleNamespace
-from uuid import uuid4
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
