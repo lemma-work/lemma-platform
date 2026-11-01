@@ -24,6 +24,12 @@ export async function* readSSE(
     }
 
     const data = dataLines.join("\n");
+    if (data.length === 0) {
+      eventName = undefined;
+      dataLines = [];
+      return null;
+    }
+
     const raw = `${eventName ? `event: ${eventName}\n` : ""}${dataLines
       .map((line) => `data: ${line}`)
       .join("\n")}`;
