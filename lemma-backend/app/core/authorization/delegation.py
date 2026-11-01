@@ -186,7 +186,7 @@ class DelegationClaimsError(ValueError):
 def _coerce_scope(value: Any) -> list[str]:
     if value is None:
         return []
-    if isinstance(value, str):
+    if isinstance(value, str) and value.strip():
         return [value]
     if isinstance(value, list) and all(
         isinstance(v, str) and v.strip() for v in value
