@@ -162,3 +162,45 @@ async def test_bump_repairs_overflow_created_by_a_concurrent_increment(monkeypat
 
     assert await redis.get(key) == b"123456790"
     await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_epoch_reads_use_raw_redis_responses_for_malformed_utf8(monkeypatch):
+    key = "authz:epoch:global"
+    redis = fakeredis.FakeAsyncRedis()
+    await redis.set(key, b"\\xff")
+    observed: dict[str, object] = {}
+
+    def _get_redis(**kwargs):
+        observed.update(kwargs)
+        return redis
+
+    monkeypatch.setattr(authz_epoch, "get_redis", _get_redis)
+
+    epoch = await authz_epoch._epoch_of([key])
+
+    assert observed == {"url": authz_epoch.settings.redis_url, "decode_responses": False}
+    assert epoch is not None
+    assert authz_epoch._epoch_value(await redis.get(key)) is not None
+    await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_epoch_bumps_use_raw_redis_responses_for_malformed_utf8(monkeypatch):
+    key = "authz:epoch:global"
+    redis = fakeredis.FakeAsyncRedis()
+    await redis.set(key, b"\\xff")
+    observed: dict[str, object] = {}
+
+    def _get_redis(**kwargs):
+        observed.update(kwargs)
+        return redis
+
+    monkeypatch.setattr(authz_epoch, "get_redis", _get_redis)
+    monkeypatch.setattr(authz_epoch, "_seed", lambda: "123456789")
+
+    await authz_epoch._bump(key, None)
+
+    assert observed == {"url": authz_epoch.settings.redis_url, "decode_responses": False}
+    assert await redis.get(key) == b"123456790"
+    await redis.aclose()
