@@ -54,6 +54,18 @@ describe("readSSE", () => {
     });
   });
 
+  it("handles a CRLF pair split across chunks", async () => {
+    const input = new TextEncoder().encode("data: split\\r\\n\\r\\n");
+    const splitAt = input.indexOf(13) + 1;
+
+    const events = await collect(
+      readable([input.slice(0, splitAt), input.slice(splitAt)]),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toBe("split");
+  });
+
   it("removes only one optional space after an SSE field colon", async () => {
     const input = new TextEncoder().encode(
       "event:  custom\ndata:   indented  \n\n",
