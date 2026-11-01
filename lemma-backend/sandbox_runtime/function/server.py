@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -414,17 +415,31 @@ async def invoke(request: Request) -> JSONResponse:
         return await _invoke(request)
 
 
+async def _read_bounded_invocation_body(request: Request) -> bytes:
+    """Buffer an invocation only after enforcing its size while streaming."""
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        if not content_length.isascii() or not content_length.isdecimal():
+            raise HTTPException(status_code=400, detail="invalid content length")
+        normalized_length = content_length.lstrip("0") or "0"
+        maximum_length = str(_MAX_INPUT_BYTES)
+        if len(normalized_length) > len(maximum_length) or (
+            len(normalized_length) == len(maximum_length)
+            and normalized_length > maximum_length
+        ):
+            raise HTTPException(status_code=413, detail="invocation body is too large")
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > _MAX_INPUT_BYTES:
+            raise HTTPException(status_code=413, detail="invocation body is too large")
+        body.extend(chunk)
+    return bytes(body)
+
+
 async def _invoke(request: Request) -> JSONResponse:
     try:
-        content_length = int(request.headers.get("content-length", "0"))
-    except ValueError:
-        content_length = _MAX_INPUT_BYTES + 1
-    if content_length > _MAX_INPUT_BYTES:
-        return JSONResponse({"error": "invocation body is too large"}, status_code=413)
-    try:
-        body_bytes = await request.body()
-        if len(body_bytes) > _MAX_INPUT_BYTES:
-            raise ValueError("invocation body is too large")
+        body_bytes = await _read_bounded_invocation_body(request)
         invocation = RuntimeInvocation.model_validate_json(body_bytes)
         function_id = UUID(request.path_params["function_id"])
         run_id = UUID(request.path_params["run_id"])
@@ -449,6 +464,8 @@ async def _invoke(request: Request) -> JSONResponse:
     # No overload answer here: capacity is waited for inside the run's task,
     # and a run that never gets a worker settles as a failed report that says
     # it never started. Nothing on this path can raise it.
+    except HTTPException as exc:
+        return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
     except Exception:
