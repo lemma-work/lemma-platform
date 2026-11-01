@@ -114,6 +114,17 @@ def test_init_pod_creates_parsable_bundle(tmp_path: Path):
     # instruction.md resolved via $file ref into a string
     assert isinstance(agent["instruction"], str) and agent["instruction"].strip()
 
+    # The starter agent's advertised operations must be backed by the table
+    # scaffold: its columns are part of the starter's usable contract.
+    table = load_resource_payload(root / "tables" / "items", "items")
+    columns = {column["name"]: column for column in table["columns"]}
+    assert {"title", "status"} <= columns.keys()
+    assert columns["title"]["type"] == "TEXT"
+    assert columns["title"]["required"] is True
+    assert columns["status"]["type"] == "ENUM"
+    assert columns["status"]["default"] == "open"
+    assert columns["status"]["options"] == ["open", "in_progress", "done"]
+
 
 def test_init_pod_refuses_existing_without_force(tmp_path: Path):
     init_pod(tmp_path / "demo", "demo")
