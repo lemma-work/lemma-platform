@@ -114,6 +114,13 @@ def test_init_pod_creates_parsable_bundle(tmp_path: Path):
     # instruction.md resolved via $file ref into a string
     assert isinstance(agent["instruction"], str) and agent["instruction"].strip()
 
+    readme_text = (root / "README.md").read_text(encoding="utf-8")
+    assert "lemma auth login" in readme_text
+    assert "lemma orgs select --save-default" in readme_text
+    assert "lemma pods select --save-default" in readme_text
+    assert "lemma pods import ./demo-ops --dry-run" in readme_text
+    assert "lemma pods import ./demo-ops" in readme_text
+
 
 def test_init_pod_refuses_existing_without_force(tmp_path: Path):
     init_pod(tmp_path / "demo", "demo")
