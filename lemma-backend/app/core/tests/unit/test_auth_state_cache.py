@@ -134,7 +134,10 @@ async def test_a_corrupt_payload_reads_as_a_miss(fake_cache: _FakeRedis) -> None
 
 
 @pytest.mark.parametrize("flag", ["is_active", "is_verified", "is_deleted"])
-@pytest.mark.parametrize(\n    "invalid_value", ["\\\"false\\\"", "0", "1", "null", "[]", "{}"]\n)
+@pytest.mark.parametrize(
+    "invalid_value",
+    ['"false"', "0", "1", "null", "[]", "{}"],
+)
 async def test_non_boolean_flag_is_a_cache_miss(
     fake_cache: _FakeRedis, flag: str, invalid_value: str
 ) -> None:
