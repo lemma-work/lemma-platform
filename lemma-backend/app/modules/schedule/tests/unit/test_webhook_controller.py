@@ -284,3 +284,15 @@ async def test_non_github_sources_keep_the_smaller_body_ceiling(monkeypatch):
 
     assert rejected.value.status_code == 413
     assert receive_calls() == 0
+
+
+def test_unverified_schedule_handshake_route_is_not_exposed():
+    """WhatsApp handshakes belong to the authenticated surface ingress.
+
+    The schedule source registry accepts Composio, GitHub, and MCP; its old
+    WhatsApp GET route echoed arbitrary challenges despite having no matching
+    WhatsApp POST source. The real token-checked handshake lives under
+    /surfaces/webhooks/{platform}.
+    """
+    paths = {route.path for route in router.routes}
+    assert "/webhooks/{source}/verify" not in paths
