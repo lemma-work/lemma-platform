@@ -74,5 +74,7 @@ def test_loads_jsonc_invalid_still_raises():
 
 def test_strip_jsonc_reports_unterminated_block_comment_location():
     text = "{" + chr(10) + '  "a": 1,' + chr(10) + "  /* missing terminator" + chr(10) + "}"
-    with pytest.raises(ValueError, match=r"line 3, column 3"):
+    with pytest.raises(json.JSONDecodeError, match="Unterminated block comment") as excinfo:
         strip_jsonc(text)
+    assert excinfo.value.lineno == 3
+    assert excinfo.value.colno == 3
