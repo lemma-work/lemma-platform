@@ -161,7 +161,9 @@ def test_load_resource_payload_rejects_parent_directory_file_refs(
     outside_file = tmp_path / sidecar_name
     outside_file.write_text(sidecar_contents, encoding="utf-8")
     (resource_dir / "helper.json").write_text(
-        json.dumps(\n            {"name": "helper", "instruction": {ref_key: f"../../{sidecar_name}"}}\n        ),
+        json.dumps(
+            {"name": "helper", "instruction": {ref_key: f"../../{sidecar_name}"}}
+        ),
         encoding="utf-8",
     )
 
