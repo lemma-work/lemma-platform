@@ -107,12 +107,25 @@ def _workflow_run_key(payload: WebhookPayload) -> str | None:
 
 def _check_suite_key(payload: WebhookPayload) -> str | None:
     suite = payload.get("check_suite") or {}
+    action = payload.get("action")
+    status = suite.get("status")
+    updated_at = suite.get("updated_at")
+    if (
+        suite.get("id") is None
+        or not isinstance(action, str)
+        or not action
+        or not isinstance(status, str)
+        or not status
+        or not isinstance(updated_at, str)
+        or not updated_at
+    ):
+        return None
     # A GitHub App can receive requested/rerequested check_suite actions. A
     # rerequest resets status to queued on the same suite id; updated_at moves
     # for each new request, while a redelivery carries the same timestamp.
     return (
-        f"{suite.get('id')}:{payload.get('action')}:{suite.get('status')}"
-        f":{suite.get('conclusion')}:{suite.get('updated_at')}"
+        f"{suite['id']}:{action}:{status}"
+        f":{suite.get('conclusion')}:{updated_at}"
     )
 
 
