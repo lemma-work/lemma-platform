@@ -14,6 +14,12 @@ from app.modules.schedule.api.controllers.webhook_controller import (
 )
 
 
+def test_unverified_schedule_handshake_route_is_not_exposed():
+    """WhatsApp handshakes belong to the token-checked surface ingress."""
+    paths = {route.path for route in router.routes}
+    assert "/webhooks/{source}/verify" not in paths
+
+
 def test_direct_schedule_webhook_route_is_removed():
     """The unauthenticated, unverified POST /webhooks/schedules/{id} endpoint was
     deleted (security_authz-02). Only the composio-verified /webhooks/{source}
