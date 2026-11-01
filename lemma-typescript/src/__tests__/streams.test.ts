@@ -88,7 +88,7 @@ describe("readSSE", () => {
   });
 
   it("treats an empty event field as the default message event", async () => {
-    const input = new TextEncoder().encode("event: custom\\nevent:\\ndata: ready\\n\\n");
+    const input = new TextEncoder().encode("event: custom\nevent:\ndata: ready\n\n");
 
     const events = await collect(readable([input]));
 
