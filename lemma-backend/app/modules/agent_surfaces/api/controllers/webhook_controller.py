@@ -130,7 +130,6 @@ async def _read_surface_webhook_body(request: Request, *, endpoint: str) -> byte
     return bytes(body)
 
 
-
 @router.post(
     "/webhooks/telegram-manager",
     operation_id="surface.webhook.handle_telegram_manager",
