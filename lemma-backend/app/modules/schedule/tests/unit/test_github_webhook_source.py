@@ -690,3 +690,21 @@ class TestSourceEventIdRejectsIncompletePayloads:
         assert source_event_id(
             "pull_request", installation_id, repository_id, _pull_request()
         ) is None
+
+
+    @pytest.mark.parametrize(
+        ("event", "payload"),
+        [
+            ("pull_request", {"action": "opened", "pull_request": "not-an-object"}),
+            ("pull_request_review", {"action": "submitted", "review": []}),
+            ("pull_request_review_comment", {"action": "created", "comment": None}),
+            ("issues", {"action": "opened", "issue": []}),
+            ("issue_comment", {"action": "created", "comment": "not-an-object"}),
+            ("workflow_run", {"action": "completed", "workflow_run": []}),
+            ("check_suite", {"action": "rerequested", "check_suite": []}),
+            ("check_run", {"action": "completed", "check_run": []}),
+            ("release", {"action": "published", "release": []}),
+        ],
+    )
+    def test_malformed_nested_objects_are_dropped_without_exceptions(self, event, payload):
+        assert source_event_id(event, "1", 2, payload) is None
