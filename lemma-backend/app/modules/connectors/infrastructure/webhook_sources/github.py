@@ -63,10 +63,16 @@ _PULL_REQUEST_EVENTS = frozenset(
 
 
 def _push_key(payload: WebhookPayload) -> str | None:
-    # `after` is the commit the ref now points at: the same push redelivered
-    # names the same commit, and a force-push to a different one is a different
-    # event that should fire again.
-    return payload.get("after")
+    # A push is a ref transition, not just a commit. Two branches can point at
+    # the same `after` SHA, and the same ref can reach that SHA from different
+    # prior tips. Include all three required GitHub fields so distinct pushes
+    # remain distinct while a redelivery of one transition stays idempotent.
+    ref = payload.get("ref")
+    before = payload.get("before")
+    after = payload.get("after")
+    if not all(isinstance(value, str) and value for value in (ref, before, after)):
+        return None
+    return f"{ref}:{before}:{after}"
 
 
 def _pull_request_key(payload: WebhookPayload) -> str | None:
