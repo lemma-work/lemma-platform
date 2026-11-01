@@ -73,6 +73,60 @@ from app.modules.agent_surfaces.services.webhook_security_service import (
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
 
+# Surface webhooks are public ingress points. The global request limit is sized
+# for uploads, not for small signed event envelopes, so keep webhook buffering
+# independently bounded before JSON parsing or signature verification.
+MAX_SURFACE_WEBHOOK_BODY_BYTES = 25 * 1024 * 1024
+
+
+async def _read_surface_webhook_body(request: Request, *, endpoint: str) -> bytes:
+    """Read a bounded webhook body without trusting Content-Length.
+
+    Resend sends attachment metadata in its inbound event; the attachment bytes
+    are retrieved separately. A 25 MiB ceiling leaves room for large message
+    bodies while avoiding the global upload-sized request allowance on public
+    webhook routes.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        if not content_length.isascii() or not content_length.isdecimal():
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid webhook content length",
+            )
+        normalized_length = content_length.lstrip("0") or "0"
+        maximum_length = str(MAX_SURFACE_WEBHOOK_BODY_BYTES)
+        if len(normalized_length) > len(maximum_length) or (
+            len(normalized_length) == len(maximum_length)
+            and normalized_length > maximum_length
+        ):
+            logger.warning(
+                "agent_surfaces.webhook.rejecting_oversized_delivery.degraded",
+                endpoint=endpoint,
+                size=normalized_length,
+            )
+            raise HTTPException(
+                status_code=413,
+                detail="Webhook payload is too large",
+            )
+
+    body = bytearray()
+    async for chunk in request.stream():
+        observed_size = len(body) + len(chunk)
+        if observed_size > MAX_SURFACE_WEBHOOK_BODY_BYTES:
+            logger.warning(
+                "agent_surfaces.webhook.rejecting_oversized_delivery.degraded",
+                endpoint=endpoint,
+                size=observed_size,
+            )
+            raise HTTPException(
+                status_code=413,
+                detail="Webhook payload is too large",
+            )
+        body.extend(chunk)
+    return bytes(body)
+
+
 
 @router.post(
     "/webhooks/telegram-manager",
@@ -94,7 +148,10 @@ async def handle_telegram_manager_webhook(
         )
     if not constant_time_equals(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
-    payload = _decode_webhook_payload(await request.body(), dict(request.headers))
+    raw_body = await _read_surface_webhook_body(
+        request, endpoint="telegram-manager"
+    )
+    payload = _decode_webhook_payload(raw_body, dict(request.headers))
     try:
         await service.handle_update(payload)
     except TelegramManagedBotProvisioningInProgressError as exc:
@@ -128,7 +185,9 @@ async def handle_platform_webhook(
     resolved = parse_webhook_platform(platform)
     source = resolved.value.lower()
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await _read_surface_webhook_body(
+        request, endpoint=f"platform:{source}"
+    )
     payload = _decode_webhook_payload(raw_body, headers)
 
     # Resend inbound: a catch-all address webhook. Resolve the destination
@@ -274,7 +333,9 @@ async def handle_whatsapp_number_webhook(
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
     # short scope for the pool lookup, nothing held across a provider call.
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await _read_surface_webhook_body(
+        request, endpoint="whatsapp-number"
+    )
 
     # The order below is the whole point of this route, and it looks odd enough
     # to be worth stating. The body names a `metadata.phone_number_id`, and
@@ -379,7 +440,9 @@ async def handle_surface_webhook(
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
     # short scope for the surface lookup, nothing held across a provider call.
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await _read_surface_webhook_body(
+        request, endpoint="surface"
+    )
     payload = _decode_webhook_payload(raw_body, headers)
 
     # get_surface raises AgentSurfaceNotFoundError (404) and verify_surface_request
