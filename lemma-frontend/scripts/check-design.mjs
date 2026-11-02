@@ -48,6 +48,11 @@ const ALLOWED = [
         reason: "the backdrop for somebody else's document, authored against a white page",
     },
     {
+        file: "site.css",
+        selector: /\.site--day/,
+        reason: "the public site pages share the landing's fixed daylight palette (white paper, one violet), which does not move with the app's theme",
+    },
+    {
         file: "refinement.css",
         line: /\.verify__qr-paper/,
         reason: "a QR code is read by a camera, so it is fixed ink on fixed paper in both themes or it does not scan",

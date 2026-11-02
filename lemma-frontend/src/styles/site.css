@@ -395,3 +395,78 @@
  .docs-article :is(h2,h3,h4) { scroll-margin-top: 140px; }
  .docs-heading h1 { font-size: 34px; }
 }
+
+/* ── Site pages in the marketing pages' daylight ──────────────────────
+   White paper, one violet, Geist; the same header and buttons as the
+   landing, so a visitor never feels they left it. Scoped to SitePage. */
+.site--day {
+  --canvas: #ffffff;
+  --paper: #ffffff;
+  --ink: #100e18;
+  --ink-2: #4c4858;
+  --ink-3: #6b6778;
+  --accent: #5a3fd4;
+  --accent-soft: #f4f1ff;
+  --line-2: rgb(16 14 24 / 0.09);
+  background: #ffffff;
+  font-family: var(--font-geist, "Geist"), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.site--day .site-header {
+  height: 72px;
+  /* The same edges as the marketing nav, so the logo never jumps between pages. */
+  padding: 0 max(24px, 5vw, calc((100% - 1120px) / 2));
+  background: rgb(255 255 255 / 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom-color: rgb(16 14 24 / 0.07);
+}
+.site--day .site-header nav {
+  align-items: center;
+  gap: 28px;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+.site--day .site-header nav a:hover { color: var(--ink); }
+.site--day .site-header nav a[data-nav="start"] {
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 17px;
+  border-radius: 99px;
+  background: var(--ink);
+  color: #ffffff;
+  box-shadow: 0 10px 26px -14px rgb(16 14 24 / 0.6);
+}
+.site--day .site-main { padding-top: 96px; }
+.site--day .site-title h1 {
+  font-family: inherit;
+  font-weight: 500;
+  font-size: clamp(44px, 6vw, 76px);
+  line-height: 1;
+  letter-spacing: -0.045em;
+  margin: 18px 0 22px;
+}
+.site--day .site-title > p:first-child {
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.site--day .site-title > p:last-child { font-size: 20px; line-height: 1.55; }
+.site--day .site-prose h2 { letter-spacing: -0.025em; }
+.site--day .site-card {
+  border: 0;
+  border-radius: 16px;
+  box-shadow: 0 0 0 1px rgb(90 63 212 / 0.12), 0 24px 60px -40px rgb(70 45 190 / 0.45);
+  transition: transform 160ms cubic-bezier(.2, .8, .2, 1), box-shadow 160ms cubic-bezier(.2, .8, .2, 1);
+}
+.site--day a.site-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px rgb(90 63 212 / 0.24), 0 30px 70px -40px rgb(70 45 190 / 0.55);
+}
+.site--day .site-chips button { border-color: rgb(16 14 24 / 0.12); }
+.site--day .site-chips button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #ffffff; }
+@media (max-width: 760px) {
+  .site--day .site-header nav a:not([data-nav="start"]) { display: none; }
+}

@@ -32,16 +32,3 @@ export function AppWindow({ picture, title, who, sizes }: { picture: Picture; ti
         </figure>
     );
 }
-
-/** A note in the margin, in a hand, with an arrow that draws itself in. */
-export function Note({ children }: { children: string }) {
-    return (
-        <p className={p.note}>
-            <span>{children}</span>
-            <svg className={p.arrow} viewBox="0 0 120 70" fill="none" aria-hidden="true">
-                <path pathLength={1} d="M6 8 C 30 50, 70 62, 110 56" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                <path pathLength={1} d="M98 46 L111 56 L97 64" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-        </p>
-    );
-}

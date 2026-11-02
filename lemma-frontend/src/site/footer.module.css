@@ -1,9 +1,9 @@
 .footer {
-    --ink: #20211f;
-    --brand: #4a35c9;
-    background: #f4f3ed;
-    color: #20211f;
-    border-top: 1px solid #20211f22;
+    --ink: #100e18;
+    --brand: #5a3fd4;
+    background: #ffffff;
+    color: #100e18;
+    border-top: 1px solid #100e1817;
     padding: 0 5vw;
 }
 .footer a {
@@ -15,7 +15,7 @@
     text-underline-offset: 4px;
 }
 .footer a:focus-visible {
-    outline: 2px solid #4a35c9;
+    outline: 2px solid #5a3fd4;
     outline-offset: 5px;
 }
 .directory {
@@ -45,7 +45,7 @@
 .oss {
     display: inline-block;
     font-size: 12px;
-    color: #4a35c9 !important;
+    color: #5a3fd4 !important;
     padding: 4px 0;
 }
 .directory nav {
