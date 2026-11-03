@@ -44,6 +44,10 @@ const config: NextConfig = {
         destination: "/t",
         permanent: false,
       })),
+      /* The app was tried at `/o` beside the workspace before it became
+         `/t`; its links still open. */
+      { source: "/o", destination: "/t", permanent: false },
+      { source: "/o/:path*", destination: "/t/:path*", permanent: false },
     ];
   },
   async rewrites() {

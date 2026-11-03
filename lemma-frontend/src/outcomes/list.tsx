@@ -88,7 +88,12 @@ export function OutcomesList({ org, pods, activity, plans, queue, go }: {
 
     return (
         <div className="ox-page">
-            <h1 className="ox-title">Your Lemmas</h1>
+            <header className="ox-list__head">
+                <h1 className="ox-title">Your Lemmas</h1>
+                {/* The workspace's way in: describe the job, meet who would
+                    do it, name them, and choose their first move. */}
+                <a className="ox-btn" {...to({ name: "hire" }, go)}>New Lemma</a>
+            </header>
             <p className="ox-sub">Each one owns something: a bar it holds every week, or a finish line by a date. It builds what that takes, runs it, and asks a person when it needs one.</p>
 
             <div className="ox-sec">

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ConversationRef, Org, Pod } from "@/data";
 import { key } from "@/session/storage";
-import { workSince, type Go, type QueueItem } from "./model";
+import { workSince, type Ask, type Go, type QueueItem } from "./model";
 import { NeedRow } from "./answer";
 import { AppTiles, AskBox, useApps } from "./ask";
 import { Empty, to } from "./parts";
@@ -63,7 +63,7 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
     queue: readonly QueueItem[];
     me: string;
     go: Go;
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
 }) {
     const [now] = useState(() => Date.now());
     const lastSeen = useLastSeen();

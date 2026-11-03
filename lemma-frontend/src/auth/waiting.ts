@@ -13,6 +13,7 @@
  */
 
 import { readAddress } from "@/shell/address";
+import { isFramePath, podOfFramePath } from "@/outcomes/paths";
 import { characterForSeed, CHARACTERS, type CharacterName } from "@/shell/cast";
 import { readableName } from "@/library/reading";
 
@@ -65,7 +66,7 @@ function crowd(seed: string, howMany: number): CharacterName[] {
  */
 export function waitingFor(destination: string | null, seed = "lemma"): Waiting {
     const path = pathOf(destination);
-    const podId = path ? readAddress(path).podId : null;
+    const podId = !path ? null : isFramePath(path) ? podOfFramePath(path) : readAddress(path).podId;
 
     if (podId) return { name: sayableName(podId), faces: [characterForSeed(podId)] };
     return { name: null, faces: crowd(seed, 3) };

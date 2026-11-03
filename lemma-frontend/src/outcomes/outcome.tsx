@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { ContactsPage } from "@/space/contacts-page";
+import { ChatsPage } from "@/space/chats-page";
+import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { Library } from "@/library/library";
 import { AppCover } from "@/stage/app-cover";
 import { readableName } from "@/library/reading";
@@ -17,7 +19,7 @@ import { useWorkflowList } from "@/workflow/use-run";
 import {
     NEW_CHAT, PLAN_PATH, PLAN_SECTIONS, SECTION_TITLES,
     ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, workRows,
-    type Go, type OutcomeTab, type Plan, type PlanLine, type PlanSection, type QueueItem,
+    type Ask, type Go, type OutcomeTab, type Plan, type PlanLine, type PlanSection, type QueueItem,
 } from "./model";
 import { mcpUrl, planRequest, PlanMovedOn, readPlan, savePlan, useMeasure } from "./data";
 import { Avatar, Empty, Icon, to } from "./parts";
@@ -25,7 +27,7 @@ import type { FrameActions } from "./actions";
 import { NeedRow } from "./answer";
 import { AppTiles, AskBox, useApps } from "./ask";
 import { AutomationsTab } from "./automations";
-import { LemmaActions, SectionSwitch, sectionLabel, useLemmaSections, type LemmaSection } from "./lemma-bar";
+import { LemmaActions, SectionSwitch, closeMenu, sectionLabel, useLemmaSections, type LemmaSection } from "./lemma-bar";
 import { kindOf, markOf } from "./sidebar";
 import { Stage } from "./stage";
 
@@ -62,7 +64,7 @@ export function OutcomePage({ pod, pods, tab, section = null, plan, activity, qu
     me: string;
     go: Go;
     /** Start a chat with this Lemma with these words, and open it. */
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
     actions: FrameActions;
 }) {
     const contacts = useMaySeeContacts(pod.id);
@@ -76,9 +78,27 @@ export function OutcomePage({ pod, pods, tab, section = null, plan, activity, qu
     }
     return (
         <Stage pod={pod} here={<SectionSwitch pod={pod} here={tab} go={go} />} go={go} actions={bar}>
-            <div className="ox-page ox-page--lemma ox-section" data-section={tab}>
-                <h1 className="ox-section__t">{sectionLabel(tab)}</h1>
+            <div className="ox-page ox-section" data-section={tab}>
+                <header className="ox-section__head">
+                    <h1 className="ox-section__t">{sectionLabel(tab)}</h1>
+                    {tab === "made" && <MakeMenu pod={pod} go={go} actions={actions} />}
+                </header>
                 {tab === "plan" && <PlanTab pod={pod} me={me} go={go} onAsk={onAsk} />}
+                {tab === "chats" && (
+                    <ChatsPage
+                        pod={pod}
+                        openId={null}
+                        initialFilter={section === "channels" ? "channels" : "all"}
+                        onOpen={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
+                        onOpenChannel={(id) => go(chatView({ kind: "shared", podId: pod.id, id }))}
+                        onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
+                        onNew={() => go(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }))}
+                        onConnect={() => actions.connect(pod.id)}
+                        onReach={() => actions.connect(pod.id)}
+                        onPages={() => go(outcomeView(pod.id, "made"))}
+                        onAsk={(text) => actions.prompt(pod.id, text)}
+                    />
+                )}
                 {tab === "apps" && <AppsTab pod={pod} go={go} />}
                 {tab === "made" && <Library podId={pod.id} onFile={(path) => go({ name: "file", podId: pod.id, path })} onTable={(name) => go({ name: "table", podId: pod.id, table: name })} />}
                 {tab === "contacts" && (contacts
@@ -87,6 +107,54 @@ export function OutcomePage({ pod, pods, tab, section = null, plan, activity, qu
                 {tab === "automations" && <AutomationsTab pod={pod} pods={pods} section={section} queue={queue} go={go} actions={actions} />}
             </div>
         </Stage>
+    );
+}
+
+/** New, over a Lemma's files, as the workspace offers it: a blank page or
+ *  one from a template, made and opened with the caret in it; a table or an
+ *  app, which the Lemma makes, so they start as words in a chat's box. */
+function MakeMenu({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
+    const cache = useQueryClient();
+    const [making, setMaking] = useState<string | null>(null);
+    const [failed, setFailed] = useState(false);
+    const make = async (event: { currentTarget: Element }, id: string, base: string, text: string) => {
+        closeMenu(event);
+        setMaking(id);
+        setFailed(false);
+        try {
+            /* Named like a person would, Untitled then Untitled 2, against
+               what the pages folder already holds; with no listing, names are
+               found by trying. Create-only, so it never writes over a page. */
+            const taken = await source.listLibrary(pod.id, "files", "/pages")
+                .then((listed) => new Set(listed.items.map((item) => item.name.toLowerCase())))
+                .catch(() => new Set<string>());
+            const path = await makePage((at, body) => source.createFile(pod.id, at, body), base, text, taken);
+            void cache.invalidateQueries({ queryKey: ["library", pod.id] });
+            go({ name: "file", podId: pod.id, path });
+        } catch {
+            setFailed(true);
+        } finally {
+            setMaking(null);
+        }
+    };
+    const mate = pod.teammate?.name || pod.name;
+    return (
+        <div className="ox-make">
+            {failed && <span className="ox-make__note" role="alert">That page couldn’t be made. Try again.</span>}
+            <details className="ox-more">
+                <summary className="ox-btn ox-btn--small" aria-label="New">{making ? "Making…" : "New"}<Icon name="chevron" size={14} /></summary>
+                <div className="ox-more__menu" role="menu">
+                    <button type="button" role="menuitem" disabled={Boolean(making)} onClick={(event) => void make(event, "page", "Untitled", "# Untitled\n\n")}>Page</button>
+                    {PAGE_TEMPLATES.map((template) => (
+                        <button key={template.id} type="button" role="menuitem" disabled={Boolean(making)} onClick={(event) => void make(event, template.id, template.file, template.body(mate, new Date()))}>
+                            {template.title}<span className="ox-make__blurb">{template.blurb}</span>
+                        </button>
+                    ))}
+                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.prompt(pod.id, "Set up a table to track "); }}>Table</button>
+                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.prompt(pod.id, "Build an app that "); }}>App</button>
+                </div>
+            </details>
+        </div>
     );
 }
 
@@ -103,7 +171,7 @@ function LemmaSummary({ pod, plan, activity, queue, go, onAsk, actions }: {
     activity: readonly ConversationRef[];
     queue: readonly QueueItem[];
     go: Go;
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
     actions: FrameActions;
 }) {
     const reader = useMe();
@@ -129,7 +197,7 @@ function LemmaSummary({ pod, plan, activity, queue, go, onAsk, actions }: {
     const tableCount = (tables.data?.items ?? []).filter((item) => item.kind === "table").length;
 
     return (
-        <div className="ox-page ox-page--lemma ox-lsum">
+        <div className="ox-page ox-lsum">
             <header className="ox-lsum__head">
                 <TeammateFace pod={pod} size={52} />
                 <div className="ox-lsum__id">
@@ -223,6 +291,7 @@ function SectionRows({ pod, plan, queue, apps, tables, go }: {
     const jobs = (schedules.data ?? []).filter((job) => !job.internal).length;
     const said: Record<LemmaSection, string> = {
         plan: plan === undefined ? "" : lines ? counted(lines, "line") : "Not written yet",
+        chats: "Every chat, and the shared ones",
         apps: apps ? counted(apps, "app") : "None yet",
         made: tables ? `${counted(tables, "table")}, pages and files` : "Pages, files and tables",
         contacts: waiting ? `${waiting} waiting on a person` : "",
@@ -288,7 +357,7 @@ function ReachedOn({ pod, actions }: { pod: Pod; actions: FrameActions }) {
 /** The plan: what it owns and how, line by line, with who wrote each. With
  *  none yet, a draft read off what it already runs -- to save as it is, or
  *  to have the Lemma write properly in a chat. */
-function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: (podId: string, text: string) => void }) {
+function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: Ask }) {
     const queryClient = useQueryClient();
     /* The frame's own read of the plan, shared by key, asked here for its
        failure: a plan that could not be read is not a pod with no plan. */

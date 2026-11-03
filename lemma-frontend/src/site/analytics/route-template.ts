@@ -18,7 +18,8 @@
  *  because they do not appear in URLs. Kept in sync by `route-template.test.ts`. */
 export const ROUTE_TEMPLATES: readonly string[] = [
     "/",
-    "/t/[[...podId]]",
+    "/t/[[...path]]",
+    "/l/[[...podId]]",
     "/d/[code]",
     "/connect",
     "/demo/[...path]",

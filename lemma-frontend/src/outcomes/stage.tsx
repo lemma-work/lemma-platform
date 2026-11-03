@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { source, type Pod } from "@/data";
+import { source, type FileContent, type Pod, type Tab } from "@/data";
 import { RunPage } from "@/space/run-page";
+import { ComputerView } from "@/computer/computer-view";
+import { ConnectBanner } from "@/connect/pod-connect";
 import { WorkflowPage } from "@/space/workflow-page";
 import { AppFrameView } from "@/desktop/app-frame";
 import { FileView } from "@/thread/file-view";
@@ -18,14 +20,22 @@ import type { Org } from "@/data";
 import { displayAgentName } from "@/data/agent-names";
 import { readableName } from "@/library/reading";
 import { registerFrame } from "@/thread/compose-bridge";
+import { docTitle } from "@/library/doc-title";
+import { ViewActions } from "@/shell/view-actions";
+import { CommentsButton } from "@/docpages/comments/button";
+import { moveComments } from "@/docpages/comments/store";
+import { recordMove } from "@/docpages/moves";
+import { renamePage } from "@/docpages/rename";
+import { DocAskContext } from "@/docs/doc-ask";
+import { FloatingChat, moveDocThread, useFloatingChat, type ChatResource, type FloatingChatState } from "@/chat/floating-chat";
+import type { ShareSubject } from "@/space/share-sheet";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
 import { NEW_CHAT, chatView, outcomeView, type Go, type View } from "./model";
-import { classic } from "./data";
 import type { FrameActions } from "./actions";
 import { LemmaActions, SectionSwitch } from "./lemma-bar";
-import { Empty, Icon, to } from "./parts";
+import { Empty, to } from "./parts";
 
-const NO_FRAME_REF = () => undefined;
+const NOTHING = () => undefined;
 
 /** Back where the reader came from in the frame, or to `fallback` when they
  *  arrived by a link and there is nowhere in it to go back to. */
@@ -63,19 +73,57 @@ export function Stage({ pod, title, here, go, fill, actions, children }: {
                 </div>
                 {actions && <div className="ox-stagebar__acts">{actions}</div>}
             </div>
+            {/* Connections this Lemma needs that the reader has not made, as
+                the workspace asks for them over every page of a pod. */}
+            <ConnectBanner key={pod.id} pod={pod} />
             <div className="ox-stage">{children}</div>
         </div>
     );
 }
 
-function Workspace({ href }: { href: string }) {
-    return <a className="ox-btn ox-btn--small" href={href}>Open in the workspace</a>;
+/** The bar's end over something a Lemma holds: what the workspace offers on
+ *  it -- open, reload, download, copy its link, refresh -- and sharing it. */
+function HeldActions({ pod, tab, subject, actions, onReload = NOTHING }: {
+    pod: Pod;
+    tab: Tab;
+    subject: ShareSubject;
+    actions: FrameActions;
+    onReload?: () => void;
+}) {
+    return (
+        <>
+            <ViewActions tab={tab} podId={pod.id} onNew={NOTHING} onHistory={NOTHING} onComputer={NOTHING} onReload={onReload} />
+            <button type="button" className="ox-btn ox-btn--small" onClick={() => actions.share(pod.id, subject)}>Share</button>
+        </>
+    );
+}
+
+/** The chat about what a stage shows -- a page, a table, an app -- floating
+ *  beside it, as the workspace has it: that thing's own conversation, which a
+ *  page's "Ask for change" and a table's ask both reach. Opened full size, it
+ *  is a chat of the frame's like any other. */
+function ResourceChat({ pod, resource, state, go }: { pod: Pod; resource: ChatResource; state: FloatingChatState; go: Go }) {
+    return (
+        <FloatingChat
+            pod={pod}
+            resource={resource}
+            live={source.label === "live"}
+            state={state}
+            onOpenFile={(path) => go({ name: "file", podId: pod.id, path })}
+            onOpenTable={(table) => go({ name: "table", podId: pod.id, table })}
+            onOpenApp={(app) => go({ name: "app", podId: pod.id, app })}
+            onExpand={(id) => {
+                state.setOpen(false);
+                go(chatView({ kind: "chat", podId: pod.id, id }));
+            }}
+        />
+    );
 }
 
 export function RunView({ pod, runId, go, back }: { pod: Pod; runId: string; go: Go; back: Back }) {
     const [name, setName] = useState<string | null>(null);
     return (
-        <Stage pod={pod} title={name ? `${readableName(name)} · run` : "Workflow run"} go={go} fill actions={<Workspace href={classic.run(pod.id, runId)} />}>
+        <Stage pod={pod} title={name ? `${readableName(name)} · run` : "Workflow run"} go={go} fill>
             <div className="run-page">
                 <RunPage
                     pod={pod}
@@ -101,7 +149,7 @@ export function WorkflowView({ pod, workflow, go }: { pod: Pod; workflow: string
         if (id) go(chatView({ kind: "chat", podId: pod.id, id }));
     };
     return (
-        <Stage pod={pod} title={readableName(workflow)} go={go} fill actions={<Workspace href={classic.workflow(pod.id, workflow)} />}>
+        <Stage pod={pod} title={readableName(workflow)} go={go} fill>
             <div className="run-page">
                 <WorkflowPage
                     pod={pod}
@@ -117,18 +165,31 @@ export function WorkflowView({ pod, workflow, go }: { pod: Pod; workflow: string
 
 /** An app, framed here the way the workspace frames it, and registered so
  *  a button in it that asks Lemma something reaches a chat in this frame. */
-export function AppView({ pod, app, go }: { pod: Pod; app: string; go: Go }) {
+export function AppView({ pod, app, go, actions }: { pod: Pod; app: string; go: Go; actions: FrameActions }) {
     const tabs = useQuery({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 });
     const found = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" && tab.id === "app:" + app ? [tab] : []))[0] ?? null;
     const unregister = useRef<(() => void) | null>(null);
     useEffect(() => () => { unregister.current?.(); }, []);
+    const frame = useRef<HTMLIFrameElement | null>(null);
+    const chat = useFloatingChat();
+    const label = found?.label ?? readableName(app);
     return (
         <Stage
             pod={pod}
-            title={found?.label ?? readableName(app)}
+            title={label}
             go={go}
             fill
-            actions={found && <a className="ox-btn ox-btn--small" href={found.url} target="_blank" rel="noreferrer"><Icon name="out" size={13} />New tab</a>}
+            actions={found && (
+                <HeldActions
+                    pod={pod}
+                    tab={found}
+                    subject={{ kind: "app", label: found.label }}
+                    actions={actions}
+                    /* The src it was given, which on macOS is the app's alias
+                       rather than its URL. */
+                    onReload={() => { if (frame.current) frame.current.src = frame.current.getAttribute("src") ?? found.url; }}
+                />
+            )}
         >
             {tabs.isPending
                 ? <p className="ox-loading">Opening the app…</p>
@@ -136,33 +197,76 @@ export function AppView({ pod, app, go }: { pod: Pod; app: string; go: Go }) {
                     ? <div className="ox-stage__none"><Empty title="This app isn’t here."><p>It may have been removed or renamed.</p></Empty></div>
                     : <AppFrameView
                         url={found.url}
-                        frameRef={NO_FRAME_REF}
+                        frameRef={(element) => { frame.current = element; }}
                         onFrameLoad={(view) => {
                             unregister.current?.();
                             unregister.current = registerFrame(view);
                         }}
                     />}
+            {found && <ResourceChat pod={pod} resource={{ kind: "app", name: app, label }} state={chat} go={go} />}
         </Stage>
     );
 }
 
 /** A file. A page (Markdown) opens as the workspace's own page, edited in
- *  place with its comments; anything else as the file viewer. */
+ *  place, with its comments and the chat about it beside it; anything else
+ *  as the file viewer. */
 export function FilePage({ pod, path, go, actions }: { pod: Pod; path: string; go: Go; actions: FrameActions }) {
     const name = path.split("/").filter(Boolean).at(-1) ?? path;
     const page = isDoc(path);
+    const chat = useFloatingChat();
+    const cache = useQueryClient();
+    const docAsk = useMemo(() => ({ label: pod.name, ask: chat.ask }), [pod.name, chat.ask]);
+    /* A page's file follows its title, as in the workspace: the file moves
+       with what it owns, the chat about it goes along, and the address is
+       replaced rather than pushed. */
+    const rename = useCallback(async (from: string, title: string): Promise<string> => {
+        const podId = pod.id;
+        const to = await renamePage({
+            move: (a, b) => source.renameFile(podId, a, b),
+            read: async (at) => {
+                try { return (await source.readFile(podId, at)).text ?? null; }
+                catch (error) { if ((error as { statusCode?: number } | null)?.statusCode === 404) return null; throw error; }
+            },
+            write: (at, text) => source.writeFile(podId, at, text),
+            moveComments: (a, b) => moveComments(podId, a, b),
+        }, from, title);
+        if (to === from) return from;
+        if (source.label === "live") await moveDocThread(podId, from, to).catch(() => undefined);
+        void cache.invalidateQueries({ queryKey: ["resource-thread", podId, "file"] });
+        recordMove(podId, from, to);
+        const was = cache.getQueryData<FileContent>(["file", podId, from]);
+        if (was) cache.setQueryData<FileContent>(["file", podId, to], { ...was, path: to, name: to.slice(to.lastIndexOf("/") + 1) });
+        go({ name: "file", podId, path: to }, { replace: true });
+        return to;
+    }, [pod.id, cache, go]);
+    const tab: Tab = { id: "file:" + path, kind: "file", label: docTitle(path), path };
     return (
-        <Stage pod={pod} title={name} go={go} fill actions={<Workspace href={classic.file(pod.id, path)} />}>
+        <Stage
+            pod={pod}
+            title={name}
+            go={go}
+            fill
+            actions={(
+                <>
+                    {page && !/^\/me(\/|$)/.test(path) && <CommentsButton path={path} />}
+                    <HeldActions pod={pod} tab={tab} subject={{ kind: "file", path, label: tab.label }} actions={actions} />
+                </>
+            )}
+        >
             {page ? (
                 <div className="pane file-tab-pane doc-tab-pane">
-                    <DocSpace
-                        pod={pod}
-                        path={path}
-                        openFile={(next) => go({ name: "file", podId: pod.id, path: next })}
-                        openTable={(table) => go({ name: "table", podId: pod.id, table })}
-                        openConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
-                        sendToBot={(text) => actions.prompt(pod.id, text)}
-                    />
+                    <DocAskContext.Provider value={docAsk}>
+                        <DocSpace
+                            pod={pod}
+                            path={path}
+                            renamePage={rename}
+                            openFile={(next) => go({ name: "file", podId: pod.id, path: next })}
+                            openTable={(table) => go({ name: "table", podId: pod.id, table })}
+                            openConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
+                            sendToBot={chat.send}
+                        />
+                    </DocAskContext.Provider>
                 </div>
             ) : (
                 <div className="pane file-tab-pane">
@@ -171,30 +275,40 @@ export function FilePage({ pod, path, go, actions }: { pod: Pod; path: string; g
                     </div>
                 </div>
             )}
+            <ResourceChat pod={pod} resource={{ kind: "file", name: path, label: tab.label }} state={chat} go={go} />
         </Stage>
     );
 }
 
 export function TablePage({ pod, table, go, actions }: { pod: Pod; table: string; go: Go; actions: FrameActions }) {
+    const chat = useFloatingChat();
+    const label = readableName(table);
     return (
-        <Stage pod={pod} title={readableName(table)} go={go} fill actions={<Workspace href={classic.table(pod.id, table)} />}>
+        <Stage
+            pod={pod}
+            title={label}
+            go={go}
+            fill
+            actions={<HeldActions pod={pod} tab={{ id: "table:" + table, kind: "table", label, name: table }} subject={{ kind: "table", label }} actions={actions} />}
+        >
             <div className="pane library-pane">
                 <TableView
                     podId={pod.id}
                     name={table}
                     teammate={pod.teammate?.name || pod.name}
                     onOpenRecord={(name, recordId) => go({ name: "record", podId: pod.id, table: name, recordId })}
-                    onAsk={(text) => actions.prompt(pod.id, text)}
+                    onAsk={chat.prompt}
                 />
             </div>
+            <ResourceChat pod={pod} resource={{ kind: "table", name: table, label }} state={chat} go={go} />
         </Stage>
     );
 }
 
 /** One row of a table, on its own page. */
-export function RecordPage({ pod, table, recordId, go }: { pod: Pod; table: string; recordId: string; go: Go }) {
+export function RecordPage({ pod, table, recordId, go, actions }: { pod: Pod; table: string; recordId: string; go: Go; actions: FrameActions }) {
     return (
-        <Stage pod={pod} title={readableName(table)} go={go} fill actions={<Workspace href={classic.record(pod.id, table, recordId)} />}>
+        <Stage pod={pod} title={readableName(table)} go={go} fill actions={<HeldActions pod={pod} tab={{ id: "table:" + table, kind: "table", label: readableName(table), name: table }} subject={{ kind: "table", label: readableName(table) }} actions={actions} />}>
             <div className="pane library-pane">
                 <RecordView
                     podId={pod.id}
@@ -211,7 +325,7 @@ export function RecordPage({ pod, table, recordId, go }: { pod: Pod; table: stri
 /** One of a Lemma's agents: who it is, what it may do, and chats with it. */
 export function AgentView({ pod, agent, go, actions, back }: { pod: Pod; agent: string; go: Go; actions: FrameActions; back: Back }) {
     return (
-        <Stage pod={pod} title={displayAgentName(agent)} go={go} fill actions={<Workspace href={classic.agent(pod.id, agent)} />}>
+        <Stage pod={pod} title={displayAgentName(agent)} go={go} fill>
             <div className="pane bot-pane">
                 <AgentPage
                     pod={pod}
@@ -219,7 +333,7 @@ export function AgentView({ pod, agent, go, actions, back }: { pod: Pod; agent: 
                     live={source.label === "live"}
                     onBack={() => back(outcomeView(pod.id, "settings", "agents"))}
                     onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
-                    onAsk={(text, createWith) => actions.ask(pod.id, text, createWith)}
+                    onAsk={(text, createWith, files) => actions.ask(pod.id, text, createWith, files)}
                     onOpenSchedules={() => go(outcomeView(pod.id, "settings", "schedules"))}
                     onOpenWorkflows={() => go(outcomeView(pod.id, "automations"))}
                 />
@@ -235,7 +349,7 @@ export function SettingsView({ pod, org, section, go, actions }: { pod: Pod; org
     const cache = useQueryClient();
     return (
         <Stage pod={pod} here={<SectionSwitch pod={pod} here="settings" go={go} />} go={go} actions={<LemmaActions pod={pod} go={go} actions={actions} />}>
-            <div className="ox-page ox-page--lemma ox-section" data-section="settings">
+            <div className="ox-page ox-section" data-section="settings">
                 <h1 className="ox-section__t">Settings</h1>
                 <AboutPage
                     framed
@@ -254,6 +368,26 @@ export function SettingsView({ pod, org, section, go, actions }: { pod: Pod; org
                     onFile={(path) => go({ name: "file", podId: pod.id, path })}
                     onDeleted={() => { void cache.invalidateQueries({ queryKey: ["pods"] }); go({ name: "outcomes" }); }}
                 />
+            </div>
+        </Stage>
+    );
+}
+
+/** The machine a Lemma works on: what is on its screen, the sites it is
+ *  signed in to, and its files -- from one chat's working folder when it is
+ *  opened from that chat, else the whole machine. */
+export function ComputerPage({ pod, conversationId, go }: { pod: Pod; conversationId: string | null; go: Go }) {
+    const cache = useQueryClient();
+    return (
+        <Stage
+            pod={pod}
+            title="Computer"
+            go={go}
+            fill
+            actions={<button type="button" className="ox-btn ox-btn--small" onClick={() => void cache.invalidateQueries({ queryKey: ["computer"] })}>Refresh</button>}
+        >
+            <div className="pane library-pane">
+                <ComputerView podId={pod.id} conversationId={conversationId} visible />
             </div>
         </Stage>
     );

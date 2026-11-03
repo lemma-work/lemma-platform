@@ -77,7 +77,6 @@ export function AutomationsTab({ pod, pods, section, queue, go, actions }: {
                     podId={pod.id}
                     teammate={pod.name}
                     members={pod.members}
-                    orgId={pod.orgId}
                     onOpenRun={openRun}
                     onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
                 />

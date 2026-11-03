@@ -7,6 +7,12 @@
    its figures up. Weight stops at 500, as everywhere in the app. */
 
 .ox {
+    /* Every page in the frame is one column this wide, gutters included,
+       centred beside the sidebar: Home, the lists, a Lemma and its tabs, and
+       whatever the workspace draws in a stage. Only an app, a page being
+       read and a chat keep a width of their own. */
+    --ox-col: 1040px;
+    --ox-gutter: 28px;
     display: grid;
     grid-template-columns: 272px minmax(0, 1fr);
     height: 100dvh;
@@ -465,16 +471,6 @@
     box-shadow: 0 0 0 3px var(--lemma-wash);
 }
 
-.ox-classic {
-    color: var(--ink-2);
-    font-size: 12.5px;
-    white-space: nowrap;
-}
-
-.ox-classic:hover {
-    color: var(--ink);
-}
-
 .ox-me,
 .ox-avatar {
     display: inline-grid;
@@ -514,14 +510,21 @@
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
+    /* A gutter for the scrollbar whether or not this page has one, and a
+       matching one on the other side, so the column stays centred and does
+       not shift sideways between a short page and a long one. */
+    scrollbar-gutter: stable both-edges;
     padding-bottom: 48px;
 }
 
+/* The column, header and tabs included, so what is at a header's end lines
+   up with the edge of what is under it, and every page starts where the
+   last one did. */
 .ox-page {
     width: 100%;
-    max-width: 1320px;
+    max-width: var(--ox-col);
     margin: 0 auto;
-    padding: 28px 28px 0;
+    padding: 28px var(--ox-gutter) 0;
 }
 
 .ox-loading {
@@ -1700,6 +1703,12 @@ a.ox-row:hover .ox-row__t {
     font-size: 14.5px;
 }
 
+.ox-palette__name mark {
+    border-radius: 3px;
+    background: var(--wash-b);
+    color: inherit;
+}
+
 .ox-palette__desc {
     overflow: hidden;
     color: var(--ink-2);
@@ -1714,10 +1723,9 @@ a.ox-row:hover .ox-row__t {
 
 /* ── home: asking, and every app ─────────────────────────────────────── */
 
-/* One column, about as wide as a thread: what needs you said once, the box
-   to ask, a few lines of what waits, and a row of apps. */
+/* The page column: what needs you said once, the box to ask, a few lines
+   of what waits, and a row of apps. */
 .ox-home {
-    max-width: 880px;
     padding-top: 56px;
 }
 
@@ -1772,6 +1780,52 @@ a.ox-row:hover .ox-row__t {
     align-items: center;
     gap: 10px;
     padding: 6px 10px 10px 16px;
+}
+
+.ox-askbox--over {
+    border-color: var(--ink-2);
+    background: var(--wash-a);
+}
+
+.ox-askbox__files {
+    padding: 12px 16px 0;
+}
+
+.ox-askbox__attach {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    margin-left: -6px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ox-askbox__attach:hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.ox-askbox__note {
+    min-width: 0;
+    color: var(--bad);
+    font-size: 12.5px;
+}
+
+/* The model sits at the bar's end, beside send. */
+.ox-askbox__model {
+    display: inline-flex;
+    min-width: 0;
+    margin-left: auto;
+}
+
+.ox-askbox__model + .ox-askbox__send {
+    margin-left: 0;
 }
 
 .ox-askbox__in {
@@ -1894,6 +1948,7 @@ a.ox-row:hover .ox-row__t {
     flex-direction: column;
     padding-bottom: 0;
     overflow: hidden;
+    scrollbar-gutter: auto;
 }
 
 .ox-main--fill > .ox-thread,
@@ -1901,6 +1956,42 @@ a.ox-row:hover .ox-row__t {
 .ox-main--fill > .ox-stagepage {
     flex: 1;
     min-height: 0;
+}
+
+/* A call, as in the workspace: the call on the left and the chat it is held
+   in on the right, so the Lemma is seen working while it is talked to. On a
+   narrow screen only one fits, and it is the call. */
+.ox-main--calling {
+    flex-direction: row;
+}
+
+.ox-callstage {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 58%;
+    min-width: 0;
+    border-right: 1px solid var(--line);
+}
+
+.ox-main--calling > :not(.ox-callstage) {
+    flex: 1;
+    min-width: 0;
+}
+
+/* The bar a call folds to sits over the foot of the main side. */
+.ox-body {
+    position: relative;
+}
+
+@media (max-width: 1100px) {
+    .ox-callstage {
+        flex-basis: 100%;
+        border-right: 0;
+    }
+
+    .ox-main--calling > :not(.ox-callstage) {
+        display: none;
+    }
 }
 
 /* one chat */
@@ -1977,14 +2068,6 @@ a.ox-row:hover .ox-row__t {
     font-size: 13px;
 }
 
-.ox-thread__out {
-    flex: none;
-    margin-left: auto;
-    color: var(--ink-2);
-    font-size: 12.5px;
-}
-
-.ox-thread__out:hover,
 .ox-thread__crumb:hover {
     color: var(--ink);
 }
@@ -2069,13 +2152,6 @@ a.ox-row:hover .ox-row__t {
 
 .ox-newchat__foot .ox-askbox {
     margin-top: 0;
-}
-
-/* A Lemma: its summary at its own address, and each section a page of its
-   own under the bar every page of a Lemma shares. Both are one 1040px
-   column, so a section's edge is the summary's edge. */
-.ox-page--lemma {
-    max-width: 1040px;
 }
 
 /* The summary: who it is and what it owns across the top, then two
@@ -2267,8 +2343,14 @@ a.ox-row:hover .ox-row__t {
 }
 
 .ox-section .library-heading > div:first-child,
-.ox-section .contacts__head {
+.ox-section .contacts__head,
+.ox-section .chats-page .all__head > h1 {
     display: none;
+}
+
+/* With its title gone, the chats' search and New keep to the right. */
+.ox-section .chats-page .all__head {
+    justify-content: flex-end;
 }
 
 /* A Lemma's settings are the workspace's About page, in the section's flow
@@ -2743,9 +2825,13 @@ a.ox-row:hover .ox-row__t {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    /* The frame's one top bar, the same as a chat's: crumbs at its start
+       and actions at its end, on the main side's edges rather than the
+       column's, since what is under it is not always the column -- a page
+       being read is narrower, an app is wider. */
     min-height: 48px;
-    padding: 8px 24px;
-    border-bottom: 1px solid var(--line-2);
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--line);
     background: var(--paper);
 }
 
@@ -2808,13 +2894,24 @@ a.ox-row:hover .ox-row__t {
 
 .ox-stage > .ox-loading,
 .ox-stage__none {
-    padding: 24px;
+    padding: 24px var(--ox-gutter);
 }
 
-.ox-filepage {
-    width: min(100%, 960px);
-    margin: 0 auto;
-    padding: 28px 24px 40px;
+/* The workspace's own pages, opened in a stage -- a run, a workflow, an
+   agent, a Lemma's settings, a table and its rows: each in the page column
+   rather than the width it has in the workspace. */
+.ox-stage :is(.runpage, .wfpage__inner, .agentpage__inner, .aboutpage__column, .library-view) {
+    width: min(100%, var(--ox-col));
+    max-width: none;
+    margin-inline: auto;
+    padding-inline: var(--ox-gutter);
+}
+
+/* Each of them scrolls inside itself; its scrollbar gets a gutter on both
+   sides, as the main side's does, so the column stands where it does on
+   every other page. */
+.ox-stage :is(.aboutpage, .run-page, .agentpage, .library-pane) {
+    scrollbar-gutter: stable both-edges;
 }
 
 /* ── narrow screens ──────────────────────────────────────────────────── */
@@ -2867,6 +2964,7 @@ a.ox-row:hover .ox-row__t {
 @media (max-width: 760px) {
     /* One column. The sidebar slides over the page from a bar on top. */
     .ox {
+        --ox-gutter: 16px;
         grid-template-columns: minmax(0, 1fr);
     }
 
@@ -2931,7 +3029,18 @@ a.ox-row:hover .ox-row__t {
     }
 
     .ox-page {
-        padding: 18px 16px 0;
+        padding-top: 18px;
+    }
+
+    /* A Lemma's tabs are wider than a phone: they scroll on their own
+       rather than taking the page sideways with them. */
+    .ox-otabs {
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+
+    .ox-otab {
+        flex: none;
     }
 
     .ox-section .library-heading {
@@ -2985,4 +3094,95 @@ a.ox-row:hover .ox-row__t {
     .ox-side {
         transition: none;
     }
+}
+
+/* The allowance, when it is close or spent, or the plan is free: the
+   workspace's own card, set in from the sidebar's edges. */
+.ox-side > .allowance {
+    margin: 0 14px 8px;
+}
+
+/* A tool at the end of a chat's header: the machine it works on. */
+.ox-thread__tool {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-thread__tool:hover {
+    color: var(--ink);
+}
+
+/* A section's title, with what can be made there beside it. The end of the
+   row is the embedded page's own actions' -- the Library's Upload and New
+   folder -- which sit there over it. */
+.ox-section__head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.ox-section__head > .ox-section__t {
+    margin: 0;
+}
+
+.ox-make {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ox-make > .ox-more > summary.ox-btn {
+    display: inline-flex;
+    width: auto;
+    gap: 4px;
+}
+
+.ox-make__note {
+    color: var(--bad);
+    font-size: 12.5px;
+}
+
+.ox-make .ox-more__menu {
+    right: auto;
+    left: 0;
+}
+
+.ox-make .ox-more__menu > button {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    height: auto;
+    min-height: 34px;
+    padding: 6px 10px;
+}
+
+.ox-make__blurb {
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+/* An app kept mounted behind whatever is in front: in the main side's flow
+   while it is the one shown, as if it were drawn there directly. */
+.ox-keep:not([hidden]) {
+    display: contents;
+}
+
+.ox-main--fill > .ox-keep > .ox-stagepage {
+    flex: 1;
+    min-height: 0;
+}
+
+/* Your Lemmas, with the way to start a new one at the title's end. */
+.ox-list__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 }

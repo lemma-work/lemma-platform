@@ -1,9 +1,9 @@
 "use client";
 
 import type { Pod } from "@/data";
+import { WaitingBell } from "@/channels/waiting-panel";
 import { useMaySeeContacts } from "@/space/contact-queries";
 import type { FrameActions } from "./actions";
-import { classic } from "./data";
 import { NEW_CHAT, chatView, outcomeView, type Go, type OutcomeTab } from "./model";
 import { Icon, to, type IconName } from "./parts";
 
@@ -16,6 +16,7 @@ export type LemmaSection = Exclude<OutcomeTab, "home">;
  *  the bar every page of a Lemma shares. */
 export const LEMMA_SECTIONS: readonly { tab: LemmaSection; label: string; icon: IconName }[] = [
     { tab: "plan", label: "Plan", icon: "skill" },
+    { tab: "chats", label: "Chats", icon: "chat" },
     { tab: "apps", label: "Apps", icon: "app" },
     { tab: "made", label: "Files", icon: "file" },
     { tab: "contacts", label: "Contacts", icon: "people" },
@@ -64,19 +65,22 @@ export function SectionSwitch({ pod, here, go }: { pod: Pod; here: LemmaSection;
     );
 }
 
-/** What every page of a Lemma offers at its top right: a new chat with it,
- *  and the rest -- who has access, where people reach it, sharing it -- in a
- *  menu. */
+/** What every page of a Lemma offers at its top right: its inbox, a new
+ *  chat with it, and the rest -- who has access, where people reach it,
+ *  sharing it, its computer -- in a menu. */
 export function LemmaActions({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
     return (
         <>
+            {/* Its inbox, as the workspace has it over a pod: the reader's
+                private line with it, what waits on them, and mentions. */}
+            <WaitingBell podId={pod.id} />
             <details className="ox-more">
                 <summary aria-label={`More for ${pod.name}`} title="More"><Icon name="more" size={16} /></summary>
                 <div className="ox-more__menu" role="menu">
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.addPeople(pod.id); }}>Who has access</button>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where people reach it</button>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.share(pod.id); }}>Share or export</button>
-                    <a role="menuitem" href={classic.pod(pod.id)}>Open in the workspace</a>
+                    <a role="menuitem" {...to({ name: "computer", podId: pod.id, conversationId: null }, go)} onClick={(event) => { closeMenu(event); to({ name: "computer", podId: pod.id, conversationId: null }, go).onClick(event); }}>Its computer</a>
                 </div>
             </details>
             <a className="ox-btn ox-btn--primary ox-btn--small" {...to(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }), go)}>New chat</a>
