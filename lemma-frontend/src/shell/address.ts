@@ -185,6 +185,15 @@ export function writeAddress(address: Address): string {
     return path.join("/");
 }
 
+/** A teammate's Connections part, opened on one connector when there is one
+ *  to name: the place `connectionsPath` is inside the app, for a link that
+ *  should stay in it rather than load it again. Written like every other
+ *  address, so from the classic workspace it stays there. */
+export function connectionsPlace(podId: string, slug?: string): string {
+    const place = writeAddress({ ...NOWHERE, podId, tabId: "space:about", section: "connections" });
+    return place + (slug ? "?connector=" + encodeURIComponent(slug) : "");
+}
+
 function tailOf(address: Address): string[] {
     const { tabId } = address;
     if (!tabId) return [];

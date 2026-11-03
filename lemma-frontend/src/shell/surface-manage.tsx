@@ -6,7 +6,8 @@ import {
     connectionLine, connectionTrouble, contactsSupported, filtersSupported, isOwnBot, needsRebind, readConnection, rebindChoices,
     routesSupported, surfaceApp, surfaceDraft, surfacePatch, type SurfaceDraft,
 } from "@/data/surface-settings";
-import { connectionsPlace, connectorLabel } from "@/data/pod-connectors";
+import { connectorLabel } from "@/data/pod-connectors";
+import { connectionsPlace } from "@/shell/address";
 import { ProblemLine } from "@/connect/connection-problem";
 import { answerChoices } from "@/data/contacts";
 import { useBotGroups } from "@/channels/queries";

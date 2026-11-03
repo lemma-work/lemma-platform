@@ -7,7 +7,7 @@ import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-    askedLine, bannerLine, connectionsPlace, connectorCalled, connectorChanges, connectorCreateBody, connectorName, connectorPatchBody, coverageLine, failureOf, mayUseOnceConnected,
+    askedLine, bannerLine, connectorCalled, connectorChanges, connectorCreateBody, connectorName, connectorPatchBody, coverageLine, failureOf, mayUseOnceConnected,
     missingForMe, modeBadge, myStatus, readAskOutcome, readCoverage, readPodConnectors, slugProblem, truncatedLine, waitingLine, wantsCoverage, type MyAccount,
 } from "../src/data/pod-connectors.ts";
 import {
@@ -17,7 +17,7 @@ import {
 import { INSTALLATION_MANAGE, readOrgActions } from "../src/data/org-actions.ts";
 import { CONNECTOR_USE, connectorGrantSlugs, grantsBody, withConnectorGrants } from "../src/data/agents.ts";
 import { connectionLine, connectionTrouble, needsRebind, readConnection, rebindChoices, surfaceApp } from "../src/data/surface-settings.ts";
-import { readAddress, writeAddress } from "../src/shell/address.ts";
+import { connectionsPlace, readAddress, writeAddress } from "../src/shell/address.ts";
 import { legacyAddress } from "../src/site/legacy-address.ts";
 import { liveSource } from "../src/data/live.ts";
 import { disconnect } from "../src/session/client.ts";
@@ -334,6 +334,19 @@ test("the server's connect_url lands on the teammate's Connections, opened on th
     assert.equal(read.section, "connections");
     assert.equal(writeAddress(read), "/t/p1/about/connections");
     assert.equal(readAddress("/t/p1/about/connectors").section, "connections", "an old link to the part still opens it");
+});
+
+test("Open connections from the classic workspace stays in it", () => {
+    /* Rather than moving the reader into the app at /t halfway through
+       connecting a platform. */
+    const was = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", { value: { location: { pathname: "/l/p1/apps" } }, configurable: true, writable: true });
+    try {
+        assert.equal(connectionsPlace("p 1", "a b"), "/l/p%201/about/connections?connector=a%20b");
+    } finally {
+        if (was) Object.defineProperty(globalThis, "window", was);
+        else delete (globalThis as { window?: unknown }).window;
+    }
 });
 
 /* ── the live source, against a recorded API ───────────────────────── */

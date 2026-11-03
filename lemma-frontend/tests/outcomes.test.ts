@@ -50,7 +50,7 @@ function conversation(id: string, activityAt: string | null, kind?: string): Con
     };
 }
 
-test("every view writes an address that reads back as itself", () => {
+test("every view writes an address that reads back as itself, and is told apart from a workspace address", () => {
     const views: View[] = [
         { name: "today" },
         { name: "outcomes" },
@@ -81,7 +81,12 @@ test("every view writes an address that reads back as itself", () => {
         { name: "computer", podId: "abc", conversationId: "c1" },
         outcomeView("abc", "chats", "channels"),
     ];
-    for (const view of views) assert.deepEqual(readView(writeView(view)), view, writeView(view));
+    for (const view of views) {
+        assert.deepEqual(readView(writeView(view)), view, writeView(view));
+        /* A path whose first word is not one of the frame's own would be read
+           as a Lemma's workspace address and opened as its summary. */
+        assert.ok(isFramePath(writeView(view)), writeView(view) + " is the frame's own");
+    }
 });
 
 test("an address the frame cannot read lands somewhere, not nowhere", () => {

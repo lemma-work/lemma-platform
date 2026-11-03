@@ -7,7 +7,7 @@ import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { retryTransient, transientRetryDelay } from "@/session/auth-state";
 
-// The SDK, the session and the data source all need a browser, as in `/t`.
+// The SDK, the session and the data source all need a browser, as in `/l`.
 const App = dynamic(() => import("@/outcomes/app").then(m => m.OutcomesApp), {
     ssr: false,
     loading: () => <PageLoading label="Opening Lemma" />,
