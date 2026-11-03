@@ -219,6 +219,15 @@ def conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
     return build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
 
 
+def workflow_url(*, pod_id: UUID, workflow_name: str) -> str:
+    """Where a person opens this workflow in Lemma, with its runs and forms."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_workflow_url,
+    )
+
+    return build_workflow_url(pod_id=pod_id, workflow_name=workflow_name)
+
+
 __all__ = [
     "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
@@ -230,4 +239,5 @@ __all__ = [
     "parse_surface_event_metadata",
     "report_approved_action_failed",
     "retire_cards_answered_in_lemma",
+    "workflow_url",
 ]

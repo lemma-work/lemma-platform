@@ -249,7 +249,11 @@ def build_display_resource_url(
         case DisplayResourceType.AGENT:
             return f"{space}/profile/{name}" if name else f"{space}/about"
         case DisplayResourceType.WORKFLOW:
-            return f"{space}/workflow/{name}" if name else f"{space}/workflows"
+            return (
+                build_workflow_url(pod_id=pod_id, workflow_name=request.name)
+                if request.name
+                else f"{space}/workflows"
+            )
         case DisplayResourceType.APP:
             # The app's resource name, not a slug, on purpose: the workspace
             # canonicalizes whatever the link carries on arrival, and a slug
@@ -270,6 +274,11 @@ def build_conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
     is where the workspace's routes are spelt.
     """
     return f"{_space_url(pod_id)}/conversation/{quote(str(conversation_id), safe='')}"
+
+
+def build_workflow_url(*, pod_id: UUID, workflow_name: str) -> str:
+    """A workflow's page in the workspace, where its runs and forms are."""
+    return f"{_space_url(pod_id)}/workflow/{quote(workflow_name, safe='')}"
 
 
 def _space_url(pod_id: UUID) -> str:

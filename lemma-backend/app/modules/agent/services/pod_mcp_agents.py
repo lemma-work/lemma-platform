@@ -71,7 +71,7 @@ from app.modules.agent.services.pause_questions import (
     shown,
     undecided_pauses,
 )
-from app.modules.agent.services.poll_backoff import poll_delay
+from app.modules.agent.services.poll_backoff import poll_until
 from app.modules.mcp_access.contracts import McpPrincipal
 from app.modules.usage.contracts.execution import build_usage_service
 
@@ -276,20 +276,10 @@ async def await_answer(
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
 ) -> AgentAnswer:
     """``read`` until it has an answer, or ``still_working`` once time is up."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(wait_seconds, 0.0)
-    attempt = 0
-    while True:
-        answer = await read()
-        if answer is not None:
-            return answer
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            return still_working
-        attempt += 1
-        await sleep(
-            poll_delay(attempt, base_seconds=_POLL_SECONDS, remaining_seconds=remaining)
-        )
+    answer = await poll_until(
+        read, wait_seconds=wait_seconds, base_seconds=_POLL_SECONDS, sleep=sleep
+    )
+    return answer if answer is not None else still_working
 
 
 #: Enough of the tail to hold the latest run's last words: the answer is what it
