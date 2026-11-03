@@ -68,7 +68,7 @@ export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "plan", "chats", "ap
 
 /** A Lemma's page, on its home unless another tab is named. */
 export function outcomeView(podId: string, tab: OutcomeTab = "home", section: string | null = null): View {
-    return section && (tab === "settings" || tab === "automations") ? { name: "outcome", podId, tab, section } : { name: "outcome", podId, tab };
+    return section && (tab === "settings" || tab === "automations" || tab === "chats") ? { name: "outcome", podId, tab, section } : { name: "outcome", podId, tab };
 }
 
 /** A chat, open in the main area beside the sidebar that lists it. */
@@ -303,6 +303,8 @@ export interface Fill {
     text: string;
     id: number;
     podId: string;
+    /** Files attached with the words, held in the box with them. */
+    files?: File[];
 }
 
 export interface GoOptions {

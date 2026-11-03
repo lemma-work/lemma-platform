@@ -166,12 +166,14 @@ export function OutcomesShell() {
         }
     }, [go]);
     const sentHandoff = useCallback(() => setHandoff((was) => (was ? { ...was, sent: true } : was)), []);
-    const { huddle, calls } = useCalls(go);
-    /* The call has the main side beside its own chat; stepping anywhere else
-       folds it to the bar. */
+    const { huddle, calls, resume } = useCalls(go);
+    /* The call has the main side beside its own chat; stepping away from that
+       chat folds it to the bar. Only the step folds it -- going back to the
+       call opens its chat and expands it in one go, and an expand that lands
+       before the address has moved must not be folded straight back. */
     const { expanded: calling, collapse: foldCall, callConversationId: callHeldIn } = huddle;
     const atCall = view.name === "chats" && view.open.kind === "chat" && view.open.id === callHeldIn;
-    useEffect(() => { if (calling && !atCall) foldCall(); }, [calling, atCall, foldCall]);
+    useEffect(() => { if (!atCall) foldCall(); }, [atCall, foldCall]);
     const filled = useCallback(() => setFill(null), []);
     const queryClient = useQueryClient();
 
@@ -234,7 +236,7 @@ export function OutcomesShell() {
         asks.current += 1;
         const target = chatView({ kind: "chat", podId, id: NEW_CHAT });
         if (source.label === "live") go(target, { replace, handoff: { text, id: asks.current, podId, sent: false, createWith: extra.createWith, files: extra.files } });
-        else go(target, { replace, fill: { text, id: asks.current, podId } });
+        else go(target, { replace, fill: { text, id: asks.current, podId, files: extra.files } });
     }, [go]);
     /* From a new chat's own box: the chat is already open, so the words
        start it in place rather than as another step back to go through. */
@@ -514,12 +516,12 @@ export function OutcomesShell() {
                         const shown = Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
                         return (
                             <div key={one.podId + "/" + one.app} className="ox-keep" hidden={!shown}>
-                                <AppView pod={keptPod} app={one.app} go={go} actions={actions} />
+                                <AppView pod={keptPod} app={one.app} go={go} actions={actions} shown={shown} />
                             </div>
                         );
                     })}
                 </main>
-                <CallDock huddle={huddle} />
+                <CallDock huddle={huddle} onResume={resume} />
             </div>
             {/* The desktop app's background work -- connecting this computer,
                 the sandbox download, a missing model. Nothing in a browser. */}

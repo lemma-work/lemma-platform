@@ -115,7 +115,7 @@ test("a link to an outcome's old Chats tab opens the chat it named", () => {
     assert.deepEqual(readView("/t/chats/p1/customers"), outcomeView("p1", "contacts"), "the old customers queue is the Contacts tab");
     assert.deepEqual(readView("/t/chats/p1/customers/c9"), chatView({ kind: "contact", podId: "p1", id: "c9" }));
     assert.deepEqual(readView("/t/outcome/p1/chats"), outcomeView("p1", "chats"), "with no chat named, its every chat");
-    assert.deepEqual(readView("/t/outcome/p1/chats/channels"), outcomeView("p1", "chats", "channels"), "on the shared ones");
+    assert.deepEqual(readView("/t/outcome/p1/chats/channels"), { name: "outcome", podId: "p1", tab: "chats", section: "channels" }, "on the shared ones");
     assert.deepEqual(readView(writeView(outcomeView("p1", "chats", "channels"))), outcomeView("p1", "chats", "channels"));
 });
 
@@ -134,7 +134,7 @@ test("a workspace link followed inside the frame stays in the frame where it can
     assert.deepEqual(viewOfAddress(address("file:/me/notes.md")), { name: "file", podId: "p1", path: "/me/notes.md" });
     assert.deepEqual(viewOfAddress(address("space:contacts")), outcomeView("p1", "contacts"));
     assert.deepEqual(viewOfAddress(address("space:chats")), outcomeView("p1", "chats"), "a Lemma's every chat");
-    assert.deepEqual(viewOfAddress(address("space:channels")), outcomeView("p1", "chats", "channels"), "the shared ones");
+    assert.deepEqual(viewOfAddress(address("space:channels")), { name: "outcome", podId: "p1", tab: "chats", section: "channels" }, "the shared ones");
     assert.deepEqual(viewOfAddress(address(null)), outcomeView("p1"));
     assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "schedules" }), outcomeView("p1", "automations", "schedules"), "schedules are a view of Automations here");
     assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "people" }), outcomeView("p1", "settings", "people"));

@@ -584,7 +584,7 @@ test("a status the schema fixes offers every option it allows, and nothing it wo
     const profile = profileTable([{ name: "id" }, { name: "stage", type: "ENUM", options: ["open", "waiting", "closed"] }], rows, { complete: true, now: NOW });
     const stage = profile.columns.find((column) => column.name === "stage");
     assert.deepEqual(stage?.fixed, ["open", "waiting", "closed"]);
-    assert.deepEqual(statusOptions(stage!), ["open", "waiting", "closed", "legacy"], "every option, then what the rows hold that it does not");
+    assert.deepEqual(statusOptions(stage!), ["open", "waiting", "closed"], "every option it allows, and not a row's value it would refuse");
 
     const free = profileTable([{ name: "id" }, { name: "stage", type: "TEXT" }], rows, { complete: true, now: NOW }).columns.find((column) => column.name === "stage");
     assert.equal(free?.fixed, undefined, "free text keeps the rows' own values, and a way to add one");

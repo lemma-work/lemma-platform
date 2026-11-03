@@ -21,11 +21,11 @@ registerHooks({
 });
 
 const CONTACTS = [
-    { id: "c1", name: "Northwind", created_at: "2026-10-01T09:00:00Z" },
-    { id: "c2", name: "Globex", created_at: "2026-10-02T09:00:00Z" },
+    { id: "c1", name: "Northwind", contact_email: "ops@northwind.example", created_at: "2026-10-01T09:00:00Z" },
+    { id: "c2", name: "Globex", contact_email: "ops@globex.example", created_at: "2026-10-02T09:00:00Z" },
 ];
 
-async function mount(t: { after: (done: () => void | Promise<void>) => void }, value: string | null, next: string | null) {
+async function mount(t: { after: (done: () => void | Promise<void>) => void }, value: string | null, next: string | null, column = "id") {
     const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true });
     for (const [key, one] of Object.entries({
         window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -46,7 +46,7 @@ async function mount(t: { after: (done: () => void | Promise<void>) => void }, v
         root.render(createElement(QueryClientProvider, { client }, createElement(LinkPicker, {
             id: "rf-contact_id",
             podId: "p1",
-            reference: { table: "contacts", column: "id" },
+            reference: { table: "contacts", column },
             value,
             onChange: (next: unknown) => { picked.push(next); },
         })));
@@ -84,4 +84,9 @@ test("a table longer than one page still takes a typed id", async (t) => {
     assert.equal(more?.textContent, "Not listed? Type its id");
     await act(async () => { more.click(); });
     assert.ok(view.container.querySelector("input[type=text]"), "the box is there for a row not listed");
+});
+
+test("a link that stores another column asks for that column, not an id", async (t) => {
+    const view = await mount(t, null, "page-2", "contact_email");
+    assert.equal(view.container.querySelector("button")?.textContent, "Not listed? Type its contact email");
 });

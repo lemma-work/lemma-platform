@@ -25,18 +25,27 @@ export interface Calls {
 /** The workspace's huddle, held by the frame: one call at a time, with the
  *  Lemma it was placed with, for as long as it lasts -- walking into another
  *  Lemma mid-call neither re-points it nor relabels it. */
-export function useCalls(go: Go): { huddle: Huddle; calls: Calls } {
+export function useCalls(go: Go): { huddle: Huddle; calls: Calls; resume: () => void } {
     const huddle = useHuddle();
     const queryClient = useQueryClient();
-    const { start: place } = huddle;
+    const { start: place, expand, callConversationId: held, target, liveEpoch, active, settled, error } = huddle;
+    /* Back to the call that is on: its own chat first, which is where the
+       call is shown beside, then the call itself. */
+    const heldPod = target?.pod.id ?? null;
+    const resume = useCallback(() => {
+        if (held && heldPod) go(chatView({ kind: "chat", podId: heldPod, id: held }));
+        expand();
+    }, [held, heldPod, go, expand]);
     const start = useCallback((pod: Pod, conversationId: string | null) => {
+        /* One call at a time: calling from another chat while one is on
+           goes back to it rather than placing a second. */
+        if (active) return resume();
         void place({ pod: { id: pod.id, name: pod.name }, teammate: pod.teammate?.name || pod.name, conversationId }).then((placed) => {
             if (!placed) return;
             go(chatView({ kind: "chat", podId: pod.id, id: placed }));
             void refreshConversationLists(queryClient, pod.id);
         });
-    }, [place, go, queryClient]);
-    const { callConversationId: held, liveEpoch, active, settled, error } = huddle;
+    }, [active, resume, place, go, queryClient]);
     const calls = useMemo<Calls>(() => ({
         start,
         error,
@@ -44,7 +53,7 @@ export function useCalls(go: Go): { huddle: Huddle; calls: Calls } {
             ? `live:${liveEpoch}:${active}`
             : settled?.callId === conversationId ? `settled:${settled.count}` : ""),
     }), [start, error, held, liveEpoch, active, settled]);
-    return { huddle, calls };
+    return { huddle, calls, resume };
 }
 
 /** The call given the left of the main side, its chat on the right: what is
@@ -82,8 +91,8 @@ export function CallStage({ huddle, go }: { huddle: Huddle; go: Go }) {
 }
 
 /** A call that is on while something else is in front: who it is with,
- *  mute, end, and the way back to it. */
-export function CallDock({ huddle }: { huddle: Huddle }) {
+ *  mute, end, and the way back to it -- its chat, with the call beside. */
+export function CallDock({ huddle, onResume }: { huddle: Huddle; onResume: () => void }) {
     if (!huddle.active || huddle.expanded) return null;
     return (
         <CallBar
@@ -96,7 +105,7 @@ export function CallDock({ huddle }: { huddle: Huddle }) {
             level={huddle.level}
             onMute={huddle.toggleMute}
             onEnd={huddle.end}
-            onExpand={huddle.expand}
+            onExpand={onResume}
         />
     );
 }

@@ -74,8 +74,8 @@ const PARTS: readonly Part[] = [
 ];
 
 /** A part's heading on its own page. */
-/** Inside the Lemma frame (`/o`) a pod is a Lemma, and the pods it works
- *  with are other Lemmas; here they are still teammates. */
+/** In the app (`/t`) a pod is a Lemma, and the pods it works with are other
+ *  Lemmas; in the classic workspace they are still teammates. */
 function labelOf(part: Part, framed: boolean): string {
     return framed && part.id === "works-with" ? "Other Lemmas" : part.label;
 }
@@ -83,6 +83,18 @@ function labelOf(part: Part, framed: boolean): string {
 function titleOf(part: Part, name: string, framed = false): string {
     if (framed && part.id === "works-with") return "Other Lemmas " + name + " works with";
     return part.title ? part.title(name) : part.label;
+}
+
+/** What one of the other pods is called, in a part's words. */
+function mateOf(framed: boolean): string {
+    return framed ? "Lemma" : "teammate";
+}
+
+function noteOf(part: Part, name: string, framed = false): string {
+    if (framed && part.id === "works-with") {
+        return "As you: " + name + " asks with your access there, and checks with you first. Allowed: that Lemma lets " + name + " ask it with nobody present, reading only what it shared.";
+    }
+    return part.note(name);
 }
 
 /** A part's short name, for the breadcrumb above its page. */
@@ -237,11 +249,11 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
         case "works-with":
             action = manageLinks ? (
                 <button className="aboutpage__action aboutpage__action--long" onClick={() => setConnecting({})}>
-                    <PlusIcon size={14} /> Let another teammate ask {pod.name}
+                    <PlusIcon size={14} /> Let another {mateOf(framed)} ask {pod.name}
                 </button>
             ) : null;
             body = <>
-                <WorksWith pod={pod} onOpen={onOpenTeammate} />
+                <WorksWith pod={pod} framed={framed} onOpen={onOpenTeammate} />
                 <AskedBy pod={pod} onOpen={onOpenTeammate} onEdit={(asker) => setConnecting({ asker })} />
                 {connecting && <ConnectTeammate pod={pod} asker={connecting.asker} onClose={() => setConnecting(null)} />}
             </>;
@@ -296,7 +308,7 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
                     <h1>{titleOf(part, pod.name, framed)}</h1>
                     {action}
                 </div>
-                <p>{part.note(pod.name)}</p>
+                <p>{noteOf(part, pod.name, framed)}</p>
             </header>
             <div className="aboutpage__content">{body}</div>
         </section>
@@ -418,7 +430,7 @@ function AgentList({ pod, onOpen }: { pod: Pod; onOpen: (name: string) => void }
  *  Partly yours: through you means you are in both, so someone else opening
  *  this page sees their own. The same list the teammate reads before it asks,
  *  so nothing here is something it would be refused. */
-function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void }) {
+function WorksWith({ pod, framed = false, onOpen }: { pod: Pod; framed?: boolean; onOpen: (podId: string) => void }) {
     const askable = useQuery({
         queryKey: ["askable-pods", pod.id],
         queryFn: () => source.askablePods(pod.id),
@@ -434,7 +446,7 @@ function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void 
         );
     }
     if (askable.data.length === 0) {
-        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other teammate you’re in, or one that lets it.</p>;
+        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other {mateOf(framed)} you’re in, or one that lets it.</p>;
     }
     return (
         <ul className="agentlist">

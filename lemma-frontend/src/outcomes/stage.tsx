@@ -165,11 +165,22 @@ export function WorkflowView({ pod, workflow, go }: { pod: Pod; workflow: string
 
 /** An app, framed here the way the workspace frames it, and registered so
  *  a button in it that asks Lemma something reaches a chat in this frame. */
-export function AppView({ pod, app, go, actions }: { pod: Pod; app: string; go: Go; actions: FrameActions }) {
+export function AppView({ pod, app, go, actions, shown }: {
+    pod: Pod;
+    app: string;
+    go: Go;
+    actions: FrameActions;
+    /** Whether it is the app in front. A kept app behind something else
+     *  stays mounted but is not trusted to ask for a chat: only the app on
+     *  screen may put words in a box. */
+    shown: boolean;
+}) {
     const tabs = useQuery({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 });
     const found = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" && tab.id === "app:" + app ? [tab] : []))[0] ?? null;
-    const unregister = useRef<(() => void) | null>(null);
-    useEffect(() => () => { unregister.current?.(); }, []);
+    /* The window the app last loaded in, registered with the compose bridge
+       only while the app is shown, and again after each load. */
+    const [loaded, setLoaded] = useState<Window | null>(null);
+    useEffect(() => (shown ? registerFrame(loaded) : undefined), [shown, loaded]);
     const frame = useRef<HTMLIFrameElement | null>(null);
     const chat = useFloatingChat();
     const label = found?.label ?? readableName(app);
@@ -198,10 +209,7 @@ export function AppView({ pod, app, go, actions }: { pod: Pod; app: string; go: 
                     : <AppFrameView
                         url={found.url}
                         frameRef={(element) => { frame.current = element; }}
-                        onFrameLoad={(view) => {
-                            unregister.current?.();
-                            unregister.current = registerFrame(view);
-                        }}
+                        onFrameLoad={setLoaded}
                     />}
             {found && <ResourceChat pod={pod} resource={{ kind: "app", name: app, label }} state={chat} go={go} />}
         </Stage>

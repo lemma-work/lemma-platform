@@ -295,11 +295,12 @@ function roleOf(name: string, values: unknown[], primaryKey: string, lengths: nu
     return "text";
 }
 
-/** What a status picker offers: every value the schema allows, then any the
- *  rows hold that it does not (written before the list was fixed), or, with
- *  no fixed list, the values the rows hold. */
+/** What a status picker offers: every value the schema allows, or, with no
+ *  fixed list, the values the rows hold. A value a row holds that the list
+ *  does not (written before the list was fixed) is shown on that row alone
+ *  by the picker, never offered to the others, which the table would refuse. */
 export function statusOptions(column: Pick<ColumnProfile, "values" | "fixed">): string[] {
-    return column.fixed ? [...column.fixed, ...column.values.filter((value) => !column.fixed?.includes(value))] : column.values;
+    return column.fixed ?? column.values;
 }
 
 export function profileTable(

@@ -264,7 +264,9 @@ export function LinkPicker({ id, podId, reference, value, onChange }: {
             </select>
             {rows.data?.next && (
                 <button type="button" className="record-form__revert" onClick={() => setTyping(true)}>
-                    Not listed? Type its id
+                    {/* What the link stores is the referenced column's value --
+                        an id, or an email, a code -- so that is what is asked for. */}
+                    Not listed? Type its {reference.column === "id" ? "id" : readableName(reference.column).toLowerCase()}
                 </button>
             )}
         </>
