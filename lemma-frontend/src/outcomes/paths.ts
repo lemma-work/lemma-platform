@@ -10,11 +10,17 @@
 const FRAME_HEADS: ReadonlySet<string> = new Set(["outcomes", "needs-you", "people", "new-lemma", "chats", "outcome"]);
 
 /** Whether a path is in the app's own grammar: `/t` and `/t/{one of the
- *  above}/…`, and `/o/…`, where the app was tried before it was `/t`. */
+ *  above}/…`. `/o`, where the app was tried before it was `/t`, redirects
+ *  to the same path under `/t`, so it is told apart the same way. */
 export function isFramePath(pathname: string): boolean {
     const [root, head] = pathname.split("/").filter(Boolean);
-    if (root === "o") return true;
-    return root === "t" && (head === undefined || FRAME_HEADS.has(head));
+    return (root === "t" || root === "o") && (head === undefined || FRAME_HEADS.has(head));
+}
+
+/** A path under `/o` as the path it redirects to under `/t`; any other
+ *  path as it is. */
+export function fromTrial(pathname: string): string {
+    return pathname === "/o" || pathname.startsWith("/o/") ? "/t" + pathname.slice(2) : pathname;
 }
 
 /** The Lemma an app path is inside, if it names one: `/t/outcome/{pod}/…`

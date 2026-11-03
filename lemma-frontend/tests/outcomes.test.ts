@@ -105,7 +105,7 @@ test("the app's own paths are told apart from workspace addresses under the same
     for (const path of ["/t", "/t/outcomes", "/t/needs-you", "/t/people", "/t/new-lemma", "/t/chats/p1/c/c1", "/t/outcome/p1/apps"]) {
         assert.ok(isFramePath(path), path);
     }
-    for (const path of ["/t/p1", "/t/p1/conversation/c1", "/t/teammates", "/l/p1/apps"]) {
+    for (const path of ["/t/p1", "/t/p1/conversation/c1", "/t/teammates", "/l/p1/apps", "/o/p1"]) {
         assert.ok(!isFramePath(path), path + " is a workspace address");
     }
     assert.ok(isFramePath("/o/outcome/p1"), "a link from while the app was tried at /o");

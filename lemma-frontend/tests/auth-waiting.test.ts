@@ -18,6 +18,14 @@ test("the app's own paths name the Lemma they are inside, and the app's places n
     assert.equal(waitingFor("/t/outcomes").name, null);
 });
 
+test("a destination still under /o is read as the /t path it redirects to", () => {
+    assert.equal(waitingFor("/o/outcome/marketing/apps").name, "Marketing");
+    assert.equal(waitingFor("/o/marketing/library").name, "Marketing", "a workspace address, once it is under /t");
+    assert.equal(waitingFor("https://app.example/o/marketing").name, "Marketing");
+    assert.equal(waitingFor("/o/needs-you").name, null);
+    assert.equal(waitingFor("/o").name, null);
+});
+
 test("the face is that teammate's own, wherever you arrived from", () => {
     // Derived from the pod id, so it is the same creature the rail draws for
     // them — arriving at a sign-in should not introduce a stranger.
