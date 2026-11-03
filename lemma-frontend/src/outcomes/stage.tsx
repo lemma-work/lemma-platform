@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { source, type FileContent, type Pod, type Tab } from "@/data";
+import { source, type Pod, type Tab } from "@/data";
 import { RunPage } from "@/space/run-page";
 import { ComputerView } from "@/computer/computer-view";
 import { ConnectBanner } from "@/connect/pod-connect";
@@ -243,8 +243,11 @@ export function FilePage({ pod, path, go, actions }: { pod: Pod; path: string; g
         if (source.label === "live") await moveDocThread(podId, from, to).catch(() => undefined);
         void cache.invalidateQueries({ queryKey: ["resource-thread", podId, "file"] });
         recordMove(podId, from, to);
-        const was = cache.getQueryData<FileContent>(["file", podId, from]);
-        if (was) cache.setQueryData<FileContent>(["file", podId, to], { ...was, path: to, name: to.slice(to.lastIndexOf("/") + 1) });
+        /* Read afresh at the new name rather than carried over: the rename
+           rewrote the page's own links there, and the page is drawn again
+           for its new address, so an old copy would be the text it shows --
+           and saves back. */
+        cache.removeQueries({ queryKey: ["file", podId, to], exact: true });
         go({ name: "file", podId, path: to }, { replace: true });
         return to;
     }, [pod.id, cache, go]);
