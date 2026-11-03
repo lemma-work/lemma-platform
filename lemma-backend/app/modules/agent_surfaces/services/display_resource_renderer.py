@@ -229,10 +229,9 @@ def build_display_resource_url(
         output = _as_record(tool_output)
         return _as_nonempty_string(output.get("url"))
 
-    base = settings.frontend_url.rstrip("/")
-    space = f"{base}/t/{quote(str(pod_id), safe='')}"
+    space = _space_url(pod_id)
     conversation = (
-        f"{space}/conversation/{quote(str(conversation_id), safe='')}"
+        build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
         if conversation_id is not None
         else None
     )
@@ -262,6 +261,19 @@ def build_display_resource_url(
             # A function has no page of its own in the workspace: the
             # conversation that showed it, else the teammate's space.
             return conversation or space
+
+
+def build_conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
+    """A conversation in the workspace, for a reader outside it to open.
+
+    Beside ``build_display_resource_url`` for the reason given there: this file
+    is where the workspace's routes are spelt.
+    """
+    return f"{_space_url(pod_id)}/conversation/{quote(str(conversation_id), safe='')}"
+
+
+def _space_url(pod_id: UUID) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/t/{quote(str(pod_id), safe='')}"
 
 
 def _display_resource_title(request: DisplayResourceRequest) -> str:

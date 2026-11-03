@@ -87,6 +87,7 @@ servers and need a publicly reachable API.
 | 5 | Claude Code plugin in a marketplace repository | small | MCP-first skill text; Deepak's go-ahead to publish |
 | 6 | Directory listings | — | the decision in [§d](#d-directory-listings-and-one-url-per-pod), submission assets |
 | 7 | A pod's own app, framed, in ChatGPT then Claude | built | Claude to lift its `frameDomains` restriction — [§b](#b-a-pods-own-app-inside-the-host) |
+| 8 | Ask the pod's agents from the host's chat | built | — [§e](#e-the-pods-agents-asked-from-the-host) |
 
 ### a. More views
 
@@ -293,6 +294,112 @@ behind a second endpoint, so the per-pod URLs keep their guarantee (option 4) �
 is a product decision for Deepak. Option 2 is the weakest of the three that
 change anything: it gives up the audience guarantee and caps a person at one
 pod. Nothing here has been changed.
+
+### e. The pod's agents, asked from the host
+
+The pod tools reach tables, records and files. A pod's agents reach more:
+functions that query BigQuery or PostHog, workflows, connected accounts. A
+host's model that can only read tables answers a question about the funnel by
+guessing at the schema, when one of the pod's agents already knows how to get
+the number. The host's chat should be able to hand the question over.
+
+**Built.** Two tools, beside the app tools
+(`app/modules/agent/services/pod_mcp_agents.py`; what they are offered as, and
+to whom, in `pod_mcp_agent_tools.py` beside it):
+
+- **`lemma_pod_ask_agent`**, titled "Ask one of the pod's agents". It takes
+  the request, which agent, and optionally the conversation to continue. It
+  opens a conversation in the pod as the person, with that agent, puts the
+  request as their message, starts the run, and waits a little for the answer.
+- **`lemma_pod_agent_answer`**, titled "Check on an agent's answer", read-only.
+  It waits again for a conversation the first one opened, and reads where it
+  stands.
+
+Each question below was settled before building.
+
+**Which agents, and by name.** Every agent in the pod the person may *run*
+(`agent.execute`, not only `agent.read`), the pod's own assistant first, up to
+twenty. One tool takes the agent's name as an enum, and its description lists
+each agent with what it is for; leaving the name out asks the pod's assistant.
+Not one tool per agent, as apps are: an app is something to open, so each
+earns a suggestion of its own, while asking is one move whose target is chosen
+by what the agents do, which a model picks better from one list than from
+twenty near-identical tools. The tool list stays small beside the apps too.
+The name is read again on every call, so an agent added since the host listed
+the tools can be asked and one removed is refused.
+
+**Synchronous or polled: both.** A call waits up to `wait_seconds` (25 by
+default, at most 50) and returns the answer if it is ready, or `WORKING` and
+the conversation's id. `lemma_pod_agent_answer` then waits again, as often as
+needed. A function run can hold the request because its timeout bounds it; an
+agent run has no such bound, and a host gives up on a tool call that runs long
+while the person sees nothing happen. The check is a separate tool, not a mode
+of the first, for its annotations: it is read-only and idempotent, so a host
+does not ask the person to confirm every check. This is the same shape the
+pods' own `ask_teammate` uses between pods (`pod_ask_service.py`), with the
+same polling backoff. A standard for long-running tool calls in MCP would
+replace the second tool once both hosts support one; that was not checked
+here.
+
+**What the answer carries.** The text the run wrote after its last tool call,
+by the same rule an ask between pods uses (`pod_asks.answer_from`): what came
+before a tool call is narration. An agent with an output schema also returns
+its structured `output`. Every answer carries `url`, the conversation in Lemma
+(`/t/{pod}/conversation/{id}`), and says how many things the run *showed*
+(`display_resource`) that only Lemma draws. Widgets are not mapped to an MCP
+Apps view. A widget's HTML runs the browser SDK against the API with a widget
+token; framing one would need a view per widget, a CSP that opens the API, and
+a token minted for the view, which is §b's work again for a smaller prize. When
+someone wants a chart inside ChatGPT, the table view's pattern (Lemma draws
+from data in the result) is the cheaper route.
+
+**Scope: `pod:write`.** An agent can act: write records, run workflows, send
+from a connected account. So asking needs `pod:write`, and is annotated as
+destructive, open-world and not idempotent, which makes Claude and ChatGPT ask
+the person before each ask, showing the request. A read-only connection is
+shown neither tool. The check tool reads only conversations this connection
+opened, recorded in the conversation's metadata (`mcp.grant_id`) beside its
+owner, which stays the boundary: it is never a way to read the person's other
+chats.
+
+**Who is billed, and how the run is attributed.** The conversation is the
+person's own, in this pod, started as them: the run is billed to the pod's
+organization and counted against the person's own limits, exactly as a chat
+they start in Lemma is, and the usage preflight refuses one past a limit with
+the limit's name. It is not run under the connection's delegated session, the
+one a framed app holds (§b): a run never holds a token from whoever started
+it, it runs as the person and the agent, as in Lemma. So revoking the
+connection stops new asks and checks at once, and a run already going
+finishes; Stop is in Lemma. The
+attribution is in three places: the conversation's `mcp` metadata (the grant
+and the client's name), `source: "mcp"` on the message, and the audit line
+every call already writes. The conversation shows in the person's chats in
+Lemma like any other, with the whole run in it.
+
+**Questions and approvals inside the run.** The conversation's instructions
+tell the agent that its final message is read in another AI tool, where its
+`ask_user` cards are not shown, so it should ask in its answer instead; the
+reply comes back as the next message, sent with the same `conversation_id`.
+If it pauses anyway, the call returns `WAITING` with each question's or
+approval's text and the Lemma link, and the pause is in the person's inbox in
+Lemma as every pause is (`pause_questions.py`). Sending a message into a
+waiting conversation moves past the pause the way a new message in Lemma does
+(`pause_supersession.py`): the question or approval is declined, never
+approved, and the agent reads the message. **An approval is given only in
+Lemma.** The host's model wrote the request the agent is asking to act on; an
+approval the same model could grant would approve itself. The approval card in
+[§a](#a-more-views) is the way to bring it into the host, as a view the person
+clicks rather than a tool the model calls.
+
+**What it deliberately does not do.**
+
+- **Not offered to a Lemma session.** The Agent Host's token is a Lemma agent,
+  which has its own ways to reach other agents; these tools are for outside
+  clients only, as the app tools are.
+- **No conversation history.** The host cannot list or read the person's other
+  chats, only the ones its own asks opened.
+- **No stop.** A run is stopped in Lemma. A host's model that could stop runs
+  could stop ones the person started there.
 
 ## Where MCP Events meets this
 

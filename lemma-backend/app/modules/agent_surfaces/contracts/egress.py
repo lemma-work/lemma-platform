@@ -210,10 +210,20 @@ def build_progress_observer(
     )
 
 
+def conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
+    """Where a person opens this conversation in Lemma, from anywhere else."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_conversation_url,
+    )
+
+    return build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
+
+
 __all__ = [
     "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
     "build_surface_toolsets",
+    "conversation_url",
     "deliver_display_resource",
     "deliver_voice_note",
     "hold_display_for_one_reply",

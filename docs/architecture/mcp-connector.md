@@ -152,7 +152,9 @@ hand-off is removed from denied results: it points a Lemma agent at
 as themselves a denial is the answer. One call needs more than its tool's
 scope: `pod_get_file_url` with `url_type: public` mints a link anyone can open
 for up to a week, which outlives the connection, so it needs `pod:write`, and
-the tool is marked open-world.
+the tool is marked open-world. A connection allowed to change things also gets
+a tool per pod app and two that hand a request to one of the pod's agents
+([mcp-plugin.md](mcp-plugin.md) §b and §e).
 
 **An outside client's token is honoured only where it was checked.** The public
 mount verifies the token, applies the rate limit and the Origin check, and
