@@ -57,7 +57,6 @@ from app.modules.agent.services.pod_mcp_workflows import (
     WRITING_TOOLS as WORKFLOW_WRITING_TOOLS,
     PodWorkflows,
     is_workflow_tool,
-    workflow_tools,
 )
 from app.modules.agent.services.pod_mcp_apps import (
     app_tools,
@@ -209,11 +208,7 @@ class PodMCPService:
             listed += function_tools(
                 await self.functions.functions(pod_id=pod_id, user_id=principal.user_id)
             )
-        listed += workflow_tools(
-            await self.workflows.workflows(principal),
-            may_read=Scope.READ in principal.scopes,
-            may_change=Scope.WRITE in principal.scopes,
-        )
+        listed += await self.workflows.tools(principal)
         return listed
 
     async def call_tool(

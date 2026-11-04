@@ -561,8 +561,13 @@ class _Repository:
     def __init__(self, conversation: Conversation, messages: list[Message]) -> None:
         self.conversation = conversation
         self.messages = messages
+        self.calls: list[str] = []
+
+    async def lock_conversation(self, conversation_id: UUID) -> None:
+        self.calls.append("lock")
 
     async def get_conversation(self, conversation_id: UUID, *, include_runs=False):
+        self.calls.append("read")
         return self.conversation if conversation_id == self.conversation.id else None
 
     async def list_messages(self, *, conversation_id: UUID, limit: int):
@@ -623,12 +628,18 @@ async def test_a_follow_up_waits_until_the_agent_is_done_with_the_last_one():
         principal=mine,
         agent_id=_ANALYST.id,
     )
-    asks = _asks(busy)
+    repository = _Repository(busy, [])
+    asks = PodAgentAsks(
+        _no_database, conversations=lambda _uow: repository, list_agents=_askable
+    )
     with pytest.raises(AgentAskRefused, match="analyst is still on the last message"):
         await asks.ask(
             AskAgentArguments(message="And last week?", conversation_id=busy.id),
             principal=mine,
         )
+    # The busy check reads under the conversation's lock, so two follow-ups at
+    # once cannot both find the agent idle.
+    assert repository.calls == ["lock", "read"]
 
 
 async def test_checking_reads_the_answer_with_where_to_open_it():

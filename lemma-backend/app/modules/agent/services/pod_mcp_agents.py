@@ -297,7 +297,10 @@ _ANSWER_WINDOW = 200
 
 
 class ConversationReads(Protocol):
-    """The two reads the tools make of a conversation."""
+    """What the tools ask of a conversation: two reads, and the lock a
+    follow-up holds while it decides whether it may be sent."""
+
+    async def lock_conversation(self, conversation_id: UUID) -> None: ...
 
     async def get_conversation(
         self, conversation_id: UUID, *, include_runs: bool = False
@@ -370,6 +373,13 @@ class PodAgentAsks:
         agents = await self.agents(pod_id=principal.pod_id, user_id=principal.user_id)
         async with self.uow_factory() as uow:
             if request.conversation_id is not None:
+                # Locked before it is read, and held through the send: two
+                # follow-ups at once would both find the agent idle, and the
+                # second would join the first's run and read its answer.
+                # `turns.start` takes the same lock again, in this transaction.
+                await self._conversations(uow).lock_conversation(
+                    request.conversation_id
+                )
                 conversation = await self._own_conversation(
                     uow, request.conversation_id, principal=principal
                 )

@@ -219,13 +219,27 @@ def conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
     return build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
 
 
-def workflow_url(*, pod_id: UUID, workflow_name: str) -> str:
-    """Where a person opens this workflow in Lemma, with its runs and forms."""
+def workflow_run_url(*, pod_id: UUID, run_id: UUID) -> str:
+    """Where a person opens one workflow run in Lemma, with the form it waits on.
+
+    The page reads the run, so it opens only for someone who may read its
+    workflow; a form assigned on one they may not is answered from the pod's
+    waiting list instead (``space_url``).
+    """
     from app.modules.agent_surfaces.services.display_resource_renderer import (
-        build_workflow_url,
+        build_workflow_run_url,
     )
 
-    return build_workflow_url(pod_id=pod_id, workflow_name=workflow_name)
+    return build_workflow_run_url(pod_id=pod_id, run_id=run_id)
+
+
+def space_url(*, pod_id: UUID) -> str:
+    """Where a person opens the pod itself in Lemma."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_space_url,
+    )
+
+    return build_space_url(pod_id=pod_id)
 
 
 __all__ = [
@@ -239,5 +253,6 @@ __all__ = [
     "parse_surface_event_metadata",
     "report_approved_action_failed",
     "retire_cards_answered_in_lemma",
-    "workflow_url",
+    "space_url",
+    "workflow_run_url",
 ]

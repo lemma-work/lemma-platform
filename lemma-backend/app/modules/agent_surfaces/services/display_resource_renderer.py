@@ -281,6 +281,17 @@ def build_workflow_url(*, pod_id: UUID, workflow_name: str) -> str:
     return f"{_space_url(pod_id)}/workflow/{quote(workflow_name, safe='')}"
 
 
+def build_workflow_run_url(*, pod_id: UUID, run_id: UUID) -> str:
+    """One workflow run's page, with the form it waits on, for someone who may
+    read its workflow."""
+    return f"{_space_url(pod_id)}/run/{quote(str(run_id), safe='')}"
+
+
+def build_space_url(*, pod_id: UUID) -> str:
+    """The pod's own space, where its waiting list is."""
+    return _space_url(pod_id)
+
+
 def _space_url(pod_id: UUID) -> str:
     return f"{settings.frontend_url.rstrip('/')}/t/{quote(str(pod_id), safe='')}"
 

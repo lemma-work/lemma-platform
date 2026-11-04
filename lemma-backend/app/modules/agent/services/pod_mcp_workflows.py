@@ -35,7 +35,7 @@ from app.modules.agent.services.mcp_content import tool_call_result
 from app.modules.agent.tools.authority import tool_authorization_context
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
-from app.modules.mcp_access.contracts import McpPrincipal
+from app.modules.mcp_access.contracts import McpPrincipal, Scope
 from app.modules.workflow.contracts.person_runs import (
     PersonWorkflowRun,
     PodWorkflow,
@@ -106,15 +106,23 @@ def is_workflow_tool(name: str) -> bool:
 
 
 def workflow_tools(
-    workflows: Sequence[PodWorkflow], *, may_read: bool, may_change: bool
+    workflows: Sequence[PodWorkflow],
+    *,
+    may_read: bool,
+    may_change: bool,
+    forms_waiting: bool = False,
 ) -> list[Tool]:
-    """The reading tools on a connection allowed to read, wherever the pod has a
-    workflow the person can see; starting and submitting only on one allowed to
-    change things. Each scope gates its own tools, as every pod tool's does: a
-    connection granted only events is offered none of them."""
-    if not workflows:
+    """The reading tools on a connection allowed to read; starting and
+    submitting only on one allowed to change things. Each scope gates its own
+    tools, as every pod tool's does: a connection granted only events is
+    offered none of them.
+
+    The waiting list is offered wherever a form waits on the person, even with
+    no workflow they can see: being the assignee is the grant, and a form on a
+    restricted workflow is still theirs to find."""
+    if not workflows and not forms_waiting:
         return []
-    reads = [
+    run_read = [
         Tool(
             name=WORKFLOW_RUN,
             title="Check on a workflow run",
@@ -124,7 +132,10 @@ def workflow_tools(
             ),
             input_schema=_run_id_schema(),
             annotations=ToolAnnotations(title="Check on a workflow run", **_READS),
-        ),
+        )
+    ]
+    reads = [
+        *(run_read if workflows else []),
         Tool(
             name=WAITING_ON_ME,
             title="Forms waiting on me",
@@ -199,12 +210,12 @@ def _run_id_schema() -> JsonObject:
     }
 
 
-def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID, url: str) -> str | None:
+def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID, where: str) -> str | None:
     """Why the host may not submit this run's form, or ``None`` when it may.
 
-    ``url`` is where the person answers it in Lemma, written into the refusal:
-    the model passes on what it is told, and a link it has to look up elsewhere
-    is a link it may not pass on."""
+    ``where`` is where the person answers it in Lemma, written into the
+    refusal: the model passes on what it is told, and a link it has to look up
+    elsewhere is a link it may not pass on."""
     wait = run.waiting
     if wait is None or wait.kind != _FORM:
         return "That run is not waiting on a form."
@@ -213,12 +224,16 @@ def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID, url: str) -> str | 
     if run.started_by != user_id:
         return (
             "That form is in a run someone else started. They are waiting on "
-            f"your decision: give it in Lemma, at {url}"
+            f"your decision: give it in Lemma, at {where}"
         )
     return None
 
 
-def run_payload(run: PersonWorkflowRun, *, url: str, user_id: UUID) -> JsonObject:
+def run_payload(
+    run: PersonWorkflowRun, *, url: str, user_id: UUID, where: str | None = None
+) -> JsonObject:
+    """``url`` is the link for the payload; ``where`` how to reach it, when the
+    link alone does not say (a form answered from the pod's waiting list)."""
     payload: JsonObject = {
         "success": run.status != "FAILED",
         "run_id": str(run.id),
@@ -242,7 +257,9 @@ def run_payload(run: PersonWorkflowRun, *, url: str, user_id: UUID) -> JsonObjec
         ),
     }
     refusal = (
-        submit_refusal(run, user_id=user_id, url=url) if wait.kind == _FORM else None
+        submit_refusal(run, user_id=user_id, where=where or url)
+        if wait.kind == _FORM
+        else None
     )
     if wait.kind == _FORM and refusal is None:
         payload["message"] = (
@@ -260,20 +277,35 @@ class PodWorkflows:
         uow_factory: UnitOfWorkFactory,
         *,
         gateway: WorkflowGateway | None = None,
-        workflow_url: Callable[[UUID, str], str] | None = None,
+        run_url: Callable[[UUID, UUID], str] | None = None,
+        space_url: Callable[[UUID], str] | None = None,
     ) -> None:
         self._gateway = gateway or _WorkflowModule(uow_factory)
-        self._workflow_url = workflow_url or _lemma_workflow_url
+        self._run_url = run_url or _lemma_run_url
+        self._space_url = space_url or _lemma_space_url
 
-    async def workflows(self, principal: McpPrincipal) -> list[PodWorkflow]:
-        return await self._gateway.workflows(principal)
+    async def tools(self, principal: McpPrincipal) -> list[Tool]:
+        """The workflow tools this connection is offered."""
+        may_read = Scope.READ in principal.scopes
+        workflows = await self._gateway.workflows(principal)
+        # Asked only when nothing else would offer the waiting list: a pod with
+        # no visible workflow can still hold a form assigned to the person.
+        forms_waiting = (
+            may_read and not workflows and bool(await self._gateway.waiting(principal))
+        )
+        return workflow_tools(
+            workflows,
+            may_read=may_read,
+            may_change=Scope.WRITE in principal.scopes,
+            forms_waiting=forms_waiting,
+        )
 
     async def call(
         self, name: str, arguments: JsonObject, *, principal: McpPrincipal
     ) -> CallToolResult:
         try:
             if name == WAITING_ON_ME:
-                return self._listing(await self._gateway.waiting(principal), principal)
+                return await self._listing(principal)
             if name == WORKFLOW_RUN:
                 request = RunArguments.model_validate(arguments)
                 return self._answer(
@@ -299,7 +331,7 @@ class PodWorkflows:
     ) -> CallToolResult:
         run = await self._gateway.run(principal, request.run_id)
         refusal = submit_refusal(
-            run, user_id=principal.user_id, url=self._url(principal, run)
+            run, user_id=principal.user_id, where=self._url(principal, run)
         )
         if refusal is not None or run.waiting is None:
             return _refusal(refusal or "That run is not waiting on a form.")
@@ -321,23 +353,44 @@ class PodWorkflows:
         )
         return tool_call_result(payload)
 
-    def _listing(
-        self, runs: Sequence[PersonWorkflowRun], principal: McpPrincipal
-    ) -> CallToolResult:
+    async def _listing(self, principal: McpPrincipal) -> CallToolResult:
+        runs = await self._gateway.waiting(principal)
+        readable = {
+            workflow.name for workflow in await self._gateway.workflows(principal)
+        }
         return tool_call_result(
             {
                 "success": True,
                 "waiting": [
-                    run_payload(
-                        run, url=self._url(principal, run), user_id=principal.user_id
-                    )
+                    self._waiting_payload(run, principal, readable=readable)
                     for run in runs
                 ],
             }
         )
 
+    def _waiting_payload(
+        self, run: PersonWorkflowRun, principal: McpPrincipal, *, readable: set[str]
+    ) -> JsonObject:
+        """A form waiting on the person, with where to answer it.
+
+        A run's own page reads the run, which needs its workflow; a form
+        assigned on a workflow the person may not read is answered from the
+        pod's waiting list instead, so it is linked to the pod and says so.
+        """
+        if run.workflow in readable:
+            return run_payload(
+                run, url=self._url(principal, run), user_id=principal.user_id
+            )
+        space = self._space_url(principal.pod_id)
+        return run_payload(
+            run,
+            url=space,
+            user_id=principal.user_id,
+            where=f"{space} , from the list of what is waiting on you",
+        )
+
     def _url(self, principal: McpPrincipal, run: PersonWorkflowRun) -> str:
-        return self._workflow_url(principal.pod_id, run.workflow)
+        return self._run_url(principal.pod_id, run.id)
 
 
 class _WorkflowModule:
@@ -425,10 +478,16 @@ async def _assistant_context(
     )
 
 
-def _lemma_workflow_url(pod_id: UUID, workflow_name: str) -> str:
-    from app.modules.agent_surfaces.contracts.egress import workflow_url
+def _lemma_run_url(pod_id: UUID, run_id: UUID) -> str:
+    from app.modules.agent_surfaces.contracts.egress import workflow_run_url
 
-    return workflow_url(pod_id=pod_id, workflow_name=workflow_name)
+    return workflow_run_url(pod_id=pod_id, run_id=run_id)
+
+
+def _lemma_space_url(pod_id: UUID) -> str:
+    from app.modules.agent_surfaces.contracts.egress import space_url
+
+    return space_url(pod_id=pod_id)
 
 
 def _refusal(message: str) -> CallToolResult:

@@ -92,14 +92,16 @@ class _Gateway:
         runs: list[PersonWorkflowRun] | None = None,
         submitted: tuple[bool, str] = (True, "Submitted."),
         refusal: str | None = None,
+        workflows: list[PodWorkflow] | None = None,
     ) -> None:
+        self.visible = [_INTAKE, _PAYROLL] if workflows is None else workflows
         self.runs = list(runs or [])
         self.submitted = submitted
         self.refusal = refusal
         self.submits: list[tuple[UUID, str, JsonObject]] = []
 
     async def workflows(self, principal: McpPrincipal) -> list[PodWorkflow]:
-        return [_INTAKE, _PAYROLL]
+        return self.visible
 
     async def start(self, principal: McpPrincipal, name: str) -> PersonWorkflowRun:
         if self.refusal:
@@ -123,7 +125,8 @@ def _workflows(gateway: _Gateway) -> PodWorkflows:
     return PodWorkflows(
         lambda: None,
         gateway=gateway,
-        workflow_url=lambda pod, name: f"https://lemma.test/{name}",
+        run_url=lambda pod, run_id: f"https://lemma.test/run/{run_id}",
+        space_url=lambda pod: "https://lemma.test/space",
     )
 
 
@@ -166,27 +169,27 @@ def test_a_pod_with_no_workflows_offers_no_workflow_tools():
 
 
 def test_the_form_on_a_run_the_person_started_is_theirs_to_fill_in():
-    assert submit_refusal(_run(), user_id=PERSON, url=_URL) is None
+    assert submit_refusal(_run(), user_id=PERSON, where=_URL) is None
 
 
 def test_a_form_in_someone_elses_run_is_answered_in_lemma():
-    refusal = submit_refusal(_run(started_by=SOMEONE), user_id=PERSON, url=_URL)
+    refusal = submit_refusal(_run(started_by=SOMEONE), user_id=PERSON, where=_URL)
     assert refusal is not None
     # The link itself, not the name of a field the model has to go and read.
     assert refusal.endswith(f"give it in Lemma, at {_URL}")
 
 
 def test_a_form_waiting_on_someone_else_is_not_the_persons():
-    assert submit_refusal(_run(on_this_person=False), user_id=PERSON, url=_URL) == (
+    assert submit_refusal(_run(on_this_person=False), user_id=PERSON, where=_URL) == (
         "That form is not waiting on you."
     )
 
 
 def test_a_run_waiting_on_a_step_rather_than_a_form_has_nothing_to_submit():
-    assert submit_refusal(_run(kind="AGENT"), user_id=PERSON, url=_URL) == (
+    assert submit_refusal(_run(kind="AGENT"), user_id=PERSON, where=_URL) == (
         "That run is not waiting on a form."
     )
-    assert submit_refusal(_run(kind=None), user_id=PERSON, url=_URL) == (
+    assert submit_refusal(_run(kind=None), user_id=PERSON, where=_URL) == (
         "That run is not waiting on a form."
     )
 
@@ -215,7 +218,8 @@ async def test_starting_a_workflow_that_begins_with_a_form_returns_the_form():
     content = result.structured_content
     assert content["status"] == "WAITING"
     assert content["waiting"]["form"] == _FORM
-    assert content["url"] == "https://lemma.test/intake"
+    # The run's own page, where its form is, not the workflow's overview.
+    assert content["url"] == f"https://lemma.test/run/{content['run_id']}"
 
 
 async def test_submitting_uses_the_node_the_run_waits_on_not_one_the_model_names():
@@ -241,7 +245,7 @@ async def test_a_form_in_someone_elses_run_is_not_submitted():
     )
     assert result.is_error
     assert gateway.submits == []
-    assert "https://lemma.test/intake" in result.structured_content["error"]
+    assert "https://lemma.test/run/" in result.structured_content["error"]
 
 
 async def test_a_submission_the_form_rejects_says_which_field():
@@ -270,8 +274,30 @@ async def test_the_waiting_list_says_where_to_answer_each_form():
         WAITING_ON_ME, {}, principal=_principal(Scope.READ)
     )
     [waiting] = result.structured_content["waiting"]
-    assert waiting["url"] == "https://lemma.test/intake"
+    assert waiting["url"] == f"https://lemma.test/run/{waiting['run_id']}"
     assert "in Lemma" in waiting["message"]
+
+
+async def test_a_form_on_a_workflow_the_person_cannot_read_is_sent_to_their_list():
+    """Its run's page would refuse them; the pod's waiting list holds it."""
+    gateway = _Gateway(runs=[_run(started_by=SOMEONE)], workflows=[])
+    result = await _workflows(gateway).call(
+        WAITING_ON_ME, {}, principal=_principal(Scope.READ)
+    )
+    [waiting] = result.structured_content["waiting"]
+    assert waiting["url"] == "https://lemma.test/space"
+    assert "from the list of what is waiting on you" in waiting["message"]
+
+
+async def test_the_waiting_list_is_offered_for_a_form_on_a_workflow_nobody_shows():
+    gateway = _Gateway(runs=[_run(started_by=SOMEONE)], workflows=[])
+    tools = await _workflows(gateway).tools(_principal(Scope.READ))
+    assert [tool.name for tool in tools] == [WAITING_ON_ME]
+
+
+async def test_a_pod_with_no_workflows_and_nothing_waiting_offers_none():
+    gateway = _Gateway(workflows=[])
+    assert await _workflows(gateway).tools(_principal(Scope.READ, Scope.WRITE)) == []
 
 
 async def test_arguments_are_checked_before_anything_is_started():
