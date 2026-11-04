@@ -373,7 +373,9 @@ def build_agent_instruction_parts(
     # Somebody outside the pod is told what they can have, not how to build and
     # write: a run that read "build missing pieces" told a stranger it had
     # saved what it had no tool to save.
-    for_outsider = run_audience(ctx).answers_outsiders
+    # A contact's run. A linked pod's keeps the member prompt and the pod
+    # fragment: it reads what was shared with it, through the pod tools.
+    for_outsider = run_audience(ctx).is_contact
     if for_outsider:
         sections.append(load_outsider_base_prompt())
     elif conversation.is_pod_assistant:
@@ -443,7 +445,8 @@ def _remote_fragments(enabled: set[AgentToolset], *, ctx: AgentContext) -> list[
     native_commands = bool(getattr(ctx, "host_runs_native_commands", False))
     # Not how to write and post to a run answering somebody outside the pod,
     # which can do neither (``capabilities/assembler._NOT_FOR_OUTSIDERS``).
-    outsider = run_audience(ctx).answers_outsiders
+    # A contact's run; a linked pod's reads through the pod tools.
+    outsider = run_audience(ctx).is_contact
     fragments = [
         _read_required_prompt(path)
         for toolset, path in FRAGMENT_BY_TOOLSET.items()

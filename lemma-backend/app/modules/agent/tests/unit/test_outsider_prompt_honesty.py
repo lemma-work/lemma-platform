@@ -11,7 +11,9 @@ pins one rule:
 * no working folder is named;
 * the pod and messaging guidance is not given, and nor is the chat
   platform's guidance on showing files, asking and approving;
-* the group brief, not a private chat's, in a group, and it says the same.
+* the group brief, not a private chat's, in a group, and it says the same;
+* on email too, nothing it is not given is taught;
+* a linked pod's run, which reads what was shared with it, is not a guest's.
 """
 
 from __future__ import annotations
@@ -102,6 +104,24 @@ def test_the_chat_platforms_delivery_tools_are_not_offered_to_a_guest():
     for tool in ("display_resource", "request_approval", "ask_user", "write_todos"):
         assert tool not in guest, tool
     assert "display_resource" in member
+
+
+def test_a_guest_answered_by_email_is_not_taught_its_withheld_tools():
+    guest = surface_platform_guidance("RESEND", audience=Audience.contact(uuid4()))
+    member = surface_platform_guidance("RESEND")
+
+    for tool in ("display_resource", "request_approval", "ask_user"):
+        assert tool not in guest, tool
+        assert tool in member, tool
+    assert "exactly one" in guest
+
+
+def test_a_linked_pods_run_keeps_the_prompt_for_what_was_shared_with_it():
+    """A run answering another pod acts with what that pod was given -- not
+    as nobody -- and reads it through the pod tools it keeps."""
+    text = _instructions(Audience.pod(uuid4()))
+
+    assert "You cannot save, change, delete or send anything" not in text
 
 
 def test_the_group_brief_says_nothing_is_saved_for_them():

@@ -71,7 +71,7 @@ def surface_platform_guidance(
         lines.append(_GROUP_SECTION)
 
     if facts.is_email:
-        lines.extend(_email_sections(facts))
+        lines.extend(_email_sections(facts, guest=audience.answers_outsiders))
     elif not audience.answers_outsiders:
         # How to show files, ask, approve and narrate long work: tools a run
         # answering somebody outside the pod is not given, and one told about
@@ -310,14 +310,21 @@ def withheld_background_note(count: int, *, view: str | None = None) -> str:
     return f"({count} message(s) in this chat are not shown to you: {because}.)"
 
 
-def _email_sections(facts: PlatformFacts) -> list[str]:
-    """Email delivers one composed reply, so there is no chat delivery to describe."""
+def _email_sections(facts: PlatformFacts, *, guest: bool = False) -> list[str]:
+    """Email delivers one composed reply, so there is no chat delivery to
+    describe. ``guest``: somebody outside the pod, whose run is given neither
+    files to show nor questions to ask -- told only how the reply goes."""
+    sending = (
+        "## Sending your reply\n"
+        "The recipient only receives email, and they receive exactly one: "
+        "everything you write this turn is composed into a single reply and "
+        "sent when you finish. Just write it. Markdown is rendered to HTML."
+    )
+    if guest:
+        return [f"{sending} Do not narrate progress."]
     return [
         (
-            "## Sending your reply\n"
-            "The recipient only receives email, and they receive exactly one: "
-            "everything you write this turn is composed into a single reply and "
-            "sent when you finish. Just write it. Markdown is rendered to HTML. "
+            f"{sending} "
             "Show a file with `display_resource` (`type=FILE`, a pod path) and it "
             f"is attached to that reply — up to {facts.inline_mb_cap} MB inline, "
             "larger files become download links automatically. Do not narrate "
