@@ -4,6 +4,7 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { useQuery } from "@tanstack/react-query";
 import { lemma } from "../session/client";
 import { useSession } from "../session/session";
+import { useWebSessionReady } from "../session/web-cookie";
 import { Text } from "./text";
 import { useTheme } from "./theme";
 import { useWidgetFont } from "./widget-font";
@@ -105,8 +106,10 @@ export function EmbedFrame({ src, onCompose, label }: {
     onCompose?: (text: string, newConversation: boolean) => void;
     label: string;
 }) {
-    const { server } = useSession();
+    const { server, mode } = useSession();
     const { scheme } = useTheme();
+    /* Its live data rides the cookie session: made sure of first. */
+    const checked = useWebSessionReady(mode === "live");
     /* The app's face, put into the page it frames (`widget-font.ts`): read
        once, and waited for, so the page is not drawn twice. */
     const face = useWidgetFont();
@@ -131,7 +134,7 @@ export function EmbedFrame({ src, onCompose, label }: {
         else if (said.type === "compose" && typeof said.text === "string") onCompose?.(said.text, Boolean(said.newConversation));
     };
     if (late && !loaded) return <Text size={14} tone={color.ink3} style={{ paddingVertical: 8 }}>{label} did not load.</Text>;
-    if (html === null) {
+    if (html === null || !checked) {
         return (
             <View style={{ height: 160, alignItems: "center", justifyContent: "center" }}>
                 <ActivityIndicator color={color.ink3} />

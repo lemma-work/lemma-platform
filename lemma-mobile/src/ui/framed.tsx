@@ -1,9 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import * as WebBrowser from "expo-web-browser";
+import { useSession } from "../session/session";
+import { useWebSession, useWebSessionReady } from "../session/web-cookie";
+import { signInRedirect, UNSTICK_MARKER } from "../session/web-cookie-script";
 import { Icon } from "./icons";
 import { Press } from "./press";
 import { Text } from "./text";
@@ -12,11 +15,15 @@ import { color, TOUCH } from "./tokens";
 /** A page of the web shown full screen: a pod app, or a workspace page the
  *  phone has no screen for yet.
  *
- *  It signs in the way a browser does, with the cookie session the sign-in
- *  WebView left (pod apps read the parent-domain SuperTokens cookie). Where
- *  that is missing, the page's own "Sign in with Lemma" runs in here. The
- *  phone's own header tokens never go in: a refresh token held in two places
- *  trips SuperTokens' theft detection and signs both out. */
+ *  It signs in the way a browser does, with the WebViews' cookie session
+ *  (pod apps read the parent-domain SuperTokens cookie). That session is
+ *  checked, and made again from the app's own when it has ended, before the
+ *  page loads (`session/web-cookie.tsx`). A page that sends itself to the
+ *  web's sign-in anyway gets the check once more, skipping what was
+ *  remembered, and is taken back to where it was going; only a second trip
+ *  shows the sign-in. The phone's own header tokens never go in: a refresh
+ *  token held in two places trips SuperTokens' theft detection and signs
+ *  both out. */
 export function Framed({ url, title, subtitle, children, right }: {
     url: string | null;
     title: string;
@@ -29,6 +36,29 @@ export function Framed({ url, title, subtitle, children, right }: {
     const view = useRef<WebView>(null);
     const [loading, setLoading] = useState(true);
     const [failed, setFailed] = useState<string | null>(null);
+    const { mode, server } = useSession();
+    const { ensure } = useWebSession();
+    const checked = useWebSessionReady(url !== null && mode === "live");
+    /* What the WebView shows: `url`, or where a sign-in trip was going. */
+    const [target, setTarget] = useState(url);
+    const [load, setLoad] = useState(0);
+    const [recovering, setRecovering] = useState(false);
+    const recovered = useRef(false);
+    useEffect(() => {
+        setTarget(url);
+        recovered.current = false;
+    }, [url]);
+    const recover = (back: string) => {
+        recovered.current = true;
+        setRecovering(true);
+        setLoading(true);
+        void ensure(true).finally(() => {
+            setTarget(back);
+            setLoad((n) => n + 1);
+            setRecovering(false);
+        });
+    };
+    const showing = checked && !recovering ? target : null;
     return (
         <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: color.paper }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingTop: 2, paddingBottom: 6, paddingLeft: 4, paddingRight: 6, borderBottomWidth: 1, borderBottomColor: color.line }}>
@@ -53,21 +83,32 @@ export function Framed({ url, title, subtitle, children, right }: {
             </View>
             {url ? (
                 <View style={{ flex: 1 }}>
-                    <WebView
-                        ref={view}
-                        source={{ uri: url }}
-                        originWhitelist={["http://*", "https://*"]}
-                        sharedCookiesEnabled
-                        thirdPartyCookiesEnabled
-                        domStorageEnabled
-                        javaScriptEnabled
-                        allowsBackForwardNavigationGestures
-                        setSupportMultipleWindows={false}
-                        onLoadEnd={() => setLoading(false)}
-                        onError={(event) => { setLoading(false); setFailed(event.nativeEvent.description || "This page did not load."); }}
-                        style={{ flex: 1 }}
-                    />
-                    {loading ? (
+                    {showing ? (
+                        <WebView
+                            key={load}
+                            ref={view}
+                            source={{ uri: showing }}
+                            originWhitelist={["http://*", "https://*"]}
+                            injectedJavaScriptBeforeContentLoaded={UNSTICK_MARKER}
+                            sharedCookiesEnabled
+                            thirdPartyCookiesEnabled
+                            domStorageEnabled
+                            javaScriptEnabled
+                            allowsBackForwardNavigationGestures
+                            setSupportMultipleWindows={false}
+                            onShouldStartLoadWithRequest={(request) => {
+                                if (request.isTopFrame === false || recovered.current || mode !== "live") return true;
+                                const back = signInRedirect(request.url, server.web, showing);
+                                if (!back) return true;
+                                recover(back);
+                                return false;
+                            }}
+                            onLoadEnd={() => setLoading(false)}
+                            onError={(event) => { setLoading(false); setFailed(event.nativeEvent.description || "This page did not load."); }}
+                            style={{ flex: 1 }}
+                        />
+                    ) : null}
+                    {loading || !showing ? (
                         <View style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: color.paper }}>
                             <ActivityIndicator color={color.ink3} />
                         </View>

@@ -48,9 +48,9 @@ async function sha256(text: string): Promise<Uint8Array> {
     return new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, new TextEncoder().encode(text)));
 }
 
-/** Open a request against `server`. Nothing is signed in until the browser
- *  completes it and the app's WebView trades the verifier. */
-export async function startHandoff(server: Server): Promise<Handoff> {
+/** A request opened with a fresh PKCE pair. Nothing comes of it until
+ *  someone signed in completes it and a WebView trades the verifier. */
+export async function openRequest(server: Server): Promise<{ requestId: string; verifier: string; expiresAt: number }> {
     const verifier = base64Url(Crypto.getRandomBytes(32));
     const challenge = base64Url(await sha256(verifier));
     let response: Response;
@@ -69,12 +69,19 @@ export async function startHandoff(server: Server): Promise<Handoff> {
     const requestId = typeof created.request_id === "string" && REQUEST_ID.test(created.request_id) ? created.request_id : null;
     if (!requestId) throw new Error("Signing in in the browser could not start.");
     const seconds = Number(created.expires_in_seconds);
+    return { requestId, verifier, expiresAt: Date.now() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 300) * 1000 };
+}
+
+/** Open a request against `server`. Nothing is signed in until the browser
+ *  completes it and the app's WebView trades the verifier. */
+export async function startHandoff(server: Server): Promise<Handoff> {
+    const { requestId, verifier, expiresAt } = await openRequest(server);
     const handoff: Handoff = {
         requestId,
         verifier,
         code: codeFrom(await sha256(codeInput(requestId))),
         url: browserUrl(server.web, requestId),
-        expiresAt: Date.now() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 300) * 1000,
+        expiresAt,
         serverId: server.id,
     };
     await store.setHandoff(JSON.stringify(handoff));

@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
 import { SessionProvider, useSession } from "../session/session";
+import { WebSessionProvider } from "../session/web-cookie";
 import { WebSignOut } from "../session/web-session";
 import { ThemeProvider, useTheme } from "../ui/theme";
 import { color } from "../ui/tokens";
@@ -57,9 +58,11 @@ export default function RootLayout() {
         <SafeAreaProvider initialMetrics={initialWindowMetrics}>
             <QueryClientProvider client={client}>
                 <SessionProvider>
-                    <ThemeProvider>
-                        <Routes />
-                    </ThemeProvider>
+                    <WebSessionProvider>
+                        <ThemeProvider>
+                            <Routes />
+                        </ThemeProvider>
+                    </WebSessionProvider>
                 </SessionProvider>
             </QueryClientProvider>
         </SafeAreaProvider>
