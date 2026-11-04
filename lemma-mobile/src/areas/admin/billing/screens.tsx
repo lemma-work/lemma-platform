@@ -11,6 +11,7 @@ import { color } from "../../../ui/tokens";
 import { useDeployment, useMyOrgRole } from "../access/hooks";
 import { openOutside } from "../connect/round-trip";
 import { adminRoutes } from "../routes";
+import { SELLS } from "../sections";
 import { Field, Group, ReadProblem, Reading, Row, Say, SettingsScreen, isForbidden, problemOf } from "../ui";
 import {
     useCancel, useChange, useContactsCap, useDaily, useInvoices, useMyLimits, useOnReturn, usePlans, useSeats,
@@ -69,8 +70,9 @@ function Allowance({ orgId }: { orgId: string | null }) {
     const local = isLocal(useDeployment());
     const windows = limits.data?.windows ?? [];
     const place = planPlace(limits.data);
-    /* Near the cap or past it, the way to raise it is one tap away. */
-    const raise = !local && worthShowing(limits.data);
+    /* Near the cap or past it, the way to raise it is one tap away, where
+       the phone sells at all. */
+    const raise = SELLS && !local && worthShowing(limits.data);
     return (
         <Group label={planLabel(limits.data)}>
             {limits.isPending ? <Reading label="Reading your allowance" /> : null}

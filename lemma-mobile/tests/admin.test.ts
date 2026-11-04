@@ -41,10 +41,22 @@ describe("where settings live", () => {
         expect(new Set(SETTINGS.map((one) => one.id)).size).toBe(SETTINGS.length);
         expect(offeredSettings("local").map((one) => one.id)).not.toContain("plan");
         expect(offeredSettings("local").map((one) => one.id)).not.toContain("team-billing");
-        expect(offeredSettings("hosted")).toHaveLength(SETTINGS.length);
-        expect(offeredSettings(null)).toHaveLength(SETTINGS.length);
+        expect(offeredSettings("hosted", true)).toHaveLength(SETTINGS.length);
+        expect(offeredSettings(null, true)).toHaveLength(SETTINGS.length);
         expect(settingsEntry("models")?.title).toBe("Models");
         expect(settingsEntry("nope")).toBeNull();
+    });
+
+    it("leaves Plan and Billing out everywhere while the phone sells nothing, routes included", () => {
+        for (const deployment of ["hosted", null]) {
+            const ids = offeredSettings(deployment).map((one) => one.id);
+            expect(ids).not.toContain("plan");
+            expect(ids).not.toContain("team-billing");
+            expect(ids).toContain("usage");
+        }
+        expect(settingsEntry("plan")).toBeNull();
+        expect(settingsEntry("team-billing")).toBeNull();
+        expect(settingsEntry("plan", true)?.id).toBe("plan");
     });
 
     it("names a Lemma's parts in the phone's words", () => {

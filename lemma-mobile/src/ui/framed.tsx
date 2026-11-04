@@ -90,6 +90,9 @@ export function Framed({ url, title, subtitle, children, right }: {
                             source={{ uri: showing }}
                             originWhitelist={["http://*", "https://*"]}
                             injectedJavaScriptBeforeContentLoaded={UNSTICK_MARKER}
+                            /* The web leaves out plans, prices and checkout
+                               for a page that says this (`sellsHere`). */
+                            applicationNameForUserAgent="LemmaApp/1"
                             sharedCookiesEnabled
                             thirdPartyCookiesEnabled
                             domStorageEnabled

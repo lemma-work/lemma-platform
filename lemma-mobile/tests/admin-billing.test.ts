@@ -28,17 +28,24 @@ function subscription(patch: Partial<Subscription>): Subscription {
 
 describe("buying from the phone", () => {
     it("offers nothing that pays on iOS, and says where instead, naming the server's own web address", () => {
-        expect(buyingHere("ios", "https://lemma.work", "mine")).toEqual({ offer: false, elsewhere: "Change your plan on the web, at lemma.work." });
-        expect(buyingHere("ios", "https://staging.example.com/", "organization")).toEqual({
+        expect(buyingHere("ios", "https://lemma.work", "mine", true)).toEqual({ offer: false, elsewhere: "Change your plan on the web, at lemma.work." });
+        expect(buyingHere("ios", "https://staging.example.com/", "organization", true)).toEqual({
             offer: false,
             elsewhere: "Change what this organization pays for on the web, at staging.example.com.",
         });
-        expect(buyingHere("ios", "http://localhost:3000", "mine").elsewhere).toBe("Change your plan on the web, at localhost:3000.");
+        expect(buyingHere("ios", "http://localhost:3000", "mine", true).elsewhere).toBe("Change your plan on the web, at localhost:3000.");
     });
 
     it("offers it all on Android, with nothing said in its place", () => {
-        expect(buyingHere("android", "https://lemma.work", "mine")).toEqual({ offer: true, elsewhere: null });
-        expect(buyingHere("android", "https://lemma.work", "organization")).toEqual({ offer: true, elsewhere: null });
+        expect(buyingHere("android", "https://lemma.work", "mine", true)).toEqual({ offer: true, elsewhere: null });
+        expect(buyingHere("android", "https://lemma.work", "organization", true)).toEqual({ offer: true, elsewhere: null });
+    });
+
+    it("while the phone sells nothing, offers nothing and names nowhere to pay, on either platform", () => {
+        for (const os of ["ios", "android"]) {
+            expect(buyingHere(os, "https://lemma.work", "mine")).toEqual({ offer: false, elsewhere: null });
+            expect(buyingHere(os, "https://lemma.work", "organization")).toEqual({ offer: false, elsewhere: null });
+        }
     });
 
     it("names a host without its scheme or a trailing slash", () => {

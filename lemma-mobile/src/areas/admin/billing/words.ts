@@ -1,5 +1,6 @@
 import type { MyUsageLimitsResponse, UsageAllowanceResponse } from "lemma-sdk";
 import { count } from "../words";
+import { SELLS } from "../sections";
 import { canManage, roleLabel } from "@web/org/membership";
 import type { ContactsCap, DaySpend } from "./source";
 import { formatCost, resetsIn } from "@web/usage/allowance";
@@ -24,13 +25,15 @@ export interface Buying {
     elsewhere: string | null;
 }
 
-/** The rule for paying from the phone. Apple does not let an iOS app link
- *  out to buy or manage a subscription, so on iOS the plan and the billing
- *  are shown and nothing that pays or changes paying is: one sentence says
- *  where to do it instead, naming the server's own web address (never a
- *  fixed host, so another deployment names itself). Android offers it all,
- *  through the phone's browser. */
-export function buyingHere(os: string, web: string, whose: "mine" | "organization"): Buying {
+/** The rule for paying from the phone. While it does not sell (`SELLS` in
+ *  `../sections`), nothing pays and nothing says where to. When it does:
+ *  Apple does not let an iOS app link out to buy or manage a subscription,
+ *  so on iOS the plan and the billing are shown and nothing that pays or
+ *  changes paying is: one sentence says where to do it instead, naming the
+ *  server's own web address (never a fixed host, so another deployment
+ *  names itself). Android offers it all, through the phone's browser. */
+export function buyingHere(os: string, web: string, whose: "mine" | "organization", sells = SELLS): Buying {
+    if (!sells) return { offer: false, elsewhere: null };
     if (os !== "ios") return { offer: true, elsewhere: null };
     const at = hostOf(web);
     return {

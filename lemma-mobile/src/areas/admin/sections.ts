@@ -6,6 +6,13 @@
 
 export type SettingsSectionId = "profile" | "usage" | "plan" | "people" | "connectors" | "models" | "org-usage" | "team-billing";
 
+/** Whether the phone sells anything. It does not, for now (decided
+ *  2026-11-04), on either platform: Plan and Billing are left out of
+ *  settings and their routes, Usage does not point at them, and no screen
+ *  buys, links out to buy, names a price or says where to pay. Usage itself
+ *  stays. The screens are kept, so selling again is this one switch. */
+export const SELLS = false;
+
 export interface SettingsEntry {
     id: SettingsSectionId;
     label: string;
@@ -31,13 +38,16 @@ export const SETTINGS: readonly SettingsEntry[] = [
     { id: "team-billing", label: "Billing", title: "Billing", hint: "What this organization pays for, and its seats", group: "organization", billing: true },
 ];
 
-export function settingsEntry(id: string | undefined): SettingsEntry | null {
-    return SETTINGS.find((one) => one.id === id) ?? null;
+/** A setting by id, or null for none, and for billing while the phone does
+ *  not sell, so an old link to Plan opens nothing that pays. */
+export function settingsEntry(id: string | undefined, sells = SELLS): SettingsEntry | null {
+    return SETTINGS.find((one) => one.id === id && (sells || !one.billing)) ?? null;
 }
 
-/** The settings a deployment offers: no billing on a local one. */
-export function offeredSettings(deployment: string | null): readonly SettingsEntry[] {
-    return deployment === "local" ? SETTINGS.filter((one) => !one.billing) : SETTINGS;
+/** The settings a deployment offers: no billing on a local one, nor while
+ *  the phone does not sell. */
+export function offeredSettings(deployment: string | null, sells = SELLS): readonly SettingsEntry[] {
+    return deployment === "local" || !sells ? SETTINGS.filter((one) => !one.billing) : SETTINGS;
 }
 
 export type LemmaPartId = "about" | "model" | "skills" | "memory" | "connectors" | "channels" | "mcp" | "people" | "works-with";
