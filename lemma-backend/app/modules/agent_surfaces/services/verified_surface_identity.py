@@ -48,9 +48,17 @@ async def resolve_shared_verified_identity(
             # A shared bot's binding stands on the number the platform
             # attested. One made through an org's own app stands on the mailbox
             # code alone: that app's numbers are its secret holder's word, so
-            # none was recorded.
+            # none was recorded. A Telegram account its owner proved from a
+            # signed-in Lemma session stands on that, with no number at all --
+            # Telegram attests the account id on every bot, so the proof holds
+            # wherever it arrives. Never WhatsApp: on an org's own number the
+            # sender is its secret holder's word.
             has_shared_system_bot(event.platform)
             and installation_id is None
+            and not (
+                event.platform is SurfacePlatform.TELEGRAM
+                and identity.session_proved_at is not None
+            )
             and (
                 not identity.verified_phone
                 or identity.verified_phone != user.mobile_number
