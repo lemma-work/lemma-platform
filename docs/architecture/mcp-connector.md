@@ -161,8 +161,8 @@ Beside the pod toolset, a connection allowed to change things gets:
 - a tool per function the person may run (`lemma_run_<function>`), with
   `lemma_pod_function_run` to read a run later.
 
-A connection that can see any of the pod's workflows gets two reads:
-`lemma_pod_workflow_run` and `lemma_pod_waiting_on_me`. If it may also change
+A connection allowed to read, in a pod with a workflow the person can see,
+gets two reads: `lemma_pod_workflow_run` and `lemma_pod_waiting_on_me`. If it may also change
 things, it gets `lemma_pod_start_workflow` and `lemma_pod_submit_workflow_form`
 for the workflows the person may start. These tools are covered in
 [mcp-plugin.md](mcp-plugin.md) §b, §e and §f.

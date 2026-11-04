@@ -211,6 +211,7 @@ class PodMCPService:
             )
         listed += workflow_tools(
             await self.workflows.workflows(principal),
+            may_read=Scope.READ in principal.scopes,
             may_change=Scope.WRITE in principal.scopes,
         )
         return listed
@@ -254,19 +255,19 @@ class PodMCPService:
                 ),
             )
         if is_workflow_tool(name):
+            # Each tool needs its own scope, as every pod tool does
+            # (`caller.may_call`): reading a run or a waiting form is reading.
+            needed = Scope.WRITE if name in WORKFLOW_WRITING_TOOLS else Scope.READ
             return await self._call_outside_tool(
                 caller,
                 name,
                 arguments,
                 allowed=caller.principal is not None
-                and (
-                    name not in WORKFLOW_WRITING_TOOLS
-                    or Scope.WRITE in caller.principal.scopes
-                ),
+                and needed in caller.principal.scopes,
                 call=self.workflows.call,
                 refusal=(
-                    "Starting a workflow or filling in its form needs a connection "
-                    "allowed to change things. Reconnect it and allow that."
+                    f"This connection was not granted {needed.value}. Reconnect "
+                    "it and allow that access to use this."
                 ),
             )
         tool_name = normalize_local_mcp_tool_name(name)

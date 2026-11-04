@@ -42,6 +42,7 @@ SOMEONE = uuid4()
 _INTAKE = PodWorkflow(name="intake", description="Log a new request.", may_start=True)
 _PAYROLL = PodWorkflow(name="payroll", description=None, may_start=False)
 _FORM = {"title": "New request", "fields": [{"name": "title", "type": "string"}]}
+_URL = "https://lemma.test/t/pod/workflow/intake"
 
 
 def _principal(*scopes: Scope) -> McpPrincipal:
@@ -130,12 +131,16 @@ def _workflows(gateway: _Gateway) -> PodWorkflows:
 
 
 def test_a_read_only_connection_can_follow_runs_but_not_start_them():
-    names = [tool.name for tool in workflow_tools([_INTAKE], may_change=False)]
+    names = [
+        tool.name for tool in workflow_tools([_INTAKE], may_read=True, may_change=False)
+    ]
     assert names == [WORKFLOW_RUN, WAITING_ON_ME]
 
 
 def test_starting_names_only_the_workflows_the_person_may_start():
-    start, submit, *reads = workflow_tools([_INTAKE, _PAYROLL], may_change=True)
+    start, submit, *reads = workflow_tools(
+        [_INTAKE, _PAYROLL], may_read=True, may_change=True
+    )
     assert (start.name, submit.name) == (START_WORKFLOW, SUBMIT_FORM)
     assert start.input_schema["properties"]["workflow"]["enum"] == ["intake"]
     assert "- intake: Log a new request." in start.description
@@ -147,38 +152,41 @@ def test_starting_names_only_the_workflows_the_person_may_start():
 
 
 def test_with_nothing_to_start_only_the_reading_tools_are_offered():
-    names = [tool.name for tool in workflow_tools([_PAYROLL], may_change=True)]
+    names = [
+        tool.name for tool in workflow_tools([_PAYROLL], may_read=True, may_change=True)
+    ]
     assert names == [WORKFLOW_RUN, WAITING_ON_ME]
 
 
 def test_a_pod_with_no_workflows_offers_no_workflow_tools():
-    assert workflow_tools([], may_change=True) == []
+    assert workflow_tools([], may_read=True, may_change=True) == []
 
 
 # --- Whose forms the host may fill in ------------------------------------------------
 
 
 def test_the_form_on_a_run_the_person_started_is_theirs_to_fill_in():
-    assert submit_refusal(_run(), user_id=PERSON) is None
+    assert submit_refusal(_run(), user_id=PERSON, url=_URL) is None
 
 
 def test_a_form_in_someone_elses_run_is_answered_in_lemma():
-    refusal = submit_refusal(_run(started_by=SOMEONE), user_id=PERSON)
+    refusal = submit_refusal(_run(started_by=SOMEONE), user_id=PERSON, url=_URL)
     assert refusal is not None
-    assert "in Lemma" in refusal
+    # The link itself, not the name of a field the model has to go and read.
+    assert refusal.endswith(f"give it in Lemma, at {_URL}")
 
 
 def test_a_form_waiting_on_someone_else_is_not_the_persons():
-    assert submit_refusal(_run(on_this_person=False), user_id=PERSON) == (
+    assert submit_refusal(_run(on_this_person=False), user_id=PERSON, url=_URL) == (
         "That form is not waiting on you."
     )
 
 
 def test_a_run_waiting_on_a_step_rather_than_a_form_has_nothing_to_submit():
-    assert submit_refusal(_run(kind="AGENT"), user_id=PERSON) == (
+    assert submit_refusal(_run(kind="AGENT"), user_id=PERSON, url=_URL) == (
         "That run is not waiting on a form."
     )
-    assert submit_refusal(_run(kind=None), user_id=PERSON) == (
+    assert submit_refusal(_run(kind=None), user_id=PERSON, url=_URL) == (
         "That run is not waiting on a form."
     )
 
@@ -284,4 +292,24 @@ async def test_a_read_only_connection_cannot_start_or_submit(name):
         principal=_principal(Scope.READ),
     )
     assert result.is_error
-    assert "allowed to change things" in result.content[0].text
+    assert "not granted pod:write" in result.content[0].text
+
+
+@pytest.mark.parametrize("name", [WORKFLOW_RUN, WAITING_ON_ME])
+async def test_a_connection_granted_only_events_cannot_read_runs_or_forms(name):
+    """Reading a run, or the forms waiting on the person, is reading the pod."""
+    result = await PodMCPService().call_tool(
+        pod_id=POD,
+        token="",
+        name=name,
+        arguments={"run_id": str(uuid4())},
+        principal=_principal(Scope.EVENTS),
+    )
+    assert result.is_error
+    assert "not granted pod:read" in result.content[0].text
+
+
+def test_each_scope_offers_only_its_own_workflow_tools():
+    assert workflow_tools([_INTAKE], may_read=False, may_change=False) == []
+    write_only = workflow_tools([_INTAKE], may_read=False, may_change=True)
+    assert [tool.name for tool in write_only] == [START_WORKFLOW, SUBMIT_FORM]

@@ -34,6 +34,7 @@ from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.services.mcp_content import tool_call_result
 from app.modules.agent.tools.authority import tool_authorization_context
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.mcp_access.contracts import McpPrincipal
 from app.modules.workflow.contracts.person_runs import (
     PersonWorkflowRun,
@@ -104,12 +105,16 @@ def is_workflow_tool(name: str) -> bool:
     return name in WORKFLOW_TOOLS
 
 
-def workflow_tools(workflows: Sequence[PodWorkflow], *, may_change: bool) -> list[Tool]:
-    """The reading tools wherever the pod has a workflow the person can see;
-    starting and submitting only on a connection allowed to change things."""
+def workflow_tools(
+    workflows: Sequence[PodWorkflow], *, may_read: bool, may_change: bool
+) -> list[Tool]:
+    """The reading tools on a connection allowed to read, wherever the pod has a
+    workflow the person can see; starting and submitting only on one allowed to
+    change things. Each scope gates its own tools, as every pod tool's does: a
+    connection granted only events is offered none of them."""
     if not workflows:
         return []
-    tools = [
+    reads = [
         Tool(
             name=WORKFLOW_RUN,
             title="Check on a workflow run",
@@ -131,6 +136,7 @@ def workflow_tools(workflows: Sequence[PodWorkflow], *, may_change: bool) -> lis
             annotations=ToolAnnotations(title="Forms waiting on me", **_READS),
         ),
     ]
+    tools = reads if may_read else []
     startable = [workflow for workflow in workflows if workflow.may_start]
     if not may_change or not startable:
         return tools
@@ -193,8 +199,12 @@ def _run_id_schema() -> JsonObject:
     }
 
 
-def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID) -> str | None:
-    """Why the host may not submit this run's form, or ``None`` when it may."""
+def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID, url: str) -> str | None:
+    """Why the host may not submit this run's form, or ``None`` when it may.
+
+    ``url`` is where the person answers it in Lemma, written into the refusal:
+    the model passes on what it is told, and a link it has to look up elsewhere
+    is a link it may not pass on."""
     wait = run.waiting
     if wait is None or wait.kind != _FORM:
         return "That run is not waiting on a form."
@@ -203,7 +213,7 @@ def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID) -> str | None:
     if run.started_by != user_id:
         return (
             "That form is in a run someone else started. They are waiting on "
-            "your decision: give it in Lemma, at `url`."
+            f"your decision: give it in Lemma, at {url}"
         )
     return None
 
@@ -225,9 +235,15 @@ def run_payload(run: PersonWorkflowRun, *, url: str, user_id: UUID) -> JsonObjec
         "node_id": wait.node_id,
         "kind": wait.kind,
         "on_you": wait.on_this_person,
-        **({"form": wait.payload} if wait.kind == _FORM else {}),
+        **(
+            {"form": bounded_tool_payload(wait.payload, what="form")}
+            if wait.kind == _FORM
+            else {}
+        ),
     }
-    refusal = submit_refusal(run, user_id=user_id) if wait.kind == _FORM else None
+    refusal = (
+        submit_refusal(run, user_id=user_id, url=url) if wait.kind == _FORM else None
+    )
     if wait.kind == _FORM and refusal is None:
         payload["message"] = (
             f"It is waiting on a form for you. Fill in its fields and call "
@@ -282,13 +298,11 @@ class PodWorkflows:
         self, request: SubmitArguments, principal: McpPrincipal
     ) -> CallToolResult:
         run = await self._gateway.run(principal, request.run_id)
-        refusal = submit_refusal(run, user_id=principal.user_id)
+        refusal = submit_refusal(
+            run, user_id=principal.user_id, url=self._url(principal, run)
+        )
         if refusal is not None or run.waiting is None:
-            return _refusal(
-                (refusal or "That run is not waiting on a form.").replace(
-                    "`url`", self._url(principal, run)
-                )
-            )
+            return _refusal(refusal or "That run is not waiting on a form.")
         submitted, message = await self._gateway.submit(
             principal,
             run_id=run.id,

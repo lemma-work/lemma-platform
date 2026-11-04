@@ -50,6 +50,7 @@ from app.modules.agent.services.pod_mcp_agents import (
     AgentAnswer,
     AnswerStatus,
     PodAgentAsks,
+    WaitingOn,
     await_answer,
     connection_mark,
     opened_by,
@@ -404,6 +405,30 @@ def test_waiting_on_the_person_says_what_and_where_an_approval_is_given():
     ]
     assert "only in Lemma" in payload["message"]
     assert "declines it" in payload["message"]
+
+
+def test_where_to_approve_is_the_link_itself():
+    waiting = AgentAnswer(
+        status=AnswerStatus.WAITING,
+        agent="analyst",
+        conversation_id=uuid4(),
+        waiting_on=(WaitingOn(kind="approval", text="Send it?"),),
+    )
+    url = "https://lemma.test/t/pod/conversation/c"
+    assert f"only in Lemma, at {url} " in waiting.payload(url=url)["message"]
+
+
+def test_a_long_answer_and_a_large_output_are_bounded():
+    huge = AgentAnswer(
+        status=AnswerStatus.ANSWERED,
+        agent="analyst",
+        conversation_id=uuid4(),
+        answer="x" * 200_000,
+        output={"rows": ["y" * 1000] * 200},
+    )
+    payload = huge.payload(url="u")
+    assert len(payload["answer"]) < 60_000
+    assert payload["output"] != {"rows": ["y" * 1000] * 200}
 
 
 def test_a_failed_run_is_unfinished_with_its_reason():

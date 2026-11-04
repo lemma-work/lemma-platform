@@ -72,6 +72,10 @@ from app.modules.agent.services.pause_questions import (
     undecided_pauses,
 )
 from app.modules.agent.services.poll_backoff import poll_until
+from app.modules.agent.tools.tool_payload_limits import (
+    bounded_tool_payload,
+    bounded_tool_text,
+)
 from app.modules.mcp_access.contracts import McpPrincipal
 from app.modules.usage.contracts.execution import build_usage_service
 
@@ -137,23 +141,28 @@ class AgentAnswer:
             "conversation_id": str(self.conversation_id),
             "url": url,
         }
+        # Bounded as every pod tool's result is: an agent can write a book, and
+        # the host carries it into its own model's context whole.
         if self.answer is not None:
-            payload["answer"] = self.answer
+            payload["answer"] = bounded_tool_text(self.answer, what="answer")
         if self.output is not None:
-            payload["output"] = self.output
+            payload["output"] = bounded_tool_payload(self.output, what="output")
         if self.waiting_on:
             payload["waiting_on"] = [
                 {"kind": one.kind, "text": one.text} for one in self.waiting_on
             ]
         if self.shown_in_lemma:
             payload["shown_in_lemma"] = self.shown_in_lemma
-        message = self.detail or _status_message(self)
+        message = self.detail or _status_message(self, url=url)
         if message:
             payload["message"] = message
         return payload
 
 
-def _status_message(answer: AgentAnswer) -> str | None:
+def _status_message(answer: AgentAnswer, *, url: str) -> str | None:
+    """What the model is told to do next, with the Lemma link written in: the
+    model passes on what it is told, and a link it has to look up elsewhere is
+    a link it may not pass on."""
     if answer.status is AnswerStatus.WORKING:
         return (
             f"{answer.agent} is still working on it. Call {AGENT_ANSWER} with "
@@ -163,11 +172,11 @@ def _status_message(answer: AgentAnswer) -> str | None:
         return (
             f"{answer.agent} is waiting on the person. Relay a question and send "
             f"their reply with {ASK_AGENT} and this conversation_id. An approval "
-            "can be given only in Lemma, at `url`; a message sent here instead "
+            f"can be given only in Lemma, at {url} ; a message sent here instead "
             "declines it."
         )
     if answer.shown_in_lemma:
-        return "It also showed things only Lemma draws; they are at `url`."
+        return f"It also showed things only Lemma draws; they are at {url}"
     return None
 
 
