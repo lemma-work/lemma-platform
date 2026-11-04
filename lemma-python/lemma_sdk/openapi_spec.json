@@ -12144,6 +12144,81 @@
         "title": "IdentityKind",
         "type": "string"
       },
+      "IdentityLinkRequest": {
+        "properties": {
+          "contact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Somebody in a group the pod took for a stranger, who the caller says is them: the code then works only from that Telegram account.",
+            "title": "Contact Id"
+          },
+          "surface_id": {
+            "description": "The pod's Telegram bot to open it with.",
+            "format": "uuid",
+            "title": "Surface Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface_id"
+        ],
+        "title": "IdentityLinkRequest",
+        "type": "object"
+      },
+      "IdentityLinkResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "url": {
+            "description": "Opens a private chat with the bot, in Telegram.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "url",
+          "expires_at"
+        ],
+        "title": "IdentityLinkResponse",
+        "type": "object"
+      },
+      "IdentityLinkStatusResponse": {
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TelegramAccountResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/LinkState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "IdentityLinkStatusResponse",
+        "type": "object"
+      },
       "IdentityStrength": {
         "description": "Who vouched for a handle.\n\n``CHANNEL``: the platform the message came through, in a payload whose\nsignature was checked (WhatsApp, Telegram), or the receiving mail service's\nauthentication verdict (email). ``HOST`` and ``CODE``: see their values.\n``MEMBER``: a pod member added it by hand,\nwhich says who the member believes it is and nothing about who writes from\nit -- so it never makes a message count as that contact on its own.",
         "enum": [
@@ -13028,6 +13103,16 @@
         ],
         "title": "LinkPart",
         "type": "object"
+      },
+      "LinkState": {
+        "enum": [
+          "WAITING",
+          "OPENED",
+          "OTHER_ACCOUNT",
+          "GONE"
+        ],
+        "title": "LinkState",
+        "type": "string"
       },
       "ListeningResponse": {
         "description": "How a schedule on a connected MCP server's event is hearing from it.",
@@ -21880,6 +21965,38 @@
           "updated_at"
         ],
         "title": "TableSummaryResponse",
+        "type": "object"
+      },
+      "TelegramAccountResponse": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "name",
+          "username"
+        ],
+        "title": "TelegramAccountResponse",
         "type": "object"
       },
       "TelegramLinkRequest": {
@@ -47807,6 +47924,249 @@
           "resource": "agent.surface.telegram_managed",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links": {
+      "post": {
+        "description": "A one-time code that proves, once confirmed, a Telegram account is the\ncaller's. Ten minutes long, one use.",
+        "operationId": "telegram_identity_link.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}": {
+      "get": {
+        "description": "Whether the caller's code was opened yet, and from which account.",
+        "operationId": "telegram_identity_link.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLinkStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}/confirm": {
+      "post": {
+        "description": "The account the code was opened from is the caller's: bind it.",
+        "operationId": "telegram_identity_link.confirm",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "confirm"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}/decline": {
+      "post": {
+        "description": "The account the code was opened from is not the caller's: spend it.",
+        "operationId": "telegram_identity_link.decline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decline Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "void",
+          "verb": "decline"
         }
       }
     },

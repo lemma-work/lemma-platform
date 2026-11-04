@@ -312,5 +312,26 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             }, 6_000);
             return { url: "https://t.me/" + surfaceName.replace(/^@/, "") + "_bot?startgroup=sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
         },
+        /* Opened "in Telegram" a few seconds after it is made, from the
+           sample's own account, so the confirm step can be seen. */
+        async identityLink() {
+            await wait(300);
+            linkOpenedAt = Date.now() + 4_000;
+            return { code: id("sample-link"), url: "https://t.me/sample_bot?start=lk_sample", expiresAt: new Date(Date.now() + 600_000).toISOString() };
+        },
+        async identityLinkStatus() {
+            if (linkOpenedAt === null) return { state: "GONE" as const };
+            if (Date.now() < linkOpenedAt) return { state: "WAITING" as const };
+            return { state: "OPENED" as const, account: { name: "Sample You", username: "sample_you" } };
+        },
+        async confirmIdentityLink() {
+            linkOpenedAt = null;
+            return { name: "Sample You", username: "sample_you" };
+        },
+        async declineIdentityLink() {
+            linkOpenedAt = null;
+        },
     };
 }
+
+let linkOpenedAt: number | null = null;
