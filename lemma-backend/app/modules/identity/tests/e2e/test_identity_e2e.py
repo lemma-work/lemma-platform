@@ -753,6 +753,48 @@ async def test_signed_bounce_events_only_deactivate_on_hard_bounce(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "secret_owner"),
+    [
+        ("/auth/email/bounces", "identity"),
+        ("/auth/email/bounces/resend", "resend"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("content_length", "expected_status"),
+    [("not-a-length", 400), ("1048577", 413)],
+)
+async def test_email_bounce_endpoints_reject_invalid_and_oversized_lengths(
+    async_client: AsyncClient,
+    monkeypatch,
+    path: str,
+    secret_owner: str,
+    content_length: str,
+    expected_status: int,
+):
+    """Exercise the public HTTP routes, not just their shared body reader."""
+    webhook_secret = SecretStr("e2e-bounded-bounce-secret")
+    if secret_owner == "identity":
+        monkeypatch.setattr(
+            identity_settings, "auth_bounce_webhook_secret", webhook_secret
+        )
+    else:
+        monkeypatch.setattr(settings, "resend_bounce_webhook_secret", None)
+        monkeypatch.setattr(settings, "resend_webhook_secret", webhook_secret)
+
+    response = await async_client.post(
+        path,
+        content=b"{}",
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": content_length,
+        },
+    )
+
+    assert response.status_code == expected_status, response.text
+
+
+@pytest.mark.asyncio
 async def test_telegram_oidc_verifies_mobile_then_creates_global_cookie_session(
     async_client: AsyncClient,
     signup_user,
