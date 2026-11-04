@@ -93,7 +93,7 @@ export function readableName(name: string): string {
                something gets shouted at. */
             if (lower.length <= 4 && !/[aeiouy]/.test(lower) && /^[a-z]+$/.test(lower)) return lower.toUpperCase();
             /* Only the first letter. Upper-casing the whole word would turn
-               `LEDFlex` into `Ledflex`, and a name that arrived already
+               `ACMEWorks` into `Acmeworks`, and a name that arrived already
                capitalised was capitalised on purpose. */
             return word[0].toUpperCase() + word.slice(1);
         })

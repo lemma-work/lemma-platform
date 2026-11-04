@@ -206,7 +206,7 @@ function useFittedName(name: string, target: RefObject<HTMLSpanElement | null>):
  *
  *  A pod member comes back with whatever the account has, and for most people
  *  that is an email address — so the one line the badge exists to carry was
- *  setting `deepakjha0196@gmail.com` across two lines in the card's own voice.
+ *  setting `ada.lovelace@example.com` across two lines in the card's own voice.
  *  A badge prints a person's name. Where there is only an address, the local
  *  part is the closest thing to one it holds. */
 function leadName(raw: string): string {
