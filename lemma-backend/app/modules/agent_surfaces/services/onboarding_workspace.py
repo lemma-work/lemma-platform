@@ -321,6 +321,8 @@ async def record_verified_identity(
             # a leftover number would answer the wrong person.
             identity.user_id = user.id
             identity.verified_phone = None
+            identity.session_proved_at = None
+            identity.proved_through_surface_id = None
         if identity is None:
             identity = VerifiedSurfaceIdentity(
                 binding_key=state.binding_key,

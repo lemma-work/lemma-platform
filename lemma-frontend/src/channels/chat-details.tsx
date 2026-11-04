@@ -18,6 +18,7 @@ import { Avatar } from "./avatar";
 import { answersHint, placeName } from "./chat-copy";
 import { ChannelMark } from "./chat-mark";
 import { ContactControls } from "./contact-controls";
+import { LinkTelegramSheet } from "./identity-link";
 import { problemOf } from "./problem";
 import { addable, channelTitle, personName, sinceShort, type AgentAnswers, type ChannelDetail, type NotifyLevel } from "./model";
 import { channelKey, keepChannel, refreshLists } from "./queries";
@@ -282,6 +283,9 @@ function Members({ pod, channel, may, onLeft }: { pod: Pod; channel: ChannelDeta
     const cache = useQueryClient();
     const [query, setQuery] = useState("");
     const [adding, setAdding] = useState(false);
+    /* Somebody the space took for a stranger, who the member says is them. */
+    const [mine, setMine] = useState<{ contactId: string; seenAs: string } | null>(null);
+    const telegram = channel.kind === "GROUP" ? channel.places.find((place) => place.platform === "TELEGRAM" && place.surfaceId) ?? null : null;
     const needle = query.trim().toLowerCase();
     const matches = (name: string) => !needle || name.toLowerCase().includes(needle);
     const people = channel.members.filter((one) => one.person.kind !== "AGENT" && matches(personName(one.person, me) + " " + (one.person.name ?? "")));
@@ -348,6 +352,11 @@ function Members({ pod, channel, may, onLeft }: { pod: Pod; channel: ChannelDeta
                                 <span className="cdet__name" title={full}>{full}{you && <span className="cdet__muted"> (you)</span>}</span>
                                 {what && <span className="cdet__muted">{what}</span>}
                             </span>
+                            {telegram && one.person.kind === "CONTACT" && id && (
+                                <span className="cdet__acts">
+                                    <button type="button" className="cdet__link" onClick={() => setMine({ contactId: id, seenAs: full })}>This is me</button>
+                                </span>
+                            )}
                             {group && one.person.kind === "MEMBER" && id && (
                                 <span className="cdet__acts">
                                     {may.manage && !you && (
@@ -367,6 +376,9 @@ function Members({ pod, channel, may, onLeft }: { pod: Pod; channel: ChannelDeta
                 })}
                 {people.length === 0 && needle && <p className="cdet__note">Nobody in it matches.</p>}
             </Card>
+            {mine && telegram?.surfaceId && (
+                <LinkTelegramSheet pod={pod} surfaceId={telegram.surfaceId} contactId={mine.contactId} seenAs={mine.seenAs} onClose={() => { setMine(null); reread(); }} />
+            )}
             {(add.isError || role.isError || remove.isError || join.isError) && (
                 <p className="cdet__problem" role="alert">
                     {isForbidden(add.error ?? role.error ?? remove.error) ? "Only who started this chat, or an editor, can change who is in it." : problemOf(add.error ?? role.error ?? remove.error ?? join.error, "Couldn’t do that.")}

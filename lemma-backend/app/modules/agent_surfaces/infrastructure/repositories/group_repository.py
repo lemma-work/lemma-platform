@@ -34,6 +34,7 @@ from app.modules.channels.contracts.places import (
     find_place,
     forget_chat,
     forget_pending_group,
+    joined_place,
     left_place,
     open_pending_group,
     place_became_private,
@@ -279,6 +280,12 @@ class SurfaceGroupRepository:
     async def member_left(self, group_id: UUID, principal: Principal) -> bool:
         """Somebody the platform says left the group is out of its channel."""
         return await left_place(self.uow, group_id, principal)
+
+    async def member_joined(
+        self, group_id: UUID, principal: Principal, *, name: str | None = None
+    ) -> bool:
+        """Somebody the platform says joined the group is in its channel."""
+        return await joined_place(self.uow, group_id, principal, name=name)
 
     async def bot_removed(self, group_id: UUID) -> bool:
         """The bot was taken out of the group: its channel is archived."""

@@ -9,12 +9,14 @@ and ``services/public_rows`` for how a row is added.
 from __future__ import annotations
 
 from app.modules.datastore.domain.public_rows import (
+    Attachment,
     OpenTable,
     PublicAudience,
     PublicColumn,
     PublicRowRefused,
     PublicRowsClosed,
     public_values,
+    too_large,
 )
 from app.modules.datastore.services.public_rows import (
     add_visitor_row,
@@ -25,6 +27,7 @@ from app.modules.datastore.services.public_rows import (
 )
 
 __all__ = [
+    "Attachment",
     "OpenTable",
     "PublicAudience",
     "PublicColumn",
@@ -33,5 +36,6 @@ __all__ = [
     "add_visitor_row",
     "open_table_names",
     "public_values",
+    "too_large",
     "visitor_table",
 ]
