@@ -1,4 +1,4 @@
-"""Migration ``0066_machines`` creates the machine tables and columns exactly as
+"""Migration ``0067_machines`` creates the machine tables and columns exactly as
 the models declare them. The e2e suites build their schema from the models; a
 deploy runs the migration. A difference between the two is one every test
 passes over."""
@@ -21,12 +21,12 @@ _MIGRATION = (
     Path(__file__).resolve().parents[5]
     / "migrations"
     / "versions"
-    / "2026-10-28_machines_0066.py"
+    / "2026-10-28_machines_0067.py"
 )
 
 
 def _migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("machines_0066", _MIGRATION)
+    spec = importlib.util.spec_from_file_location("machines_0067", _MIGRATION)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

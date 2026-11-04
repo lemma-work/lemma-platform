@@ -356,6 +356,9 @@ _NAME_TO_MODULE = {
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'IdentityKind': 'identity_kind',
+    'IdentityLinkRequest': 'identity_link_request',
+    'IdentityLinkResponse': 'identity_link_response',
+    'IdentityLinkStatusResponse': 'identity_link_status_response',
     'IdentityStrength': 'identity_strength',
     'ImpactedPod': 'impacted_pod',
     'ImpactedPodConnector': 'impacted_pod_connector',
@@ -379,6 +382,7 @@ _NAME_TO_MODULE = {
     'LineDelivery': 'line_delivery',
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
+    'LinkState': 'link_state',
     'ListeningResponse': 'listening_response',
     'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
@@ -700,6 +704,7 @@ _NAME_TO_MODULE = {
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramAccountResponse': 'telegram_account_response',
     'TelegramLinkRequest': 'telegram_link_request',
     'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
@@ -1152,6 +1157,9 @@ if TYPE_CHECKING:
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .identity_kind import IdentityKind
+    from .identity_link_request import IdentityLinkRequest
+    from .identity_link_response import IdentityLinkResponse
+    from .identity_link_status_response import IdentityLinkStatusResponse
     from .identity_strength import IdentityStrength
     from .impacted_pod import ImpactedPod
     from .impacted_pod_connector import ImpactedPodConnector
@@ -1175,6 +1183,7 @@ if TYPE_CHECKING:
     from .line_delivery import LineDelivery
     from .line_preview import LinePreview
     from .link_part import LinkPart
+    from .link_state import LinkState
     from .listening_response import ListeningResponse
     from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
@@ -1496,6 +1505,7 @@ if TYPE_CHECKING:
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_account_response import TelegramAccountResponse
     from .telegram_link_request import TelegramLinkRequest
     from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
@@ -1961,6 +1971,9 @@ __all__ = [
     'IconUploadRequest',
     'IconUploadResponse',
     'IdentityKind',
+    'IdentityLinkRequest',
+    'IdentityLinkResponse',
+    'IdentityLinkStatusResponse',
     'IdentityStrength',
     'ImpactedPod',
     'ImpactedPodConnector',
@@ -1984,6 +1997,7 @@ __all__ = [
     'LineDelivery',
     'LinePreview',
     'LinkPart',
+    'LinkState',
     'ListeningResponse',
     'ListeningResponseState',
     'LiteralInputBinding',
@@ -2305,6 +2319,7 @@ __all__ = [
     'TableOpeningResponse',
     'TableResponse',
     'TableSummaryResponse',
+    'TelegramAccountResponse',
     'TelegramLinkRequest',
     'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',
