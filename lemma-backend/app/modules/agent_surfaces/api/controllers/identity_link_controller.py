@@ -156,8 +156,9 @@ async def confirm_identity_link(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail=(
-                "Nothing to confirm: the link expired, was declined, or that "
-                "Telegram account is already linked to somebody else."
+                "Nothing to confirm: the link expired, was declined, that "
+                "Telegram account is already linked to somebody else, or you "
+                "have linked as many Telegram accounts as you can."
             ),
         )
     await uow.commit()

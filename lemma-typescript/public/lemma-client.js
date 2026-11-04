@@ -19569,6 +19569,38 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * List My Telegram Accounts
+     * The Telegram accounts the current user proved from a Lemma session, still
+     * theirs: every bot knows them as this user.
+     * @returns TelegramAccountsResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceListMyTelegramAccounts() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/surfaces/me/telegram-accounts"
+      });
+    }
+    /**
+     * Unlink My Telegram Account
+     * Unlink one of them: from its next message the account is a stranger's.
+     * @param accountId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentSurfaceUnlinkMyTelegramAccount(accountId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/surfaces/me/telegram-accounts/{account_id}",
+        path: {
+          "account_id": accountId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/user-surfaces.ts
@@ -19584,6 +19616,18 @@ var LemmaClient = (() => {
     setDefault(payload) {
       return this.client.request(
         () => AgentSurfacesMeService.agentSurfaceSetMyDefault(payload)
+      );
+    }
+    /** The Telegram accounts I proved from a Lemma session; every bot knows them as me. */
+    telegramAccounts() {
+      return this.client.request(
+        () => AgentSurfacesMeService.agentSurfaceListMyTelegramAccounts()
+      );
+    }
+    /** Unlink one of them: from its next message it is a stranger's. */
+    unlinkTelegramAccount(accountId) {
+      return this.client.request(
+        () => AgentSurfacesMeService.agentSurfaceUnlinkMyTelegramAccount(accountId)
       );
     }
   };
