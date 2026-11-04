@@ -66,8 +66,10 @@ async def _prove(client: AsyncClient, pod_id: str, bot_id: str, account: int) ->
     assert confirmed.status_code == 200, confirmed.text
 
 
-async def _listed(client: AsyncClient, **kwargs) -> list[dict]:
-    response = await client.get(ACCOUNTS, **kwargs)
+async def _listed(
+    client: AsyncClient, headers: dict[str, str] | None = None
+) -> list[dict[str, object]]:
+    response = await client.get(ACCOUNTS, headers=headers)
     assert response.status_code == 200, response.text
     return response.json()["items"]
 
