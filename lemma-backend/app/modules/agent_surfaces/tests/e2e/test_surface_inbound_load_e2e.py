@@ -54,9 +54,8 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
 )
 
 # Both tests count queued ``work_items``; a running session worker (started by
-# any earlier module in the shard) claims and finishes them first -- the day of
-# webhooks counted 3 queued ingests of 1,040 stored messages, and 0 of 262
-# platform updates. Held, the rows stay where the request left them.
+# any earlier module in the shard) claims and finishes them first. Held, the
+# rows stay where the request left them.
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,

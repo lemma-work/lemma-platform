@@ -1537,6 +1537,27 @@ def _shared_db_manager(database_url: str) -> DatabaseManager:
     return manager
 
 
+async def _truncate_retrying_deadlocks(
+    manager: DatabaseManager, *, restore: TableSnapshot | None = None
+) -> None:
+    """A module's reset, retried when Postgres picks it as a deadlock victim.
+
+    The shared worker can still be finishing the previous module's writes
+    when the next module empties the tables; the per-test reset in
+    ``db_manager`` already retries this, and a module's reset met it once in
+    every few runs (``test_export_pod_bundle_roundtrip``'s setup)."""
+    from sqlalchemy.exc import DBAPIError
+
+    for attempt in range(6):
+        try:
+            await manager.truncate_all(restore=restore)
+            return
+        except DBAPIError as exc:
+            if "deadlock" not in str(exc).lower() or attempt == 5:
+                raise
+            await asyncio.sleep(0.3 * (attempt + 1))
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, None]:
     # Per-test data isolation only. The schema itself is prepared once per
@@ -1831,7 +1852,7 @@ async def module_identity(e2e_settings) -> AsyncGenerator[ModuleIdentity, None]:
     manager = DatabaseManager(url)
     _import_e2e_models()
     await _ensure_schema_once(url)
-    await manager.truncate_all()
+    await _truncate_retrying_deadlocks(manager)
     _reset_supertokens_testing_state()
     app = _test_app_factory() if _test_app_factory is not None else None
     if app is None:
@@ -1889,7 +1910,7 @@ async def extend_module_identity(
     if identity is None:
         raise RuntimeError("extend_module_identity needs module_identity first")
     manager = _shared_db_manager(database_url)
-    await manager.truncate_all(restore=identity.rows)
+    await _truncate_retrying_deadlocks(manager, restore=identity.rows)
     _reset_supertokens_testing_state()
     app = _test_app_factory() if _test_app_factory is not None else None
     if app is None:

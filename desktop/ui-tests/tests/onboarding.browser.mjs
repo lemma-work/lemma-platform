@@ -169,10 +169,10 @@ test('connecting to your own server checks it in the shell and says why it was r
   assert.equal(await page.locator('.server-hint').isVisible(), false, 'the error takes the hint\'s place');
 
   await page.evaluate(() => { window.__fixture.rejectServer = false; window.__fixture.calls = []; });
-  await page.locator('#server-url').fill('agentbox.work');
+  await page.locator('#server-url').fill('acme.example');
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   assert.deepEqual(await deploymentCalls(page), [
-    { command: 'set_connection_mode', args: { mode: 'hosted', server: 'agentbox.work' } },
+    { command: 'set_connection_mode', args: { mode: 'hosted', server: 'acme.example' } },
   ]);
 });
 
