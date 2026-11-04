@@ -1,12 +1,14 @@
 "use client";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname } from "next/navigation";
 import {
     startAnalytics,
     capturePageview,
     applyAnalyticsPersistence,
 } from "./analytics/client";
+import { isNewView } from "./analytics/route-template";
 import {
+    asksForConsent,
     readConsentDecision,
     recordConsentDecision,
     subscribeToConsent,
@@ -26,20 +28,27 @@ export function Analytics() {
         readConsentDecision,
         consentServerSnapshot,
     );
+    /* The address the last pageview was decided against. Both frames rewrite
+       their own address as they settle, and only a move to a new place is a
+       pageview (`isNewView`). Updated on every change, counted or not, so the
+       next move is judged from where the page actually is. No cancel on
+       cleanup: a remount with the same address is not a new view, and a
+       cancelled first one would be no view at all. */
+    const viewed = useRef<string | null>(null);
     useEffect(() => {
-        let alive = true;
-        void startAnalytics().then(() => {
-            if (alive && pathname) capturePageview(pathname);
-        });
-        return () => {
-            alive = false;
-        };
+        if (!pathname) return;
+        const previous = viewed.current;
+        viewed.current = pathname;
+        if (!isNewView(previous, pathname)) return;
+        void startAnalytics().then(() => capturePageview(pathname));
     }, [pathname]);
     useEffect(() => {
         applyAnalyticsPersistence(consent === "granted");
     }, [consent]);
     if (
         !hydrated ||
+        !pathname ||
+        !asksForConsent(pathname) ||
         !isAnalyticsDocument() ||
         !config.ANALYTICS_KEY ||
         isLocalDeployment() ||

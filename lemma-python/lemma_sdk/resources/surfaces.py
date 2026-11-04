@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from ..errors import LemmaConflictError, LemmaNotFoundError
 from ..openapi_client.api.agent_surfaces import (
@@ -29,7 +30,9 @@ from ..openapi_client.api.agent_surfaces import (
 )
 from ..openapi_client.api.agent_surfaces_me import (
     agent_surface_list_mine,
+    agent_surface_list_my_telegram_accounts,
     agent_surface_set_my_default,
+    agent_surface_unlink_my_telegram_account,
 )
 from ..openapi_client.models.agent_surface_list_response import AgentSurfaceListResponse
 from ..openapi_client.models.agent_surface_response import AgentSurfaceResponse
@@ -80,6 +83,9 @@ from ..openapi_client.models.telegram_managed_bot_setup_request import (
 )
 from ..openapi_client.models.telegram_managed_bot_setup_response import (
     TelegramManagedBotSetupResponse,
+)
+from ..openapi_client.models.telegram_accounts_response import (
+    TelegramAccountsResponse,
 )
 from ..openapi_client.models.user_surfaces_response import UserSurfacesResponse
 from .base import BoundResource, Resource
@@ -343,3 +349,12 @@ class UserSurfaces(Resource):
             body=request,
             body_model=SetDefaultSurfaceRequest,
         )
+
+    def telegram_accounts(self) -> TelegramAccountsResponse:
+        """The Telegram accounts the caller proved from a Lemma session; every
+        bot knows them as the caller."""
+        return self._call(agent_surface_list_my_telegram_accounts)
+
+    def unlink_telegram_account(self, account_id: str | UUID) -> None:
+        """Unlink one of them: from its next message it is a stranger's."""
+        self._call(agent_surface_unlink_my_telegram_account, UUID(str(account_id)))

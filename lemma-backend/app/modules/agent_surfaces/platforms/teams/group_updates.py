@@ -1,4 +1,4 @@
-"""What Teams says about a chat or channel itself: who was taken out of it.
+"""What Teams says about a chat or channel itself: who came and who went.
 
 Teams tells a bot of membership changes in a ``conversationUpdate`` activity:
 ``membersRemoved`` (a person left or was removed from a group chat, a private
@@ -41,7 +41,8 @@ def _place(activity: Mapping[str, object]) -> str:
 
 
 def teams_group_updates(activity: Mapping[str, object]) -> list[ParsedGroupUpdate]:
-    """Every removal (and the bot's return) one conversationUpdate reports."""
+    """Every removal and addition (the bot's own too) one conversationUpdate
+    reports."""
     if activity.get("type") != "conversationUpdate":
         return []
     place = _place(activity)
@@ -64,11 +65,15 @@ def teams_group_updates(activity: Mapping[str, object]) -> list[ParsedGroupUpdat
             updates.append(
                 _update(GroupUpdateKind.MEMBER_LEFT, place, tenant, person=person)
             )
-    if bot and any(
-        payload_text(member, "id").strip() == bot
-        for member in _members(activity.get("membersAdded"))
-    ):
-        updates.append(_update(GroupUpdateKind.BOT_RETURNED, place, tenant))
+    for member in _members(activity.get("membersAdded")):
+        if bot and payload_text(member, "id").strip() == bot:
+            updates.append(_update(GroupUpdateKind.BOT_RETURNED, place, tenant))
+            continue
+        person = payload_first(member, "aadObjectId", "id").strip()
+        if person:
+            updates.append(
+                _update(GroupUpdateKind.MEMBER_JOINED, place, tenant, person=person)
+            )
     return updates
 
 
