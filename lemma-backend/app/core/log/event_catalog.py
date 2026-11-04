@@ -883,6 +883,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.projection.delete_file_s_s.diagnostic': EventSpec('debug', frozenset()),
     'datastore.projection.delete_object_revisions.diagnostic': EventSpec('debug', frozenset()),
     'datastore.projection.remove_indexed_chunks_s_s.diagnostic': EventSpec('debug', frozenset()),
+    'datastore.public_rows.attachment_cleanup_failed.degraded': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'datastore.public_rows.closed': EventSpec('info', frozenset({'pod_id', 'table_id', 'user_id'})),
     'datastore.public_rows.opened': EventSpec('info', frozenset({'audience', 'column_count', 'pod_id', 'table_id', 'user_id'})),
     'datastore.public_tables.read_failed.degraded': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
