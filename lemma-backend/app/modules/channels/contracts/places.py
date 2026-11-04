@@ -18,6 +18,7 @@ from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
     Principal,
+    SeatedBy,
     Source,
 )
 from app.modules.channels.infrastructure.accounts import AccountRepository
@@ -46,6 +47,7 @@ __all__ = [
     "forget_chat",
     "forget_pending_group",
     "heard_at",
+    "joined_place",
     "left_place",
     "open_pending_group",
     "owned_place",
@@ -364,6 +366,24 @@ async def left_place(
         return False
     return await MemberRepository(uow.session).remove_platform_seat(
         channel.id, principal
+    )
+
+
+async def joined_place(
+    uow: SqlAlchemyUnitOfWork,
+    source_id: UUID,
+    principal: Principal,
+    *,
+    name: str | None = None,
+) -> bool:
+    """Somebody joined the place this source is: in its channel, seated by the
+    platform -- so its leaving takes them out again -- under the ``name`` it
+    shows them by until they speak under another. True for a seat made now."""
+    channel = await _mirrored_group(uow, source_id)
+    if channel is None:
+        return False
+    return await MemberRepository(uow.session).add_person(
+        channel, principal, seated_by=SeatedBy.PLATFORM, shown_as=name
     )
 
 
