@@ -17,6 +17,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.tools.contact_tools import build_contact_toolset
+from app.modules.agent.tools.group_history import build_group_history_toolset
 from app.modules.agent.tools.form_tools import build_form_toolset
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.vision import AgentVisionMode
@@ -274,6 +275,8 @@ class RunToolAssembler:
         toolsets: list[AbstractToolset[ConversationContext]] = []
         if audience.is_contact and not _in_a_group(conversation):
             toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
+        if audience.is_contact and _in_a_group(conversation):
+            toolsets.append(build_group_history_toolset(uow_factory=self.uow_factory))
         if audience.answers_outsiders and _on_a_web_page(conversation):
             toolsets.append(build_form_toolset(uow_factory=self.uow_factory))
         return toolsets
