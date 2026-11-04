@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -19,6 +20,9 @@ import pytest
 
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
+from app.core.infrastructure.db.transaction_locks import (
+    holds_transaction_scoped_lock,
+)
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.value_objects import (
@@ -640,6 +644,35 @@ async def test_a_follow_up_waits_until_the_agent_is_done_with_the_last_one():
     # The busy check reads under the conversation's lock, so two follow-ups at
     # once cannot both find the agent idle.
     assert repository.calls == ["lock", "read"]
+
+
+async def test_a_follow_ups_lock_is_not_handed_back_before_it_sends():
+    """Authorization commits to return its connection when it may, which would
+    end a row lock early; the transaction says it holds one, so it may not."""
+    mine = _principal(Scope.READ, Scope.WRITE)
+    busy = _conversation(
+        status=ConversationStatus.RUNNING,
+        run=_run(AgentRunStatus.RUNNING),
+        principal=mine,
+        agent_id=_ANALYST.id,
+    )
+    uow = _Uow()
+    uow.session = SimpleNamespace(info={})
+
+    @asynccontextmanager
+    async def one_transaction() -> AsyncIterator[_Uow]:
+        yield uow
+
+    repository = _Repository(busy, [])
+    asks = PodAgentAsks(
+        one_transaction, conversations=lambda _uow: repository, list_agents=_askable
+    )
+    with pytest.raises(AgentAskRefused):
+        await asks.ask(
+            AskAgentArguments(message="And last week?", conversation_id=busy.id),
+            principal=mine,
+        )
+    assert holds_transaction_scoped_lock(uow.session)
 
 
 async def test_checking_reads_the_answer_with_where_to_open_it():

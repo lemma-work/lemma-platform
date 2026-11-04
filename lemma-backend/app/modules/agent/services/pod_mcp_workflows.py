@@ -229,11 +229,7 @@ def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID, where: str) -> str 
     return None
 
 
-def run_payload(
-    run: PersonWorkflowRun, *, url: str, user_id: UUID, where: str | None = None
-) -> JsonObject:
-    """``url`` is the link for the payload; ``where`` how to reach it, when the
-    link alone does not say (a form answered from the pod's waiting list)."""
+def run_payload(run: PersonWorkflowRun, *, url: str, user_id: UUID) -> JsonObject:
     payload: JsonObject = {
         "success": run.status != "FAILED",
         "run_id": str(run.id),
@@ -257,9 +253,7 @@ def run_payload(
         ),
     }
     refusal = (
-        submit_refusal(run, user_id=user_id, where=where or url)
-        if wait.kind == _FORM
-        else None
+        submit_refusal(run, user_id=user_id, where=url) if wait.kind == _FORM else None
     )
     if wait.kind == _FORM and refusal is None:
         payload["message"] = (
@@ -382,12 +376,15 @@ class PodWorkflows:
                 run, url=self._url(principal, run), user_id=principal.user_id
             )
         space = self._space_url(principal.pod_id)
-        return run_payload(
-            run,
-            url=space,
-            user_id=principal.user_id,
-            where=f"{space} , from the list of what is waiting on you",
+        payload = run_payload(run, url=space, user_id=principal.user_id)
+        # Whoever started it: submitting from here reads the run first, which
+        # needs its workflow, so the only way to answer it is Lemma's own.
+        payload["message"] = (
+            f"Answer it in Lemma, at {space} , from the list of what is waiting "
+            "on you. Its workflow is not one you can open, so it cannot be filled "
+            "in from here."
         )
+        return payload
 
     def _url(self, principal: McpPrincipal, run: PersonWorkflowRun) -> str:
         return self._run_url(principal.pod_id, run.id)

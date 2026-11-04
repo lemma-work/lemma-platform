@@ -35,6 +35,7 @@ from pydantic import ValidationError
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.calls import CANVAS_TOOL_NAMES
@@ -380,6 +381,11 @@ class PodAgentAsks:
                 await self._conversations(uow).lock_conversation(
                     request.conversation_id
                 )
+                # A row lock ends at commit, and the authorization the send
+                # runs commits to hand its connection back whenever it may
+                # (`connection_released`). Marked, it may not, so the lock
+                # lasts until this transaction's own commit.
+                mark_transaction_scoped_lock(uow.session)
                 conversation = await self._own_conversation(
                     uow, request.conversation_id, principal=principal
                 )

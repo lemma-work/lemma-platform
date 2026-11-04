@@ -289,6 +289,19 @@ async def test_a_form_on_a_workflow_the_person_cannot_read_is_sent_to_their_list
     assert "from the list of what is waiting on you" in waiting["message"]
 
 
+async def test_a_form_on_a_workflow_they_cannot_read_is_not_offered_for_submitting():
+    """Even on their own run: submitting reads the run, which needs its workflow."""
+    gateway = _Gateway(runs=[_run()], workflows=[])
+    result = await _workflows(gateway).call(
+        WAITING_ON_ME, {}, principal=_principal(Scope.READ, Scope.WRITE)
+    )
+    [waiting] = result.structured_content["waiting"]
+    assert SUBMIT_FORM not in waiting["message"]
+    assert waiting["message"].startswith(
+        "Answer it in Lemma, at https://lemma.test/space"
+    )
+
+
 async def test_the_waiting_list_is_offered_for_a_form_on_a_workflow_nobody_shows():
     gateway = _Gateway(runs=[_run(started_by=SOMEONE)], workflows=[])
     tools = await _workflows(gateway).tools(_principal(Scope.READ))
