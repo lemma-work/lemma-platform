@@ -181,9 +181,10 @@ async def test_a_cursor_older_than_the_log_is_told_to_refetch(
 async def test_speakers_are_read_from_their_seats(
     pod: Pod, db_session: AsyncSession
 ) -> None:
-    """Who spoke, newest first, under the name they last spoke under -- then
-    whoever the platform seated who has said nothing yet, under the name it
-    showed them by. One read of the seats, none of the lines."""
+    """Who is there, newest first: by when they last spoke, under the name
+    they spoke under -- or, seated by the platform and silent, by when they
+    were seated, under the name it showed them by. One read of the seats,
+    none of the lines."""
     channel = await group(pod, title="Speakers")
     await say(pod, channel["id"], "first", as_user=pod.user)
     await say(pod, channel["id"], "second", as_user=pod.editor)
@@ -203,9 +204,9 @@ async def test_speakers_are_read_from_their_seats(
                 SqlAlchemyUnitOfWork(session), [UUID(channel["id"])]
             )
     assert [each.principal.user_id for each in found] == [
+        UUID(pod.viewer["id"]),
         UUID(pod.editor["id"]),
         UUID(pod.user["id"]),
-        UUID(pod.viewer["id"]),
     ]
-    assert (found[-1].name, found[-1].last_said_at) == ("Joined Quietly", None)
+    assert (found[0].name, found[0].last_said_at) == ("Joined Quietly", None)
     assert not [each for each in statements if "channel_messages" in each]

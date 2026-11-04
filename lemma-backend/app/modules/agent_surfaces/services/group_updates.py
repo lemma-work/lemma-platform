@@ -44,9 +44,6 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
-    ExternalSurfaceUserRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
@@ -57,14 +54,9 @@ from app.modules.agent_surfaces.platforms.common import platform_transport_error
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
-from app.modules.agent_surfaces.services.group_joiners import who_joined
-from app.modules.channels.contracts import Principal
+from app.modules.agent_surfaces.services.group_joiners import who_moved
+from app.modules.agent_surfaces.services.recent_leaves import left_lately, note_left
 from app.modules.channels.contracts.places import places_hearing
-from app.modules.contacts.contracts import (
-    IdentityKind,
-    find_contact,
-    find_contact_by_user,
-)
 
 logger = get_logger(__name__)
 
@@ -250,53 +242,15 @@ class GroupUpdates:
         if kind is GroupUpdateKind.BOT_RETURNED:
             return await self.groups.bot_returned(group.id)
         if kind is GroupUpdateKind.MEMBER_JOINED:
-            joined = await who_joined(self.uow, group, update)
+            if await left_lately(group.id, update.external_user_id):
+                return False
+            joined = await who_moved(self.uow, group, update, joining=True)
             return joined is not None and await self.groups.member_joined(
                 group.id, joined, name=update.display_name
             )
-        who = await self._who_left(group, update)
-        return who is not None and await self.groups.member_left(group.id, who)
-
-    async def _who_left(
-        self, group: SurfaceGroup, update: ParsedGroupUpdate
-    ) -> Principal | None:
-        """The member -- else the contact -- the platform says left."""
-        external_id = update.external_user_id
-        if not external_id:
-            return None
-        resolved = await ExternalSurfaceUserRepository(
-            self.uow
-        ).resolved_users_by_external_ids(
-            platform=group.platform,
-            tenant_id=update.tenant_id,
-            external_user_ids=[external_id],
-        )
-        user_id = resolved.get(external_id)
-        if user_id is not None:
-            return Principal.member(user_id)
-        contact = None
-        if group.platform == SurfacePlatform.TELEGRAM.value:
-            contact = await find_contact(
-                self.uow,
-                pod_id=group.pod_id,
-                kind=IdentityKind.TELEGRAM,
-                value=external_id,
-            )
-        elif group.platform == SurfacePlatform.SLACK.value:
-            contact = await find_contact_by_user(
-                self.uow,
-                pod_id=group.pod_id,
-                kind=IdentityKind.SLACK,
-                user_id=external_id,
-            )
-        elif group.platform == SurfacePlatform.WHATSAPP.value and update.phone:
-            contact = await find_contact(
-                self.uow,
-                pod_id=group.pod_id,
-                kind=IdentityKind.PHONE,
-                value=f"+{update.phone}",
-            )
-        return Principal.contact(contact.id) if contact is not None else None
+        await note_left(group.id, update.external_user_id)
+        left = await who_moved(self.uow, group, update, joining=False)
+        return left is not None and await self.groups.member_left(group.id, left)
 
     async def _fetch_invite_link(
         self, group: SurfaceGroup, *, phone_number_id: str | None

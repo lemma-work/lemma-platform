@@ -6,8 +6,9 @@ channel, from their seats -- each seat keeps when its person last spoke and
 the name they spoke under (``channel_members.last_spoke_at``, ``last_name``,
 written as the line is posted) -- so the read is one statement over the
 seats, never over the lines. A seat the platform made when somebody joined
-(``SeatedBy.PLATFORM``) counts before they speak, after everyone who has, under
-the name the platform showed them by, if any.
+(``SeatedBy.PLATFORM``) counts before they speak, under the name the platform
+showed them by, if any -- placed by when it was made, so somebody who just
+joined a busy group is among the first listed, not past the read's limit.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import Principal, SeatedBy
@@ -47,8 +48,9 @@ class SpeakerReads:
     async def speakers(
         self, channel_ids: Collection[UUID], *, limit: int = MAX_SPEAKERS
     ) -> list[Speaker]:
-        """The people who spoke in these channels, once per channel, newest
-        first -- then the ones the platform seated who have not spoken yet.
+        """The people in these channels' places, once per channel, newest
+        first: by when they last spoke, or -- the ones the platform seated who
+        have not spoken yet -- by when they were seated.
 
         Agents are not speakers: an agent is attached to a channel, never one
         of the people in it. Somebody taken out of the channel since is not
@@ -74,7 +76,9 @@ class SpeakerReads:
                         seat.seated_by == SeatedBy.PLATFORM.value,
                     ),
                 )
-                .order_by(seat.last_spoke_at.desc().nulls_last(), seat.id)
+                .order_by(
+                    func.coalesce(seat.last_spoke_at, seat.created_at).desc(), seat.id
+                )
                 .limit(max(1, min(limit, MAX_SPEAKERS)))
             )
         ).all()

@@ -38,6 +38,12 @@ from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import _create_surface
+from app.modules.contacts.contracts import (
+    IdentityKind,
+    IdentityStrength,
+    find_contact,
+    open_contact,
+)
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
     ChannelModel,
@@ -729,10 +735,11 @@ async def test_somebody_who_joins_a_group_is_in_it_before_they_speak(
     message_store,
     monkeypatch,
 ):
-    """WhatsApp says a person joined: they are a contact by their number, in
-    the group's channel before they say a word -- so a member's run there
-    knows they read its answers -- and out of it when WhatsApp says they left.
-    Their number is never their name."""
+    """WhatsApp says a person the pod knows joined: they are in the group's
+    channel before they say a word -- so a member's run there knows they read
+    its answers -- and out of it when WhatsApp says they left. A stranger's
+    join makes nobody: anybody with the link can join, and Contacts does not
+    fill with whoever did. A number is never a name."""
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     pod_id = test_pod["id"]
     surface = await _create_surface(
@@ -746,8 +753,33 @@ async def test_somebody_who_joins_a_group_is_in_it_before_they_speak(
     )
     factory = SessionUnitOfWorkFactory(async_session_maker)
     adapters = SurfacePlatformAdapterRegistry()
+    stranger = "16505559876"
 
     async with factory() as uow:
+        await apply_group_updates(
+            uow,
+            _participants("group_participants_add", "added_participants", stranger),
+            adapters=adapters,
+        )
+        assert (
+            await find_contact(
+                uow, pod_id=UUID(pod_id), kind=IdentityKind.PHONE, value=f"+{stranger}"
+            )
+            is None
+        )
+    people = await _people(authenticated_client, pod_id, started["channel_id"])
+    assert [person for person in people if person["kind"] == "CONTACT"] == []
+
+    async with factory() as uow:
+        known = await open_contact(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.PHONE,
+            value=f"+{CLIENT}",
+            strength=IdentityStrength.CHANNEL,
+            display_name="Tiago",
+        )
+        await uow.commit()
         await apply_group_updates(
             uow,
             _participants("group_participants_add", "added_participants", CLIENT),
@@ -756,12 +788,13 @@ async def test_somebody_who_joins_a_group_is_in_it_before_they_speak(
 
     people = await _people(authenticated_client, pod_id, started["channel_id"])
     [joined] = [person for person in people if person["kind"] == "CONTACT"]
+    assert joined["id"] == str(known.id)
     assert CLIENT not in str(joined.get("name") or "")
     async with factory() as uow:
         seat = await uow.session.scalar(
             select(ChannelMemberModel).where(
                 ChannelMemberModel.channel_id == UUID(started["channel_id"]),
-                ChannelMemberModel.contact_id == UUID(joined["id"]),
+                ChannelMemberModel.contact_id == known.id,
             )
         )
     assert seat is not None

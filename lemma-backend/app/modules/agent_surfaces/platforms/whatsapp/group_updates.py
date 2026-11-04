@@ -50,7 +50,10 @@ def whatsapp_group_updates(payload: dict[str, object]) -> list[ParsedGroupUpdate
             )
             for group in _objects(value.get("groups")):
                 if field == _PARTICIPANTS_FIELD:
-                    updates.extend(_participants_moved(group))
+                    # The account's WhatsApp Business id: what its people are
+                    # resolved under, as for their messages.
+                    tenant = payload_text(entry, "id").strip() or None
+                    updates.extend(_participants_moved(group, tenant=tenant))
                     continue
                 update = _group_update(group, phone_number_id=phone_number_id)
                 if update is not None:
@@ -58,7 +61,9 @@ def whatsapp_group_updates(payload: dict[str, object]) -> list[ParsedGroupUpdate
     return updates
 
 
-def _participants_moved(group: dict[str, object]) -> list[ParsedGroupUpdate]:
+def _participants_moved(
+    group: dict[str, object], *, tenant: str | None
+) -> list[ParsedGroupUpdate]:
     """One update per person a participants event says joined or left."""
     moved = _MOVED.get(payload_text(group, "type"))
     chat = payload_text(group, "group_id").strip()
@@ -78,6 +83,7 @@ def _participants_moved(group: dict[str, object]) -> list[ParsedGroupUpdate]:
                     platform="WHATSAPP",
                     kind=kind,
                     external_channel_id=chat,
+                    tenant_id=tenant,
                     external_user_id=number,
                     phone=number,
                 )

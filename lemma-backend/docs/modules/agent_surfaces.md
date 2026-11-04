@@ -400,12 +400,16 @@ is answered *for the pod*, in a group the pod has opened to them.
   `added_by_user_id`. A person who joins -- Slack `member_joined_channel`,
   Teams `membersAdded`, Telegram `new_chat_members`, WhatsApp
   `group_participants_add` -- is seated before they say a word
-  (`services/group_joiners.py`), resolved as their first line would be: the
-  member they resolve or proved to be, else a contact by their Telegram id or
-  number; a Slack colleague or Teams person nothing has resolved yet waits
-  until they speak. The seat carries the name the platform showed, never a
-  number, and counts among the group's participants a member's run is told
-  of. The bot taken out (Slack
+  (`services/group_joiners.py`): the member their account resolves to or was
+  proved to be (in the pod), else the contact the pod already holds for it.
+  A join never opens a contact or nudges anyone -- anybody with a group's link
+  can join -- so a stranger is seated when they first speak. Leaves are
+  resolved the same way, and remembered for ten minutes
+  (`services/recent_leaves.py`): updates are worked as separate items in no
+  promised order, and a join worked after its leave must not seat somebody
+  gone. The seat carries the name the platform showed, never a number, and
+  counts among the group's participants a member's run is told of, placed by
+  when it was made. The bot taken out (Slack
   `channel_left` / `group_left`, Teams removing the bot, Telegram
   `my_chat_member` to left or kicked) archives the channel; put back, it
   returns. Slack `channel_shared` / `channel_unshared` set `shared_externally`.

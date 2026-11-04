@@ -407,6 +407,8 @@ def test_people_joining_and_leaving_a_group_are_named_by_their_number():
         (GroupUpdateKind.MEMBER_LEFT, "447700900789", "447700900789"),
     ]
     assert {u.external_channel_id for u in updates} == {GROUP}
+    # Resolved under the account's WhatsApp Business id, as messages are.
+    assert {u.tenant_id for u in updates} == {"waba-1"}
 
 
 def test_a_message_webhook_carries_no_group_update():
