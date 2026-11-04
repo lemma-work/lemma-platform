@@ -64,6 +64,9 @@ def build_whatsapp_group_toolset(
         vendor -- with you in the conversation. They become the person who
         answers for the group: people there who are not in the pod are answered
         from what the pod has marked Public, and anything more is passed to them.
+        The bot writes nothing down for them unless a member gives the group a
+        table, in its settings or with `lemma channels grants set` as
+        themselves -- never through an agent; otherwise a member records them.
 
         Returns an invite link for them to share. A group holds at most eight
         people. You answer there only when somebody addresses you by name, by

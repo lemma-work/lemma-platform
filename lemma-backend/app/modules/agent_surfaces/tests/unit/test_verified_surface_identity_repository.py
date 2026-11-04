@@ -30,11 +30,15 @@ class _Session:
         )
 
 
-async def _revoke(phone: str | None) -> str:
+async def _statements(phone: str | None) -> list[str]:
     session = _Session()
     repository = VerifiedSurfaceIdentityRepository(SimpleNamespace(session=session))
     await repository.revoke_phone_bound_except(uuid4(), phone)
-    return session.statements[0]
+    return session.statements
+
+
+async def _revoke(phone: str | None) -> str:
+    return (await _statements(phone))[-1]
 
 
 @pytest.mark.asyncio
@@ -44,6 +48,18 @@ async def test_a_changed_number_revokes_only_identities_bound_to_another_number(
     assert "SET revoked_at" in statement
     assert "verified_phone IS NOT NULL" in statement
     assert "verified_phone != '+15550001111'" in statement
+    assert "session_proved_at IS NULL" in statement
+
+
+@pytest.mark.asyncio
+async def test_an_identity_its_owner_proved_from_lemma_loses_the_number_and_stays():
+    """It stands on the session proof; the number was only ever beside it."""
+    cleared, revoked = await _statements("+15550001111")
+
+    assert "SET verified_phone=NULL" in cleared
+    assert "session_proved_at IS NOT NULL" in cleared
+    assert "revoked_at" not in cleared
+    assert "session_proved_at IS NULL" in revoked
 
 
 @pytest.mark.asyncio
