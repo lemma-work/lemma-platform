@@ -259,8 +259,8 @@ def group_participants_notice(participants: object) -> str | None:
             "that they should not hear. When they ask the bot themselves it "
             "reads only what is Public and any table this group was given, and "
             "adds rows only to a table given with adding: anything else they "
-            "want written down, you write -- or give the group the table "
-            "(`lemma channels grants set`)."
+            "want written down, you write. The person you are answering can "
+            "give the group a table in its settings; you never do."
         )
     lines.append(
         "This is for you to judge the answer by, not to repeat: do not tell the "

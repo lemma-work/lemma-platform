@@ -4,7 +4,8 @@ A member whose Telegram account Lemma did not know spoke in a group as a
 contact. Once the account is proved theirs, each test pins one rule:
 
 * the contact that was only that account is the member: it holds nothing, is
-  not listed, and its lines in the group are the member's;
+  not listed, and its lines in the group are the member's -- and so are the
+  mentions of it, already read;
 * what the bot answered it keeps saying it was made from what is Public;
 * a contact with other handles keeps them and stays a contact: only the
   account is taken, and the pod's administrators are told;
@@ -34,7 +35,10 @@ from app.modules.agent_surfaces.tests.e2e.test_outsider_isolation_e2e import (
 )
 from app.modules.channels.contracts import Principal, Sender, SenderKind
 from app.modules.channels.infrastructure.contact_channels import ContactChannels
-from app.modules.channels.infrastructure.models import ChannelMemberModel
+from app.modules.channels.infrastructure.models import (
+    ChannelMemberModel,
+    ChannelMentionModel,
+)
 from app.modules.contacts.contracts import (
     IdentityKind,
     IdentityStrength,
@@ -69,11 +73,21 @@ async def test_a_guest_who_proved_to_be_a_member_is_them_in_the_group(
         "We are six in total.",
         sender=Sender.contact(guest.contact_id, display_name="Anu"),
     )
-    await say(
+    answered = await say(
         db_session,
         group,
         "Noted, six people.",
         sender=bot_for(guest, agent_id=UUID(scenario.pod_id)),
+    )
+    # The answer names the guest, unread.
+    db_session.add(
+        ChannelMentionModel(
+            message_id=answered.id,
+            channel_id=answered.channel_id,
+            pod_id=UUID(scenario.pod_id),
+            seq=answered.seq,
+            contact_id=guest.contact_id,
+        )
     )
     await db_session.commit()
 
@@ -109,6 +123,16 @@ async def test_a_guest_who_proved_to_be_a_member_is_them_in_the_group(
         )
     ).all()
     assert seats == []
+    # Who the answer named is the member now -- history, so not news to them.
+    [named] = (
+        await db_session.scalars(
+            select(ChannelMentionModel).where(
+                ChannelMentionModel.message_id == answered.id
+            )
+        )
+    ).all()
+    assert (named.user_id, named.contact_id) == (owner, None)
+    assert named.read_at is not None
 
     listed = await scenario.owner_client.get(f"/pods/{scenario.pod_id}/contacts")
     assert listed.status_code == 200, listed.text

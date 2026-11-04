@@ -205,7 +205,14 @@ columns they may fill in a new row. A guest's run reads and adds through
 access rebuilt on every call -- and an added row is marked as from outside,
 naming the contact. Everybody in the group reads what is given, so whoever
 gives a column gives it to the whole group; a table where each member sees only
-their own rows is never given.
+their own rows is never given, nor read once it becomes one.
+
+Giving is a person's act: an agent's or a function's context is refused (403),
+since an agent in the group reads what strangers wrote there. The person giving
+must hold what the grant will use -- the table's settings and its rows, and
+writing them to give adding. Taking a grant back needs only the group: its
+owners or an admin, whether or not they can read the table. The list shows a
+reader only the tables they can read themselves.
 
 ## Posting a line
 

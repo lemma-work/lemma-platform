@@ -10,6 +10,11 @@ Expand-only: a nullable column, its foreign key (SET NULL, so a member deleted
 leaves a contact that was them rather than taking the row) and the check.
 Nothing is backfilled.
 
+And an index on a handle across pods (``ix_contact_identities_kind_value``),
+built concurrently: a member proving an account looks for the contacts that
+hold it in every pod they are in, by kind and value, which the per-pod unique
+key cannot serve.
+
 Revision ID: 0067_contact_became_member
 Revises: 0066_session_proved_identity
 """
@@ -45,8 +50,24 @@ def upgrade() -> None:
         "contacts",
         "merged_into_id IS NULL OR merged_into_user_id IS NULL",
     )
+    with op.get_context().autocommit_block():
+        op.create_index(
+            "ix_contact_identities_kind_value",
+            "contact_identities",
+            ["kind", "value"],
+            unique=False,
+            postgresql_concurrently=True,
+            if_not_exists=True,
+        )
 
 
 def downgrade() -> None:
+    with op.get_context().autocommit_block():
+        op.drop_index(
+            "ix_contact_identities_kind_value",
+            table_name="contact_identities",
+            postgresql_concurrently=True,
+            if_exists=True,
+        )
     op.drop_constraint("ck_contacts_merged_once", "contacts", type_="check")
     op.drop_column("contacts", "merged_into_user_id")

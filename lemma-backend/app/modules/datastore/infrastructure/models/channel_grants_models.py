@@ -30,6 +30,8 @@ class DatastoreChannelGrantModel(UUIDAuditBase):
         Index("ix_datastore_channel_grants_channel", "channel_id"),
         # Deleting a member cascades through this column.
         Index("ix_datastore_channel_grants_granted_by", "granted_by"),
+        # Deleting a pod cascades through this one.
+        Index("ix_datastore_channel_grants_pod", "pod_id"),
     )
 
     pod_id: Mapped[UUID] = mapped_column(

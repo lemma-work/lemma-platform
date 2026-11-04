@@ -80,6 +80,9 @@ class GroupRecordsRequest(BaseModel):
 class GroupRecordsResponse(BaseModel):
     success: bool
     rows: list[dict[str, object]] = Field(default_factory=list)
+    #: How many rows matched: more than ``rows`` when the read was cut off.
+    total: int | None = None
+    note: str | None = None
     error: str | None = None
 
 
@@ -160,7 +163,7 @@ def build_group_history_toolset(
             return GroupRecordsResponse(success=False, error=_NOT_GIVEN)
         channel_id, contact_id = found
         try:
-            rows = await read_granted_rows(
+            found = await read_granted_rows(
                 uow_factory,
                 pod_id=ctx.deps.pod_id,
                 channel_id=channel_id,
@@ -171,7 +174,18 @@ def build_group_history_toolset(
             )
         except PublicRowsClosed:
             return GroupRecordsResponse(success=False, error=_NOT_GIVEN)
-        return GroupRecordsResponse(success=True, rows=rows)
+        cut = found.total > len(found.rows)
+        return GroupRecordsResponse(
+            success=True,
+            rows=found.rows,
+            total=found.total,
+            note=(
+                f"{found.total} rows match; these are the first {len(found.rows)}. "
+                "Narrow it with equals, and never count or add up from these alone."
+                if cut
+                else None
+            ),
+        )
 
     async def group_add_record(
         ctx: RunContext[BaseAgentContext], request: GroupAddRecordRequest

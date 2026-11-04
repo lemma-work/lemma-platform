@@ -74,6 +74,11 @@ def upgrade() -> None:
         "datastore_channel_grants",
         ["granted_by"],
     )
+    op.create_index(
+        "ix_datastore_channel_grants_pod",
+        "datastore_channel_grants",
+        ["pod_id"],
+    )
 
 
 def downgrade() -> None:

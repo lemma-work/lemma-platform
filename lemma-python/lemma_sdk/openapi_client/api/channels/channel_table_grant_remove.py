@@ -87,7 +87,8 @@ def sync_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Remove Table Grant
 
-     The group no longer reads or adds to the table.
+     The group no longer reads or adds to the table. Whoever may manage the
+    group may take it back, whether or not they can read the table.
 
     Args:
         pod_id (UUID):
@@ -124,7 +125,8 @@ def sync(
 ) -> Any | ErrorResponse | None:
     """Remove Table Grant
 
-     The group no longer reads or adds to the table.
+     The group no longer reads or adds to the table. Whoever may manage the
+    group may take it back, whether or not they can read the table.
 
     Args:
         pod_id (UUID):
@@ -156,7 +158,8 @@ async def asyncio_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Remove Table Grant
 
-     The group no longer reads or adds to the table.
+     The group no longer reads or adds to the table. Whoever may manage the
+    group may take it back, whether or not they can read the table.
 
     Args:
         pod_id (UUID):
@@ -191,7 +194,8 @@ async def asyncio(
 ) -> Any | ErrorResponse | None:
     """Remove Table Grant
 
-     The group no longer reads or adds to the table.
+     The group no longer reads or adds to the table. Whoever may manage the
+    group may take it back, whether or not they can read the table.
 
     Args:
         pod_id (UUID):

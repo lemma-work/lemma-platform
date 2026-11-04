@@ -33,6 +33,30 @@ def _group(*, platform: str = "TELEGRAM", owner: UUID | None = None) -> SurfaceG
     )
 
 
+class _Savepoint:
+    def __init__(self) -> None:
+        self.rolled_back = False
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, kind, error, trace) -> bool:
+        self.rolled_back = error is not None
+        return False
+
+
+class _Uow:
+    """The caller's unit of work: only its savepoints are touched."""
+
+    def __init__(self) -> None:
+        self.savepoints: list[_Savepoint] = []
+        self.session = SimpleNamespace(begin_nested=self._savepoint)
+
+    def _savepoint(self) -> _Savepoint:
+        self.savepoints.append(_Savepoint())
+        return self.savepoints[-1]
+
+
 class _Pod:
     """The pod's directory and the notices it sent, in memory."""
 
@@ -54,7 +78,7 @@ class _Pod:
 
     async def nudge(self, group: SurfaceGroup, contact: UUID, name: str) -> None:
         await link_nudges.nudge_lookalikes(
-            object(),
+            _Uow(),
             group=group,
             contact_id=contact,
             name=name,
@@ -97,5 +121,26 @@ async def test_a_failed_read_costs_the_notice_not_the_line():
         raise OperationalError("select", {}, Exception("down"))
 
     await link_nudges.nudge_lookalikes(
-        object(), group=_group(), contact_id=uuid4(), name="Anu", directory=broken
+        _Uow(), group=_group(), contact_id=uuid4(), name="Anu", directory=broken
     )
+
+
+async def test_a_failed_notice_is_rolled_back_alone_so_the_line_still_lands():
+    """The notice is written in the group line's own unit of work: a failed
+    write is undone to its savepoint, not left poisoning the line's insert."""
+    pod, uow = _Pod(), _Uow()
+
+    async def refused(_uow, **_said):
+        raise OperationalError("insert", {}, Exception("refused"))
+
+    await link_nudges.nudge_lookalikes(
+        uow,
+        group=_group(),
+        contact_id=uuid4(),
+        name="Anu",
+        directory=pod.directory,
+        notice=refused,
+    )
+
+    [savepoint] = uow.savepoints
+    assert savepoint.rolled_back

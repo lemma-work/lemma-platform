@@ -14,6 +14,7 @@ from app.modules.datastore.domain.public_rows import (
 from app.modules.datastore.services.channel_grants import (
     MAX_GRANTED_ROWS,
     ChannelGrant,
+    GrantedRows,
     add_granted_row,
     channel_grants,
     grant_table,
@@ -25,6 +26,7 @@ from app.modules.datastore.services.public_rows import OpeningRefused
 __all__ = [
     "MAX_GRANTED_ROWS",
     "ChannelGrant",
+    "GrantedRows",
     "OpeningRefused",
     "PublicRowRefused",
     "PublicRowsClosed",

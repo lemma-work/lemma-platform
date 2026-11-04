@@ -86,7 +86,8 @@ def sync_detailed(
 ) -> Response[ErrorResponse | TableGrantsResponse]:
     """List Table Grants
 
-     The tables the group's people outside the pod may read or add to.
+     The tables the group's people outside the pod may read or add to --
+    those the caller may read themselves.
 
     Args:
         pod_id (UUID):
@@ -120,7 +121,8 @@ def sync(
 ) -> ErrorResponse | TableGrantsResponse | None:
     """List Table Grants
 
-     The tables the group's people outside the pod may read or add to.
+     The tables the group's people outside the pod may read or add to --
+    those the caller may read themselves.
 
     Args:
         pod_id (UUID):
@@ -149,7 +151,8 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | TableGrantsResponse]:
     """List Table Grants
 
-     The tables the group's people outside the pod may read or add to.
+     The tables the group's people outside the pod may read or add to --
+    those the caller may read themselves.
 
     Args:
         pod_id (UUID):
@@ -181,7 +184,8 @@ async def asyncio(
 ) -> ErrorResponse | TableGrantsResponse | None:
     """List Table Grants
 
-     The tables the group's people outside the pod may read or add to.
+     The tables the group's people outside the pod may read or add to --
+    those the caller may read themselves.
 
     Args:
         pod_id (UUID):
