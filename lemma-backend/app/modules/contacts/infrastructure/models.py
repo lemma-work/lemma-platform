@@ -83,6 +83,8 @@ class ContactIdentityModel(UUIDAuditBase):
             "pod_id", "kind", "value", name="uq_contact_identities_pod_handle"
         ),
         Index("ix_contact_identities_contact", "contact_id"),
+        # A handle across pods: a proved account's contacts in every pod.
+        Index("ix_contact_identities_kind_value", "kind", "value"),
     )
 
     contact_id: Mapped[UUID] = mapped_column(

@@ -45,7 +45,9 @@ async def nudge_lookalikes(
     notice: Notice | None = None,
 ) -> None:
     """Tell each member whose first name this newcomer shares. Best-effort:
-    the line is logged either way."""
+    the line is logged either way. The notices are written in a savepoint of
+    the caller's unit of work, so one that fails is rolled back alone and the
+    group line written after it still lands."""
     shown = " ".join(str(name or "").split())[:_MAX_NAME_CHARS]
     first = _first(shown)
     if (
@@ -58,16 +60,17 @@ async def nudge_lookalikes(
         page = await (directory or list_pod_members)(
             pod_id=group.pod_id, requester_user_id=group.owner_user_id, search=first
         )
-        for member in page.members if page is not None else ():
-            if member.user_id is None or _first(member.name) != first:
-                continue
-            await (notice or tell_member)(
-                uow,
-                pod_id=group.pod_id,
-                user_id=member.user_id,
-                text=_notice(shown, group.title),
-                key=f"link-nudge:{contact_id}:{member.user_id}",
-            )
+        async with uow.session.begin_nested():
+            for member in page.members if page is not None else ():
+                if member.user_id is None or _first(member.name) != first:
+                    continue
+                await (notice or tell_member)(
+                    uow,
+                    pod_id=group.pod_id,
+                    user_id=member.user_id,
+                    text=_notice(shown, group.title),
+                    key=f"link-nudge:{contact_id}:{member.user_id}",
+                )
     except SQLAlchemyError, OSError:
         logger.warning(
             "agent_surfaces.link_nudges.nudge_failed.degraded",
