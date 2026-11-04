@@ -3,19 +3,24 @@
  * `app/core/analytics/event_catalog.py`.
  *
  * The backend emitter is default-deny on both keys and values, and
- * `test_analytics_safety.py` proves it with adversarial input. Until this file
- * existed the client had none of that: `captureEvent` took an arbitrary
- * property bag straight to a third party, which is how two events already drifted
- * from the contract they share a *name* with. A shared name with divergent
- * shapes is worse than two names, because it looks correct in a dashboard.
+ * `test_analytics_safety.py` proves it with adversarial input. The client is
+ * default-deny on keys: `captureEvent` is typed against this table, and the
+ * `before_send` gate in `client.ts` drops anything else whatever the call site.
+ * A shared name with divergent shapes is worse than two names, because it looks
+ * correct in a dashboard, so the two names both sides use keep the backend's
+ * property names exactly.
  *
  * Two rules, matching the backend's:
  *
  * * an event absent from this catalog is not an event;
  * * a property absent from its entry is dropped, not forwarded.
  *
- * Both are enforced in one `before_send` gate in `client.ts`, so no call site
- * can bypass them.
+ * And what belongs here at all: only what the server cannot see. Anything that
+ * changes state is the backend's — it sees every origin, including the ones
+ * with no browser — so these are the steps a person takes before any API call,
+ * and the ones that end somewhere else (a provider's sign-in, a checkout, an
+ * address book). `tests/analytics-catalog.test.ts` holds every entry to a call
+ * site.
  */
 
 export interface ClientAnalyticEvent {
@@ -25,10 +30,14 @@ export interface ClientAnalyticEvent {
 }
 
 export const CLIENT_CATALOG = {
-    /** The marketing page. Top of the funnel, before any API call exists. */
-    "landing.viewed": { properties: [] },
-    /** A shared link opened. `kind` and `viewer_is_member` must stay identical to
-     *  the backend entry of the same name. */
+    // --- the share → import loop ------------------------------------------
+    //
+    // The two names the backend lists as client-emitted (`CLIENT_EMITTED` in
+    // `test_analytics_wiring.py`), so their keys are the backend entry's.
+
+    /** A shared link opened, signed in or not — the reader who is not signed in
+     *  is exactly the one this funnel is about. The page renders on the server
+     *  without checking access, so `viewer_is_member` is not sent from it. */
     "share_link.viewed": {
         properties: ["bundle_id", "kind", "viewer_is_member"],
     },
@@ -39,58 +48,59 @@ export const CLIENT_CATALOG = {
     /** The vCard saved. The card's real conversion, and the last thing we can
      *  see: everything after it happens in an address book we have no view of. */
     "share_link.contact_saved": { properties: [] },
-    /** The import button pressed — the step the server never sees, because an
-     *  abandoned import makes no API call. */
+    /** An import begun — Remix, or reviewing a GitHub install — before any
+     *  request: an abandoned one makes no API call the server could count. */
     "import.started": { properties: ["bundle_id", "is_remix"] },
-    /** Pod creation begun in the UI, before anything is persisted. */
-    "pod.create_started": { properties: [] },
-    /** A client-side error. `error_class` is a constructor name, never a message
-     *  — messages carry user content. */
-    "client.error": { properties: ["error_class"] },
 
-    // --- onboarding -------------------------------------------------------
-    //
-    // Onboarding renders every step at "/", so pageviews cannot tell them
-    // apart and the funnel was previously unmeasurable end to end. `step` is
-    // the bounded SetupStep union, never free text.
-    /** One onboarding step shown. */
-    "onboarding.step_viewed": { properties: ["step"] },
-    /** The user is inside a pod: the end of onboarding, however they got there.
-     *  `entry_kind` says which of the three routes they took. */
-    "onboarding.pod_ready": { properties: ["entry_kind", "elapsed_bucket"] },
+    // --- arriving -------------------------------------------------------------
 
-    // --- activation -------------------------------------------------------
-    //
-    // The three transitions that each permanently widen what the product can
-    // do, and the thing worth optimising rather than step completion. Elapsed
-    // time is bucketed rather than exact: a duration is not an id, an enum or a
-    // boolean, and the funnel only ever reads it in bands anyway.
-    /** A chat surface went live. The pod can be *reached* only once its owner
-     *  has messaged the bot — a backend fact — so this is the nearest thing the
-     *  client can honestly witness, and is named for what it measures. */
-    "activation.surface_connected": {
-        properties: ["platform", "elapsed_bucket"],
-    },
-    /** The pod does work for its owner: an app page opened. */
-    "activation.app_opened": { properties: ["elapsed_bucket"] },
-    /** The pod is shared: an invited teammate accepted and landed inside it. */
-    "activation.member_joined": { properties: ["elapsed_bucket"] },
+    /** The first screen of a new account: what it offered. Booleans, never the
+     *  organization or the domain behind them. */
+    "onboarding.arrival_viewed": { properties: ["invited", "domain_match"] },
+    /** Which way somebody got into an organization: `invite`, `domain` or
+     *  `new_org`. The membership itself is the backend's event. */
+    "onboarding.arrived": { properties: ["route"] },
+
+    // --- hiring a teammate ----------------------------------------------------
+
+    /** One step of hiring shown: `shelf`, `describe`, `candidate`, `making`,
+     *  `met`. All of it is one overlay at one address, so pageviews cannot tell
+     *  the steps apart, and a step left before the hire makes no request. */
+    "hire.step_viewed": { properties: ["step"] },
+    /** The hire pressed, and which way: `role` (a card from the shelf),
+     *  `described` (a job written out) or `explore` (a dealt face, no job). The
+     *  pod it makes is the backend's `pod.created`. */
+    "hire.started": { properties: ["path"] },
+
+    // --- leaving for somewhere else -------------------------------------------
+
+    /** A connector's sign-in opened at its provider. What comes back is the
+     *  backend's `connector.connected`; this is the top of that funnel. */
+    "connector.authorization_opened": { properties: [] },
+    /** The payment page opened, for which plan id. A payment that never happens
+     *  writes nothing at either end, so this is the only record it was tried. */
+    "billing.checkout_opened": { properties: ["plan"] },
+    /** "Not now" pressed while a checkout or a change was waiting. */
+    "billing.checkout_abandoned": { properties: ["plan"] },
 } as const satisfies Record<string, ClientAnalyticEvent>;
 
 export type WebAnalyticEvent = keyof typeof CLIENT_CATALOG;
+
+/** What a call site may send with `name`: its declared keys, each optional. */
+export type EventProperties<E extends WebAnalyticEvent> = {
+    readonly [K in (typeof CLIENT_CATALOG)[E]["properties"][number]]?: string | number | boolean;
+};
 
 /** Declared but raised by nothing yet.
  *
  *  Same ratchet as the backend's `KNOWN_GAPS`: a declared event nothing emits is
  *  a dashboard that is permanently zero, and the worst version of that is the
- *  one nobody knows about. Emitting one means deleting it from here. */
-export const KNOWN_UNEMITTED: readonly WebAnalyticEvent[] = [
-    "landing.viewed",
-    "pod.create_started",
-];
+ *  one nobody knows about. `tests/analytics-catalog.test.ts` fails on an entry
+ *  with no call site that is not named here, and on a name here that has one. */
+export const KNOWN_UNEMITTED: readonly WebAnalyticEvent[] = [];
 
 /** Properties the client attaches to every event, so they are never dropped by
- *  the allowlist above. */
+ *  the allowlist above. Registered once at start (`registerSpine`). */
 export const CLIENT_SPINE_PROPERTIES: readonly string[] = ["deployment"];
 
 export function isCatalogued(name: string): name is WebAnalyticEvent {

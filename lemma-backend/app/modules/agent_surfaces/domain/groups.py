@@ -116,6 +116,8 @@ class GroupUpdateKind(StrEnum):
     UNSHARED = "UNSHARED"
     #: Somebody left, or was taken out of, the place (``external_user_id``).
     MEMBER_LEFT = "MEMBER_LEFT"
+    #: Somebody joined the place, or was added to it (``external_user_id``).
+    MEMBER_JOINED = "MEMBER_JOINED"
     #: The bot itself was taken out of the place, or put back in it.
     BOT_LEFT = "BOT_LEFT"
     BOT_RETURNED = "BOT_RETURNED"
@@ -125,9 +127,10 @@ class ParsedGroupUpdate(BaseModel):
     """A platform's word about a group itself, as opposed to a message in it.
 
     WhatsApp confirms a group the bot asked it to create, naming the
-    ``request_id`` it answers. Slack, Teams and Telegram say who left a place,
-    when the bot was taken out of one or put back, and (Slack) when a channel
-    turned private or was shared with another company.
+    ``request_id`` it answers. Every platform says who joined a place and who
+    left it; Slack, Teams and Telegram say when the bot was taken out of one or
+    put back, and Slack when a channel turned private or was shared with
+    another company.
     """
 
     platform: str
@@ -141,6 +144,11 @@ class ParsedGroupUpdate(BaseModel):
     #: The workspace or tenant the place is in, where the platform has one:
     #: only surfaces installed there are asked about it.
     tenant_id: str | None = None
-    #: Who left (``MEMBER_LEFT``), as the platform names them -- a Teams
-    #: person by their AAD object id where the event carries it.
+    #: Who left (``MEMBER_LEFT``) or joined (``MEMBER_JOINED``), as the
+    #: platform names them -- a Teams person by their AAD object id where the
+    #: event carries it.
     external_user_id: str | None = None
+    #: The name the platform shows a person joining under, where it shows one.
+    display_name: str | None = None
+    #: A WhatsApp person's number, international, where the event names it.
+    phone: str | None = None
