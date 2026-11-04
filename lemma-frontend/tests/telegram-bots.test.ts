@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { botChoices, readMine, spacesSaid, type TelegramBot } from "../src/session/telegram-bots.ts";
+import { botChoices, linkedWhen, readLinkedAccounts, readMine, spacesSaid, type TelegramBot } from "../src/session/telegram-bots.ts";
 
 const shared = (surfaceId: string, podName: string, handle = "@lemma_example_bot"): TelegramBot =>
     ({ surfaceId, podId: "pod-" + surfaceId, podName, handle, shared: true });
@@ -71,4 +71,26 @@ test("spaces are said the way a person would list them", () => {
     assert.equal(spacesSaid(["Marketing", "Sales"]), "Marketing and Sales");
     assert.equal(spacesSaid(["Marketing", "Sales", "Support"]), "Marketing, Sales and Support");
     assert.equal(spacesSaid(["Marketing", "Sales", "Support", "Billing"]), "Marketing, Sales and 2 more");
+});
+
+test("a linked account is read with its name, or none when Telegram gave a blank one", () => {
+    assert.deepEqual(readLinkedAccounts({
+        items: [
+            { id: "acct-1", name: " Dana ", proved_at: "2026-11-04T09:00:00Z" },
+            { id: "acct-2", name: "  ", proved_at: null },
+            { name: "no id" },
+        ],
+    }), [
+        { id: "acct-1", name: "Dana", provedAt: "2026-11-04T09:00:00Z" },
+        { id: "acct-2", name: null, provedAt: null },
+    ]);
+    assert.deepEqual(readLinkedAccounts(null), []);
+});
+
+test("when an account was linked reads as a day, never a bare clock", () => {
+    const now = new Date(2026, 10, 4, 15, 0);
+    assert.equal(linkedWhen(new Date(2026, 10, 4, 9, 30).toISOString(), now), "today");
+    assert.equal(linkedWhen(new Date(2026, 9, 1, 9, 30).toISOString(), now), new Date(2026, 9, 1).toLocaleDateString([], { day: "numeric", month: "short" }));
+    assert.equal(linkedWhen(null, now), "");
+    assert.equal(linkedWhen("not a date", now), "");
 });

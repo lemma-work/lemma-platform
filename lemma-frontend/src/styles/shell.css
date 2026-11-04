@@ -5390,6 +5390,11 @@ button.filecard__open {
 .settings-account .profile-form { align-self: stretch; }
 .settings-account .profile-telegram { align-self: stretch; margin-bottom: 0; }
 .profile-telegram .btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; }
+.profile-telegram__accounts { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.profile-telegram__accounts li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13.5px; color: var(--ink); }
+.profile-telegram__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-telegram__when { flex: none; font-size: 12.5px; color: var(--ink-3); }
+.profile-telegram__accounts .linkish { flex: none; margin: 0 0 0 auto; }
 /* Signing out is separated from the form so it is not read as one of the
    things Save applies to. */
 .settings-leave {

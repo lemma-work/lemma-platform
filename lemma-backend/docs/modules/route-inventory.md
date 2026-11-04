@@ -56,6 +56,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | `agent.surface.slack_app_creation.forget` | Forget Slack Configuration Token |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
+| DELETE | `/surfaces/me/telegram-accounts/{account_id}` | `agent.surface.unlink_my_telegram_account` | Unlink My Telegram Account |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
 | GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.get` | Get Source |
 | GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.list` | List Slack App Workspaces |
@@ -76,6 +77,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surface-setup/slack/install` | `agent.surface.slack_install.availability` | Slack Install Availability |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
+| GET | `/surfaces/me/telegram-accounts` | `agent.surface.list_my_telegram_accounts` | List My Telegram Accounts |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
 | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
