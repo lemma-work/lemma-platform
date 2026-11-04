@@ -536,7 +536,7 @@ is answered *for the pod*, in a group the pod has opened to them.
   is shown everything said in the group, what people outside the pod wrote
   marked `(not in this pod)` and fenced as information rather than a request,
   and not members' notes. On Slack, read live, a line is marked by whether the
-  pod resolves its author to one of its members (`group_log.live_members`),
+  pod resolves its author to one of its members (`live_group_roster.live_members`),
   not by Slack's own mark, which only names another company's lines; when that
   cannot be read, every line but the asker's is marked. What is left out is
   counted. Each line is one quoted line however many it spanned. A member's
