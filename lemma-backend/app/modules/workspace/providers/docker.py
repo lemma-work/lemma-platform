@@ -589,7 +589,12 @@ def _tmpfs(is_function: bool) -> dict[str, str]:
         return {}
     return {
         "/tmp": "rw,noexec,nosuid,size=512m",
+        # Docker accepts uid/gid here, but Podman's Docker-compatible API
+        # rejects those tmpfs options. A sticky world-writable directory keeps
+        # the mount usable by the unprivileged function user (10001) without
+        # relying on runtime-specific ownership options. The mount is private
+        # to this function container.
         "/run/lemma-function-cache": (
-            "rw,exec,nosuid,nodev,size=512m,mode=0700,uid=10001,gid=10001"
+            "rw,exec,nosuid,nodev,size=512m,mode=1777"
         ),
     }
