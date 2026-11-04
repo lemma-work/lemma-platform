@@ -9,6 +9,8 @@
    choice however many of the member's spaces use it. It comes first, because
    it is the chat a member most likely has already. */
 
+import { listStamp } from "@/data/stamp";
+
 /** One of the member's Telegram bots, in one of their spaces. */
 export interface TelegramBot {
     surfaceId: string;
@@ -81,4 +83,33 @@ export function spacesSaid(spaces: readonly string[]): string {
     if (spaces.length <= 2) return spaces.join(" and ");
     if (spaces.length === 3) return spaces[0] + ", " + spaces[1] + " and " + spaces[2];
     return spaces[0] + ", " + spaces[1] + " and " + (spaces.length - 2) + " more";
+}
+
+/** A Telegram account the member proved from a Lemma session. */
+export interface LinkedTelegramAccount {
+    id: string;
+    /** The name Telegram last gave it; its @username is not kept. */
+    name: string | null;
+    provedAt: string | null;
+}
+
+/** `GET /surfaces/me/telegram-accounts`, read. */
+export function readLinkedAccounts(raw: unknown): LinkedTelegramAccount[] {
+    const items = (raw as { items?: unknown } | null)?.items;
+    return (Array.isArray(items) ? items : [])
+        .map((one) => one as { id?: unknown; name?: unknown; proved_at?: unknown })
+        .filter((one): one is { id: string; name?: unknown; proved_at?: unknown } => typeof one.id === "string")
+        .map((one) => ({
+            id: one.id,
+            name: typeof one.name === "string" && one.name.trim() ? one.name.trim() : null,
+            provedAt: typeof one.proved_at === "string" ? one.proved_at : null,
+        }));
+}
+
+/** When an account was linked, beside its name: "today", then the list's ladder. */
+export function linkedWhen(iso: string | null, now = new Date()): string {
+    if (!iso) return "";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toDateString() === now.toDateString() ? "today" : listStamp(iso, now);
 }

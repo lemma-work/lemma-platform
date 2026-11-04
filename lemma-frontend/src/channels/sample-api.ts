@@ -326,6 +326,10 @@ export function sampleChannelApi(_podId: string): ChannelApi {
         },
         async confirmIdentityLink() {
             linkOpenedAt = null;
+            /* Linked from a group or from the profile, it is the member's
+               everywhere: the profile's list shows it either way. */
+            const { rememberSampleLink } = await import("@/session/telegram-accounts");
+            rememberSampleLink("Sample You");
             return { name: "Sample You", username: "sample_you" };
         },
         async declineIdentityLink() {

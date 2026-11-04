@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { SetDefaultSurfaceRequest } from '../models/SetDefaultSurfaceRequest.js';
+import type { TelegramAccountsResponse } from '../models/TelegramAccountsResponse.js';
 import type { UserSurfacesResponse } from '../models/UserSurfacesResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -38,6 +39,40 @@ export class AgentSurfacesMeService {
             url: '/surfaces/me/default',
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List My Telegram Accounts
+     * The Telegram accounts the current user proved from a Lemma session, still
+     * theirs: every bot knows them as this user.
+     * @returns TelegramAccountsResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceListMyTelegramAccounts(): CancelablePromise<TelegramAccountsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/surfaces/me/telegram-accounts',
+        });
+    }
+    /**
+     * Unlink My Telegram Account
+     * Unlink one of them: from its next message the account is a stranger's.
+     * @param accountId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentSurfaceUnlinkMyTelegramAccount(
+        accountId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/surfaces/me/telegram-accounts/{account_id}',
+            path: {
+                'account_id': accountId,
+            },
             errors: {
                 422: `Validation Error`,
             },
