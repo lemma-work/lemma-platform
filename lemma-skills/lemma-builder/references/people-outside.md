@@ -21,7 +21,21 @@ never a member's personal allowance.
 
 A contact's or visitor's run is anonymous to the pod: Public reads only, a short tool
 allowlist, no sandbox, no member's grants. In a **group**, people outside the pod are
-answered as outsiders the same way (`surfaces.md`).
+answered as outsiders the same way (`surfaces.md`): they can read what is Public, and
+nothing they say in the group is written anywhere by the bot -- a request to save or
+change something is passed to the member who looks after the group, who acts on it.
+So for a workflow where people outside the pod "post in the group and the bot records
+it", a member gives the group the table: in the group's settings in the app, or
+`lemma channels grants set <channel> <table> --read <cols> --add <cols>` signed in as
+themselves. An agent's token is refused -- an agent in a group reads what strangers
+wrote there -- so tell the member to do it rather than doing it. The member needs the
+table's settings and its rows (and to write them, for `--add`). Per-user tables are
+refused; columns that are unique or point at another row can't be filled by guests;
+on a contact-owned table only the columns contacts are shown can be read, and each
+guest reads and adds only their own row. Then guests' runs read those columns
+(`group_records`) and add rows (`group_add_record`) through the granting member's
+access, each row marked as from outside. Without a grant, only members' messages can
+be written down. Everybody in the group reads what is granted.
 
 ## The pieces
 
@@ -67,6 +81,9 @@ anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
 its rows through a widget's key: the hosted `{page_url}?table=t`, the embed script
 with `data-lemma-table`, a `<form data-lemma-table>`, or `Lemma.addRow(t, values)`.
 Rows are added as the member who opened the table, with only the open columns.
+A FILE_PATH column takes an attached file: stored as that member under
+`/forms/{t}/`, its path in the row. A group's guests can't attach one, so a
+group grant never opens a file column.
 
 **Showing a table on a page** — a page reads a table the pod marked **Public**
 with `Lemma.readRows(t, {orderBy})` (`GET /public/web/{key}/rows?table=t`), as the

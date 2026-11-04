@@ -39,6 +39,43 @@ export function hasAnalyticsConsent(): boolean {
     return readConsentDecision() === "granted";
 }
 
+/**
+ * Where the question is asked: the public site, whose visitors are the people
+ * the answer is for.
+ *
+ * Sign-in, the hand-offs on either side of it, and the workspace are left out.
+ * Someone there came to do one thing, and a card in the corner about storage is
+ * in the way of it. A signed-in person is counted against their account
+ * whichever they answer (`/privacy`, "While you are signed in"), so the answer
+ * changes little there anyway. Not asking keeps a page cookieless, so a section
+ * missing from this list costs the question and nothing more.
+ *
+ * Matched by first path segment, so a new post or docs page asks without being
+ * listed, and a new top-level route stays quiet until somebody decides.
+ */
+export const ASKING_SECTIONS: ReadonlySet<string> = new Set([
+    "", // the landing page
+    "about",
+    "blog",
+    "changelog",
+    "characters",
+    "contact",
+    "docs",
+    "download",
+    "privacy",
+    "product",
+    "templates",
+    "tos",
+    // Where a stranger is sent: a shared file, a share link, a template's install page.
+    "d",
+    "s",
+    "import",
+]);
+
+export function asksForConsent(pathname: string): boolean {
+    return ASKING_SECTIONS.has(pathname.split("/").filter(Boolean)[0] ?? "");
+}
+
 export function recordConsentDecision(
     decision: Exclude<ConsentDecision, "unanswered">,
 ): void {
