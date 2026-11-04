@@ -68,6 +68,7 @@ from app.modules.datastore.contracts.public_rows import (
     PublicRowRefused,
     PublicRowsClosed,
     add_visitor_row,
+    validate_visitor_row as validate_public_visitor_row,
     visitor_table,
 )
 from app.modules.pod.contracts.members import (
@@ -417,6 +418,35 @@ class WebChat:
         if opened is None or not opened.columns:
             raise refused("There is nothing to fill in here", 404, "table_closed")
         return opened, opened.audience is PublicAudience.CONTACTS
+
+    async def validate_visitor_row(
+        self,
+        widget: WebWidget,
+        *,
+        table: str,
+        answers: dict[str, object],
+        vouched: bool = False,
+    ) -> None:
+        """Check an anonymous first submission before opening its identity."""
+        if widget.answer is WidgetAnswer.KNOWN and not vouched:
+            raise refused("This is for existing customers only", 403, "not_a_contact")
+        _opened, contacts_only = await self.visitor_table(widget, table=table)
+        if contacts_only and not vouched:
+            raise refused("Confirm your email first", 403, "needs_contact")
+        try:
+            await validate_public_visitor_row(
+                self.uow_factory,
+                pod_id=widget.pod_id,
+                table_name=table,
+                answers=answers,
+                vouched=vouched,
+            )
+        except PublicRowRefused as exc:
+            raise refused(exc.message, 422, "bad_answer") from exc
+        except PublicRowsClosed as exc:
+            raise refused(
+                "This isn't taking answers right now", 403, "table_closed"
+            ) from exc
 
     async def add_visitor_row(
         self,
