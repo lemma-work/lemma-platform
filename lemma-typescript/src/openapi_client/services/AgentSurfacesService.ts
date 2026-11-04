@@ -6,6 +6,9 @@ import type { AgentSurfaceListResponse } from '../models/AgentSurfaceListRespons
 import type { AgentSurfaceResponse } from '../models/AgentSurfaceResponse.js';
 import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfaceChannelsResponse.js';
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
+import type { IdentityLinkRequest } from '../models/IdentityLinkRequest.js';
+import type { IdentityLinkResponse } from '../models/IdentityLinkResponse.js';
+import type { IdentityLinkStatusResponse } from '../models/IdentityLinkStatusResponse.js';
 import type { NoticeRequest } from '../models/NoticeRequest.js';
 import type { NoticeResponse } from '../models/NoticeResponse.js';
 import type { SlackAppCreateRequest } from '../models/SlackAppCreateRequest.js';
@@ -27,6 +30,7 @@ import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
 import type { SurfaceSendResponse } from '../models/SurfaceSendResponse.js';
 import type { SurfaceSetupResponse } from '../models/SurfaceSetupResponse.js';
 import type { SurfaceUpdateRequest } from '../models/SurfaceUpdateRequest.js';
+import type { TelegramAccountResponse } from '../models/TelegramAccountResponse.js';
 import type { TelegramManagedBotSetupRequest } from '../models/TelegramManagedBotSetupRequest.js';
 import type { TelegramManagedBotSetupResponse } from '../models/TelegramManagedBotSetupResponse.js';
 import type { WebWidgetCreatedResponse } from '../models/WebWidgetCreatedResponse.js';
@@ -557,6 +561,104 @@ export class AgentSurfacesService {
             path: {
                 'pod_id': podId,
                 'setup_id': setupId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Identity Link
+     * A one-time code that proves, once confirmed, a Telegram account is the
+     * caller's. Ten minutes long, one use.
+     * @param podId
+     * @param requestBody
+     * @returns IdentityLinkResponse Successful Response
+     * @throws ApiError
+     */
+    public static telegramIdentityLinkCreate(
+        podId: string,
+        requestBody: IdentityLinkRequest,
+    ): CancelablePromise<IdentityLinkResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/telegram-identity-links',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Identity Link
+     * Whether the caller's code was opened yet, and from which account.
+     * @param podId
+     * @param code
+     * @returns IdentityLinkStatusResponse Successful Response
+     * @throws ApiError
+     */
+    public static telegramIdentityLinkGet(
+        podId: string,
+        code: string,
+    ): CancelablePromise<IdentityLinkStatusResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/telegram-identity-links/{code}',
+            path: {
+                'pod_id': podId,
+                'code': code,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Confirm Identity Link
+     * The account the code was opened from is the caller's: bind it.
+     * @param podId
+     * @param code
+     * @returns TelegramAccountResponse Successful Response
+     * @throws ApiError
+     */
+    public static telegramIdentityLinkConfirm(
+        podId: string,
+        code: string,
+    ): CancelablePromise<TelegramAccountResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/telegram-identity-links/{code}/confirm',
+            path: {
+                'pod_id': podId,
+                'code': code,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Decline Identity Link
+     * The account the code was opened from is not the caller's: spend it.
+     * @param podId
+     * @param code
+     * @returns void
+     * @throws ApiError
+     */
+    public static telegramIdentityLinkDecline(
+        podId: string,
+        code: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/telegram-identity-links/{code}/decline',
+            path: {
+                'pod_id': podId,
+                'code': code,
             },
             errors: {
                 422: `Validation Error`,

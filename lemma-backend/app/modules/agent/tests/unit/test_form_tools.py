@@ -106,3 +106,33 @@ async def test_an_unknown_table_lists_the_forms_there_are():
     )
     assert result["success"] is False
     assert [form["table"] for form in result["forms"]] == ["signups", "feedback"]
+
+
+async def test_a_file_is_attached_by_the_visitor_never_filled_by_the_chat():
+    applications = OpenTable(
+        pod_id=POD,
+        name="applications",
+        audience=PublicAudience.ANYONE,
+        contact_owned=False,
+        columns=(
+            PublicColumn(name="full_name", type="TEXT", required=True),
+            PublicColumn(name="cv", type="FILE_PATH", required=True, input="file"),
+        ),
+    )
+    tool = _tool({"applications": applications})
+    asked = await tool(_ctx(), FillFormRequest(table="applications"))
+    assert asked["asks"][1] == {
+        "name": "cv",
+        "type": "FILE_PATH",
+        "required": True,
+        "attach_on_page": True,
+    }
+    filled = await tool(
+        _ctx(),
+        FillFormRequest(
+            table="applications",
+            values={"full_name": "Priya", "cv": "/finance/payroll.xlsx"},
+        ),
+    )
+    assert filled["filled"] == {"full_name": "Priya"}
+    assert filled["skipped"] == ["cv"]

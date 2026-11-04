@@ -41,6 +41,7 @@ from app.modules.contacts.infrastructure.repository import (
 from app.modules.contacts.infrastructure.visitor_sessions import (
     VisitorSessionRepository,
 )
+from app.modules.contacts.services.member_folds import MemberFold, fold_into_member
 from app.modules.contacts.services.proofs import ContactProofs
 
 __all__ = [
@@ -48,6 +49,7 @@ __all__ = [
     "ContactRef",
     "IdentityKind",
     "IdentityStrength",
+    "MemberFold",
     "ProofTooWeak",
     "UnusableHandle",
     "VerifiedHandles",
@@ -57,6 +59,7 @@ __all__ = [
     "contact_handles",
     "find_contact",
     "find_contact_by_user",
+    "fold_into_member",
     "is_stop_request",
     "lock_answered_contacts_count",
     "normalize_handle",
