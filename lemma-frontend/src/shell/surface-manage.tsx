@@ -9,7 +9,7 @@ import {
 import { connectorLabel } from "@/data/pod-connectors";
 import { connectionsPlace } from "@/shell/address";
 import { ProblemLine } from "@/connect/connection-problem";
-import { answerChoices } from "@/data/contacts";
+import { answerChoices, groupsNote } from "@/data/contacts";
 import { useBotGroups } from "@/channels/queries";
 import { GroupSheets, type GroupSheet } from "@/channels/source-sheets";
 import { BotGroupRow } from "@/channels/bot-groups";
@@ -255,8 +255,9 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                     </select>
                     <small>
                         {!isOwnBot(surface)
-                            ? "Only a bot on your own account or number answers contacts."
+                            ? "Privately, only a bot on your own account or number answers people outside " + pod.name + "."
                             : answerChoices(pod.name).find(choice => choice.value === draft.contactsAnswer)?.note}
+                        {isGroupPlatform(surface.platform) && " " + groupsNote(pod.name)}
                     </small>
                 </label>
             )}
