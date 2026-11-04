@@ -44,8 +44,12 @@ OUTSIDER_TOOL_NAMES = frozenset(
         "fill_form",
         # GROUP -- offered only to a guest's run in a group
         # (``tools/group_history``): the group's own lines, as the guest may
-        # read them, from the conversation's place, never one the model names.
+        # read them, and the tables a member gave the group -- the granted
+        # columns, read and added as that member -- from the conversation's
+        # place, never one the model names.
         "group_history",
+        "group_records",
+        "group_add_record",
     }
 )
 

@@ -650,6 +650,9 @@ _NAME_TO_MODULE = {
     'TableColumn': 'table_column',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
+    'TableGrantRequest': 'table_grant_request',
+    'TableGrantResponse': 'table_grant_response',
+    'TableGrantsResponse': 'table_grants_response',
     'TableListResponse': 'table_list_response',
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
@@ -1405,6 +1408,9 @@ if TYPE_CHECKING:
     from .table_column import TableColumn
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
+    from .table_grant_request import TableGrantRequest
+    from .table_grant_response import TableGrantResponse
+    from .table_grants_response import TableGrantsResponse
     from .table_list_response import TableListResponse
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
@@ -2173,6 +2179,9 @@ __all__ = [
     'TableColumn',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
+    'TableGrantRequest',
+    'TableGrantResponse',
+    'TableGrantsResponse',
     'TableListResponse',
     'TableOpeningResponse',
     'TableResponse',

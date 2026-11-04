@@ -181,6 +181,7 @@ async def build_run_context(
                 owner_user_id=user_id,
                 contact_id=audience.contact_id,
                 in_group=is_group_conversation(ctx),
+                channel_id=conversation.channel_id,
             )
         else:
             brief = await AgentContextBriefBuilder(uow_factory).build(
