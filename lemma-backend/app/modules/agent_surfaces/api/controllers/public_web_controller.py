@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import AsyncExitStack
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -24,6 +25,16 @@ from pydantic import BaseModel, Field, JsonValue
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.api.schemas import ErrorResponse
+from app.core.api.streaming_multipart import (
+    MultipartFileLimit,
+    UploadStagingCoordinator,
+    stream_multipart_form,
+)
+from app.core.domain.errors import (
+    BadRequestError,
+    PayloadTooLargeError,
+    UploadCapacityExceededError,
+)
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
 from app.modules.agent_surfaces.api import kept_chats
@@ -42,8 +53,19 @@ from app.modules.agent_surfaces.services.web_visitors import (
     StartedSession,
     WebVisitors,
 )
+from app.modules.datastore.contracts.public_rows import (
+    Attachment,
+    OpenTable,
+    too_large,
+)
 
 router = APIRouter(prefix="/public/web", tags=["Agent Surfaces (Web)"])
+
+#: Files from people outside are staged in slots of their own: a stranger's
+#: slow upload must never be what keeps a member's from starting.
+_visitor_uploads = UploadStagingCoordinator(
+    max_requests=4, max_active_bytes=128 * 1024 * 1024
+)
 
 
 class SessionRequest(BaseModel):
@@ -465,3 +487,101 @@ async def web_add_row(
         widget, visitor, table=body.table, answers=body.values, address=address
     )
     return Accepted()
+
+
+@router.post(
+    "/{public_key}/rows/with-files",
+    operation_id="public.web.row.add_with_files",
+    status_code=201,
+    response_model=Accepted,
+    # The widget script's own wire, like the page and the script itself: a page
+    # attaches a file through ``Lemma.addRow``, never by calling this.
+    include_in_schema=False,
+)
+async def web_add_row_with_files(
+    request: Request,
+    widget: PublicWidgetDep,
+    visitor: OptionalVisitorDep,
+    address: VisitorAddressDep,
+    table: str = Query(max_length=255),
+    chat: WebChat = Depends(web_chat),
+) -> Accepted:
+    """Add one row with files attached. Nothing is read back.
+
+    ``multipart/form-data``: the typed answers as a JSON object in ``values``,
+    and at most one file per open file column, under the column's name. Who
+    may send is settled before the body is read, so a refused visitor's files
+    are never taken; past that, each file is held to its own cap and the
+    whole response to another.
+    """
+    opened = await chat.admit_row(widget, visitor, table=table, address=address)
+    attachable = [column.name for column in opened.columns if column.attached]
+    async with AsyncExitStack() as stack:
+        try:
+            form = await stack.enter_async_context(
+                stream_multipart_form(
+                    request,
+                    file_limits={
+                        name: MultipartFileLimit(
+                            max_bytes=surface_settings.surface_web_attachment_max_bytes,
+                            label=name,
+                        )
+                        for name in attachable
+                    },
+                    # A file input left empty may arrive as a bare field of its
+                    # column's name: taken, and never read as a value.
+                    text_fields={"values", *attachable},
+                    combined_max_bytes=surface_settings.surface_web_attachments_max_bytes,
+                    coordinator=_visitor_uploads,
+                )
+            )
+        except PayloadTooLargeError as exc:
+            raise _too_large(opened, exc) from exc
+        except UploadCapacityExceededError as exc:
+            raise refused(
+                "Too many files are arriving right now. Try again in a minute.",
+                503,
+                "busy",
+            ) from exc
+        except BadRequestError as exc:
+            raise refused(
+                "This form can't take that. Check your answers and try again.",
+                400,
+                "bad_answer",
+            ) from exc
+        attachments = {
+            name: Attachment(name=staged.filename or name, content=staged.path)
+            for name in attachable
+            # An empty file input still sends a part: no name, no bytes.
+            if (staged := form.file(name)) is not None and staged.size > 0
+        }
+        await chat.save_visitor_row(
+            widget,
+            visitor,
+            table=table,
+            answers=_typed_answers(form.text("values")),
+            attachments=attachments,
+        )
+    return Accepted()
+
+
+def _typed_answers(raw: str | None) -> dict[str, object]:
+    """The JSON object a multipart row carries its typed answers in."""
+    try:
+        answers = json.loads(raw) if raw else {}
+    except ValueError:
+        answers = None
+    if not isinstance(answers, dict):
+        raise refused("Check your answers and try again", 400, "bad_answer")
+    return answers
+
+
+def _too_large(opened: OpenTable, exc: PayloadTooLargeError) -> WebChatRefused:
+    """Over a cap, said for the file that was, or for the whole response."""
+    details = exc.details if isinstance(exc.details, dict) else {}
+    field = str(details.get("field"))
+    by_name = {column.name: column for column in opened.columns}
+    if field == "values":
+        return refused("Your answers are too long", 413, "too_large")
+    max_bytes = int(details.get("max_bytes") or 0)
+    return refused(too_large(by_name.get(field), max_bytes).message, 413, "too_large")

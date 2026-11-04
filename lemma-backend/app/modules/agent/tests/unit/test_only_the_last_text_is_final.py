@@ -14,6 +14,8 @@ from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel
+from pydantic_ai import Agent as PydanticAIAgent
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import (
     AgentInfo,
@@ -21,10 +23,12 @@ from pydantic_ai.models.function import (
     DeltaToolCalls,
     FunctionModel,
 )
+from pydantic_ai.tools import RunContext
 
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.steered_answers import ANSWERED_BEFORE_STEER
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -150,8 +154,49 @@ async def test_an_answer_the_run_goes_on_past_is_not_the_final_answer(
     assert [draft.text for draft in drafts if not _final(draft)] == [
         "Looks fine to me."
     ]
+    # Sent back for the structured answer, not by the person: no answer of
+    # its own to ship.
+    assert not any(
+        (draft.metadata or {}).get(ANSWERED_BEFORE_STEER) for draft in drafts
+    )
     assert len(finals) == 1, drafts
     assert (finals[0].metadata or {}).get("structured_output") == {"verdict": "ok"}
+
+
+class _SaysMoreAsItAnswers(AbstractCapability[object]):
+    """The person writes again as the run gives its answer: their words are
+    steered in once, the way ``PendingUserMessagesCapability`` steers them."""
+
+    def __init__(self) -> None:
+        self.said = False
+
+    async def before_node_run(self, ctx: RunContext[object], *, node: object) -> object:
+        if not self.said and PydanticAIAgent.is_call_tools_node(node):
+            self.said = True
+            ctx.enqueue("And tomorrow?")
+        return node
+
+
+@pytest.mark.asyncio
+async def test_an_answer_the_person_spoke_over_is_an_answer_all_the_same(
+    monkeypatch,
+) -> None:
+    """The run answered; the person said more before it ended, so it went on
+    and answered that too. The first answer is not the run's final one, but it
+    was given -- marked so it ships as a message of its own."""
+    drafts = await _texts(
+        _scripted(
+            ModelResponse(parts=[TextPart("Sunny today.")]),
+            ModelResponse(parts=[TextPart("Rain tomorrow.")]),
+        ),
+        monkeypatch,
+        capabilities=[_SaysMoreAsItAnswers()],
+    )
+
+    assert [
+        (draft.text, _final(draft), (draft.metadata or {}).get(ANSWERED_BEFORE_STEER))
+        for draft in drafts
+    ] == [("Sunny today.", False, True), ("Rain tomorrow.", True, None)]
 
 
 def test_settling_a_response_leaves_only_a_closing_text_undecided() -> None:

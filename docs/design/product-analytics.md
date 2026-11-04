@@ -1,9 +1,9 @@
 # Product analytics
 
 The plane is built on all four edges: the backend spine (`app/core/origin.py`,
-`app/core/analytics/`, and the subscriber in
-`app/composition/analytics_consumer.py`), the web client
-(`lib/analytics/client.ts`), the CLI (`lemma_cli/cli_core/telemetry.py` and
+`app/core/analytics/`, and the projections in
+`app/modules/analytics/events/`), the web client
+(`lemma-frontend/src/site/analytics/`), the CLI (`lemma_cli/cli_core/telemetry.py` and
 `lemma telemetry`), and Desktop (`desktop/src/telemetry.rs`). The ClickStack sink
 described in §4 is not written yet.
 
@@ -426,13 +426,15 @@ scheduled run, a connector send a member approved. Derived from the raw events,
 computed once, origin recorded so the mix stays visible.
 
 ```text
-landing.viewed → auth.signed_up → organization.created → pod.created
+$pageview(/) → auth.signed_up → organization.created → pod.created
   → [ pod built: table/agent/workflow/app/surface/connector configured ]
   → pod.delivered   ← activation, any origin
 ```
 
-**The loop.** Share→import→remix is the growth engine, and the routes are built
-(`app/s`, `app/import`, `app/remix`), so this is instrumentable today.
+**The loop.** Share→import→remix is the growth engine. The web raises the two
+steps the server cannot see: `share_link.viewed` on the share page (`app/s`)
+and `import.started` from Remix and the GitHub install (`app/remix`,
+`app/import`).
 
 ```text
 bundle.exported → share_link.viewed → import.started → import.completed

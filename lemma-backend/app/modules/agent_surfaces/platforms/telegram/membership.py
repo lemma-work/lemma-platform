@@ -4,8 +4,9 @@
 promoted, blocked in a private chat. Being added to a group is somebody
 bringing the bot in, and the update names them in ``from``
 (``joined_group_event``). Being removed, or put back, stops or resumes the
-group's mirror (``group_membership_updates``), as does a ``left_chat_member``
-service message for anybody else: they are out of the mirror too. Telegram
+group's mirror (``group_membership_updates``). For anybody else a
+``left_chat_member`` service message takes them out of the mirror, and a
+``new_chat_members`` one seats them in it before they say a word. Telegram
 sends service messages whatever the bot's privacy mode.
 """
 
@@ -55,12 +56,15 @@ def joined_group_event(
 
 
 def group_membership_updates(payload: dict[str, object]) -> list[ParsedGroupUpdate]:
-    """The bot taken out of a group or put back, or somebody else leaving it."""
+    """The bot taken out of a group or put back, or somebody else leaving or
+    joining it."""
     update = payload.get("my_chat_member")
     if isinstance(update, dict):
         return _bot_moved(update)
     message = payload.get("message")
-    return _somebody_left(message) if isinstance(message, dict) else []
+    if not isinstance(message, dict):
+        return []
+    return _somebody_left(message) + _somebody_joined(message)
 
 
 def _bot_moved(update: dict[str, object]) -> list[ParsedGroupUpdate]:
@@ -90,14 +94,51 @@ def _somebody_left(message: dict[str, object]) -> list[ParsedGroupUpdate]:
     return [_group_update(GroupUpdateKind.MEMBER_LEFT, chat_id, person=person)]
 
 
+def _somebody_joined(message: dict[str, object]) -> list[ParsedGroupUpdate]:
+    """A ``new_chat_members`` service message: one update per person, never a
+    bot -- this one's own arrival is ``my_chat_member``, and other bots are
+    not people in the group."""
+    chat = _section(message, "chat")
+    chat_id = str(chat.get("id") or "").strip()
+    if chat.get("type") not in _GROUP_TYPES or not chat_id:
+        return []
+    joined = message.get("new_chat_members")
+    updates: list[ParsedGroupUpdate] = []
+    for person in joined if isinstance(joined, list) else []:
+        if not isinstance(person, dict) or person.get("is_bot"):
+            continue
+        person_id = str(person.get("id") or "").strip()
+        if person_id:
+            updates.append(
+                _group_update(
+                    GroupUpdateKind.MEMBER_JOINED,
+                    chat_id,
+                    person=person_id,
+                    name=_name(person),
+                )
+            )
+    return updates
+
+
+def _name(person: dict[str, object]) -> str | None:
+    parts = (person.get("first_name"), person.get("last_name"))
+    name = " ".join(str(part).strip() for part in parts if part)
+    return name or None
+
+
 def _group_update(
-    kind: GroupUpdateKind, chat_id: str, *, person: str | None = None
+    kind: GroupUpdateKind,
+    chat_id: str,
+    *,
+    person: str | None = None,
+    name: str | None = None,
 ) -> ParsedGroupUpdate:
     return ParsedGroupUpdate(
         platform=SurfacePlatform.TELEGRAM.value,
         kind=kind,
         external_channel_id=chat_id,
         external_user_id=person,
+        display_name=name,
     )
 
 
