@@ -26,8 +26,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0065_schedule_reset_and_author"
-REVISION = "0066_outcome_weeks"
+BEFORE = "0066_session_proved_identity"
+REVISION = "0067_outcome_weeks"
 
 MEASURED = {
     "outcome": {

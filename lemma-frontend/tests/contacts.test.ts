@@ -5,6 +5,7 @@ import {
     EMPTY_WIDGET_DRAFT,
     answerChoices,
     contactName,
+    groupsNote,
     contactSubline,
     everyPage,
     outreachProblem,
@@ -102,6 +103,11 @@ test("the cap says what was spent, with or without one", () => {
 
 test("the three answers are offered in order of who gets in", () => {
     assert.deepEqual(answerChoices("Kit").map((choice) => choice.value), ["off", "known", "anyone"]);
+});
+
+test("each answer is said of private messages, and groups are left to their own switch", () => {
+    for (const choice of answerChoices("Kit")) assert.match(choice.note, /privately/);
+    assert.equal(groupsNote("Kit"), "Groups follow “Answer people outside Kit”.");
 });
 
 test("a list is followed to its last page, and a page that repeats ends it", async () => {

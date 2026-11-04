@@ -21,14 +21,14 @@ The downgrade drops both.
 `TABLE` is the table's DDL exactly as the model compiles it, pinned to it by
 ``datastore/tests/unit/test_outcome_weeks_ddl_matches_models``.
 
-Revision ID: 0066_outcome_weeks
-Revises: 0065_schedule_reset_and_author
+Revision ID: 0067_outcome_weeks
+Revises: 0066_session_proved_identity
 """
 
 from alembic import op
 
-revision = "0066_outcome_weeks"
-down_revision = "0065_schedule_reset_and_author"
+revision = "0067_outcome_weeks"
+down_revision = "0066_session_proved_identity"
 branch_labels = None
 depends_on = None
 

@@ -211,15 +211,28 @@ class InboundAcceptor:
         from app.modules.agent_surfaces.services.telegram_group_join import (
             claim_telegram_group_join,
         )
+        from app.modules.agent_surfaces.services.telegram_identity_link_claim import (
+            claim_telegram_identity_link,
+        )
 
         request = delivery.request
+        text = str((request.payload.get("message") or {}).get("text") or "")
         if (
             verdict.message
             and platform is SurfacePlatform.TELEGRAM
-            and "/start"
-            in str((request.payload.get("message") or {}).get("text") or "")
-            and await claim_telegram_group_join(
-                self.uow_factory, request, adapters=self.adapters
+            and "/start" in text
+            and (
+                # A member proving their account, in a private chat: before
+                # onboarding or routing can take it for a question.
+                (
+                    "lk_" in text
+                    and await claim_telegram_identity_link(
+                        self.uow_factory, request, adapters=self.adapters
+                    )
+                )
+                or await claim_telegram_group_join(
+                    self.uow_factory, request, adapters=self.adapters
+                )
             )
         ):
             return True

@@ -1,6 +1,7 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { SourceUpdateRequest } from "../openapi_client/models/SourceUpdateRequest.js";
 import type { WhatsAppGroupRequest } from "../openapi_client/models/WhatsAppGroupRequest.js";
+import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 import { ChannelSourcesService } from "../openapi_client/services/ChannelSourcesService.js";
 import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
 
@@ -16,6 +17,13 @@ import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
  * groups, it cannot join one; it comes back `pending` until WhatsApp confirms
  * it) and `telegramLink` (a one-use, hour-long link that adds the bot to a
  * group the caller picks).
+ *
+ * And the caller proving which Telegram account is theirs, so the bot knows
+ * them in its groups: `identityLink` mints a ten-minute code to open in a
+ * private chat with the bot -- for somebody in a group the pod took for a
+ * stranger (`contactId`), it works only from that account -- `identityLinkStatus`
+ * says whether it was opened and from which account, and the caller then
+ * confirms or declines that account. Nothing is bound until they confirm.
  */
 export class ChannelSourcesNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
@@ -74,6 +82,36 @@ export class ChannelSourcesNamespace {
   telegramLink(podId: string, surfaceName: string) {
     return this.client.request(() =>
       ChannelSourcesService.channelTelegramLinkCreate(podId, { surface_name: surfaceName }),
+    );
+  }
+
+  /** A ten-minute code proving, once confirmed, a Telegram account is the
+   *  caller's. With `contactId`, only that person's account may open it. */
+  identityLink(podId: string, surfaceId: string, options: { contactId?: string } = {}) {
+    return this.client.request(() =>
+      AgentSurfacesService.telegramIdentityLinkCreate(podId, {
+        surface_id: surfaceId,
+        contact_id: options.contactId ?? null,
+      }),
+    );
+  }
+
+  /** Whether the caller's code was opened, and from which account. */
+  identityLinkStatus(podId: string, code: string) {
+    return this.client.request(() => AgentSurfacesService.telegramIdentityLinkGet(podId, code));
+  }
+
+  /** The account that opened the code is the caller's: bind it. */
+  confirmIdentityLink(podId: string, code: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.telegramIdentityLinkConfirm(podId, code),
+    );
+  }
+
+  /** The account that opened the code is not the caller's: spend it. */
+  declineIdentityLink(podId: string, code: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.telegramIdentityLinkDecline(podId, code),
     );
   }
 }

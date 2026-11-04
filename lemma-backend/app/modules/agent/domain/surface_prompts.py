@@ -292,10 +292,7 @@ _WITHHELD_BECAUSE = {
         "answers an agent gave other members, made with their access, which "
         "the person you are answering may not read"
     ),
-    "MEMBER_IN_GROUP": (
-        "from people outside the pod, answers to them, or notes members kept "
-        "out of the chat"
-    ),
+    "MEMBER_IN_GROUP": "notes members kept out of the chat",
     "CONTACT": "that the person you are answering may not read",
     "PLATFORM": "from people outside the pod, or answers to them",
 }
