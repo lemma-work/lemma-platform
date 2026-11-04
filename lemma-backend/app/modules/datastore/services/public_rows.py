@@ -339,6 +339,41 @@ async def add_visitor_row(
         await uow.commit()
 
 
+async def _validate_as(
+    uow,
+    user_id: UUID,
+    opened: OpenTable,
+    row: dict[str, object],
+) -> None:
+    """Run the same authorization and schema validation as an insert, without writing."""
+    try:
+        ctx = await create_authorization_data_service(uow).build_user_context(
+            user_id=user_id, pod_id=opened.pod_id
+        )
+    except DomainError as exc:
+        raise PublicRowsClosed(opened.name) from exc
+    token = set_current_context(ctx)
+    try:
+        table = await build_table_service(uow).get_table(
+            opened.pod_id, opened.name, ctx
+        )
+        table_ctx = TableContext.from_table_entity(
+            table,
+            get_schema_manager().get_schema_name(opened.pod_id),
+            events_enabled=True,
+            outside_actor="visitor",
+        )
+        _check(table_ctx, opened, row)
+    except DatastoreAccessDeniedError as exc:
+        raise PublicRowsClosed(opened.name) from exc
+    except (DatastoreValidationError, DatastoreConflictError) as exc:
+        raise PublicRowRefused(UNSAVED) from exc
+    except DomainError as exc:
+        raise PublicRowsClosed(opened.name) from exc
+    finally:
+        reset_current_context(token)
+
+
 async def _insert_as(
     uow,
     user_id: UUID,
