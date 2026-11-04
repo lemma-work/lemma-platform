@@ -121,6 +121,18 @@ requests and answer -- so the read is bounded and moves in elision's blocks.
 A run answering a line in Lemma answers the lines whose words it read
 (`services/channel_answers`, recorded in `channel_line_answers`).
 
+A message the person sends while a run is finishing is steered into it
+(`capabilities/pending_user_messages`), and the run goes on to answer that
+too. The answer it had already written is then not the run's final answer --
+its output is still the last -- but it was an answer: the pydantic-ai node
+loop marks it `answered_before_steer` when the request that sent the run on
+carries the person's words rather than a retry (`domain/steered_answers`).
+`contracts/run_replies` reads up to five of them, and each is a line of its own
+ahead of the final answer, in Lemma and on a platform (`run:{run}:{n}`, the
+final answer staying `run:{run}`). Such a line rides none of the run's files,
+finishes no live stream, and is not sent at all where the run's Slack stream
+already shows it.
+
 Three kinds of message belong to no run and still reach the model, placed by
 sequence among the runs around them: notifications; what somebody outside
 the pod said while a person had them, with whatever they were told instead
