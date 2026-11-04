@@ -2,12 +2,16 @@
 
 A member's run in a group reads what people outside the pod said there, and
 its conversation is marked while it does (``outside_text``). Anything such a
-run does beyond reading and writing the pod's own records and files -- posting,
-running a function, an agent or a workflow, using a connected account,
-changing what the pod is -- waits for the person it acts for to approve it, the
-way a destructive action does. Their own "add this" stays a write: it is what
-they asked, it is reversible, and every row says who wrote it. Deletes are
-refused before this is asked, by the destructive gate.
+run asks the authorizer for beyond reading and writing the pod's own records
+and files -- running a function, an agent or a workflow, using a connected
+account, changing what the pod is -- waits for the person it acts for to
+approve it, the way a destructive action does. Their own "add this" stays a
+write: it is what they asked, it is reversible, and every row says who wrote
+it. Deletes are refused before this is asked, by the destructive gate.
+
+A line the run posts (``channel_post``) never asks the authorizer -- it checks
+the channel itself -- so nothing here holds it; the run's prompt tells it to
+ask its person before writing to anyone a stranger's line named.
 
 Agents only. A function an approved call runs is the approved action; refusing
 its own steps again would leave it nowhere to ask.
