@@ -14,8 +14,8 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
