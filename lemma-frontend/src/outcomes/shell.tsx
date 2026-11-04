@@ -9,7 +9,7 @@ import { key } from "@/session/storage";
 import { CLASSIC_ROOT, readAddress } from "@/shell/address";
 import { NotYours } from "@/shell/not-yours";
 import { isForbidden } from "@/session/auth-state";
-import { setAnalyticsIdentity, startAnalytics } from "@/site/analytics/client";
+import { useAnalyticsIdentity } from "@/site/analytics/identity";
 import { settingsFromQuery } from "@/site/legacy-address";
 import { isAboutSection, settingsSectionOf } from "@/space/about-sections";
 import { acknowledge, readComposeRequest } from "@/thread/compose-bridge";
@@ -193,6 +193,7 @@ export function OutcomesShell() {
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,
     });
+    useAnalyticsIdentity(source.label === "sample" ? null : { userId: me.data?.id, organizationId: orgId, podId: podOfView(view) });
 
     const pods = useQuery({
         queryKey: ["pods", orgId],
@@ -376,14 +377,6 @@ export function OutcomesShell() {
         try { localStorage.setItem(ORG_KEY, JSON.stringify(elsewhere)); } catch { /* a private window keeps the choice for this tab only */ }
     }, [elsewhere]);
     const stranger = unlisted && linked.isError && isForbidden(linked.error) ? unlisted : null;
-    useEffect(() => {
-        if (source.label === "sample") return;
-        let active = true;
-        void startAnalytics().then(() => {
-            if (active && me.data?.id) setAnalyticsIdentity({ userId: me.data.id, organizationId: orgId ?? undefined, podId: scoped ?? undefined });
-        });
-        return () => { active = false; };
-    }, [me.data?.id, orgId, scoped]);
 
     /* Somebody who belongs nowhere yet: the workspace's own way in, with
        their invitations, the organizations they could join, or a new one. */

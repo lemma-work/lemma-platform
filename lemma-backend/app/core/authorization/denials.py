@@ -61,6 +61,12 @@ def denial_message(permission_id: str, decision: "AuthorizationDecision") -> str
             f"workload never exceeds its invoker. Give that person the "
             f"permission, or run this as someone who already has it."
         )
+    if decision.reason_code == "OUTSIDE_TEXT_REQUIRES_APPROVAL":
+        # No grant answers this one, so the grant hint below would mislead.
+        return (
+            f"{message} — this run is reading what people outside the pod wrote, "
+            f"so the person it acts for approves this first."
+        )
     if decision.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT":
         spec = _GRANT_COMMAND_BY_TYPE.get(resource_type)
         if spec and decision.resource_name:

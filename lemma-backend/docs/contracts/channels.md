@@ -37,6 +37,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | `channel.message.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | Edit Message |
 | `channel.read` | POST | `/pods/{pod_id}/channels/{channel_id}/read` | Mark Read |
 | `channel.search` | GET | `/pods/{pod_id}/search` | Search |
+| `channel.table_grant.list` | GET | `/pods/{pod_id}/channels/{channel_id}/table-grants` | List Table Grants |
+| `channel.table_grant.remove` | DELETE | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | Remove Table Grant |
+| `channel.table_grant.set` | PUT | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | Set Table Grant |
 | `channel.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}` | Update Channel |
 
 <!-- /generated:operations -->
