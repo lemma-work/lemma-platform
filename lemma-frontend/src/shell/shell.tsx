@@ -1,6 +1,6 @@
 "use client";
 import { docTitle } from "@/library/doc-title";
-import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
+import { useAnalyticsIdentity } from "@/site/analytics/identity";
 import { settingsFromQuery } from "@/site/legacy-address";
 
 import { WorkspaceLoading } from "@/shell/workspace-loading";
@@ -417,18 +417,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     useRemember(["pod-access", podId], linkedPod.data, linkedPod.dataUpdatedAt);
     const remembered = orgs.data?.some((candidate) => candidate.id === orgId) ? orgId : null;
     const activeOrgId = linkedPod.data?.orgId ?? remembered ?? orgs.data?.[0]?.id ?? null;
-    useEffect(() => {
-        if (source.label === "sample") return;
-        let active = true;
-        void startAnalytics().then(() => {
-            if (active && me.data?.id) setAnalyticsIdentity({
-                userId: me.data.id,
-                organizationId: activeOrgId ?? undefined,
-                podId: podId ?? undefined,
-            });
-        });
-        return () => { active = false; };
-    }, [me.data?.id, activeOrgId, podId]);
+    useAnalyticsIdentity(source.label === "sample" ? null : { userId: me.data?.id, organizationId: activeOrgId, podId });
     const activeOrg = orgs.data?.find((candidate) => candidate.id === activeOrgId) ?? null;
 
     const pods = useQuery({

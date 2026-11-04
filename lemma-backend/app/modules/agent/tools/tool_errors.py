@@ -38,10 +38,12 @@ from app.core.domain.errors import DomainError
 # call through ``request_approval`` instead of treating it as a hard failure.
 # DESTRUCTIVE_ACTION_REQUIRES_APPROVAL is the destructive-action gate — the
 # user's APPROVE_FOR_SESSION decision unlocks the action type for the rest of
-# the conversation.
+# the conversation. OUTSIDE_TEXT_REQUIRES_APPROVAL is the same question asked
+# of anything an agent does while it reads what people outside the pod wrote.
 APPROVAL_CODES = {
     "MISSING_WORKLOAD_RESOURCE_GRANT",
     "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+    "OUTSIDE_TEXT_REQUIRES_APPROVAL",
     "AUTH_REQUIRED",
 }
 
