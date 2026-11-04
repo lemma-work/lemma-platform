@@ -712,7 +712,9 @@ _NAME_TO_MODULE = {
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramAccountItem': 'telegram_account_item',
     'TelegramAccountResponse': 'telegram_account_response',
+    'TelegramAccountsResponse': 'telegram_accounts_response',
     'TelegramLinkRequest': 'telegram_link_request',
     'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
@@ -1521,7 +1523,9 @@ if TYPE_CHECKING:
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_account_item import TelegramAccountItem
     from .telegram_account_response import TelegramAccountResponse
+    from .telegram_accounts_response import TelegramAccountsResponse
     from .telegram_link_request import TelegramLinkRequest
     from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
@@ -2343,7 +2347,9 @@ __all__ = [
     'TableOpeningResponse',
     'TableResponse',
     'TableSummaryResponse',
+    'TelegramAccountItem',
     'TelegramAccountResponse',
+    'TelegramAccountsResponse',
     'TelegramLinkRequest',
     'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',

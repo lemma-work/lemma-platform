@@ -8,6 +8,7 @@ import { hasToken, lemma } from "@/session/client";
 import { useSession } from "@/session/session";
 import { displayName } from "@/session/profile-edit";
 import { ProfilePanel } from "@/session/profile-panel";
+import { LinkTelegramEntry } from "@/session/link-telegram";
 import { AppearancePanel } from "@/session/theme";
 import { UsagePanel } from "@/usage/usage-panel";
 import { PlanSection } from "@/billing/plan-section";
@@ -287,6 +288,11 @@ export function SettingsModal({
                                     </div>
                                     <ProfilePanel user={user.data} />
                                 </>}
+                                {/* Beside the profile, not in its form: it proves an
+                                    account rather than saving a field. The sample has
+                                    no profile to edit but does have channels, so it
+                                    links there too. */}
+                                {(sample || user.data) && <LinkTelegramEntry />}
                                 {!sample && (
                                     <div className="settings-leave">
                                         <button
