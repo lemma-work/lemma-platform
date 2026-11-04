@@ -44,7 +44,7 @@ URL = "/public/web/pk_test/rows/with-files?table=applications"
 class _Chat:
     def __init__(self, *, admit_error=None) -> None:
         self.admit_error = admit_error
-        self.saved: list[dict] = []
+        self.saved: list[dict[str, object]] = []
 
     async def admit_row(self, widget, visitor, *, table, address):
         if self.admit_error is not None:
