@@ -36,17 +36,14 @@ export function DeleteAccountForm({ email, onCancel }: { email: string; onCancel
         try {
             await lemma().users.deleteAccount({ confirm_email: typed.trim() });
         } catch (problem) {
-            const refused = deletionRefusal(problem);
-            if (!refused.alreadyDeleted) {
-                setRefusal(refused);
-                setBusy(false);
-                return;
-            }
+            setRefusal(deletionRefusal(problem));
+            setBusy(false);
+            return;
         }
         /* The account is gone: write that down for the page this lands on,
            then forget the person in this browser whatever the server says
            about a session it has already ended. */
-        noteDeletionConfirmed(window.sessionStorage);
+        noteDeletionConfirmed(() => window.sessionStorage);
         await session.leave(DELETED_PATH);
     }
 

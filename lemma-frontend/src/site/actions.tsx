@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/session/session";
 import { hasApiUrl, lemma } from "@/session/client";
 import { DeleteAccountForm } from "@/session/delete-account";
-import { isDeletionConfirmed } from "@/session/account-deletion";
+import { takeDeletionNote } from "@/session/account-deletion";
 import { source as data } from "@/data";
 import { afterNewOrganization, newOrganizationLink } from "@/auth/redirects";
 import type { ActionProps } from "./action-host";
@@ -51,8 +51,13 @@ function SignedIn(props: ActionProps & { signOut: () => Promise<void> }) {
         );
     return <Remix {...props} />;
 }
+/* Read once per document load and remembered: the note is taken when read,
+   and a later render — or a development double render — must get the same
+   answer as the first. */
+let deletedOnArrival: boolean | null = null;
 function deletedJustNow(): boolean {
-    return isDeletionConfirmed(window.location.search, window.sessionStorage);
+    deletedOnArrival ??= takeDeletionNote(window.location.search, () => window.sessionStorage);
+    return deletedOnArrival;
 }
 function AccountDeleted() {
     return (

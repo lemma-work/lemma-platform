@@ -407,9 +407,13 @@ are shown with a retry action rather than an indefinite loading message.
   belongs to, shown as by "Deleted user".
 - When a person deletes their account, the system shall delete every
   organization nobody else is in, with its pods.
-- If a deletion fails partway, then the system shall either finish it or leave
-  the account, its memberships and its data exactly as they were — never a
-  person half-removed.
+- If a deletion fails before the account is deleted, then the system shall
+  leave the account, its memberships and its data exactly as they were.
+- Once the account is deleted, the system shall keep retrying what follows from
+  it — ending sessions, disconnecting accounts, letting go of paired computers
+  and proved chat accounts — until it is done. Anything that still cannot be
+  finished shall stay visible to the operator, who can run it again. It shall
+  never be dropped silently.
 
 **Contracts:** `user.current.delete`
 

@@ -16,25 +16,39 @@ export const DELETED_PATH = "/delete-account?deleted=1";
  *  The address alone is not proof — anybody can open it, signed in or not,
  *  and would be told an account that still exists has been deleted. So the
  *  page says so only when this tab also carries the note, which it writes
- *  after the answer and before it navigates. Per tab, like the answer was. */
+ *  after the answer and before it navigates, and which the page takes away
+ *  when it reads it: the welcome belongs to that one arrival. */
 const DELETION_NOTE = "lemma:account-deleted";
 
 interface NoteStore {
     getItem(key: string): string | null;
     setItem(key: string, value: string): void;
+    removeItem(key: string): void;
 }
+
+/** Where the note is kept. A getter, because reaching `sessionStorage` at all
+ *  throws where the browser blocks storage — and that must not stop the page,
+ *  nor a deletion that has already happened from landing. */
+type NoteStoreOf = () => NoteStore;
 
 /** Note that the API confirmed the deletion. A tab that cannot store it
  *  lands on the ordinary page instead, which is wrong only in its welcome. */
-export function noteDeletionConfirmed(store: NoteStore): void {
-    try { store.setItem(DELETION_NOTE, "1"); } catch { /* no storage */ }
+export function noteDeletionConfirmed(storeOf: NoteStoreOf): void {
+    try { storeOf().setItem(DELETION_NOTE, "1"); } catch { /* no storage */ }
 }
 
-/** Whether to show "your account has been deleted": the address says so,
- *  and this tab was the one that deleted it. */
-export function isDeletionConfirmed(search: string, store: NoteStore): boolean {
+/** Whether to say "your account has been deleted": the address says so and
+ *  this tab was the one that deleted it. Takes the note, so it is said once. */
+export function takeDeletionNote(search: string, storeOf: NoteStoreOf): boolean {
     if (new URLSearchParams(search).get("deleted") !== "1") return false;
-    try { return store.getItem(DELETION_NOTE) === "1"; } catch { return false; }
+    try {
+        const store = storeOf();
+        const noted = store.getItem(DELETION_NOTE) === "1";
+        store.removeItem(DELETION_NOTE);
+        return noted;
+    } catch {
+        return false;
+    }
 }
 
 /** What deleting an account does, one sentence each. */
@@ -58,9 +72,6 @@ export interface DeletionRefusal {
     message: string;
     /** The organizations that need another owner first, when that is the reason. */
     organizations: string[];
-    /** The account was already gone — a second click, a second tab. Not a
-     *  failure: the person should be shown that it is deleted. */
-    alreadyDeleted: boolean;
 }
 
 interface Problem {
@@ -88,31 +99,32 @@ function namesIn(details: unknown): string[] {
 export function deletionRefusal(problem: unknown): DeletionRefusal {
     const { statusCode, code, message, details } = (problem ?? {}) as Problem;
     const said = typeof message === "string" && message.trim() ? message.trim() : null;
+    /* Not proof of a deletion: the same refusal answers an account that was
+       switched off. Either way it can no longer be used, and the person is
+       told that much and no more. */
     if (code === "ACCOUNT_INACTIVE") {
-        return { message: "This account has already been deleted.", organizations: [], alreadyDeleted: true };
+        return { message: "This account can no longer be used. It may already have been deleted — sign in again to check.", organizations: [] };
     }
     if (statusCode === 401) {
-        return { message: "Your session has ended. Sign in again, then try again.", organizations: [], alreadyDeleted: false };
+        return { message: "Your session has ended. Sign in again, then try again.", organizations: [] };
     }
     if (code === "ACCOUNT_DELETION_CONFIRMATION_MISMATCH") {
-        return { message: "That is not this account’s email address. Type it exactly as shown.", organizations: [], alreadyDeleted: false };
+        return { message: "That is not this account’s email address. Type it exactly as shown.", organizations: [] };
     }
     if (code === "ACCOUNT_DELETION_SOLE_OWNER") {
         return {
             message: said ?? `Make someone else an owner of your ${ORG} first.`,
             organizations: namesIn(details),
-            alreadyDeleted: false,
         };
     }
     if (said && typeof statusCode === "number" && statusCode >= 400 && statusCode < 500) {
-        return { message: said, organizations: [], alreadyDeleted: false };
+        return { message: said, organizations: [] };
     }
     if (code === "ACCOUNT_DELETION_UNAVAILABLE" && said) {
-        return { message: said, organizations: [], alreadyDeleted: false };
+        return { message: said, organizations: [] };
     }
     return {
         message: "We couldn’t confirm your account was deleted. Check your connection and try again.",
         organizations: [],
-        alreadyDeleted: false,
     };
 }
