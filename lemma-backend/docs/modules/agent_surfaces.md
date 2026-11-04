@@ -277,10 +277,21 @@ observer renders them on the surface and a submission resumes the run.
   share their own contact; proven, the account stays resolved whatever their
   handle later says. A managed bot's creator is not bound by opening the setup
   link -- a link can leak -- and is recognised the same way, by a contact share
-  in the new bot. Someone with no verified number cannot be recognised on a
-  pod's own bot: they verify their number in account settings first, or sign up
-  through the shared bot, whose email-code step verifies the contact they
-  share. A number a profile merely lists does not match by
+  in the new bot. Someone with no verified number proves their Telegram account
+  from their signed-in Lemma session instead (`services/telegram_identity_link`,
+  `/pods/{pod_id}/telegram-identity-links`): a one-time, ten-minute code opened
+  as `/start lk_<code>` in a private chat with the bot, then confirmed back in the
+  same session after it shows them the account that opened it. Nothing binds
+  before that confirm, so a forwarded link gives whoever opened it nothing; a
+  code minted from a group's people for somebody the pod took for a stranger
+  ("This is me") works only from that person's account and is spent by any
+  other. The binding (`surface_verified_identities.session_proved_at`) holds on
+  every bot, without a phone and through a phone change, and the group log
+  reads it as well as the cache, so the member's lines in groups are theirs.
+  When somebody new speaks in a Telegram group and their first name is a
+  member's, that member is told once, in their own chat, to check
+  (`services/link_nudges`) -- the name decides who is asked, never who anybody
+  is. A number a profile merely lists does not match by
   default: it would hand the number's real owner's messages -- and the agent's
   replies, sent from the shared number -- to whoever typed it. That sender goes
   through signup instead. A deployment can accept that risk with
@@ -522,10 +533,23 @@ is answered *for the pod*, in a group the pod has opened to them.
   recent lines as background, chosen by whose access it acts with
   (`group_log.group_background`): a contact's run reads what the channel lets
   a contact read -- never an answer made with a member's access; a member's run
-  is not shown what people outside the pod wrote, the bot's answers to them,
-  or members' notes -- on Slack, lines from another workspace are left out the
-  same way. What is left out is counted. Each line is one quoted line however
-  many it spanned. Nothing is deleted automatically. The run's message keeps
+  is shown everything said in the group, what people outside the pod wrote
+  marked `(not in this pod)` and fenced as information rather than a request,
+  and not members' notes. On Slack, read live, a line is marked by whether the
+  pod resolves its author to one of its members (`live_group_roster.live_members`),
+  not by Slack's own mark, which only names another company's lines; when that
+  cannot be read, every line but the asker's is marked. What is left out is
+  counted. Each line is one quoted line however many it spanned. A member's
+  run that reads such a line marks its conversation, and while it is marked
+  the authorizer asks the member before the run does anything beyond reading
+  and writing the pod's own records and files (`OUTSIDE_TEXT_REQUIRES_APPROVAL`,
+  `core/authorization/outside_text.py`, set by `agent/services/outside_text.py`
+  as a turn starts, when a steered message brings a background, and when
+  `channel_read`/`channel_search` return a stranger's line). It covers every
+  path the authorizer sees -- in-process tools, MCP, the sandbox's `lemma` CLI,
+  approved re-runs -- and not what does not ask it: `channel_post`, a raw
+  network call from the sandbox, Agent Host's native tools, or the answer
+  itself, which is why the prompt says it too. Nothing is deleted automatically. The run's message keeps
   which lines, not what they said (`services/run_background.py`): they are read
   from the timeline as its prompt is built, so an edit or a forgotten contact
   reaches it. A platform's history read live keeps the lines the pod heard as

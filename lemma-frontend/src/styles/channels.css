@@ -248,6 +248,9 @@
     font-size: 13px;
     color: var(--ink-2);
 }
+.gsheet__lead {
+    margin: 0;
+}
 .gsheet__steps {
     display: flex;
     flex-direction: column;
@@ -391,6 +394,8 @@ code.gsheet__code-text {
     width: 100%;
     height: 52px;
     font-size: 15px;
+    /* Also a link that opens another app (Telegram), drawn as the button. */
+    text-decoration: none;
 }
 .gsheet__status {
     display: flex;

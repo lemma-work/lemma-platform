@@ -89,7 +89,7 @@ from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedup
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
-from app.modules.agent_surfaces.services.group_log import RosterReads, roster_reads
+from app.modules.agent_surfaces.services import live_group_roster as roster
 from app.modules.agent_surfaces.services.run_background import (
     reply_all_audience,
     run_background,
@@ -138,7 +138,7 @@ class SurfaceTurnStarter:
         pooled_numbers: PooledNumberReader | None = None,
         ingest_memo: AttachmentIngestMemo | None = None,
         reprepare: Reprepare | None = None,
-        roster_reads: RosterReads = roster_reads,
+        roster_reads: roster.RosterReads = roster.roster_reads,
         write_scope: WriteScope | None = None,
         reply_sink: ReplySink | None = None,
         channel_lines: ChannelLinesFor = ChannelLinesInDatabase,

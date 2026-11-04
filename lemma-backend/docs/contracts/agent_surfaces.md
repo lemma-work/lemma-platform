@@ -63,5 +63,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | `surface.webhook.verify` | GET | `/surfaces/webhooks/{platform}` | Verify surface webhook using the platform callback URL |
 | `surface.webhook.verify_surface` | GET | `/surfaces/{surface_id}/webhook` | Verify surface webhook using a surface-level callback URL |
 | `surface.webhook.verify_whatsapp_number` | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | Verify a pooled WhatsApp number's own callback URL |
+| `telegram_identity_link.confirm` | POST | `/pods/{pod_id}/telegram-identity-links/{code}/confirm` | Confirm Identity Link |
+| `telegram_identity_link.create` | POST | `/pods/{pod_id}/telegram-identity-links` | Create Identity Link |
+| `telegram_identity_link.decline` | POST | `/pods/{pod_id}/telegram-identity-links/{code}/decline` | Decline Identity Link |
+| `telegram_identity_link.get` | GET | `/pods/{pod_id}/telegram-identity-links/{code}` | Get Identity Link |
 
 <!-- /generated:operations -->
