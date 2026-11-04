@@ -3136,3 +3136,51 @@ button.chfile:disabled {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* A group's tables, given to its people from outside the space. */
+.tgrants {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 0 8px;
+    padding: 0;
+    list-style: none;
+}
+.tgrants__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.tgrants__text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.tgrants__text strong {
+    font-weight: 500;
+}
+.tgrants__text small {
+    color: var(--ink-2);
+}
+.tgrants__give {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 8px;
+}
+.tgrants__pick {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.tgrants__columns {
+    width: 100%;
+    border-collapse: collapse;
+}
+.tgrants__columns th,
+.tgrants__columns td {
+    padding: 4px 8px 4px 0;
+    font-weight: 500;
+    text-align: left;
+}

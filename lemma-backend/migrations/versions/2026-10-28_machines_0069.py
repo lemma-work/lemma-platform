@@ -34,14 +34,14 @@ default machine of whoever the run acts for.
 `TABLES` is each table's DDL exactly as the models compile it, pinned to them
 by ``workspace/tests/unit/test_machine_ddl_matches_models``.
 
-Revision ID: 0068_machines
-Revises: 0067_contact_became_member
+Revision ID: 0069_machines
+Revises: 0068_channel_table_grants
 """
 
 from alembic import op
 
-revision = "0068_machines"
-down_revision = "0067_contact_became_member"
+revision = "0069_machines"
+down_revision = "0068_channel_table_grants"
 branch_labels = None
 depends_on = None
 
