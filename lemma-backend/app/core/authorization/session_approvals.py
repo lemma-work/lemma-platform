@@ -36,6 +36,7 @@ from uuid import UUID
 from redis.exceptions import RedisError
 
 from app.core.config import settings
+from app.core.authorization.outside_text import OUTSIDE_TEXT_REQUIRES_APPROVAL
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -225,10 +226,16 @@ async def denied_permissions(
 
 
 #: The refusals a person can answer by approving: a grant the workload lacks,
-#: or a destructive action no workload may take unasked. Anything else -- the
-#: person's own ceiling, a scope the token was narrowed to -- no approval lifts.
+#: a destructive action no workload may take unasked, or an action an agent
+#: takes while it reads what people outside the pod wrote (``outside_text``).
+#: Anything else -- the person's own ceiling, a scope the token was narrowed
+#: to -- no approval lifts.
 APPROVABLE_REFUSALS = frozenset(
-    {"MISSING_WORKLOAD_RESOURCE_GRANT", "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"}
+    {
+        "MISSING_WORKLOAD_RESOURCE_GRANT",
+        "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+        OUTSIDE_TEXT_REQUIRES_APPROVAL,
+    }
 )
 
 
