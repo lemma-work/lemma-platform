@@ -1,7 +1,9 @@
-"""What Slack says about a channel itself: who left it, and what it now is.
+"""What Slack says about a channel itself: who came and went, and what it now is.
 
 A mirrored Slack channel's members in Lemma are the pod's members Slack shows
-are there, so a person leaving it leaves the mirror (``member_left_channel``).
+are there, so a person leaving it leaves the mirror (``member_left_channel``),
+and a person joining it is seated there before they speak
+(``member_joined_channel``) -- once the pod knows who they are.
 The bot being taken out (``channel_left`` for a public channel, ``group_left``
 for a private one, or a ``member_left_channel`` naming the bot itself) stops
 the mirror; being invited back (``member_joined_channel`` naming the bot)
@@ -22,6 +24,7 @@ from app.modules.agent_surfaces.domain.groups import GroupUpdateKind, ParsedGrou
 from app.modules.agent_surfaces.platforms.common import payload_section, payload_text
 
 _BOT_LEFT = frozenset({"channel_left", "group_left"})
+_PEOPLE_MOVING = frozenset({GroupUpdateKind.MEMBER_LEFT, GroupUpdateKind.MEMBER_JOINED})
 _BECAME_PRIVATE = frozenset({"channel_converted_to_private"})
 
 #: Every event type read here, for the classifier to send to this path.
@@ -75,7 +78,7 @@ def slack_group_updates(payload: Mapping[str, object]) -> list[ParsedGroupUpdate
             tenant_id=payload_text(envelope, "team_id").strip() or None,
             external_user_id=(
                 payload_text(event, "user").strip() or None
-                if kind is GroupUpdateKind.MEMBER_LEFT
+                if kind in _PEOPLE_MOVING
                 else None
             ),
         )
@@ -92,8 +95,9 @@ def _kind(
             return None
         return GroupUpdateKind.BOT_LEFT if is_bot else GroupUpdateKind.MEMBER_LEFT
     if event_type == "member_joined_channel":
-        # A colleague joining is not news here: they are seated when they speak.
-        return GroupUpdateKind.BOT_RETURNED if is_bot else None
+        if not user:
+            return None
+        return GroupUpdateKind.BOT_RETURNED if is_bot else GroupUpdateKind.MEMBER_JOINED
     if event_type in _BOT_LEFT:
         return GroupUpdateKind.BOT_LEFT
     if event_type in _BECAME_PRIVATE:

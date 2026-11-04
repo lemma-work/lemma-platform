@@ -26,11 +26,23 @@ is listed with what moves it in
 `tests/unit/test_merge_covers_every_contact_key.py`: a new one fails it until
 the merge moves it too.
 
+A contact can also turn out to be one of the pod's **members**: somebody whose
+platform account Lemma did not know, who then proved it theirs from a signed-in
+Lemma session (`agent_surfaces`' `telegram_identity_link`). In each pod they
+are a member of, the contact holding that handle loses it
+(`services/member_folds`, `fold_into_member`); one that was nothing but that
+handle is marked `merged_into_user_id`, holds nothing, and is no longer listed
+or counted towards the contacts cap, and `ContactBecameMember` moves its lines
+and seats in the pod's groups onto the member (`channels`). An agent's answer to
+it keeps saying it was made for somebody outside, from what is Public. A
+contact with other handles keeps them and stays a contact, and the pod's
+administrators are told. Only proof reaches this: a name never does.
+
 ## What it owns
 
 | Table | Meaning |
 | --- | --- |
-| `contacts` | One person per pod, and the name to address them by. `merged_into_id` points a contact that turned out to be another at the one it became (always one hop); `answered_at` is when an agent first answered them, which the organization's contact limit counts. Cascades from the pod |
+| `contacts` | One person per pod, and the name to address them by. `merged_into_id` points a contact that turned out to be another at the one it became (always one hop); `merged_into_user_id` at the member it turned out to be (never both); `answered_at` is when an agent first answered them, which the organization's contact limit counts. Cascades from the pod |
 | `contact_identities` | The handles a contact is known by (`PHONE`, `EMAIL`, `TELEGRAM`, `HOST`, `SLACK`, `TEAMS`, `WEB`) and who vouched for each (`strength`: `CHANNEL`, `HOST`, `CODE`, `MEMBER`, `SESSION`). Only `CHANNEL`, `HOST` and `CODE` prove a handle another contact holds. Unique per pod and handle, so one number is one contact whichever bot it writes to. A number a platform vouches for is read as international (WhatsApp's comes without its `+`, which is put back), never in the pod's region; only one a member typed without `+` is tried there first (`domain/handles.py`). A WhatsApp group participant named only by a user id, with no number, has no phone handle. `last_inbound_at` is when they last wrote from it; `unsubscribed_at` when they asked not to be written to there |
 | `visitor_sessions` | One web visitor's chat with one widget, found by a secret only their page holds (stored hashed). Names the visitor's contact from their first write; `strength` says whether anything vouched for them (`ANONYMOUS`, `CODE`, `HOST`). Ends at `expires_at` -- 90 days for an anonymous session, 30 days after last use for a confirmed one, a host session only as long as the host keeps signing -- or when `revoked_at` is set by a reissued widget secret or a forgotten contact. An ended session is swept hourly; its contact and conversation stay |
 | `agent_surface_web_codes` | A one-time code sent to an email a visitor typed, hashed with its session; ten minutes, five guesses counted atomically. Swept once used or expired |
@@ -63,8 +75,9 @@ the merge moves it too.
   `CODE` handles, of the contact a merge led to: what a function opened to
   contacts is told, `domain/verified.py`), `note_inbound`, `note_answered`,
   `answered_contacts_in_organization` and the two unsubscribes, for the surface
-  that resolves a sender and the run that addresses them. `contracts/facts`
-  publishes `ContactMerged`.
+  that resolves a sender and the run that addresses them; `fold_into_member`
+  for a proved account. `contracts/facts` publishes `ContactMerged` and
+  `ContactBecameMember`.
 
 ## What it does not own
 

@@ -101,6 +101,16 @@ EXPECTED = [
         500,
     ),
     (
+        "surface_web_attachment_max_bytes",
+        "SURFACE_WEB_ATTACHMENT_MAX_BYTES",
+        10 * 1024 * 1024,
+    ),
+    (
+        "surface_web_attachments_max_bytes",
+        "SURFACE_WEB_ATTACHMENTS_MAX_BYTES",
+        25 * 1024 * 1024,
+    ),
+    (
         "surface_web_reads_per_widget_per_day",
         "SURFACE_WEB_READS_PER_WIDGET_PER_DAY",
         20000,
