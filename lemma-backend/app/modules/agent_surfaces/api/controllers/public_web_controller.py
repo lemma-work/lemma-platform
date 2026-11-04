@@ -495,6 +495,11 @@ async def web_add_row(
         _opened, contacts_only = await chat.visitor_table(widget, table=body.table)
         if contacts_only:
             raise refused("Confirm your email first", 403, "needs_contact")
+        # Reject invalid answers before opening a session or creating a contact.
+        # The insert repeats validation in its own transaction to handle races.
+        await chat.validate_visitor_row(
+            widget, table=body.table, answers=body.values, vouched=False
+        )
         started = await visitors.start_visitor_session(
             widget,
             secret=None,
