@@ -231,6 +231,33 @@ async def _github_schedule(
 
 
 @pytest.mark.asyncio
+async def test_case_insensitive_github_source_uses_github_body_limit(
+    authenticated_client: AsyncClient,
+):
+    # GitHub permits 25 MB webhook payloads. A body above the ordinary 1 MiB
+    # limit must still reach the GitHub verifier when the URL casing differs.
+    payload = _payload()
+    payload["padding"] = "x" * 1_100_000
+    raw = json.dumps(payload).encode()
+    signature = "sha256=" + hmac.new(
+        WEBHOOK_SECRET.encode(), raw, hashlib.sha256
+    ).hexdigest()
+
+    response = await authenticated_client.post(
+        "/webhooks/GitHub",
+        content=raw,
+        headers={
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": signature,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "case-insensitive-source",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
 async def test_a_signed_pull_request_delivery_starts_one_run(
     authenticated_client: AsyncClient,
     fixed_test_user,
