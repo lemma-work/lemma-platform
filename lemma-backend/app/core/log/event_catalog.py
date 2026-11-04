@@ -629,6 +629,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.telegram_identity_link.proved.observed': EventSpec('info', frozenset({'surface_id'})),
     'agent_surfaces.telegram_identity_link.reply_failed.observed': EventSpec('info', frozenset({'surface_id'})),
     'agent_surfaces.telegram_identity_link.store_unavailable.degraded': EventSpec('warning', frozenset()),
+    'agent_surfaces.telegram_identity_link.unlinked.observed': EventSpec('info', frozenset()),
     'agent_surfaces.telegram_manager.bot_branding_best_effort': EventSpec('debug', frozenset({'method'})),
     'agent_surfaces.telegram_manager.bot_profile_photo_best_effort': EventSpec('debug', frozenset()),
     'agent_surfaces.telegram_manager.managed_bot_provisioning_failed': EventSpec('error', frozenset()),

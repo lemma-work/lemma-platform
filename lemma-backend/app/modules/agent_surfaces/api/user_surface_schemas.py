@@ -7,9 +7,10 @@ one pod has configured.
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 
@@ -49,3 +50,17 @@ class SetDefaultSurfaceRequest(BaseModel):
 
     platform: SurfacePlatform
     surface_id: UUID
+
+
+class TelegramAccountItem(BaseModel):
+    """A Telegram account the current user proved from a Lemma session."""
+
+    id: UUID
+    name: str | None = Field(
+        default=None, description="The name Telegram last gave the account."
+    )
+    proved_at: datetime | None = None
+
+
+class TelegramAccountsResponse(BaseModel):
+    items: list[TelegramAccountItem]

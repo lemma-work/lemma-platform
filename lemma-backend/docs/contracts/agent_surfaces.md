@@ -18,6 +18,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.get` | GET | `/pods/{pod_id}/surfaces/{surface_name}` | Get Surface |
 | `agent.surface.list` | GET | `/pods/{pod_id}/surfaces` | List Surfaces |
 | `agent.surface.list_mine` | GET | `/surfaces/me` | List My Surfaces |
+| `agent.surface.list_my_telegram_accounts` | GET | `/surfaces/me/telegram-accounts` | List My Telegram Accounts |
 | `agent.surface.send` | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | Send Surface Message |
 | `agent.surface.set_my_default` | PUT | `/surfaces/me/default` | Set My Default Surface |
 | `agent.surface.setup` | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | Get Surface Setup |
@@ -35,6 +36,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.teams_admin_consent_callback` | GET | `/surfaces/teams/admin-consent/callback` | Teams Admin Consent Callback |
 | `agent.surface.telegram_managed.get` | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | Get Telegram Managed Bot Setup |
 | `agent.surface.telegram_managed.start` | POST | `/pods/{pod_id}/telegram-bot-setups` | Start Telegram Managed Bot Setup |
+| `agent.surface.unlink_my_telegram_account` | DELETE | `/surfaces/me/telegram-accounts/{account_id}` | Unlink My Telegram Account |
 | `agent.surface.update` | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | Update Surface |
 | `agent.web_widget.create` | POST | `/pods/{pod_id}/web-widgets` | Create Widget |
 | `agent.web_widget.delete` | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | Delete Widget |
