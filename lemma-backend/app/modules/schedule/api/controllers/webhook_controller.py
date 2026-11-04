@@ -109,7 +109,9 @@ async def handle_webhook(
             detail="Unsupported or unverified webhook source",
         )
 
-    raw_body = await _read_bounded_body(request, source=source)
+    raw_body = await _read_bounded_body(
+        request, source=plugin.source.strip().lower()
+    )
 
     delivery = WebhookDelivery(
         source=source,
