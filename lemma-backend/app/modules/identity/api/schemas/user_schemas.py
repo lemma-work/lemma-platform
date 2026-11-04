@@ -60,9 +60,9 @@ class UserResponse(BaseSchema):
 class AccountDeletionRequest(BaseSchema):
     """Proof that the person means this account, typed back by them."""
 
+    # Unbounded on purpose: an empty box or an overlong paste is a mismatch
+    # like any other typo, answered with the code clients branch on, not 422.
     confirm_email: str = Field(
-        min_length=1,
-        max_length=320,
         description=(
             "The account's own email address, typed by the person. Compared "
             "case-insensitively; anything else is refused with "
@@ -72,7 +72,11 @@ class AccountDeletionRequest(BaseSchema):
 
 
 class AccountDeletionResponse(BaseSchema):
-    """What deleting the account did. Every session has ended by the time it is read."""
+    """What deleting the account did.
+
+    Every session has ended by the time it is read -- or, if the sign-in
+    service could not be reached just then, ends as soon as it can be.
+    """
 
     deleted: bool = Field(
         description="Always true: the account no longer exists, whether this "

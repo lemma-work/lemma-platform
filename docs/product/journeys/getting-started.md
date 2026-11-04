@@ -407,6 +407,9 @@ are shown with a retry action rather than an indefinite loading message.
   belongs to, shown as by "Deleted user".
 - When a person deletes their account, the system shall delete every
   organization nobody else is in, with its pods.
+- If a deletion fails partway, then the system shall either finish it or leave
+  the account, its memberships and its data exactly as they were — never a
+  person half-removed.
 
 **Contracts:** `user.current.delete`
 

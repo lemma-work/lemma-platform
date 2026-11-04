@@ -35,13 +35,12 @@ class SqlSignupStore:
         return factory()
 
     async def has_any_user(self) -> bool:
-        # A deleted account is a tombstone kept for its foreign keys, not
-        # somebody: an installation whose only person deleted themselves has
-        # nobody to invite anyone, so its next sign-up is the first again.
+        # Deleted accounts count, as deactivated ones do. An installation that
+        # has ever had a person is not a new one: an invite-only installation
+        # whose people all deleted themselves stays closed until its operator
+        # opens it, rather than admitting whoever signs up next.
         async with self._session() as session:
-            found = await session.scalar(
-                select(User.id).where(User.is_deleted.is_(False)).limit(1)
-            )
+            found = await session.scalar(select(User.id).limit(1))
             return found is not None
 
     async def has_pending_invitation(

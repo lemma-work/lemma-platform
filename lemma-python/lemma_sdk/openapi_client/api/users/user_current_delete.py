@@ -70,9 +70,10 @@ def sync_detailed(
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
     others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the
-    person is the only owner of an organization others are still in, and with 409 and the billing
-    provider's code while something they pay for stands in the way.
+    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
+    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
+    in, and with 409 and the billing provider's code while something they pay for stands in the way.
 
     Args:
         body (AccountDeletionRequest): Proof that the person means this account, typed back by
@@ -107,9 +108,10 @@ def sync(
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
     others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the
-    person is the only owner of an organization others are still in, and with 409 and the billing
-    provider's code while something they pay for stands in the way.
+    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
+    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
+    in, and with 409 and the billing provider's code while something they pay for stands in the way.
 
     Args:
         body (AccountDeletionRequest): Proof that the person means this account, typed back by
@@ -139,9 +141,10 @@ async def asyncio_detailed(
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
     others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the
-    person is the only owner of an organization others are still in, and with 409 and the billing
-    provider's code while something they pay for stands in the way.
+    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
+    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
+    in, and with 409 and the billing provider's code while something they pay for stands in the way.
 
     Args:
         body (AccountDeletionRequest): Proof that the person means this account, typed back by
@@ -174,9 +177,10 @@ async def asyncio(
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
     others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the
-    person is the only owner of an organization others are still in, and with 409 and the billing
-    provider's code while something they pay for stands in the way.
+    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
+    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
+    in, and with 409 and the billing provider's code while something they pay for stands in the way.
 
     Args:
         body (AccountDeletionRequest): Proof that the person means this account, typed back by

@@ -233,12 +233,12 @@ async def test_a_mistyped_confirmation_deletes_nothing(
 ):
     person = await signup_user()
 
-    refused = await _delete(
-        async_client, "someone-else@example.com", auth_headers(person)
-    )
+    # An empty box is a mismatch too, with the same code, not a validation error.
+    for typed in ("someone-else@example.com", ""):
+        refused = await _delete(async_client, typed, auth_headers(person))
 
-    assert refused.status_code == 400, refused.text
-    assert refused.json()["code"] == "ACCOUNT_DELETION_CONFIRMATION_MISMATCH"
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["code"] == "ACCOUNT_DELETION_CONFIRMATION_MISMATCH"
     assert (await _row(db_session, User, person["id"])).is_deleted is False
 
 

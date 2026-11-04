@@ -17,7 +17,7 @@ from app.modules.identity.api.schemas.user_schemas import (
 )
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.supertokens_auth.account_removal import (
-    end_deleted_account_sign_in,
+    sign_out_after_deletion,
 )
 
 #: What a pod app's page is not told about the person viewing it (H20): it
@@ -113,7 +113,9 @@ async def upsert_profile(
         "erased, they leave every organization, and organizations nobody else "
         "is in are deleted with their pods. Work shared with others stays, "
         'shown as by "Deleted user". Every session ends, the caller\'s '
-        "included: its cookies or tokens are cleared on this response. "
+        "included: its cookies or tokens are cleared on this response. If the "
+        "sign-in service cannot be reached just then, the deletion still "
+        "stands and the sessions end as soon as it can be. "
         "Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the "
         "only owner of an organization others are still in, and with 409 and "
         "the billing provider's code while something they pay for stands in "
@@ -132,13 +134,10 @@ async def delete_current_user(
     outcome = await deletion.delete_account(user_id, confirm_email=data.confirm_email)
     # Committed here rather than by the dependency, so the sign-in ends only
     # for a deletion that has happened -- and before this answers, so the
-    # person is signed out everywhere by the time they read it. The same
-    # removal was written as work in the transaction and is retried from
-    # there if SuperTokens fails now.
+    # person is normally signed out everywhere by the time they read it.
     await uow.commit()
     async with connection_released(uow.session):
-        await request.state.session.revoke_session()
-        await end_deleted_account_sign_in(user_id)
+        await sign_out_after_deletion(request.state.session, user_id)
     return AccountDeletionResponse(
         deleted=True,
         organizations_left=len(outcome.organizations_left),

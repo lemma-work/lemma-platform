@@ -10,6 +10,7 @@ import {
     DELETED_PATH,
     DELETION_CONSEQUENCES,
     deletionRefusal,
+    noteDeletionConfirmed,
     type DeletionRefusal,
 } from "@/session/account-deletion";
 
@@ -29,13 +30,6 @@ export function DeleteAccountForm({ email, onCancel }: { email: string; onCancel
     const [refusal, setRefusal] = useState<DeletionRefusal | null>(null);
     const confirmed = confirmsAccount(typed, email);
 
-    async function leave() {
-        /* The server has ended the session; this clears this browser's copy of
-           it. If that cannot be confirmed the account is still gone, so the
-           page goes on regardless. */
-        await session.signOut(DELETED_PATH).catch(() => window.location.assign(DELETED_PATH));
-    }
-
     async function remove() {
         setBusy(true);
         setRefusal(null);
@@ -49,7 +43,11 @@ export function DeleteAccountForm({ email, onCancel }: { email: string; onCancel
                 return;
             }
         }
-        await leave();
+        /* The account is gone: write that down for the page this lands on,
+           then forget the person in this browser whatever the server says
+           about a session it has already ended. */
+        noteDeletionConfirmed(window.sessionStorage);
+        await session.leave(DELETED_PATH);
     }
 
     return (

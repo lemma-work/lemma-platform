@@ -3,7 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * What deleting the account did. Every session has ended by the time it is read.
+ * What deleting the account did.
+ *
+ * Every session has ended by the time it is read -- or, if the sign-in
+ * service could not be reached just then, ends as soon as it can be.
  */
 export type AccountDeletionResponse = {
     /**

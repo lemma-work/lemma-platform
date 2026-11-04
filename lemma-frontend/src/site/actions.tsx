@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/session/session";
 import { hasApiUrl, lemma } from "@/session/client";
 import { DeleteAccountForm } from "@/session/delete-account";
+import { isDeletionConfirmed } from "@/session/account-deletion";
 import { source as data } from "@/data";
 import { afterNewOrganization, newOrganizationLink } from "@/auth/redirects";
 import type { ActionProps } from "./action-host";
@@ -32,7 +33,7 @@ export function Actions(props: ActionProps) {
         );
     return <SignedIn {...props} signOut={session.signOut} />;
 }
-function SignedIn(props: ActionProps & { signOut: (destination?: string) => Promise<void> }) {
+function SignedIn(props: ActionProps & { signOut: () => Promise<void> }) {
     if (props.action === "organization") return <CreateOrganization />;
     if (props.action === "delete-account") return <DeleteSignedInAccount />;
     if (props.action === "logout")
@@ -51,7 +52,7 @@ function SignedIn(props: ActionProps & { signOut: (destination?: string) => Prom
     return <Remix {...props} />;
 }
 function deletedJustNow(): boolean {
-    return new URLSearchParams(window.location.search).get("deleted") === "1";
+    return isDeletionConfirmed(window.location.search, window.sessionStorage);
 }
 function AccountDeleted() {
     return (

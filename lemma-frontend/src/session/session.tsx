@@ -40,9 +40,13 @@ export interface Session {
     user: Person | null;
     /** Hand off to the platform's auth portal, and come back here. */
     signIn: () => void;
-    /** End it everywhere: the server, this browser, and this tab's memory.
-     *  Lands on `destination` afterwards, the site's front page unless told. */
-    signOut: (destination?: string) => Promise<void>;
+    /** End it everywhere: the server, this browser, and this tab's memory. */
+    signOut: () => Promise<void>;
+    /** After the account itself is gone: forget it in this browser and this
+     *  tab, then land on `destination`. Unlike `signOut` this never refuses —
+     *  the server has already ended the session, so there is nothing to
+     *  confirm, and a browser left believing the person is here is worse. */
+    leave: (destination: string) => Promise<void>;
     /** Ask about the session again, after the API did not answer. */
     retry: () => void;
     /** Whether the API answers at all -- its liveness probe, not a session
@@ -118,10 +122,8 @@ export function useSession(): Session {
         window.location.assign(PORTAL_PATH + "?redirect_uri=" + encodeURIComponent(here));
     }, []);
 
-    const signOut = useCallback(async (destination = "/") => {
-        if (client && !(await client.auth.signOut())) {
-            throw new Error("We couldn’t confirm sign-out. Check your connection and try again.");
-        }
+    /* What leaving means on this side of the wire, whatever the server said. */
+    const forgetHere = useCallback(async (destination: string) => {
         resetAnalyticsIdentity();
         /* This computer's pairing of the person leaving stops taking work,
            so the next person at this Mac is not running theirs. */
@@ -134,7 +136,20 @@ export function useSession(): Session {
            cache, the session hook, the mounted app frames. A soft navigation
            keeps all three. */
         window.location.assign(destination);
-    }, [client, cache]);
+    }, [cache]);
+
+    const signOut = useCallback(async () => {
+        if (client && !(await client.auth.signOut())) {
+            throw new Error("We couldn’t confirm sign-out. Check your connection and try again.");
+        }
+        await forgetHere("/");
+    }, [client, forgetHere]);
+
+    const leave = useCallback(async (destination: string) => {
+        /* Still asked, for the SDK's own markers; its answer changes nothing. */
+        if (client) await client.auth.signOut().catch(() => false);
+        await forgetHere(destination);
+    }, [client, forgetHere]);
 
     const retry = useCallback(() => {
         if (client) void client.auth.checkAuth().catch(() => undefined);
@@ -149,6 +164,7 @@ export function useSession(): Session {
         user: auth.user as Session["user"],
         signIn,
         signOut,
+        leave,
         retry,
         reachable,
     };

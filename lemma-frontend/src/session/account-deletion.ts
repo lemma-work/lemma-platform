@@ -11,6 +11,32 @@ import { MATES, ORG } from "@/copy";
  *  A page anyone can open, because by then nobody is signed in. */
 export const DELETED_PATH = "/delete-account?deleted=1";
 
+/** What this tab writes down once the API has said the account is gone.
+ *
+ *  The address alone is not proof — anybody can open it, signed in or not,
+ *  and would be told an account that still exists has been deleted. So the
+ *  page says so only when this tab also carries the note, which it writes
+ *  after the answer and before it navigates. Per tab, like the answer was. */
+const DELETION_NOTE = "lemma:account-deleted";
+
+interface NoteStore {
+    getItem(key: string): string | null;
+    setItem(key: string, value: string): void;
+}
+
+/** Note that the API confirmed the deletion. A tab that cannot store it
+ *  lands on the ordinary page instead, which is wrong only in its welcome. */
+export function noteDeletionConfirmed(store: NoteStore): void {
+    try { store.setItem(DELETION_NOTE, "1"); } catch { /* no storage */ }
+}
+
+/** Whether to show "your account has been deleted": the address says so,
+ *  and this tab was the one that deleted it. */
+export function isDeletionConfirmed(search: string, store: NoteStore): boolean {
+    if (new URLSearchParams(search).get("deleted") !== "1") return false;
+    try { return store.getItem(DELETION_NOTE) === "1"; } catch { return false; }
+}
+
 /** What deleting an account does, one sentence each. */
 export const DELETION_CONSEQUENCES: readonly string[] = [
     "Your name, email address, phone number and time zone are erased, and you are signed out everywhere: browsers, the phone and desktop apps, and the command line.",

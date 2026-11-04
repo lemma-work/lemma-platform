@@ -11,15 +11,18 @@ T = TypeVar("T", bound="AccountDeletionResponse")
 
 @_attrs_define
 class AccountDeletionResponse:
-    """What deleting the account did. Every session has ended by the time it is read.
+    """What deleting the account did.
 
-    Attributes:
-        deleted (bool): Always true: the account no longer exists, whether this request deleted it or an earlier one
-            had.
-        organizations_deleted (int): Organizations the person was the only member of, deleted with their pods.
-        organizations_left (int): Organizations others are still in, which the person left; their shared work stays
-            there under "Deleted user".
-        pods_deleted (int):
+    Every session has ended by the time it is read -- or, if the sign-in
+    service could not be reached just then, ends as soon as it can be.
+
+        Attributes:
+            deleted (bool): Always true: the account no longer exists, whether this request deleted it or an earlier one
+                had.
+            organizations_deleted (int): Organizations the person was the only member of, deleted with their pods.
+            organizations_left (int): Organizations others are still in, which the person left; their shared work stays
+                there under "Deleted user".
+            pods_deleted (int):
     """
 
     deleted: bool

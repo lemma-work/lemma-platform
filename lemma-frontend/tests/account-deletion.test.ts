@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { confirmsAccount, deletionRefusal, DELETION_CONSEQUENCES } from "../src/session/account-deletion.ts";
+import { confirmsAccount, deletionRefusal, DELETION_CONSEQUENCES, isDeletionConfirmed, noteDeletionConfirmed } from "../src/session/account-deletion.ts";
 
 /** Somebody deleting their account reads two things: what it will do, and,
  *  if it is refused, what to do about it. Both have to be right before the
@@ -58,4 +58,23 @@ test("an answer that never came does not claim to know what happened", () => {
         assert.equal(refused.alreadyDeleted, false);
         assert.match(refused.message, /couldn’t confirm/);
     }
+});
+
+test("the deletion page says an account is gone only where this tab deleted it", () => {
+    const notes = new Map<string, string>();
+    const store = { getItem: (key: string) => notes.get(key) ?? null, setItem: (key: string, value: string) => void notes.set(key, value) };
+    // Anybody can open the address; it proves nothing on its own.
+    assert.equal(isDeletionConfirmed("?deleted=1", store), false);
+    noteDeletionConfirmed(store);
+    assert.equal(isDeletionConfirmed("?deleted=1", store), true);
+    assert.equal(isDeletionConfirmed("", store), false);
+});
+
+test("a tab that cannot store the note is shown the ordinary page", () => {
+    const refusing = {
+        getItem: (): string | null => { throw new Error("SecurityError"); },
+        setItem: (): void => { throw new Error("QuotaExceededError"); },
+    };
+    noteDeletionConfirmed(refusing);
+    assert.equal(isDeletionConfirmed("?deleted=1", refusing), false);
 });

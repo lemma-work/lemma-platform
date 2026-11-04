@@ -486,3 +486,58 @@ def test_only_the_person_themselves_can_delete_their_account():
 
     assert workload_may_call("DELETE", "/users/me") is False
     assert app_may_call("DELETE", "/users/me") is False
+
+
+class _Session:
+    def __init__(self, order: list[str]) -> None:
+        self.order = order
+
+    async def revoke_session(self) -> None:
+        self.order.append("this session")
+
+
+async def test_the_caller_is_signed_out_after_every_other_session():
+    """Everywhere first: that drops the cached standing, which is what refuses
+    an access token that has not expired yet."""
+    from app.modules.identity.infrastructure.supertokens_auth.account_removal import (
+        sign_out_after_deletion,
+    )
+
+    order: list[str] = []
+
+    async def everywhere(user_id: UUID) -> None:
+        del user_id
+        order.append("everywhere")
+
+    done = await sign_out_after_deletion(_Session(order), uuid4(), remove=everywhere)
+
+    assert done is True
+    assert order == ["everywhere", "this session"]
+
+
+async def test_a_sign_in_service_that_is_down_leaves_the_deletion_standing():
+    """The account is already gone; its sign-in ends later, from the work the
+    deletion wrote, and the person is not told the deletion failed."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from supertokens_python.exceptions import GeneralError
+
+    from app.modules.identity.infrastructure.supertokens_auth.account_removal import (
+        sign_out_after_deletion,
+    )
+
+    for outage in (
+        GeneralError("No SuperTokens core available to query"),
+        RedisConnectionError("Connection refused"),
+    ):
+        order: list[str] = []
+
+        async def unreachable(user_id: UUID, outage: Exception = outage) -> None:
+            del user_id
+            raise outage
+
+        done = await sign_out_after_deletion(
+            _Session(order), uuid4(), remove=unreachable
+        )
+
+        assert done is False
+        assert order == []
