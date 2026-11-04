@@ -498,7 +498,11 @@ async def web_add_row(
         # Reject invalid answers before opening a session or creating a contact.
         # The insert repeats validation in its own transaction to handle races.
         await chat.validate_visitor_row(
-            widget, table=body.table, answers=body.values, vouched=False
+            widget,
+            table=body.table,
+            answers=body.values,
+            address=address,
+            vouched=False,
         )
         started = await visitors.start_visitor_session(
             widget,
@@ -515,7 +519,12 @@ async def web_add_row(
             uow_factory,
         )
     await chat.add_visitor_row(
-        widget, visitor, table=body.table, answers=body.values, address=address
+        widget,
+        visitor,
+        table=body.table,
+        answers=body.values,
+        address=address,
+        submission_limit_checked=started is not None,
     )
     if started is not None and started.secret and kept_chats.keeps_chats(request):
         kept_chats.keep(response, widget, started.secret)
