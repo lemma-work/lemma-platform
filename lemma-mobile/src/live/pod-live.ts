@@ -11,11 +11,11 @@ import { LiveSocket, type LiveHandlers, type LiveStatus, type WebSocketLike } fr
  *  - The token is the app's own (`freshAccess`), refreshed through its own
  *    session after a 4401, never a cookie.
  *  - The URL is built by hand: React Native's `URL` cannot set search params.
- *  - The token also goes in an `Authorization` header. The server takes a
- *    header first, then the `sAccessToken` cookie, then the URL; and on
- *    Android native requests share the WebView's cookie jar, where the
- *    sign-in page left a cookie session that nothing keeps fresh. Sent in the
- *    URL alone, the token lost to that cookie once it expired.
+ *  - The token goes in an `Authorization` header, never the URL. The server
+ *    takes a header first, then the `sAccessToken` cookie, then the URL; and
+ *    on Android native requests share the WebView's cookie jar, whose cookie
+ *    session would win over a token in the URL once its own had expired. A
+ *    URL also lands in proxy and server logs, where a header does not.
  *  - It wakes when the app comes back to the front, not on a browser tab.
  *
  *  Only signed in for real: sample data has no server to listen to, so
@@ -42,9 +42,9 @@ export function liveAvailable(): boolean {
     return enabled && currentServer() !== null;
 }
 
-function phoneLiveUrl(apiUrl: string, podId: string, token: string | null): string {
+function phoneLiveUrl(apiUrl: string, podId: string): string {
     const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
-    return `${root}/pods/${encodeURIComponent(podId)}/live${token ? `?access_token=${encodeURIComponent(token)}` : ""}`;
+    return `${root}/pods/${encodeURIComponent(podId)}/live`;
 }
 
 function appWakeups(wake: () => void): () => void {
@@ -57,19 +57,21 @@ function appWakeups(wake: () => void): () => void {
 export function podLive(podId: string): LiveSocket {
     const held = sockets.get(podId);
     if (held && held.status !== "closed") return held;
+    /* `socket.ts` opens with `open(url(token))`, so the token `url` is
+       handed is the one the very next `open` sends as a header. */
+    let token: string | null = null;
     const made = new LiveSocket({
-        url: (token) => phoneLiveUrl(currentServer()?.api ?? "", podId, token),
+        url: (fresh) => {
+            token = fresh;
+            return phoneLiveUrl(currentServer()?.api ?? "", podId);
+        },
         auth: {
             token: () => freshAccess(),
             refresh: async () => {
                 if (!(await renewAccess())) throw new Error("Signed out.");
             },
         },
-        open: (url) => {
-            const token = /[?&]access_token=([^&]+)/.exec(url)?.[1];
-            const headers = token ? { headers: { Authorization: `Bearer ${decodeURIComponent(token)}` } } : null;
-            return new NativeSocket(url, null, headers);
-        },
+        open: (url) => new NativeSocket(url, null, token ? { headers: { Authorization: `Bearer ${token}` } } : null),
         wakeups: appWakeups,
     });
     sockets.set(podId, made);

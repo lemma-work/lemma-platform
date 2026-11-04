@@ -265,7 +265,7 @@ describe("a call", () => {
         const call = harness();
         await call.session.start("call-1", START);
         call.frame({ type: "transcript", speaker: "voice", text: "Hello", final: false });
-        call.frame({ type: "transcript", speaker: "voice", text: " there.", final: true });
+        call.frame({ type: "transcript", speaker: "voice", text: "Hello there.", final: true });
         call.frame({ type: "transcript", speaker: "caller", text: "Hi.", final: true });
         expect(captionOf(call.session.snapshot().transcript, "Support")).toEqual({ who: "You", text: "Hi." });
         expect(call.session.snapshot().transcript.map((line) => line.text)).toEqual(["Hello there.", "Hi."]);

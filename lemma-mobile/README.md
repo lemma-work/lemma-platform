@@ -121,8 +121,8 @@ again.
 signs nobody out. A custom API at `api.example.com` finds its web app at
 `example.com`; a bare port is a dev stack on this computer (`10.0.2.2` from the
 Android emulator, `localhost` from the iOS simulator). Plain HTTP is allowed only
-to local addresses (`plugins/local-cleartext.js` on Android,
-`NSAllowsLocalNetworking` on iOS).
+to local addresses (`plugins/local-cleartext.js` on Android, in debug builds only,
+so a dev stack needs `npx expo run:android`; `NSAllowsLocalNetworking` on iOS).
 
 A build can offer more servers by name: set `EXPO_PUBLIC_LEMMA_SERVERS` in a
 git-ignored `lemma-mobile/.env.local` to a JSON list of

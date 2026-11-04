@@ -57,10 +57,14 @@ export function scriptedCall(podId: string, callId: string, handlers: CallSocket
         }, ms);
         held.add(timer);
     };
-    /* Words a few at a time, the last one final; when the line ends. */
+    /* Words one at a time, then the close, which carries the whole line as
+       the server's does (`foldTranscript` replaces the open line with it). */
     const say = (start: number, speaker: "voice" | "caller", text: string): number => {
         const words = text.split(" ");
-        words.forEach((word, index) => at(start + index * WORD_MS, () => handlers.onFrame({ type: "transcript", speaker, text: (index ? " " : "") + word, final: index === words.length - 1 })));
+        words.forEach((word, index) => at(start + index * WORD_MS, () => {
+            const final = index === words.length - 1;
+            handlers.onFrame({ type: "transcript", speaker, text: final ? text : (index ? " " : "") + word, final });
+        }));
         return start + words.length * WORD_MS;
     };
 
