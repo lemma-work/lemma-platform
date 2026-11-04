@@ -269,7 +269,7 @@ fn a_typed_server_address_is_kept_as_its_https_origin() {
             "https://lemma.example.com:8443/",
             "https://lemma.example.com:8443",
         ),
-        ("agentbox.work", "https://agentbox.work"),
+        ("acme.example", "https://acme.example"),
         ("http://localhost:3000", "http://localhost:3000"),
         ("http://127.0.0.1:3000/x", "http://127.0.0.1:3000"),
         ("http://[::1]:3000", "http://[::1]:3000"),
@@ -299,8 +299,8 @@ fn a_typed_server_address_is_kept_as_its_https_origin() {
 #[test]
 fn a_saved_server_is_read_back_only_when_it_is_still_acceptable() {
     assert_eq!(
-        configured_hosted_server(&json!({HOSTED_SERVER_KEY: "https://agentbox.work"})).as_deref(),
-        Some("https://agentbox.work")
+        configured_hosted_server(&json!({HOSTED_SERVER_KEY: "https://acme.example"})).as_deref(),
+        Some("https://acme.example")
     );
     assert_eq!(configured_hosted_server(&json!({})), None);
     assert_eq!(
@@ -316,7 +316,7 @@ fn a_saved_server_is_read_back_only_when_it_is_still_acceptable() {
 #[test]
 fn only_a_page_carrying_lemmas_site_config_is_a_lemma_server() {
     assert!(is_lemma_site_config(
-        r#"window.__LEMMA_SITE__={"apiUrl":"https://api.agentbox.work"};"#
+        r#"window.__LEMMA_SITE__={"apiUrl":"https://api.acme.example"};"#
     ));
     assert!(!is_lemma_site_config(
         r#"<!DOCTYPE html><script>window.location.href="/lander"</script>"#
@@ -330,13 +330,13 @@ fn only_a_page_carrying_lemmas_site_config_is_a_lemma_server() {
 fn each_connected_server_gets_its_own_workspace_capability() {
     assert!(hosted_workspace_capability("https://lemma.work").is_none());
     let first: Value =
-        serde_json::from_str(&hosted_workspace_capability("https://agentbox.work").unwrap())
+        serde_json::from_str(&hosted_workspace_capability("https://acme.example").unwrap())
             .unwrap();
     let second: Value =
         serde_json::from_str(&hosted_workspace_capability("https://lemma.example.com").unwrap())
             .unwrap();
     assert_ne!(first["identifier"], second["identifier"]);
-    assert_eq!(first["remote"]["urls"], json!(["https://agentbox.work"]));
+    assert_eq!(first["remote"]["urls"], json!(["https://acme.example"]));
     assert_eq!(first["permissions"], json!(shipped_workspace_permissions()));
     assert_eq!(first["webviews"], json!(["main"]));
 }

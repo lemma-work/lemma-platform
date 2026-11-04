@@ -4441,7 +4441,7 @@ button.filecard__open {
     font-size: 4.4cqw;
     line-height: 1.3;
     /* Wraps. It was one line with an ellipsis, so an ordinary email-shaped
-       username became "Human lead: deepakjha0…" — the card trimming away the
+       username became "Human lead: ada.lovelace…" — the card trimming away the
        accountability it exists to record. */
     overflow-wrap: anywhere;
     /* The accountability line is the point of the card, so it is set in the

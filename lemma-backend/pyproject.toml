@@ -1,6 +1,6 @@
 [project]
 name = "lemma-backend"
-version = "0.10.0"
+version = "0.10.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -97,7 +97,9 @@ dependencies = [
 # Managed/local composition: document conversion in the single backend
 # process. Cloud/split deployments do not need to install this extra.
 local = [
-    "xberg>=1.0.14",
+    # 1.3.9 ships no win_amd64 wheel (1.3.4-1.3.8 do), and the Windows host
+    # pack installs this extra: the 0.10.0 Desktop release failed on it.
+    "xberg>=1.0.14,!=1.3.9",
 ]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
 # imports are lazy (only loaded when secret_key_provider selects them).
@@ -123,7 +125,7 @@ keychain = [
 # A Rust core with abi3 wheels and no Python dependencies of its own, so this
 # adds one compiled extension rather than a dependency tree.
 xberg = [
-    "xberg>=1.0.14",
+    "xberg>=1.0.14,!=1.3.9",
 ]
 
 [dependency-groups]

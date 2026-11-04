@@ -319,12 +319,15 @@ def conversation_metadata(
     """What the started conversation knows about where it came from.
 
     ``started_by`` is how a run tells that nobody is waiting on it, so it does
-    not reach for ``ask_user`` at six in the morning. A webhook source's
-    repository context, when present, becomes the run's checkout, cloned
-    through the pod's `github` connector.
+    not reach for ``ask_user`` at six in the morning. ``schedule_id`` is what
+    a list of a pod's runs groups them by, since the name can be edited and
+    the title is derived from it. A webhook source's repository context, when
+    present, becomes the run's checkout, cloned through the pod's `github`
+    connector.
     """
     started: dict[str, JsonValue] = {
         "started_by": "SCHEDULE",
+        "schedule_id": str(schedule.id),
         "schedule_type": schedule.schedule_type.value,
     }
     if schedule.name:
