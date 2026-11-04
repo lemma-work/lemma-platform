@@ -49,11 +49,12 @@ from app.modules.agent_surfaces.services.group_audience import (
 from app.modules.agent_surfaces.services.group_log import (
     GroupBackground,
     RosterReads,
-    for_member_run,
     group_background,
     group_source,
     background_from_log,
-    live_participants,
+    live_members,
+    marked_for_member_run,
+    participants_in_lines,
     roster_reads,
 )
 from app.modules.agent_surfaces.services.surface_inbound_message import (
@@ -106,8 +107,9 @@ async def run_background(
 
     The pod's own log where it keeps one (Telegram, WhatsApp, a Teams group
     chat) and it has lines;
-    otherwise the platform's history, read live. Either way a member's run is not shown
-    what strangers wrote (``group_log``), and is told that they are there.
+    otherwise the platform's history, read live. Either way a member's run is
+    shown what strangers wrote, marked as theirs (``group_log``), and is told
+    that they read its answer.
     """
     group, logged = await _group_background(uow_factory, context)
     # A log with nothing in it yet -- a group first heard with this very
@@ -120,20 +122,27 @@ async def run_background(
         lines = await fetch_channel_context(
             adapter=adapter, context=context, credentials=credentials
         )
-        outside = outside_names(lines)
-        withheld = 0
         # A stranger's run acts as nobody, so it is not handed a roster of
-        # who holds access to this pod -- only a member's run is.
-        participants = (
-            ()
-            if context.audience.answers_outsiders
-            else await _participants_in_live_group(
+        # who holds access to this pod -- only a member's run is, along with
+        # every line, a stranger's marked by who the pod says holds access.
+        participants: tuple[SurfaceGroupParticipant, ...] = ()
+        if not context.audience.answers_outsiders:
+            verified = await _members_in_live_group(
                 uow_factory, context, lines, reads=roster_reads
             )
-        )
-        if not context.audience.answers_outsiders:
-            lines, withheld = for_member_run(lines)
-        refs = await _platform_refs(uow_factory, context, lines, withheld=withheld)
+            lines = marked_for_member_run(
+                lines,
+                verified=verified,
+                asker_external_id=context.message_external_user_id,
+            )
+            if verified is not None:
+                participants = participants_in_lines(
+                    lines,
+                    verified=verified,
+                    asker_external_id=context.message_external_user_id,
+                )
+        outside = outside_names(lines)
+        refs = await _platform_refs(uow_factory, context, lines, withheld=0)
     audience = (
         None
         if context.audience.answers_outsiders
@@ -231,23 +240,23 @@ def _text(value: object) -> str | None:
     return str(value) if value is not None else None
 
 
-async def _participants_in_live_group(
+async def _members_in_live_group(
     uow_factory: UnitOfWorkFactory,
     context: SurfaceChatContext,
     lines: Sequence[Mapping[str, object]],
     *,
     reads: RosterReads,
-) -> tuple[SurfaceGroupParticipant, ...]:
-    """Who the pod can vouch for among a fetched window's speakers."""
+) -> set[str] | None:
+    """Who the pod can vouch for among a fetched window's speakers; ``None``
+    when that could not be read."""
     if context.pod_id is None:
-        return ()
-    return await live_participants(
+        return None
+    return await live_members(
         uow_factory,
         lines=lines,
         pod_id=context.pod_id,
         platform=context.platform.value,
         tenant_id=context.event.tenant_id,
-        asker_external_id=context.message_external_user_id,
         conversation_id=context.conversation_id,
         reads=reads,
     )
