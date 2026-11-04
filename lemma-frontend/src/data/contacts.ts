@@ -171,13 +171,20 @@ export function contactSubline(contact: Contact): string {
 
 /** Whom a bot -- a WhatsApp number, a Telegram bot, an email address --
  *  answers when somebody messages it privately. Its members are always
- *  answered; the choice is who else is. */
+ *  answered; the choice is who else is. Never its groups: whether a group's
+ *  people outside the space are answered is the bot's own switch
+ *  (`groupsNote`), so each note here says "privately". */
 export function answerChoices(space: string): { value: WidgetAnswer; label: string; note: string }[] {
     return [
-        { value: "off", label: "Members only", note: "Anyone outside " + space + " is turned away." },
-        { value: "known", label: "Members and contacts", note: "People already in Contacts are answered too. Strangers are turned away." },
-        { value: "anyone", label: "Everyone", note: "Strangers are answered too, and join Contacts with their first message." },
+        { value: "off", label: "Members only", note: "Anyone outside " + space + " who writes privately is turned away." },
+        { value: "known", label: "Members and contacts", note: "People already in Contacts are answered privately too. Strangers are turned away." },
+        { value: "anyone", label: "Everyone", note: "Strangers are answered privately too, and join Contacts with their first message." },
     ];
+}
+
+/** What the private-message choice leaves to a bot's groups. */
+export function groupsNote(space: string): string {
+    return "Groups follow “Answer people outside " + space + "”.";
 }
 
 /** Whom a web chat answers. A visitor is nobody's member, so the choice is
