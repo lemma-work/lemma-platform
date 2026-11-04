@@ -711,10 +711,28 @@ async def test_a_guest_reads_further_back_in_their_group_and_nothing_more(
     scenario, db_session: AsyncSession, fake_telegram, monkeypatch
 ):
     """``group_history``: the group's own lines, as the guest may read them --
-    not a note the members kept out of the chat."""
+    not a note the members kept out of the chat, and nothing from before they
+    were in the group."""
     _, group, owner = await _group_with_owner(
         scenario, db_session, fake_telegram, monkeypatch
     )
+    await say(
+        db_session,
+        group,
+        "BEFORE-THEY-CAME: the first plan was eight.",
+        sender=Sender.member(owner, display_name="Arjun"),
+    )
+    await db_session.commit()
+    guest = await a_stranger(
+        db_session, group, telegram_id=str(STRANGER_TELEGRAM_ID), name="Anu"
+    )
+    await say(
+        db_session,
+        group,
+        "Hi all, I'm in.",
+        sender=Sender.contact(guest.contact_id, display_name="Anu"),
+    )
+    await db_session.commit()
     await say(
         db_session,
         group,
@@ -752,3 +770,4 @@ async def test_a_guest_reads_further_back_in_their_group_and_nothing_more(
     )
     assert "We agreed on six people for the trip." in results["hist-1"]
     assert "MEMBERS-ONLY-NOTE" not in results["hist-1"]
+    assert "BEFORE-THEY-CAME" not in results["hist-1"]
