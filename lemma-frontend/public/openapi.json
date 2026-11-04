@@ -22040,6 +22040,45 @@
         "title": "TableSummaryResponse",
         "type": "object"
       },
+      "TelegramAccountItem": {
+        "description": "A Telegram account the current user proved from a Lemma session.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The name Telegram last gave the account.",
+            "title": "Name"
+          },
+          "proved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proved At"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TelegramAccountItem",
+        "type": "object"
+      },
       "TelegramAccountResponse": {
         "properties": {
           "name": {
@@ -22070,6 +22109,22 @@
           "username"
         ],
         "title": "TelegramAccountResponse",
+        "type": "object"
+      },
+      "TelegramAccountsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TelegramAccountItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TelegramAccountsResponse",
         "type": "object"
       },
       "TelegramLinkRequest": {
@@ -51109,6 +51164,82 @@
           "resource": "agent.surface",
           "result": "entity",
           "verb": "set_my_default"
+        }
+      }
+    },
+    "/surfaces/me/telegram-accounts": {
+      "get": {
+        "description": "The Telegram accounts the current user proved from a Lemma session, still\ntheirs: every bot knows them as this user.",
+        "operationId": "agent.surface.list_my_telegram_accounts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List My Telegram Accounts",
+        "tags": [
+          "Agent Surfaces (Me)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface",
+          "result": "entity",
+          "verb": "list_my_telegram_accounts"
+        }
+      }
+    },
+    "/surfaces/me/telegram-accounts/{account_id}": {
+      "delete": {
+        "description": "Unlink one of them: from its next message the account is a stranger's.",
+        "operationId": "agent.surface.unlink_my_telegram_account",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unlink My Telegram Account",
+        "tags": [
+          "Agent Surfaces (Me)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface",
+          "result": "void",
+          "verb": "unlink_my_telegram_account"
         }
       }
     },

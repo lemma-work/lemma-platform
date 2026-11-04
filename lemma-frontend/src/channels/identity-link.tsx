@@ -27,6 +27,25 @@ export function LinkTelegramSheet({ pod, surfaceId, contactId, seenAs, onClose }
     seenAs?: string | null;
     onClose: () => void;
 }) {
+    return (
+        <Modal mark={<ChannelIcon platform="TELEGRAM" size={32} />} title="Link your Telegram" onClose={onClose}>
+            <LinkTelegramSteps pod={pod} surfaceId={surfaceId} contactId={contactId} seenAs={seenAs} onClose={onClose} />
+        </Modal>
+    );
+}
+
+/** The link itself, inside whichever sheet chose the bot: a group's own, or
+ *  the one picked on the member's profile. `everywhere` says so where nothing
+ *  on screen names a space: the account is the member's in every space they
+ *  are in, not only the one the code was made in. */
+export function LinkTelegramSteps({ pod, surfaceId, contactId, seenAs, everywhere = false, onClose }: {
+    pod: Pick<Pod, "id" | "name">;
+    surfaceId: string;
+    contactId?: string;
+    seenAs?: string | null;
+    everywhere?: boolean;
+    onClose: () => void;
+}) {
     const api = channelApi(pod.id);
     const [link, setLink] = useState<Link | null>(null);
     const [linked, setLinked] = useState<TelegramAccount | null>(null);
@@ -58,55 +77,54 @@ export function LinkTelegramSheet({ pod, surfaceId, contactId, seenAs, onClose }
     const state = status.data?.state ?? "WAITING";
     const account = status.data?.state === "OPENED" ? status.data.account : null;
     const problem = make.error ?? confirm.error ?? decline.error;
+    const where = everywhere ? "every space you’re in" : pod.name;
     return (
-        <Modal mark={<ChannelIcon platform="TELEGRAM" size={32} />} title="Link your Telegram" onClose={onClose}>
-            <div className="gsheet">
-                {linked ? (
-                    <p className="gsheet__lead">
-                        Linked. {pod.name} knows {said(linked)} as you from the next message.
-                    </p>
-                ) : account ? (
-                    <>
-                        <p className="gsheet__lead">Is {said(account)} your Telegram account?</p>
-                        <p className="gsheet__fine">Only say yes if it is. Linked, it gets your access in {pod.name}.</p>
-                        <div className="gsheet__foot gsheet__foot--split">
-                            <button type="button" className="ghost-pill" disabled={decline.isPending} onClick={() => decline.mutate()}>Not me</button>
-                            <button type="button" className="pill-button" disabled={confirm.isPending} onClick={() => confirm.mutate()}>
-                                {confirm.isPending ? "Linking…" : "Yes, link it"}
-                            </button>
-                        </div>
-                    </>
-                ) : state === "OTHER_ACCOUNT" ? (
-                    <p className="gsheet__lead">
-                        That link was opened from a different Telegram account than {seenAs ?? "the one in the group"}, so nothing was linked.
-                    </p>
-                ) : state === "GONE" ? (
-                    <p className="gsheet__lead">That link has expired. Close this and try again.</p>
-                ) : (
-                    <>
-                        <p className="gsheet__lead">
-                            {seenAs ? "To show " + pod.name + " that " + seenAs + " is you, open" : "Open"} this in Telegram from your account and tap Start.
-                        </p>
-                        <a
-                            className="pill-button gsheet__big"
-                            href={link?.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            aria-disabled={!link || undefined}
-                        >
-                            {link ? "Open Telegram" : "Getting a link…"}
-                        </a>
-                        <p className="gsheet__fine">Then come back here to say it is yours. The link works for ten minutes.</p>
-                    </>
-                )}
-                {problem && <p className="gsheet__problem" role="alert">{problemOf(problem, "Couldn’t link it.")}</p>}
-                {(linked || (state !== "WAITING" && !account)) && (
-                    <div className="gsheet__foot">
-                        <button type="button" className="ghost-pill" onClick={onClose}>Done</button>
+        <div className="gsheet">
+            {linked ? (
+                <p className="gsheet__lead">
+                    Linked. {everywhere ? "Every space you’re in knows" : pod.name + " knows"} {said(linked)} as you from the next message.
+                </p>
+            ) : account ? (
+                <>
+                    <p className="gsheet__lead">Is {said(account)} your Telegram account?</p>
+                    <p className="gsheet__fine">Only say yes if it is. Linked, it gets your access in {where}.</p>
+                    <div className="gsheet__foot gsheet__foot--split">
+                        <button type="button" className="ghost-pill" disabled={decline.isPending} onClick={() => decline.mutate()}>Not me</button>
+                        <button type="button" className="pill-button" disabled={confirm.isPending} onClick={() => confirm.mutate()}>
+                            {confirm.isPending ? "Linking…" : "Yes, link it"}
+                        </button>
                     </div>
-                )}
-            </div>
-        </Modal>
+                </>
+            ) : state === "OTHER_ACCOUNT" ? (
+                <p className="gsheet__lead">
+                    That link was opened from a different Telegram account than {seenAs ?? "the one in the group"}, so nothing was linked.
+                </p>
+            ) : state === "GONE" ? (
+                <p className="gsheet__lead">That link has expired. Close this and try again.</p>
+            ) : (
+                <>
+                    <p className="gsheet__lead">
+                        {seenAs ? "To show " + pod.name + " that " + seenAs + " is you, open" : "Open"} this in Telegram from your account and tap Start.
+                    </p>
+                    <a
+                        className="pill-button gsheet__big"
+                        href={link?.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-disabled={!link || undefined}
+                    >
+                        {link ? "Open Telegram" : "Getting a link…"}
+                    </a>
+                    <p className="gsheet__fine">Then come back here to say it is yours. The link works for ten minutes.</p>
+                </>
+            )}
+            {problem && <p className="gsheet__problem" role="alert">{problemOf(problem, "Couldn’t link it.")}</p>}
+            {(linked || (state !== "WAITING" && !account)) && (
+                <div className="gsheet__foot">
+                    <button type="button" className="ghost-pill" onClick={onClose}>Done</button>
+                </div>
+            )}
+        </div>
     );
 }
 
