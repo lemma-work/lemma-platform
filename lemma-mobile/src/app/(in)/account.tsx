@@ -9,6 +9,7 @@ import { Icon } from "../../ui/icons";
 import { Button, Press } from "../../ui/press";
 import { ServerPicker } from "../../ui/server-picker";
 import { adminRoutes } from "../../areas/admin/routes";
+import { accountRoutes } from "../../areas/admin/account/routes";
 import { useDeployment } from "../../areas/admin/access/hooks";
 import { offeredSettings } from "../../areas/admin/sections";
 import { moreRoutes } from "../../areas/more/routes";
@@ -16,6 +17,7 @@ import { HelpGroup } from "../../areas/more/tour/help";
 import { useTheme, type Appearance } from "../../ui/theme";
 import { Text } from "../../ui/text";
 import { color, TOUCH } from "../../ui/tokens";
+import { ORG } from "@web/copy";
 
 /** Who is signed in, which organization the app is in, and the way out. */
 export default function Account() {
@@ -135,6 +137,18 @@ export default function Account() {
                 </View>
 
                 <Button title={mode === "sample" ? "Leave sample data" : "Sign out"} kind="outline" height={48} onPress={() => void signOut()} />
+
+                {/* Apart from signing out, so neither is mistaken for the other
+                    (the web's `DeleteAccountEntry`). Sample data has nobody to delete. */}
+                {mode === "live" ? (
+                    <Press role="link" label="Delete account" onPress={() => router.push(accountRoutes.delete as never)} style={{ flexDirection: "row", alignItems: "center", gap: 10, minHeight: 56, borderTopWidth: 1, borderTopColor: color.line }}>
+                        <View style={{ flex: 1 }}>
+                            <Text size={16}>Delete account</Text>
+                            <Text size={13} tone={color.ink3}>Erase your profile and leave every {ORG}. Work you shared stays with the people you shared it with.</Text>
+                        </View>
+                        <Icon name="forward" size={16} tone={color.ink3} />
+                    </Press>
+                ) : null}
             </ScrollView>
             </KeyboardAvoidingView>
         </SafeAreaView>

@@ -82,5 +82,11 @@ export function accountSample(): AccountSource {
             verified.add(id);
             return "VERIFIED";
         },
+        async deleteAccount() {
+            /* Sample data has nobody to delete: refused the way the API
+               refuses, so the screen says it in its own place. */
+            await wait(200);
+            throw { statusCode: 400, code: "SAMPLE_DATA", message: "Sample data has no account to delete. Sign in to delete yours." };
+        },
     };
 }

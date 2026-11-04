@@ -45,5 +45,8 @@ export function accountLive(context: LiveContext): AccountSource {
             const status = String(answer.status ?? "PENDING").toUpperCase();
             return (status === "VERIFIED" || status === "EXPIRED" ? status : "PENDING") as VerifyStatus;
         },
+        async deleteAccount(confirmEmail) {
+            await client().users.deleteAccount({ confirm_email: confirmEmail });
+        },
     };
 }

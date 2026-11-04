@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { accountLive } from "../src/areas/admin/account/live";
 import { accountSample } from "../src/areas/admin/account/sample";
+import type { LiveContext } from "../src/areas/context";
+import { deletionRefusal } from "@web/session/account-deletion";
 import { clock, isVerifiedNumber, phoneProblems, reasonOf, secondsLeft, unknownSender, verifyBlocker } from "../src/areas/admin/account/verify";
 import { changes, draftOf } from "@web/session/profile-edit";
 import { dayToDate, isoDay, sameZone, spokenDay, zoneChoices, zoneCity, zoneMatches, zoneRegion } from "../src/areas/admin/account/zones";
@@ -111,5 +114,30 @@ describe("renamed time zones", () => {
         expect(sameZone("Europe/Kyiv", "Europe/Kiev")).toBe(true);
         expect(sameZone("Asia/Kolkata", "Asia/Dhaka")).toBe(false);
         expect(zoneChoices("Asia/Kolkata", "Asia/Calcutta", ["Asia/Calcutta", "Asia/Dhaka"])).toEqual(["Asia/Kolkata", "Asia/Dhaka"]);
+    });
+});
+
+describe("deleting the account", () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it("sends the address as typed to the API's own call", async () => {
+        const sent: unknown[] = [];
+        const client = { users: { deleteAccount: async (payload: unknown) => { sent.push(payload); return { deleted: true }; } } };
+        await accountLive({ client: () => client } as unknown as LiveContext).deleteAccount("ada@acme.example");
+        expect(sent).toEqual([{ confirm_email: "ada@acme.example" }]);
+    });
+
+    it("hands the API's refusal on as it came, for the web's words to read", async () => {
+        const refusal = { statusCode: 409, code: "ACCOUNT_DELETION_SOLE_OWNER", message: "Make someone else an owner of Acme first.", details: { organizations: [{ id: "o1", name: "Acme" }] } };
+        const client = { users: { deleteAccount: async () => { throw refusal; } } };
+        const failed = await accountLive({ client: () => client } as unknown as LiveContext).deleteAccount("ada@acme.example").catch((problem: unknown) => problem);
+        expect(deletionRefusal(failed)).toEqual({ message: "Make someone else an owner of Acme first.", organizations: ["Acme"], alreadyDeleted: false });
+    });
+
+    it("is refused in sample data, in words the screen shows", async () => {
+        vi.useFakeTimers();
+        const asked = accountSample().deleteAccount("ada@acme.example").catch((problem: unknown) => problem);
+        await vi.runAllTimersAsync();
+        expect(deletionRefusal(await asked)).toMatchObject({ message: "Sample data has no account to delete. Sign in to delete yours.", alreadyDeleted: false });
     });
 });

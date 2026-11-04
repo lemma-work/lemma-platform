@@ -43,4 +43,8 @@ export interface AccountSource {
      *  becomes the number. */
     startWhatsAppVerification(mobileNumber?: string): Promise<VerifyTransaction>;
     verificationStatus(id: string): Promise<VerifyStatus>;
+    /** Delete the signed-in account (`DELETE /users/me`), the address typed
+     *  back as the confirmation. Throws the API's refusal as it came, for
+     *  the web's `deletionRefusal` to read. */
+    deleteAccount(confirmEmail: string): Promise<void>;
 }

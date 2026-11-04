@@ -47,6 +47,13 @@ export function useSaveProfile() {
     return useMutation({ mutationFn: (patch: UserProfileRequest) => source.saveProfile(patch), onSuccess: keep });
 }
 
+/** Delete the signed-in account. What follows a success, signing the phone
+ *  out, is the screen's: the server has already ended every session. */
+export function useDeleteAccount() {
+    const source = useAccountSource();
+    return useMutation({ mutationFn: (confirmEmail: string) => source.deleteAccount(confirmEmail) });
+}
+
 /** Whether this server verifies numbers over WhatsApp. */
 export function useVerifyConfig() {
     const source = useAccountSource();
