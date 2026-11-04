@@ -10,6 +10,8 @@ schedule asked for outside rows, and then its run is told the row is untrusted.
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.datastore.contracts.public_rows import (
+    Attachment,
     PublicRowRefused,
     add_visitor_row,
 )
@@ -160,6 +163,160 @@ async def test_an_unticked_box_keeps_the_columns_default(
     )
     [row] = (await pod_api.list_records(table))["items"]
     assert row["newsletter"] is True
+
+
+async def _applications(pod_api: DatastoreApi) -> str:
+    table = await _signups(
+        pod_api,
+        {"name": "seats", "type": "INTEGER"},
+        {"name": "cv", "type": "FILE_PATH", "required": True},
+        {"name": "portfolio", "type": "FILE_PATH"},
+    )
+    opened = await _open(
+        pod_api,
+        table,
+        audience="anyone",
+        columns=["full_name", "seats", "cv", "portfolio"],
+    )
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+    assert [
+        c["input"] for c in opened.json()["offered"] if c["type"] == "FILE_PATH"
+    ] == [
+        "file",
+        "file",
+    ]
+    return table
+
+
+def _staged(tmp_path: Path, name: str, content: bytes) -> Attachment:
+    path = tmp_path / f"staged-{uuid4().hex}"
+    path.write_bytes(content)
+    return Attachment(name=name, content=path)
+
+
+async def test_an_attached_file_is_kept_in_the_pod_and_its_path_in_the_row(
+    pod_api: DatastoreApi, db_session: AsyncSession, tmp_path: Path
+):
+    table = await _applications(pod_api)
+    add = {
+        "pod_id": UUID(pod_api.pod_id),
+        "table_name": table,
+        "contact_id": None,
+        "vouched": False,
+    }
+    for _ in range(2):
+        await add_visitor_row(
+            _uow_factory(db_session),
+            answers={"full_name": "Ana", "portfolio": "/somewhere/secret.pdf"},
+            attachments={"cv": _staged(tmp_path, "../cv.pdf", b"%PDF-1.7 Ana")},
+            **add,
+        )
+
+    rows = (await pod_api.list_records(table))["items"]
+    paths = sorted(row["cv"] for row in rows)
+    # Two people attaching cv.pdf is ordinary: the second is renamed, not refused.
+    assert paths == [f"/forms/{table}/cv (1).pdf", f"/forms/{table}/cv.pdf"]
+    # A typed path never fills a file column.
+    assert [row["portfolio"] for row in rows] == [None, None]
+    assert await pod_api.download_file(paths[1]) == b"%PDF-1.7 Ana"
+
+
+async def test_a_refused_row_keeps_no_file(
+    pod_api: DatastoreApi, db_session: AsyncSession, tmp_path: Path
+):
+    table = await _applications(pod_api)
+    add = {
+        "pod_id": UUID(pod_api.pod_id),
+        "table_name": table,
+        "contact_id": None,
+        "vouched": False,
+    }
+    with pytest.raises(PublicRowRefused) as no_cv:
+        await add_visitor_row(
+            _uow_factory(db_session), answers={"full_name": "Ana"}, **add
+        )
+    assert (no_cv.value.column, no_cv.value.message) == ("cv", "Cv is required")
+    with pytest.raises(PublicRowRefused) as bad_seats:
+        await add_visitor_row(
+            _uow_factory(db_session),
+            answers={"full_name": "Ana", "seats": "two"},
+            attachments={"cv": _staged(tmp_path, "cv.pdf", b"%PDF")},
+            **add,
+        )
+    assert bad_seats.value.column == "seats"
+    assert (await pod_api.list_records(table))["items"] == []
+    await pod_api.get_file(
+        f"/forms/{table}/cv.pdf", expected_status=status.HTTP_404_NOT_FOUND
+    )
+
+
+async def _stored_keys(pod_id: str) -> list[str]:
+    """Every object storage holds for the pod, whichever layout wrote it."""
+    from app.modules.datastore.infrastructure.storage import create_datastore_storage
+
+    keys: list[str] = []
+    async for batch in create_datastore_storage().store.list_async(
+        prefix=f"pods/{pod_id}/"
+    ):
+        keys.extend(item["path"] for item in batch)
+    return keys
+
+
+def _holds(keys: list[str], *, path_tail: str, content: bytes) -> bool:
+    """Whether a file's bytes are among ``keys``: by path in the path layout,
+    by content digest in the object layout."""
+    digest = hashlib.sha256(content).hexdigest()
+    return any(key.endswith(path_tail) or digest in key for key in keys)
+
+
+async def test_a_row_the_database_refuses_after_its_file_is_stored_keeps_no_bytes(
+    pod_api: DatastoreApi, db_session: AsyncSession, tmp_path: Path
+):
+    """A duplicate passes every check before the insert, so its file is
+    stored first: the refusal must take the stored bytes back out too."""
+    table = await _signups(
+        pod_api,
+        {"name": "badge", "type": "TEXT", "unique": True},
+        {"name": "cv", "type": "FILE_PATH", "required": True},
+    )
+    opened = await _open(
+        pod_api, table, audience="contacts", columns=["full_name", "badge", "cv"]
+    )
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+
+    add = {
+        "pod_id": UUID(pod_api.pod_id),
+        "table_name": table,
+        "answers": {"full_name": "Ana", "badge": "A-1"},
+        "contact_id": CONTACT,
+        "vouched": True,
+    }
+    await add_visitor_row(
+        _uow_factory(db_session),
+        attachments={"cv": _staged(tmp_path, "cv.pdf", b"%PDF first")},
+        **add,
+    )
+    with pytest.raises(PublicRowRefused) as refused:
+        await add_visitor_row(
+            _uow_factory(db_session),
+            attachments={"cv": _staged(tmp_path, "cv.pdf", b"%PDF second")},
+            **add,
+        )
+    assert refused.value.message == UNSAVED
+
+    keys = await _stored_keys(pod_api.pod_id)
+    assert _holds(keys, path_tail=f"forms/{table}/cv.pdf", content=b"%PDF first")
+    # The refused row's file was named `cv (1).pdf` and stored before the
+    # insert failed; neither its path nor its bytes may outlive the refusal.
+    assert not _holds(
+        keys, path_tail=f"forms/{table}/cv (1).pdf", content=b"%PDF second"
+    )
+    [row] = (await pod_api.list_records(table))["items"]
+    assert row["cv"] == f"/forms/{table}/cv.pdf"
+    assert await pod_api.download_file(row["cv"]) == b"%PDF first"
+    await pod_api.get_file(
+        f"/forms/{table}/cv (1).pdf", expected_status=status.HTTP_404_NOT_FOUND
+    )
 
 
 async def test_the_open_tables_listing_shows_only_what_the_reader_can_read(

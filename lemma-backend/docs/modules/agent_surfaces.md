@@ -394,17 +394,29 @@ is answered *for the pod*, in a group the pod has opened to them.
   the next message naming the new type; nothing turns one back.
 - **Who is in a mirror follows the platform.** A person who leaves the place --
   Slack `member_left_channel`, Teams `membersRemoved`, Telegram
-  `left_chat_member` -- leaves its channel, unless somebody in Lemma put them
-  there (a member added them, or an admin joined on request): a seat the
-  platform made has no `added_by_user_id`. The bot taken out (Slack
+  `left_chat_member`, WhatsApp `group_participants_remove` -- leaves its
+  channel, unless somebody in Lemma put them there (a member added them, or an
+  admin joined on request): a seat the platform made has no
+  `added_by_user_id`. A person who joins -- Slack `member_joined_channel`,
+  Teams `membersAdded`, Telegram `new_chat_members`, WhatsApp
+  `group_participants_add` -- is seated before they say a word
+  (`services/group_joiners.py`): the member their account resolves to or was
+  proved to be (in the pod), else the contact the pod already holds for it.
+  A join never opens a contact or nudges anyone -- anybody with a group's link
+  can join -- so a stranger is seated when they first speak. Leaves are
+  resolved the same way, and remembered for ten minutes
+  (`services/recent_leaves.py`): updates are worked as separate items in no
+  promised order, and a join worked after its leave must not seat somebody
+  gone. The seat carries the name the platform showed, never a number, and
+  counts among the group's participants a member's run is told of, placed by
+  when it was made. The bot taken out (Slack
   `channel_left` / `group_left`, Teams removing the bot, Telegram
   `my_chat_member` to left or kicked) archives the channel; put back, it
   returns. Slack `channel_shared` / `channel_unshared` set `shared_externally`.
   These arrive as `surface.platform_update` items, read by each adapter's
   `parse_group_updates` and applied by `services/group_updates.py` to the
   places on that chat in the receiving surfaces, or -- on a shared app's
-  webhook -- in the workspace or tenant the event names. WhatsApp's
-  participant updates are not read.
+  webhook -- in the workspace or tenant the event names.
 - **An app removed from Slack stands down what ran on it.** Slack's
   `app_uninstalled`, or `tokens_revoked` naming the bot, sends no leave per
   channel and refuses every later send. Both are classified to
@@ -436,7 +448,8 @@ is answered *for the pod*, in a group the pod has opened to them.
   it. A confirmation that overtakes its pending row is handed back to the
   inbox to retry. Asking again for the same title answers from the row. The
   deployment's Meta app must subscribe to the `group_lifecycle_update` webhook
-  field, or groups stay pending. Everything that names a group -- creating it,
+  field, or groups stay pending -- and to `group_participants_update`, or
+  people joining and leaving are not seen until they speak. Everything that names a group -- creating it,
   its link, a message to it -- goes to Graph `v23.0`, the version the Groups
   API was published under; ordinary messaging stays where it was.
 - **A created group belongs to the pod that created it**

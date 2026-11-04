@@ -16,6 +16,12 @@ than the member who opened the table allowed:
 The rest of the row is the platform's to fill: ``contact_id`` on a
 contact-owned table, and the table's own defaults.
 
+A file column is an attachment: the page uploads the file, the platform stores
+it in the pod as the member who opened the table, and the row holds the path it
+was stored at. Only a page that can upload asks for one -- a web form -- and the
+path is never the person's to type, since a path they wrote could name a file
+the pod already holds.
+
 What a value must be is the record validator's to say, as it is for every
 other write; this module picks the open columns, reads the shapes a web form
 sends (a ticked box, a blank field) and says a refusal in the person's words.
@@ -24,8 +30,10 @@ Pure: no I/O.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -61,6 +69,15 @@ FILLABLE_TYPES = frozenset(
     }
 )
 
+#: Column types a person outside fills by attaching a file, on a page that can
+#: upload one. Where nothing can be uploaded -- a group, where a guest only
+#: types -- they are not offered at all.
+ATTACHABLE_TYPES = frozenset({DatastoreDataType.FILE_PATH})
+
+#: The longest name an attached file keeps; past it the stem is cut, never the
+#: extension a program opens it by.
+MAX_ATTACHMENT_NAME_CHARS = 120
+
 #: The form control each type is asked with, so every page draws the same one.
 _INPUT_BY_TYPE = {
     DatastoreDataType.INTEGER: "number",
@@ -69,6 +86,7 @@ _INPUT_BY_TYPE = {
     DatastoreDataType.DATE: "date",
     DatastoreDataType.DATETIME: "datetime-local",
     DatastoreDataType.ENUM: "select",
+    DatastoreDataType.FILE_PATH: "file",
 }
 _LONG_TEXT_WORDS = ("message", "note", "description", "detail", "comment")
 
@@ -102,9 +120,14 @@ class PublicColumn(BaseModel):
     options: tuple[str, ...] = ()
     description: str | None = None
     #: The HTML control to ask with: ``text``, ``textarea``, ``email``,
-    #: ``tel``, ``number``, ``date``, ``datetime-local``, ``checkbox`` or
-    #: ``select``.
+    #: ``tel``, ``number``, ``date``, ``datetime-local``, ``checkbox``,
+    #: ``select`` or ``file``.
     input: str = "text"
+
+    @property
+    def attached(self) -> bool:
+        """Whether this column is answered with a file rather than typed."""
+        return self.input == "file"
 
 
 class PublicRowsClosed(Exception):
@@ -136,14 +159,48 @@ class PublicRowRefused(ValueError):
         self.column = column
 
 
-def is_fillable(column: ColumnSchema, primary_key: str) -> bool:
-    """Whether a person outside the pod could be asked for this column."""
+@dataclass(frozen=True, slots=True)
+class Attachment:
+    """A file a person outside attached to an answer, staged on local disk.
+
+    ``name`` is whatever their browser called it; :func:`attachment_name` makes
+    it one the pod can store.
+    """
+
+    name: str
+    content: Path
+
+
+def attachment_name(raw: str | None) -> str:
+    """A stranger's file name as one the pod can store: its last segment only,
+    trimmed, and cut to a length a folder listing can show."""
+    name = (raw or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if name in ("", ".", ".."):
+        return "attachment"
+    if len(name) <= MAX_ATTACHMENT_NAME_CHARS:
+        return name
+    stem, dot, extension = name.rpartition(".")
+    if dot and stem and len(extension) < 16:
+        return stem[: MAX_ATTACHMENT_NAME_CHARS - len(extension) - 1] + dot + extension
+    return name[:MAX_ATTACHMENT_NAME_CHARS]
+
+
+def is_fillable(
+    column: ColumnSchema, primary_key: str, *, attachments: bool = False
+) -> bool:
+    """Whether a person outside the pod could be asked for this column.
+
+    ``attachments`` when the page asking can upload a file, so a file column
+    can be asked for too.
+    """
     if column.name in SYSTEM_COLUMNS or column.name == CONTACT_COLUMN:
         return False
     if column.auto or column.computed or column.system:
         return False
     if column.name == primary_key and column.default is not None:
         return False
+    if attachments and column.type in ATTACHABLE_TYPES:
+        return True
     return column.type in FILLABLE_TYPES
 
 
@@ -198,8 +255,12 @@ def opening_problem(
     *,
     audience: PublicAudience,
     contact_owned: bool = False,
+    attachments: bool = False,
 ) -> str | None:
-    """Why these columns cannot be opened to ``audience``, or ``None`` when they can."""
+    """Why these columns cannot be opened to ``audience``, or ``None`` when they can.
+
+    ``attachments`` when the rows come from a page that can upload a file.
+    """
     if not chosen:
         return "Choose at least one column people can fill in"
     if len(chosen) > MAX_PUBLIC_COLUMNS:
@@ -210,7 +271,8 @@ def opening_problem(
     refused = [
         name
         for name in chosen
-        if name not in by_name or not is_fillable(by_name[name], primary_key)
+        if name not in by_name
+        or not is_fillable(by_name[name], primary_key, attachments=attachments)
     ]
     if refused:
         return f"People outside can't fill in {', '.join(refused)}"
@@ -223,7 +285,9 @@ def opening_problem(
                 f"{', '.join(telling)} must be unique or point at another row, "
                 "so only confirmed contacts can fill it in"
             )
-    return _missing_problem(columns, primary_key, chosen, audience, contact_owned)
+    return _missing_problem(
+        columns, primary_key, chosen, audience, contact_owned, attachments
+    )
 
 
 def _missing_problem(
@@ -232,6 +296,7 @@ def _missing_problem(
     chosen: list[str],
     audience: PublicAudience,
     contact_owned: bool,
+    attachments: bool,
 ) -> str | None:
     """A column every row needs that nobody would fill in.
 
@@ -247,7 +312,11 @@ def _missing_problem(
         and column.name not in chosen
         and not (stamped and column.name == CONTACT_COLUMN)
     ]
-    unaskable = [c.name for c in missing if not is_fillable(c, primary_key)]
+    unaskable = [
+        c.name
+        for c in missing
+        if not is_fillable(c, primary_key, attachments=attachments)
+    ]
     if unaskable:
         return (
             f"The table needs {', '.join(unaskable)}, which people outside "
@@ -260,16 +329,28 @@ def _missing_problem(
 
 
 def public_values(
-    columns: tuple[PublicColumn, ...], answers: dict[str, object]
+    columns: tuple[PublicColumn, ...],
+    answers: dict[str, object],
+    *,
+    attached: Collection[str] = (),
 ) -> dict[str, object]:
     """The row a person's answers add: the open columns only, trimmed.
 
     Anything else they sent is ignored, never passed on. A blank optional
     answer -- a box left unticked included -- is left out so the column's own
     default applies.
+
+    A file column is never taken from ``answers``: its value is the path the
+    attached file is stored at, which the caller adds once it is stored.
+    ``attached`` names the columns a file came with, so a required one without
+    a file is refused here, before anything is stored.
     """
     row: dict[str, object] = {}
     for column in columns:
+        if column.attached:
+            if column.required and column.name not in attached:
+                raise refusal_for(column, "required")
+            continue
         value = _value(column, answers.get(column.name))
         if value is None:
             if column.required:
@@ -295,6 +376,19 @@ def refusal_for(column: PublicColumn | None, reason: str | None) -> PublicRowRef
     else:
         message = f"{spoken} isn't a valid answer"
     return PublicRowRefused(message, column=column.name)
+
+
+def too_large(column: PublicColumn | None, max_bytes: int) -> PublicRowRefused:
+    """An attached file, or a whole response, over what one may carry."""
+    megabytes = max(1, max_bytes // (1024 * 1024))
+    if column is None:
+        return PublicRowRefused(
+            f"That's more than {megabytes} MB in all. Attach smaller files"
+        )
+    return PublicRowRefused(
+        f"{_spoken(column.name)} is too big. Attach a file under {megabytes} MB",
+        column=column.name,
+    )
 
 
 def _spoken(name: str) -> str:
