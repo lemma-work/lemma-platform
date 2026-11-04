@@ -152,14 +152,29 @@ async def _called_in_group(uow: SqlAlchemyUnitOfWork, *, channel_id: UUID) -> st
 
     Where, and that nothing was done -- never what they wrote: like
     ``CALLED_IN``, this line is the member's and would outlive the guest if
-    they were forgotten, while their own line in the group goes with them."""
+    they were forgotten, while their own line in the group goes with them.
+    The group's name is the platform's subject, which its participants can
+    set, so it is one short line here and nothing more."""
     group = await channel_by_id(uow, channel_id)
-    where = f"“{group.title}”" if group is not None and group.title else "a group"
+    title = _one_short_line(group.title if group is not None else None)
+    where = f"“{title}”" if title else "a group"
     return (
         f"Somebody outside the pod in {where} asked for something the bot "
         f"could not do, so nothing was done for them. Open {where} to see "
         "what they asked and answer them there."
     )
+
+
+#: The most of a group's name a member's note repeats.
+_MAX_TITLE_CHARS = 60
+
+
+def _one_short_line(text: str | None) -> str:
+    """Text somebody else chose, as one short line with no quotes of its own."""
+    line = " ".join(str(text or "").replace("“", "").replace("”", "").split())
+    if len(line) > _MAX_TITLE_CHARS:
+        line = line[: _MAX_TITLE_CHARS - 1].rstrip() + "…"
+    return line
 
 
 async def list_pod_members(

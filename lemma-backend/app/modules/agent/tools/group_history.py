@@ -10,8 +10,11 @@ members', and takes a channel to name. This reads one channel only -- the
 group this conversation answers in, taken from the conversation, never from
 the model -- as the guest may read it (``channels``' ``Reader.contact``): the
 lines said at this place, not a members' note, not an answer made with a
-member's access. So the group is one memory for every run in it, without a
-guest's run reaching anything the guest could not already scroll up to.
+member's access -- and nothing from before the guest was in the group (their
+seat's ``joined_at``): somebody added to a WhatsApp or Telegram group today
+cannot scroll up to what was said yesterday. So the group is one memory for
+every run in it, without a guest's run reaching anything the guest could not
+already scroll up to.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.messaging.pydantic_adapter import line_sender_name
-from app.modules.channels.contracts import Reader, may_read
+from app.modules.channels.contracts import Principal, Reader, may_read, member_of
 from app.modules.channels.contracts.lines import page_lines
 from app.modules.channels.contracts.places import reply_address
 from app.modules.datastore.contracts.channel_grants import (
@@ -128,6 +131,14 @@ def build_group_history_toolset(
                 return GroupHistoryResponse(
                     success=False, error="No group to read here."
                 )
+            seat = await member_of(
+                uow,
+                channel_id=place.source.channel_id,
+                principal=Principal.contact(contact_id),
+            )
+            since = seat.joined_at if seat is not None else None
+            if since is None:
+                return GroupHistoryResponse(success=True)
             reader = Reader.contact(contact_id, source_id=place.source.id)
             lines = await page_lines(
                 uow,
@@ -143,13 +154,14 @@ def build_group_history_toolset(
                 at=line.created_at.isoformat(),
             )
             for line in lines
-            if may_read(reader, line) and not line.is_deleted and line.text.strip()
+            if line.created_at >= since
+            and may_read(reader, line)
+            and not line.is_deleted
+            and line.text.strip()
         ]
-        first = lines[0].seq if lines else None
+        more = bool(lines) and lines[0].seq > 1 and lines[0].created_at > since
         return GroupHistoryResponse(
-            success=True,
-            lines=shown,
-            earlier=first if first is not None and first > 1 else None,
+            success=True, lines=shown, earlier=lines[0].seq if more else None
         )
 
     async def group_records(
