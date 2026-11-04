@@ -25,6 +25,13 @@ app.add_typer(messages_app, name="message", hidden=True)
 app.add_typer(deliveries_app, name="deliveries")
 app.add_typer(source_app, name="source")
 app.add_typer(source_app, name="sources", hidden=True)
+grants_app = typer.Typer(
+    help=(
+        "Tables a group's people outside the pod may read, or add rows to -- "
+        "everybody in the group reads what is granted."
+    )
+)
+app.add_typer(grants_app, name="grants")
 
 _KINDS = ("DIRECT", "CONTACT", "GROUP")
 _MEMBER_KINDS = ("MEMBER", "CONTACT", "AGENT")
@@ -574,3 +581,54 @@ def telegram_link(
 ) -> None:
     """A one-use, hour-long link that adds the pod's Telegram bot to a group."""
     _run(ctx, pod, lambda p: p.channels.sources.telegram_link(surface))
+
+
+# -- table grants --------------------------------------------------------------------
+
+
+@grants_app.command("list")
+def list_grants(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="The group's channel id."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """The tables a group may read or add to."""
+    _run(ctx, pod, lambda p: p.channels.table_grants.list(channel_id))
+
+
+@grants_app.command("set")
+def set_grant(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="The group's channel id."),
+    table: str = typer.Argument(..., help="The table's name."),
+    read: str = typer.Option(
+        "", "--read", help="Columns everybody in the group may read, comma-separated."
+    ),
+    add: str = typer.Option(
+        "", "--add", help="Columns they may fill in a new row, comma-separated."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Give a group a table: the columns to read, and those to fill."""
+    read_columns = [name.strip() for name in read.split(",") if name.strip()]
+    add_columns = [name.strip() for name in add.split(",") if name.strip()]
+    if not read_columns and not add_columns:
+        raise typer.BadParameter("Name columns to --read or to --add.")
+    _run(
+        ctx,
+        pod,
+        lambda p: p.channels.table_grants.set(
+            channel_id, table, read_columns=read_columns, add_columns=add_columns
+        ),
+    )
+
+
+@grants_app.command("remove")
+def remove_grant(
+    ctx: typer.Context,
+    channel_id: str = typer.Argument(..., help="The group's channel id."),
+    table: str = typer.Argument(..., help="The table's name."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """The group no longer reads or adds to the table."""
+    _run(ctx, pod, lambda p: p.channels.table_grants.remove(channel_id, table))
