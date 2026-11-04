@@ -72,10 +72,11 @@ before(async () => {
     /* posthog-js schedules its flushes and session checks on the global timers
        and never stops them, so this file's process would never exit. Every
        timer is unreferenced instead: it still fires while the tests run, and
-       holds nothing open once they are done. */
+       holds nothing open once they are done. The DOM lib says a timer is a
+       number; under Node it is always a Timeout. */
     for (const name of ["setTimeout", "setInterval"] as const) {
-        const original = globalThis[name];
-        const unreferenced = (...args: Parameters<typeof original>) => {
+        const original = globalThis[name] as unknown as (...args: unknown[]) => NodeJS.Timeout;
+        const unreferenced = (...args: unknown[]) => {
             const handle = original(...args);
             handle.unref();
             return handle;
@@ -142,6 +143,16 @@ test("what is kept is still worth having: route templates, places, and where peo
 
     const [identify] = of("$identify");
     assert.equal(identify.$set_once?.$initial_current_url, "https://lemma.work/s/[kind]/[...path]");
+});
+
+test("a pageview counted while the SDK loaded names the address it was counted for, not the one in front", async () => {
+    const before = sent.length;
+    dom.window.history.pushState(null, "", `/t/${POD_IN_ADDRESS}/table/payroll`);
+    client.capturePageview(`/t/${POD_IN_ADDRESS}/file/private/q3-layoffs.md`);
+    await settle();
+    const [pageview] = sent.slice(before).filter((event) => event.event === "$pageview");
+    assert.equal(pageview.properties.$current_url, "https://lemma.work/t/[pod]/file/[...path]");
+    assert.equal(pageview.properties.$pathname, "/t/[pod]/file/[...path]");
 });
 
 test("an undeclared event never leaves, and a declared one keeps only its keys and the SDK's", () => {
