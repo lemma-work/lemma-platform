@@ -189,11 +189,12 @@ async def read_granted_rows(
 ) -> list[dict[str, object]]:
     """Rows of a granted table, the granted columns only, as its granter reads
     them. Raises :class:`PublicRowsClosed` -- naming nothing -- for a table the
-    group was not given, a filter on a column it may not read, or a granter who
-    can no longer read it."""
+    group was not given, a filter on a column it may not read, a granter who
+    can no longer read it, or a table made per-user since it was given: its
+    rows would be the granter's own."""
     async with uow_factory() as uow:
         found = await _granted(uow, pod_id, channel_id, table_name)
-        if found is None:
+        if found is None or found[0].enable_rls:
             raise PublicRowsClosed(table_name)
         table, grant = found
         readable = [name for name in grant.read_columns if _has(table, name)]

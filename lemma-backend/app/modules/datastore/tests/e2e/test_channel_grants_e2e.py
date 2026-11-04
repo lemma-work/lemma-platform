@@ -7,7 +7,8 @@ gives the group a table. Each test pins one rule:
   a column it was not given, which would tell it what that column holds;
 * given adding, a guest's row lands, written as the granting member and
   marked as from outside;
-* a table where each member sees only their own rows is not given;
+* a table where each member sees only their own rows is not given -- nor
+  read once it is made one;
 * a table nobody gave the group is the same refusal as one that does not
   exist.
 """
@@ -154,6 +155,43 @@ async def test_a_table_each_member_reads_alone_is_not_given(pod_api: DatastoreAp
 
     assert refused.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     assert "only their own rows" in refused.text
+
+
+async def test_a_table_made_per_user_after_it_was_given_closes_to_the_group(
+    pod_api: DatastoreApi, db_session: AsyncSession
+):
+    """Given while everybody read every row, then made per-user: its rows are
+    now each member's own, and the granter's are not the group's to read."""
+    channel_id = await _group(pod_api)
+    table = await _ledger(pod_api)
+    await pod_api.create_record(table, {"what": "granter's own", "amount": 1})
+    granted = await _grant(
+        pod_api, channel_id, table, read_columns=["what"], add_columns=["what"]
+    )
+    assert granted.status_code == status.HTTP_200_OK, granted.text
+
+    await pod_api.update_table(table, {"enable_rls": True})
+
+    for attempt in (
+        read_granted_rows(
+            _uow_factory(db_session),
+            pod_id=UUID(pod_api.pod_id),
+            channel_id=UUID(channel_id),
+            table_name=table,
+            equals={},
+            contact_id=GUEST,
+        ),
+        add_granted_row(
+            _uow_factory(db_session),
+            pod_id=UUID(pod_api.pod_id),
+            channel_id=UUID(channel_id),
+            table_name=table,
+            answers={"what": "lunch"},
+            contact_id=GUEST,
+        ),
+    ):
+        with pytest.raises(PublicRowsClosed):
+            await attempt
 
 
 async def test_a_table_nobody_gave_the_group_is_not_there(
