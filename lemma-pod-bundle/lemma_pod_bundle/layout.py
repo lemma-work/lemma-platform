@@ -140,17 +140,22 @@ def _read_export_contents(source_dir: Path) -> dict[str, Any]:
     return contents if isinstance(contents, dict) else {}
 
 
-def _resolve_bundle_file_ref(raw_path: Any, *, base_dir: Path) -> Path:
+def _resolve_bundle_file_ref(raw_path: object, *, base_dir: Path) -> Path:
     """Resolve a sidecar reference without allowing it to escape its resource.
 
     Resolve symlinks as well as parent-directory segments before checking
     containment: lexical path checks alone can be bypassed by a symlink.
+
+    Containment is checked before existence, so a path outside the resource is
+    refused the same way whether or not it exists; otherwise the error would
+    tell a bundle's author which files exist on the importer's disk. A missing
+    file inside the resource still fails when it is read, as it always has.
     """
     if not isinstance(raw_path, str) or not raw_path:
         raise ValueError("Bundle file reference must be a non-empty path")
 
     resource_root = base_dir.resolve()
-    resolved = (resource_root / raw_path).resolve(strict=True)
+    resolved = (resource_root / raw_path).resolve()
     try:
         resolved.relative_to(resource_root)
     except ValueError:
@@ -158,7 +163,7 @@ def _resolve_bundle_file_ref(raw_path: Any, *, base_dir: Path) -> Path:
             f"Bundle file reference escapes its resource directory: {raw_path!r}"
         ) from None
 
-    if not resolved.is_file():
+    if resolved.exists() and not resolved.is_file():
         raise ValueError(f"Bundle file reference is not a file: {raw_path!r}")
     return resolved
 
@@ -169,9 +174,7 @@ def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     if not isinstance(value, dict):
         return value
     if set(value.keys()) == {RAW_FILE_REF_KEY}:
-        raw_path = _resolve_bundle_file_ref(
-            value[RAW_FILE_REF_KEY], base_dir=base_dir
-        )
+        raw_path = _resolve_bundle_file_ref(value[RAW_FILE_REF_KEY], base_dir=base_dir)
         return raw_path.read_text(encoding="utf-8")
     if set(value.keys()) == {JSON_FILE_REF_KEY}:
         json_path = _resolve_bundle_file_ref(
@@ -181,6 +184,7 @@ def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     return {
         key: _resolve_file_refs(item, base_dir=base_dir) for key, item in value.items()
     }
+
 
 def extract_large_text(
     payload: dict[str, Any],

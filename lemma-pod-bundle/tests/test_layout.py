@@ -171,6 +171,42 @@ def test_load_resource_payload_rejects_parent_directory_file_refs(
         load_resource_payload(resource_dir, "helper")
 
 
+@pytest.mark.parametrize("ref_key", ["$file", "$json_file"])
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_load_resource_payload_rejects_absolute_file_refs(
+    tmp_path: Path, ref_key: str, target_exists: bool
+):
+    # `base_dir / "/abs/path"` is `/abs/path`: an absolute ref replaces the
+    # resource folder outright. A missing target is refused the same way, so
+    # the error can't be used to learn which files exist.
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    outside_file = tmp_path / "secret.json"
+    if target_exists:
+        outside_file.write_text('{"sensitive": true}', encoding="utf-8")
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {ref_key: str(outside_file)}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its resource directory"):
+        load_resource_payload(resource_dir, "helper")
+
+
+def test_load_resource_payload_missing_sidecar_inside_resource_still_fails(
+    tmp_path: Path,
+):
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {"$file": "instruction.md"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        load_resource_payload(resource_dir, "helper")
+
+
 def test_load_resource_payload_rejects_symlink_to_outside_resource(tmp_path: Path):
     resource_dir = tmp_path / "agents" / "helper"
     resource_dir.mkdir(parents=True)
@@ -179,7 +215,7 @@ def test_load_resource_payload_rejects_symlink_to_outside_resource(tmp_path: Pat
     sidecar_link = resource_dir / "instruction.md"
     try:
         sidecar_link.symlink_to(outside_file)
-    except (NotImplementedError, OSError):
+    except NotImplementedError, OSError:
         pytest.skip("symlinks are not available on this platform")
     (resource_dir / "helper.json").write_text(
         json.dumps({"name": "helper", "instruction": {"$file": "instruction.md"}}),
