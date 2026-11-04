@@ -242,13 +242,16 @@ class GroupUpdates:
         if kind is GroupUpdateKind.BOT_RETURNED:
             return await self.groups.bot_returned(group.id)
         if kind is GroupUpdateKind.MEMBER_JOINED:
-            if await left_lately(group.id, update.external_user_id):
+            async with connection_released(self.uow.session):
+                gone = await left_lately(group.id, update.external_user_id)
+            if gone:
                 return False
             joined = await who_moved(self.uow, group, update, joining=True)
             return joined is not None and await self.groups.member_joined(
                 group.id, joined, name=update.display_name
             )
-        await note_left(group.id, update.external_user_id)
+        async with connection_released(self.uow.session):
+            await note_left(group.id, update.external_user_id)
         left = await who_moved(self.uow, group, update, joining=False)
         return left is not None and await self.groups.member_left(group.id, left)
 
