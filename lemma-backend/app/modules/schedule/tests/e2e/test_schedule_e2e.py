@@ -1082,6 +1082,21 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
 
 
 @pytest.mark.asyncio
+async def test_composio_webhook_rejects_oversized_body_at_http_boundary(
+    authenticated_client: AsyncClient,
+):
+    # Composio uses the ordinary 1 MiB ceiling. The body is rejected before
+    # signature verification or any schedule matching takes place.
+    response = await authenticated_client.post(
+        "/webhooks/composio",
+        content=b"x" * (1_048_576 + 1),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 413, response.text
+
+
+@pytest.mark.asyncio
 async def test_webhook_workflow_schedule_contract_derives_start_config(
     authenticated_client: AsyncClient,
     fixed_test_org,
