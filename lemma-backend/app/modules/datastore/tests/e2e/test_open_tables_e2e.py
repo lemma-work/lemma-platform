@@ -10,6 +10,7 @@ schedule asked for outside rows, and then its run is told the row is untrusted.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -246,6 +247,75 @@ async def test_a_refused_row_keeps_no_file(
     assert (await pod_api.list_records(table))["items"] == []
     await pod_api.get_file(
         f"/forms/{table}/cv.pdf", expected_status=status.HTTP_404_NOT_FOUND
+    )
+
+
+async def _stored_keys(pod_id: str) -> list[str]:
+    """Every object storage holds for the pod, whichever layout wrote it."""
+    from app.modules.datastore.infrastructure.storage import create_datastore_storage
+
+    keys: list[str] = []
+    async for batch in create_datastore_storage().store.list_async(
+        prefix=f"pods/{pod_id}/"
+    ):
+        keys.extend(item["path"] for item in batch)
+    return keys
+
+
+def _holds(keys: list[str], *, path_tail: str, content: bytes) -> bool:
+    """Whether a file's bytes are among ``keys``: by path in the path layout,
+    by content digest in the object layout."""
+    digest = hashlib.sha256(content).hexdigest()
+    return any(key.endswith(path_tail) or digest in key for key in keys)
+
+
+async def test_a_row_the_database_refuses_after_its_file_is_stored_keeps_no_bytes(
+    pod_api: DatastoreApi, db_session: AsyncSession, tmp_path: Path
+):
+    """A duplicate passes every check before the insert, so its file is
+    stored first: the refusal must take the stored bytes back out too."""
+    table = await _signups(
+        pod_api,
+        {"name": "badge", "type": "TEXT", "unique": True},
+        {"name": "cv", "type": "FILE_PATH", "required": True},
+    )
+    opened = await _open(
+        pod_api, table, audience="contacts", columns=["full_name", "badge", "cv"]
+    )
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+
+    add = {
+        "pod_id": UUID(pod_api.pod_id),
+        "table_name": table,
+        "answers": {"full_name": "Ana", "badge": "A-1"},
+        "contact_id": CONTACT,
+        "vouched": True,
+    }
+    await add_visitor_row(
+        _uow_factory(db_session),
+        attachments={"cv": _staged(tmp_path, "cv.pdf", b"%PDF first")},
+        **add,
+    )
+    with pytest.raises(PublicRowRefused) as refused:
+        await add_visitor_row(
+            _uow_factory(db_session),
+            attachments={"cv": _staged(tmp_path, "cv.pdf", b"%PDF second")},
+            **add,
+        )
+    assert refused.value.message == UNSAVED
+
+    keys = await _stored_keys(pod_api.pod_id)
+    assert _holds(keys, path_tail=f"forms/{table}/cv.pdf", content=b"%PDF first")
+    # The refused row's file was named `cv (1).pdf` and stored before the
+    # insert failed; neither its path nor its bytes may outlive the refusal.
+    assert not _holds(
+        keys, path_tail=f"forms/{table}/cv (1).pdf", content=b"%PDF second"
+    )
+    [row] = (await pod_api.list_records(table))["items"]
+    assert row["cv"] == f"/forms/{table}/cv.pdf"
+    assert await pod_api.download_file(row["cv"]) == b"%PDF first"
+    await pod_api.get_file(
+        f"/forms/{table}/cv (1).pdf", expected_status=status.HTTP_404_NOT_FOUND
     )
 
 
