@@ -11,6 +11,10 @@ and its delivery is unique per (line, place). A failed run's line is its
 failure notice, which the send offers a retry for. A web chat shows its
 answers itself, so its delivery is ``SENT`` here and nothing is sent.
 
+An answer the run gave before the person said more (``domain/steered_answers``
+in the agent module) is a line of its own, posted first, named by the run and
+its place among them -- so they arrive in the order they were given.
+
 No network: written in a FAST item (``events/reply_for_run_work``).
 """
 
@@ -33,6 +37,7 @@ from app.modules.agent.contracts.run_failures import user_safe_stored_reason
 from app.modules.agent.contracts.run_replies import (
     RunReplyMaterial,
     answer_line_client_id,
+    earlier_answer_client_id,
 )
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
@@ -93,33 +98,46 @@ async def post_run_reply(
         return None
     text = answer_text(material, platform=source.platform)
     conversation = await agent_conversations.surface_conversation(uow, conversation_id)
-    if text is None or conversation is None:
+    earlier = [
+        said for said in map(sanitize_user_visible_text, material.earlier) if said
+    ]
+    if conversation is None or (text is None and not earlier):
         return None
     agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
     event = _answered_event(address)
-    line = await post(
-        uow,
-        channel_id=source.channel_id,
-        line=NewLine(
-            sender=Sender.agent(
-                agent_id,
-                on_behalf_of=answered_for(conversation.audience, conversation.user_id),
-                display_name=await _agent_name(uow, agent_id),
-            ),
-            text=text,
-            target_source_id=source.id,
-            client_message_id=answer_line_client_id(run_id),
-            conversation_id=conversation_id,
-            agent_run_id=run_id,
-            # The thread it goes to, so the place knows the agent is in it --
-            # and a Slack or Teams thread is a thread here too.
-            external_thread_id=event.external_thread_id if event else None,
-            thread_root_id=await _thread_root(uow, source, event),
-        ),
-        deliver_to=[source.id],
+    sender = Sender.agent(
+        agent_id,
+        on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+        display_name=await _agent_name(uow, agent_id),
     )
-    if line is not None and web:
-        await shown_on_web(uow, line, source)
+    thread_root_id = await _thread_root(uow, source, event)
+    said = [
+        (earlier_answer_client_id(run_id, number), one)
+        for number, one in enumerate(earlier, start=1)
+    ]
+    if text is not None:
+        said.append((answer_line_client_id(run_id), text))
+    line: ChannelMessage | None = None
+    for client_message_id, one in said:
+        line = await post(
+            uow,
+            channel_id=source.channel_id,
+            line=NewLine(
+                sender=sender,
+                text=one,
+                target_source_id=source.id,
+                client_message_id=client_message_id,
+                conversation_id=conversation_id,
+                agent_run_id=run_id,
+                # The thread it goes to, so the place knows the agent is in it
+                # -- and a Slack or Teams thread is a thread here too.
+                external_thread_id=event.external_thread_id if event else None,
+                thread_root_id=thread_root_id,
+            ),
+            deliver_to=[source.id],
+        )
+        if line is not None and web:
+            await shown_on_web(uow, line, source)
     return line
 
 
