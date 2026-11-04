@@ -169,7 +169,7 @@ def _context_messages(
     one Slack makes, and it says nothing about somebody in the pod's own
     workspace, so the sender's id is kept beside the name: the roster a member's
     run is handed asks the pod whether that id is one of its own people
-    (``services/group_log.pod_members_in_lines``).
+    (``services/live_group_roster.pod_members_in_lines``).
 
     The author is the name the message carries (``user_profile``) where it has
     one, and the bare id otherwise -- ``name_authors`` then asks Slack for the

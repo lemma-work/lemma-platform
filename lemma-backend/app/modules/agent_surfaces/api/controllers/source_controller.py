@@ -122,7 +122,7 @@ async def _on_bot(ctx, *, pod_id: UUID, state: SourceState, action: str) -> None
     )
 
 
-async def _bot_username(
+async def bot_username_of(
     surface: AgentSurfaceEntity, *, service: AgentSurfaceService, uow: UoWDep
 ) -> str | None:
     """The bot's Telegram username, asked of Telegram if nobody has asked yet.
@@ -324,7 +324,7 @@ async def telegram_link(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Add-to-group links are for Telegram.",
         )
-    bot_username = await _bot_username(surface, service=service, uow=uow)
+    bot_username = await bot_username_of(surface, service=service, uow=uow)
     try:
         async with connection_released(uow.session):
             url, expires_at = await mint_group_link(

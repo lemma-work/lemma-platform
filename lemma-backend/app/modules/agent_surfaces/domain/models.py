@@ -69,7 +69,7 @@ class SurfaceContextMessage(BaseModel):
     #: The platform id its author was sent under, where the platform gives one
     #: beside the name it shows. A fetched history can say who spoke; only the
     #: pod can say whether they hold access, and it knows a person on a platform
-    #: by this id (``services/group_log.pod_members_in_lines``). Left unset where
+    #: by this id (``services/live_group_roster.pod_members_in_lines``). Left unset where
     #: the line carries no id to check, and then its author is nobody the pod
     #: vouches for.
     author_external_id: str | None = None
