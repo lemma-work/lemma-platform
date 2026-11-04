@@ -4,7 +4,7 @@ from collections.abc import Collection
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -19,7 +19,7 @@ from app.modules.identity.infrastructure.mobile_number_claims import (
     get_other_mobile_number_owner_id,
 )
 from app.modules.identity.infrastructure.chat_account_policy import chat_account_clause
-from app.modules.identity.infrastructure.models import User
+from app.modules.identity.infrastructure.models import EmailChallenge, User
 from app.core.helpers.identifiers import normalize_mobile_digits
 
 
@@ -27,6 +27,23 @@ from app.core.helpers.identifiers import normalize_mobile_digits
 #: bind-parameter ceiling, and large enough that the batches this serves are
 #: one statement in practice.
 _EXISTENCE_CHUNK = 10_000
+
+#: The columns an erased account rewrites. ``preferences`` is written apart,
+#: because the entity holds it typed and the column holds JSON.
+_ERASED_FIELDS = (
+    "email",
+    "first_name",
+    "last_name",
+    "mobile_number",
+    "mobile_verified_at",
+    "country",
+    "timezone",
+    "date_of_birth",
+    "is_active",
+    "is_deleted",
+    "deactivated_at",
+    "deactivation_reason",
+)
 
 
 class UserRepository(UserRepositoryPort):
@@ -231,6 +248,33 @@ class UserRepository(UserRepositoryPort):
             if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
+        await self._collect_events(entity)
+        return instance.to_entity()
+
+    async def save_erased(
+        self, entity: UserEntity, *, previous_email: str
+    ) -> UserEntity:
+        """Write every column ``UserEntity.erase`` cleared, preferences included.
+
+        Not ``update``: that writes only the fields a caller set, skips
+        ``preferences``, and claims the mobile number -- none of which is what
+        erasing an account asks for. The email challenges are keyed by address
+        rather than by account, and outlive their use, so they are forgotten
+        here too.
+        """
+        instance = await self.session.get(User, entity.id)
+        if instance is None:
+            raise UserNotFoundError()
+        for field in _ERASED_FIELDS:
+            setattr(instance, field, getattr(entity, field))
+        instance.preferences = None
+        await self.session.execute(
+            delete(EmailChallenge).where(
+                func.lower(EmailChallenge.email)
+                == normalize_identity_email(previous_email)
+            )
+        )
+        await self.session.flush()
         await self._collect_events(entity)
         return instance.to_entity()
 

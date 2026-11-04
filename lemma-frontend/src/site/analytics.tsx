@@ -8,6 +8,7 @@ import {
 } from "./analytics/client";
 import { isNewView } from "./analytics/route-template";
 import {
+    asksForConsent,
     readConsentDecision,
     recordConsentDecision,
     subscribeToConsent,
@@ -46,6 +47,8 @@ export function Analytics() {
     }, [consent]);
     if (
         !hydrated ||
+        !pathname ||
+        !asksForConsent(pathname) ||
         !isAnalyticsDocument() ||
         !config.ANALYTICS_KEY ||
         isLocalDeployment() ||

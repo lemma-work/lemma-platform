@@ -19540,6 +19540,38 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * List My Telegram Accounts
+     * The Telegram accounts the current user proved from a Lemma session, still
+     * theirs: every bot knows them as this user.
+     * @returns TelegramAccountsResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceListMyTelegramAccounts() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/surfaces/me/telegram-accounts"
+      });
+    }
+    /**
+     * Unlink My Telegram Account
+     * Unlink one of them: from its next message the account is a stranger's.
+     * @param accountId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentSurfaceUnlinkMyTelegramAccount(accountId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/surfaces/me/telegram-accounts/{account_id}",
+        path: {
+          "account_id": accountId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/user-surfaces.ts
@@ -19555,6 +19587,18 @@ var LemmaClient = (() => {
     setDefault(payload) {
       return this.client.request(
         () => AgentSurfacesMeService.agentSurfaceSetMyDefault(payload)
+      );
+    }
+    /** The Telegram accounts I proved from a Lemma session; every bot knows them as me. */
+    telegramAccounts() {
+      return this.client.request(
+        () => AgentSurfacesMeService.agentSurfaceListMyTelegramAccounts()
+      );
+    }
+    /** Unlink one of them: from its next message it is a stranger's. */
+    unlinkTelegramAccount(accountId) {
+      return this.client.request(
+        () => AgentSurfacesMeService.agentSurfaceUnlinkMyTelegramAccount(accountId)
       );
     }
   };
@@ -20796,6 +20840,24 @@ var LemmaClient = (() => {
   // src/openapi_client/services/UsersService.ts
   var UsersService = class {
     /**
+     * Delete Current User
+     * Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by "Deleted user". Every session ends, the caller's included: its cookies or tokens are cleared on this response. If the sign-in service cannot be reached just then, the deletion still stands and the sessions end as soon as it can be. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.
+     * @param requestBody
+     * @returns AccountDeletionResponse Successful Response
+     * @throws ApiError
+     */
+    static userCurrentDelete(requestBody) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/users/me",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Current User
      * Get the current authenticated user's information
      * @returns UserResponse Successful Response
@@ -20909,6 +20971,13 @@ var LemmaClient = (() => {
     }
     upsertProfile(payload) {
       return this.client.request(() => UsersService.userProfileUpsert(payload));
+    }
+    /** Delete the signed-in person's account for good. `confirm_email` is the
+     *  account's own address, typed by the person. Every session ends, this one
+     *  included; refusals (409 `ACCOUNT_DELETION_SOLE_OWNER`, a billing code,
+     *  400 `ACCOUNT_DELETION_CONFIRMATION_MISMATCH`) change nothing. */
+    deleteAccount(payload) {
+      return this.client.request(() => UsersService.userCurrentDelete(payload));
     }
   };
 

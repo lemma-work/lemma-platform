@@ -55,3 +55,39 @@ class UserResponse(BaseSchema):
     date_of_birth: date | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AccountDeletionRequest(BaseSchema):
+    """Proof that the person means this account, typed back by them."""
+
+    # Unbounded on purpose: an empty box or an overlong paste is a mismatch
+    # like any other typo, answered with the code clients branch on, not 422.
+    confirm_email: str = Field(
+        description=(
+            "The account's own email address, typed by the person. Compared "
+            "case-insensitively; anything else is refused with "
+            "ACCOUNT_DELETION_CONFIRMATION_MISMATCH."
+        ),
+    )
+
+
+class AccountDeletionResponse(BaseSchema):
+    """What deleting the account did.
+
+    Every session has ended by the time it is read -- or, if the sign-in
+    service could not be reached just then, ends as soon as it can be.
+    """
+
+    deleted: bool = Field(
+        description="Always true: the account no longer exists, whether this "
+        "request deleted it or an earlier one had."
+    )
+    organizations_left: int = Field(
+        description="Organizations others are still in, which the person left; "
+        'their shared work stays there under "Deleted user".'
+    )
+    organizations_deleted: int = Field(
+        description="Organizations the person was the only member of, deleted "
+        "with their pods."
+    )
+    pods_deleted: int
