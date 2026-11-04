@@ -42,6 +42,14 @@ OUTSIDER_TOOL_NAMES = frozenset(
         # FORM -- offered only to a web visitor's run (``tools/form_tools``):
         # fills fields of a form on their page; writes nothing.
         "fill_form",
+        # GROUP -- offered only to a guest's run in a group
+        # (``tools/group_history``): the group's own lines, as the guest may
+        # read them, and the tables a member gave the group -- the granted
+        # columns, read and added as that member -- from the conversation's
+        # place, never one the model names.
+        "group_history",
+        "group_records",
+        "group_add_record",
     }
 )
 

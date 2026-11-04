@@ -71,8 +71,11 @@ def surface_platform_guidance(
         lines.append(_GROUP_SECTION)
 
     if facts.is_email:
-        lines.extend(_email_sections(facts))
-    else:
+        lines.extend(_email_sections(facts, guest=audience.answers_outsiders))
+    elif not audience.answers_outsiders:
+        # How to show files, ask, approve and narrate long work: tools a run
+        # answering somebody outside the pod is not given, and one told about
+        # them reached for them.
         lines.append(_delivery_section(facts))
         if facts.shows_live_progress:
             lines.append(_long_work_section(facts))
@@ -253,7 +256,11 @@ def group_participants_notice(participants: object) -> str | None:
             f"{', '.join(outside)} "
             f"{'is' if _one(outside, unnamed[False]) else 'are'} not in this pod: "
             "they read only what this pod has made public, so say nothing here "
-            "that they should not hear."
+            "that they should not hear. When they ask the bot themselves it "
+            "reads only what is Public and any table this group was given, and "
+            "adds rows only to a table given with adding: anything else they "
+            "want written down, you write. The person you are answering can "
+            "give the group a table in its settings; you never do."
         )
     lines.append(
         "This is for you to judge the answer by, not to repeat: do not tell the "
@@ -305,14 +312,21 @@ def withheld_background_note(count: int, *, view: str | None = None) -> str:
     return f"({count} message(s) in this chat are not shown to you: {because}.)"
 
 
-def _email_sections(facts: PlatformFacts) -> list[str]:
-    """Email delivers one composed reply, so there is no chat delivery to describe."""
+def _email_sections(facts: PlatformFacts, *, guest: bool = False) -> list[str]:
+    """Email delivers one composed reply, so there is no chat delivery to
+    describe. ``guest``: somebody outside the pod, whose run is given neither
+    files to show nor questions to ask -- told only how the reply goes."""
+    sending = (
+        "## Sending your reply\n"
+        "The recipient only receives email, and they receive exactly one: "
+        "everything you write this turn is composed into a single reply and "
+        "sent when you finish. Just write it. Markdown is rendered to HTML."
+    )
+    if guest:
+        return [f"{sending} Do not narrate progress."]
     return [
         (
-            "## Sending your reply\n"
-            "The recipient only receives email, and they receive exactly one: "
-            "everything you write this turn is composed into a single reply and "
-            "sent when you finish. Just write it. Markdown is rendered to HTML. "
+            f"{sending} "
             "Show a file with `display_resource` (`type=FILE`, a pod path) and it "
             f"is attached to that reply — up to {facts.inline_mb_cap} MB inline, "
             "larger files become download links automatically. Do not narrate "

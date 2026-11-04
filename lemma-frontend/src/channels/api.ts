@@ -119,8 +119,18 @@ export interface ChannelApi {
      *  open it. */
     identityLink(surfaceId: string, contactId?: string): Promise<{ code: string; url: string; expiresAt: string }>;
     identityLinkStatus(code: string): Promise<IdentityLinkStatus>;
+    /** The tables a group's people outside the space may read or add to. */
+    tableGrants(channelId: string): Promise<TableGrant[]>;
+    setTableGrant(channelId: string, table: string, grant: { readColumns: string[]; addColumns: string[] }): Promise<TableGrant>;
+    removeTableGrant(channelId: string, table: string): Promise<void>;
     confirmIdentityLink(code: string): Promise<TelegramAccount>;
     declineIdentityLink(code: string): Promise<void>;
+}
+
+export interface TableGrant {
+    table: string;
+    readColumns: string[];
+    addColumns: string[];
 }
 
 export interface TelegramAccount {
@@ -308,6 +318,17 @@ function liveApi(podId: string): ChannelApi {
         },
         async declineIdentityLink(code) {
             await client().channels.sources.declineIdentityLink(podId, code);
+        },
+        async tableGrants(channelId) {
+            const listed = await client().channels.sources.tableGrants(podId, channelId);
+            return listed.items.map((grant) => ({ table: grant.table, readColumns: grant.read_columns, addColumns: grant.add_columns }));
+        },
+        async setTableGrant(channelId, table, grant) {
+            const saved = await client().channels.sources.setTableGrant(podId, channelId, table, grant);
+            return { table: saved.table, readColumns: saved.read_columns, addColumns: saved.add_columns };
+        },
+        async removeTableGrant(channelId, table) {
+            await client().channels.sources.removeTableGrant(podId, channelId, table);
         },
     };
 }
