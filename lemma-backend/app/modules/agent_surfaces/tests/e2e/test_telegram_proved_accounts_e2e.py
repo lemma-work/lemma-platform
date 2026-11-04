@@ -11,11 +11,12 @@ one rule:
 * nobody unlinks an account for somebody else, and a binding made some other
   way -- a shared phone number -- is neither listed nor unlinked here;
 * a member proves no more accounts than the list shows, so every one of them
-  has a row to unlink.
+  has a row to unlink -- even two confirmed at the same moment.
 """
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID, uuid4
 
 import pytest
@@ -23,7 +24,9 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     VerifiedSurfaceIdentity,
@@ -64,6 +67,22 @@ async def _prove(client: AsyncClient, pod_id: str, bot_id: str, account: int) ->
         f"/pods/{pod_id}/telegram-identity-links/{code}/confirm"
     )
     assert confirmed.status_code == 200, confirmed.text
+
+
+async def _prove_directly(
+    uow: SqlAlchemyUnitOfWork, account: int, user_id: UUID, surface_id: UUID
+) -> bool:
+    """Bind the account as a confirmed link would, without the Telegram trip."""
+    proved = await VerifiedSurfaceIdentityRepository(uow).prove_by_session(
+        binding_key=binding_key_of(
+            "TELEGRAM", None, installation_id=None, actor=str(account)
+        ),
+        platform="TELEGRAM",
+        external_user_id=str(account),
+        user_id=user_id,
+        surface_id=surface_id,
+    )
+    return proved is not None
 
 
 async def _listed(
@@ -194,21 +213,11 @@ async def test_a_member_proves_no_more_accounts_than_the_list_shows(
 ):
     pod_id = test_pod["id"]
     bot = await _bot(authenticated_client, pod_id, monkeypatch, fake_telegram)
-    repository = VerifiedSurfaceIdentityRepository(SqlAlchemyUnitOfWork(db_session))
+    uow = SqlAlchemyUnitOfWork(db_session)
+    member, surface_id = UUID(fixed_test_user["id"]), UUID(bot["id"])
 
     async def prove(account: int) -> bool:
-        return (
-            await repository.prove_by_session(
-                binding_key=binding_key_of(
-                    "TELEGRAM", None, installation_id=None, actor=str(account)
-                ),
-                platform="TELEGRAM",
-                external_user_id=str(account),
-                user_id=UUID(fixed_test_user["id"]),
-                surface_id=UUID(bot["id"]),
-            )
-            is not None
-        )
+        return await _prove_directly(uow, account, member, surface_id)
 
     first, one_more = MANY_ACCOUNTS_FROM, MANY_ACCOUNTS_FROM + MAX_PROVED_ACCOUNTS
     for account in range(first, one_more):
@@ -225,3 +234,32 @@ async def test_a_member_proves_no_more_accounts_than_the_list_shows(
     assert unlinked.status_code == 204, unlinked.text
     db_session.expire_all()
     assert await prove(one_more)
+
+
+async def test_two_accounts_confirmed_at_once_never_pass_the_cap(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    pod_id = test_pod["id"]
+    bot = await _bot(authenticated_client, pod_id, monkeypatch, fake_telegram)
+    member, surface_id = UUID(fixed_test_user["id"]), UUID(bot["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    last = MANY_ACCOUNTS_FROM + MAX_PROVED_ACCOUNTS - 1
+    for account in range(MANY_ACCOUNTS_FROM, last):
+        assert await _prove_directly(uow, account, member, surface_id)
+    await db_session.commit()
+
+    async def confirm(account: int) -> bool:
+        # Its own transaction, as each confirm request has.
+        async with create_uow_from_session_maker(async_session_maker) as own:
+            return await _prove_directly(own, account, member, surface_id)
+
+    # One place left, and two accounts after it at the same moment.
+    outcomes = await asyncio.gather(confirm(last), confirm(last + 1))
+    assert sorted(outcomes) == [False, True]
+    assert len(await _listed(authenticated_client)) == MAX_PROVED_ACCOUNTS

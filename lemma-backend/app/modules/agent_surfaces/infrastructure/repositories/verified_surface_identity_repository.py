@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import false, func, select, update
+from sqlalchemy import false, func, select, text, update
 
 from app.core.domain.uow import IUnitOfWork
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     VerifiedSurfaceIdentity,
 )
@@ -127,10 +129,13 @@ class VerifiedSurfaceIdentityRepository:
             and identity.revoked_at is None
             and identity.session_proved_at is not None
         )
-        if not already_theirs and (
-            await self._count_session_proved(user_id, platform) >= MAX_PROVED_ACCOUNTS
-        ):
-            return None
+        if not already_theirs:
+            await self._hold_new_proofs(user_id, platform)
+            if (
+                await self._count_session_proved(user_id, platform)
+                >= MAX_PROVED_ACCOUNTS
+            ):
+                return None
         if identity is not None and identity.user_id != user_id:
             identity.user_id = user_id
             identity.verified_phone = None
@@ -148,6 +153,20 @@ class VerifiedSurfaceIdentityRepository:
         identity.proved_through_surface_id = surface_id
         await self.session.flush()
         return identity
+
+    async def _hold_new_proofs(self, user_id: UUID, platform: str) -> None:
+        """Take this person's new proofs on ``platform`` one at a time, until
+        commit: two confirmed at once with one place left must not both count
+        it free."""
+        digest = hashlib.blake2b(
+            f"{user_id}:{platform}".encode(), digest_size=8, person=b"lemma-proofs"
+        ).digest()
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": int.from_bytes(digest, "big", signed=True)},
+        )
+        # A connection-scope release would commit, and drop the lock mid-proof.
+        mark_transaction_scoped_lock(self.session)
 
     async def _count_session_proved(self, user_id: UUID, platform: str) -> int:
         count = await self.session.scalar(

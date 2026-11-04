@@ -89,11 +89,20 @@ export function LinkTelegramEntry() {
     const unlink = useMutation({ mutationFn: unlinkTelegramAccount, onSettled: reread });
     const linked = accounts.data ?? [];
     const through = mine.data?.surfaceIds.length ? mine.data : null;
-    if (!through && !linked.length) return null;
+    /* Not yet read is not none: the row waits rather than offering a first
+       link to somebody who may have several. */
+    if (accounts.isPending) return null;
+    const unread = accounts.isError && !accounts.data;
+    if (!through && !linked.length && !unread) return null;
     return (
         <div className="field profile-telegram">
             <span>Telegram</span>
-            {linked.length ? (
+            {unread ? (
+                <em className="profile-form__problem" role="alert">
+                    {problemOf(accounts.error, "Couldn’t read your linked accounts.")}{" "}
+                    <button type="button" className="linkish" onClick={() => void accounts.refetch()}>Try again</button>
+                </em>
+            ) : linked.length ? (
                 <ul className="profile-telegram__accounts">
                     {linked.map((account) => {
                         const name = account.name ?? "A Telegram account";
