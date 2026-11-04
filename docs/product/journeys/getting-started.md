@@ -374,6 +374,56 @@ are shown with a retry action rather than an indefinite loading message.
 
 ---
 
+## Capability: Delete your account
+
+### PS-ONB-080 — A person deletes their own account, from the app or the website
+**Status:** planned
+
+- The system shall let a signed-in person delete their own account from their
+  account settings, on the web and on the phone, and from a public page that
+  works without the app once they sign in.
+- Before deleting, the system shall say plainly what goes and what stays, and
+  shall ask the person to type their account's email address to confirm.
+- If the typed address is not the account's, then the system shall delete
+  nothing.
+- When the account is deleted, the system shall end every session the person
+  has, on every device, and every connection a client or computer holds on
+  their behalf.
+- When the account is deleted, the system shall let the same email address
+  sign up again as a new person, with nothing of the old account.
+
+**Contracts:** `user.current.delete`
+
+### PS-ONB-081 — Deleting an account unlinks the person from work they shared
+**Status:** planned
+
+- When a person deletes their account, the system shall erase what it held
+  about them: their name, email address, phone number, time zone and the chat
+  accounts they proved.
+- When a person deletes their account, the system shall take them out of every
+  organization and pod, and disconnect the accounts they connected there.
+- When a person deletes their account, the system shall keep what they shared
+  with others — messages, records, files, pods — in the organization it
+  belongs to, shown as by "Deleted user".
+- When a person deletes their account, the system shall delete every
+  organization nobody else is in, with its pods.
+
+**Contracts:** `user.current.delete`
+
+### PS-ONB-082 — An account is not deleted out from under what depends on it
+**Status:** planned
+
+- If the person is the only owner of an organization other people are in, then
+  the system shall refuse to delete the account, name that organization, and
+  ask them to make someone else an owner first (PS-ONB-041).
+- If the person pays for something the deletion would leave running, then the
+  system shall refuse to delete the account and say what to cancel.
+- When the system refuses, it shall change nothing.
+
+**Contracts:** `user.current.delete`
+
+---
+
 ## Not covered here
 
 | Concern | Where it lives |

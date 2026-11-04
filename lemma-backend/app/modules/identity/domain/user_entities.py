@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from uuid import UUID
 
 from pydantic import EmailStr, field_validator
 
@@ -94,3 +95,47 @@ class UserEntity(AggregateRoot):
         self.is_active = False
         self.deactivated_at = self.deactivated_at or datetime.now(timezone.utc)
         self.deactivation_reason = reason
+
+    def erase(self) -> None:
+        """Turn the account into a tombstone that holds nothing about the person.
+
+        The row stays, keyed by the same id, because everything the person
+        wrote with others -- messages, records, files, pods -- names it, and
+        a foreign key to a missing row cascades. What is left on it is what
+        every author line already reads: a name, and that name is "Deleted
+        user". The address is replaced by one under ``.example``, which no
+        mail system delivers to, so the real one is free to sign up again.
+        """
+        from app.modules.identity.domain.events import (
+            UserDeletedEvent,
+            UserMobileChangedEvent,
+        )
+
+        if self.mobile_number is not None or self.mobile_verified_at is not None:
+            # What was bound to the number -- a surface identity resolved
+            # through it -- is unbound by the work this fact causes.
+            self.add_event(UserMobileChangedEvent(user_id=self.id))
+        self.email = deleted_user_email(self.id)
+        self.first_name = DELETED_USER_FIRST_NAME
+        self.last_name = DELETED_USER_LAST_NAME
+        self.mobile_number = None
+        self.mobile_verified_at = None
+        self.country = None
+        self.timezone = None
+        self.date_of_birth = None
+        self.preferences = None
+        self.deactivate(DELETED_ACCOUNT_REASON)
+        self.is_deleted = True
+        self.add_event(UserDeletedEvent(user_id=self.id))
+
+
+#: What a deleted account is called wherever its work is shown.
+DELETED_USER_FIRST_NAME = "Deleted"
+DELETED_USER_LAST_NAME = "user"
+DELETED_USER_NAME = f"{DELETED_USER_FIRST_NAME} {DELETED_USER_LAST_NAME}"
+DELETED_ACCOUNT_REASON = "ACCOUNT_DELETED"
+
+
+def deleted_user_email(user_id: UUID) -> str:
+    """The address a deleted account keeps: unique per account, never deliverable."""
+    return f"deleted-{user_id}@deleted.example"

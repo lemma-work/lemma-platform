@@ -313,6 +313,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/organizations/invitations/{invitation_id}` | `org.invitation.revoke` | Revoke Invitation |
 | DELETE | `/organizations/{organization_id}/members/{member_id}` | `org.member.remove` | Remove Member |
+| DELETE | `/users/me` | `user.current.delete` | Delete Current User |
 | GET | `/auth/verify-token` | `auth.verify_token` | Verify access token |
 | GET | `/organizations` | `org.list` | List My Organizations |
 | GET | `/organizations/invitations` | `org.invitation.list_mine` | List My Invitations |

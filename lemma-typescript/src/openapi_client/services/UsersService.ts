@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AccountDeletionRequest } from '../models/AccountDeletionRequest.js';
+import type { AccountDeletionResponse } from '../models/AccountDeletionResponse.js';
 import type { EmailDeliveryStatusResponse } from '../models/EmailDeliveryStatusResponse.js';
 import type { EmailDeliveryTestResponse } from '../models/EmailDeliveryTestResponse.js';
 import type { FirstWorkspaceRequest } from '../models/FirstWorkspaceRequest.js';
@@ -12,6 +14,26 @@ import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class UsersService {
+    /**
+     * Delete Current User
+     * Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by "Deleted user". Every session ends, the caller's included: its cookies or tokens are cleared on this response. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.
+     * @param requestBody
+     * @returns AccountDeletionResponse Successful Response
+     * @throws ApiError
+     */
+    public static userCurrentDelete(
+        requestBody: AccountDeletionRequest,
+    ): CancelablePromise<AccountDeletionResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/users/me',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
     /**
      * Get Current User
      * Get the current authenticated user's information

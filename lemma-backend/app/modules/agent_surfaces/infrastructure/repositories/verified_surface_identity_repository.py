@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import false, select, update
+from sqlalchemy import delete, false, select, update
 
 from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+    PendingChatOnboarding,
     VerifiedSurfaceIdentity,
 )
 
@@ -91,6 +92,37 @@ class VerifiedSurfaceIdentityRepository:
             update(VerifiedSurfaceIdentity)
             .where(*stale, VerifiedSurfaceIdentity.session_proved_at.is_(None))
             .values(revoked_at=datetime.now(timezone.utc))
+        )
+
+    async def revoke_all_for_user(self, user_id: UUID) -> None:
+        """Revoke every identity the person proved, and forget their pending
+        onboarding -- the account was deleted.
+
+        The number and the destination go with the proof: a revoked row may
+        not carry a route (``ck_surface_identity_route_is_live``), and a phone
+        number left on it would be the person's, kept after they asked to go.
+        """
+        await self.session.execute(
+            update(VerifiedSurfaceIdentity)
+            .where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+            .values(
+                revoked_at=datetime.now(timezone.utc),
+                installation_surface_id=None,
+                pod_id=None,
+            )
+        )
+        await self.session.execute(
+            update(VerifiedSurfaceIdentity)
+            .where(VerifiedSurfaceIdentity.user_id == user_id)
+            .values(verified_phone=None)
+        )
+        await self.session.execute(
+            delete(PendingChatOnboarding).where(
+                PendingChatOnboarding.user_id == user_id
+            )
         )
 
     async def prove_by_session(

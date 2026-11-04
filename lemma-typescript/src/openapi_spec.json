@@ -113,6 +113,55 @@
         "title": "AccountCredentialsUpdateSchema",
         "type": "object"
       },
+      "AccountDeletionRequest": {
+        "description": "Proof that the person means this account, typed back by them.",
+        "properties": {
+          "confirm_email": {
+            "description": "The account's own email address, typed by the person. Compared case-insensitively; anything else is refused with ACCOUNT_DELETION_CONFIRMATION_MISMATCH.",
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Confirm Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_email"
+        ],
+        "title": "AccountDeletionRequest",
+        "type": "object"
+      },
+      "AccountDeletionResponse": {
+        "description": "What deleting the account did. Every session has ended by the time it is read.",
+        "properties": {
+          "deleted": {
+            "description": "Always true: the account no longer exists, whether this request deleted it or an earlier one had.",
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "organizations_deleted": {
+            "description": "Organizations the person was the only member of, deleted with their pods.",
+            "title": "Organizations Deleted",
+            "type": "integer"
+          },
+          "organizations_left": {
+            "description": "Organizations others are still in, which the person left; their shared work stays there under \"Deleted user\".",
+            "title": "Organizations Left",
+            "type": "integer"
+          },
+          "pods_deleted": {
+            "title": "Pods Deleted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted",
+          "organizations_left",
+          "organizations_deleted",
+          "pods_deleted"
+        ],
+        "title": "AccountDeletionResponse",
+        "type": "object"
+      },
       "AccountInstallationsSchema": {
         "description": "What an account can actually reach, asked of the provider.",
         "properties": {
@@ -53508,6 +53557,56 @@
       }
     },
     "/users/me": {
+      "delete": {
+        "description": "Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies or tokens are cleared on this response. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.",
+        "operationId": "user.current.delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Current User",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "user.current"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "user.current",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
       "get": {
         "description": "Get the current authenticated user's information",
         "operationId": "user.current.get",

@@ -28,6 +28,13 @@ class UserRepositoryPort(Protocol):
 
     async def update(self, entity: UserEntity) -> UserEntity: ...
 
+    async def save_erased(
+        self, entity: UserEntity, *, previous_email: str
+    ) -> UserEntity:
+        """Write an erased account's tombstone, every scrubbed column included,
+        and forget what was kept under its previous address."""
+        ...
+
     async def set_preferences(
         self, user_id: UUID, preferences: UserPreferences
     ) -> UserEntity: ...
@@ -98,6 +105,12 @@ class OrganizationRepositoryPort(Protocol):
     ) -> Tuple[Sequence[OrganizationMemberEntity], Optional[str]]: ...
 
     async def count_members(self, organization_id: UUID) -> int: ...
+
+    async def list_user_memberships(
+        self, user_id: UUID
+    ) -> list[OrganizationMemberEntity]:
+        """Every organization membership the person holds, oldest organization first."""
+        ...
 
     #: Held until the transaction ends, before who is in the organization
     #: changes, so a plan's member cap is counted one change at a time.
@@ -235,4 +248,11 @@ class PodMembershipPort(Protocol):
     ) -> list[UUID]:
         """Take a departing organization member out of each of its pods, each
         announced as the pod's own removal."""
+        ...
+
+    async def delete_organization_pods(
+        self, *, organization_id: UUID, requester_user_id: UUID
+    ) -> list[UUID]:
+        """Delete every live pod in an organization that is going away, each
+        through the pod's own deletion."""
         ...
