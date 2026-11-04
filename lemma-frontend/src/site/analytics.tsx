@@ -39,7 +39,7 @@ export function Analytics() {
         const previous = viewed.current;
         viewed.current = pathname;
         if (!isNewView(previous, pathname)) return;
-        void startAnalytics().then(capturePageview);
+        void startAnalytics().then(() => capturePageview(pathname));
     }, [pathname]);
     useEffect(() => {
         applyAnalyticsPersistence(consent === "granted");

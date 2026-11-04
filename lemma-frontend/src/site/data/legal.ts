@@ -61,7 +61,7 @@ export const privacyPolicy: LegalDocument = {
     title: "Privacy",
     description:
         "What Lemma collects, what it never collects, who else can see it, and how to change your mind — in plain language, because you should be able to read it.",
-    effectiveDate: "August 16, 2026",
+    effectiveDate: "November 4, 2026",
     summary: [
         "We collect what it takes to run Lemma: who you are, what your workspace holds, and how the product gets used.",
         "We never sell it, never advertise against it, and never feed what you build into analytics.",

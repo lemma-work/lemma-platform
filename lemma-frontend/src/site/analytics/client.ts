@@ -366,11 +366,19 @@ export function captureSignInLoop(): void {
     });
 }
 
-/** The page in front, as a pageview. Which navigations count is the caller's
- *  (`isNewView`); `$current_url` is set by posthog-js and rewritten in
- *  `before_send`, so there is exactly one place that decides what a URL may say. */
-export function capturePageview(): void {
-    ph?.capture("$pageview");
+/** A pageview of `pathname`, or of the page in front without one. Which
+ *  navigations count is the caller's (`isNewView`). A caller that waited for
+ *  the SDK passes the address it counted: posthog-js reads the page when the
+ *  event is made, and two moves made while it loaded would both read the
+ *  second. Every address is rewritten in `before_send`, so there is exactly
+ *  one place that decides what a URL may say. */
+export function capturePageview(pathname?: string): void {
+    ph?.capture(
+        "$pageview",
+        pathname
+            ? { $current_url: new URL(pathname, window.location.origin).href, $pathname: pathname }
+            : undefined,
+    );
 }
 
 /**
