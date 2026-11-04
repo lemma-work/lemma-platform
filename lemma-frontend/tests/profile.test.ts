@@ -464,9 +464,9 @@ test("the column that identifies a row is found in the values, not a word list",
     // holds name/title/label/summary/subject/headline. The table was told it
     // had "no title column" and handed back a spreadsheet.
     const names = [
-        "Warmex Home Appliances", "Handyman Services", "Intugine", "Turant Logistics",
-        "Ornate Solar", "Clean Fanatics", "FleetCharge", "Install365", "Binocs",
-        "Sigmoid Analytics", "Optibus", "Amber AI", "LEDFlex", "Foxo.club",
+        "Northwind Home Appliances", "Corner Repairs", "Initech", "Globex Logistics",
+        "Fabrikam Solar", "Spotless Crew", "VoltYard", "Fix365", "Hooli",
+        "Contoso Analytics", "Routeline", "Pemberton AI", "ACMEWorks", "Pebble.club",
     ];
     const rows = names.map((company, i) => ({
         id: "u-" + i,
