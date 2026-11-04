@@ -47,8 +47,13 @@ async def outsider_brief(
     pod_id: UUID,
     owner_user_id: UUID,
     contact_id: UUID | None = None,
+    in_group: bool = False,
 ) -> str:
-    """The brief a stranger's run is given in place of the pod's inventory."""
+    """The brief a stranger's run is given in place of the pod's inventory.
+
+    In a group a contact is an outsider like any other (``docs/design/
+    contacts.md``): what is theirs alone is not said where everybody reads
+    the answer, so the group's brief, not their private chat's."""
     async with uow_factory() as uow:
         repo = AgentContextBriefRepository(uow)
         pod = await repo.get_pod_profile(pod_id)
@@ -58,9 +63,10 @@ async def outsider_brief(
             if contact_id is not None
             else None
         )
-        tables = await contact_owned_tables(uow, pod_id=pod_id) if contact_id else []
-        functions = await contact_functions(uow, pod_id=pod_id) if contact_id else []
-    if contact_id is not None:
+        theirs = contact_id is not None and not in_group
+        tables = await contact_owned_tables(uow, pod_id=pod_id) if theirs else []
+        functions = await contact_functions(uow, pod_id=pod_id) if theirs else []
+    if contact_id is not None and not in_group:
         return render_contact_brief(
             pod_name=pod.name,
             owner_display_name=owner.display_name,
@@ -101,6 +107,11 @@ def render_outsider_brief(
         (
             "- You can read only what the pod has marked Public. A refusal from "
             "a tool is the answer, not an obstacle: say you can't share that here."
+        ),
+        (
+            "- You cannot save, change or send anything. When they ask you to "
+            f"record or do something, pass it to {owner_name} with "
+            "`ask_a_person` and tell them you have; never say it is done."
         ),
     ]
     return "\n".join(lines)
