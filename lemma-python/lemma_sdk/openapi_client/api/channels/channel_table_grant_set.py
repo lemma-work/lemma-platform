@@ -102,7 +102,9 @@ def sync_detailed(
      Give the group these columns of the table to read, and those to fill.
 
     Everybody in the group reads what is granted -- the people outside the
-    pod included -- through the granting member's own access.
+    pod included -- through the granting member's own access. A person's act:
+    an agent or a function, which may be reading what strangers wrote in the
+    group, is refused (403).
 
     Args:
         pod_id (UUID):
@@ -145,7 +147,9 @@ def sync(
      Give the group these columns of the table to read, and those to fill.
 
     Everybody in the group reads what is granted -- the people outside the
-    pod included -- through the granting member's own access.
+    pod included -- through the granting member's own access. A person's act:
+    an agent or a function, which may be reading what strangers wrote in the
+    group, is refused (403).
 
     Args:
         pod_id (UUID):
@@ -183,7 +187,9 @@ async def asyncio_detailed(
      Give the group these columns of the table to read, and those to fill.
 
     Everybody in the group reads what is granted -- the people outside the
-    pod included -- through the granting member's own access.
+    pod included -- through the granting member's own access. A person's act:
+    an agent or a function, which may be reading what strangers wrote in the
+    group, is refused (403).
 
     Args:
         pod_id (UUID):
@@ -224,7 +230,9 @@ async def asyncio(
      Give the group these columns of the table to read, and those to fill.
 
     Everybody in the group reads what is granted -- the people outside the
-    pod included -- through the granting member's own access.
+    pod included -- through the granting member's own access. A person's act:
+    an agent or a function, which may be reading what strangers wrote in the
+    group, is refused (403).
 
     Args:
         pod_id (UUID):

@@ -3,7 +3,8 @@
 /* What a group's people outside the space may do with its tables: read the
    columns given, and add a row with the columns given. Given one table at a
    time by the group's owners or an admin, through their own access -- and
-   everybody in the group reads what is given, so the section says so. */
+   everybody in the group reads what is given, so the section says so. Only
+   tables the reader can read themselves are listed. */
 
 import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,10 +12,14 @@ import { source, type Pod } from "@/data";
 import { isForbidden } from "@/session/auth-state";
 import { channelApi, type TableGrant } from "./api";
 import { problemOf } from "./problem";
+import { useChannel } from "./queries";
 
-export function TableGrants({ pod, channelId, may }: { pod: Pod; channelId: string; may: boolean }) {
+export function TableGrants({ pod, channelId }: { pod: Pod; channelId: string }) {
     const ids = useId();
     const cache = useQueryClient();
+    /* The group's own rule -- its owners, or whoever manages the pod's
+       channels -- not the bot's: the server asks the same. */
+    const may = useChannel(pod.id, channelId, true).data?.me.canManage === true;
     const key = ["table-grants", pod.id, channelId];
     const grants = useQuery({ queryKey: key, queryFn: () => channelApi(pod.id).tableGrants(channelId) });
     const [giving, setGiving] = useState(false);
@@ -114,7 +119,7 @@ function GiveTable({ pod, channelId, onDone }: { pod: Pod; channelId: string; on
             </div>
             {save.isError && (
                 <p className="gside__problem" role="alert">
-                    {isForbidden(save.error) ? "Only the group’s owners or an admin can give it a table, and only one they can use." : problemOf(save.error, "Couldn’t give it that table.")}
+                    {isForbidden(save.error) ? "Only the group’s owners or an admin can give it a table, and only one whose settings and rows they hold." : problemOf(save.error, "Couldn’t give it that table.")}
                 </p>
             )}
         </div>

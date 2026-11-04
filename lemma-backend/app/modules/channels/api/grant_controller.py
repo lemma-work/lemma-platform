@@ -2,9 +2,11 @@
 
 ``/pods/{pod_id}/channels/{channel_id}/table-grants``: a group's owners or an
 admin grant it one table at a time -- the columns everybody there may read, the
-columns they may fill in a new row -- and the member granting must be able to
-read the table, and write it to grant adding (``datastore``'s
-``channel_grants``). Anyone who can see the group can see what it was given.
+columns they may fill in a new row. The person granting must hold the table's
+settings and its rows, and write them to grant adding (``datastore``'s
+``channel_grants``); an agent or a function never grants. Whoever may manage
+the group takes a grant back. Anyone who can see the group sees what it was
+given, of the tables they can read themselves.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from app.core.authorization.permissions import Permissions
 from app.modules.channels.api.access import (
     ERRORS,
     CallerDep,
+    forbidden,
     require_manage,
     unprocessable,
     visible,
@@ -83,11 +86,18 @@ def _group(channel: Channel) -> Channel:
     dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def list_table_grants(
-    pod_id: UUID, channel_id: UUID, uow: UoWDep, caller: CallerDep
+    pod_id: UUID,
+    channel_id: UUID,
+    uow: UoWDep,
+    caller: CallerDep,
+    ctx: PodContextDep,
 ) -> TableGrantsResponse:
-    """The tables the group's people outside the pod may read or add to."""
+    """The tables the group's people outside the pod may read or add to --
+    those the caller may read themselves."""
     channel = _group(await visible(uow, caller, channel_id))
-    grants = await channel_grants(uow, pod_id=pod_id, channel_id=channel.id)
+    grants = await channel_grants(
+        uow, pod_id=pod_id, channel_id=channel.id, readable_by_ctx=ctx
+    )
     return TableGrantsResponse(items=[_response(grant) for grant in grants])
 
 
@@ -109,7 +119,11 @@ async def set_table_grant(
     """Give the group these columns of the table to read, and those to fill.
 
     Everybody in the group reads what is granted -- the people outside the
-    pod included -- through the granting member's own access."""
+    pod included -- through the granting member's own access. A person's act:
+    an agent or a function, which may be reading what strangers wrote in the
+    group, is refused (403)."""
+    if ctx.workload is not None or ctx.is_delegated:
+        raise forbidden("Only a person can give a group a table")
     channel = _group(await visible(uow, caller, channel_id))
     await require_manage(uow, caller, channel)
     try:
@@ -140,13 +154,11 @@ async def remove_table_grant(
     table_name: str,
     uow: UoWDep,
     caller: CallerDep,
-    ctx: PodContextDep,
 ) -> Response:
-    """The group no longer reads or adds to the table."""
+    """The group no longer reads or adds to the table. Whoever may manage the
+    group may take it back, whether or not they can read the table."""
     channel = _group(await visible(uow, caller, channel_id))
     await require_manage(uow, caller, channel)
-    await revoke_table(
-        uow, pod_id=pod_id, channel_id=channel.id, table_name=table_name, ctx=ctx
-    )
+    await revoke_table(uow, pod_id=pod_id, channel_id=channel.id, table_name=table_name)
     await uow.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

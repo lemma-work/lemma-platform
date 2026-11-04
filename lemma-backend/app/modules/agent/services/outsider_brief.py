@@ -135,6 +135,12 @@ def render_outsider_brief(
             f"- This group was given the table {grant.table}"
             + (f": read {read} with `group_records`" if read else "")
             + (f"; add a row with {add} using `group_add_record`" if add else "")
+            + (
+                " -- each person sees and adds only their own row, so what you "
+                "read for one says nothing about anyone else's"
+                if grant.own_rows
+                else ""
+            )
             + ". Everybody in the group reads what you quote from it."
         )
     return "\n".join(lines)

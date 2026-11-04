@@ -18161,7 +18161,8 @@ var LemmaClient = (() => {
     }
     /**
      * List Table Grants
-     * The tables the group's people outside the pod may read or add to.
+     * The tables the group's people outside the pod may read or add to --
+     * those the caller may read themselves.
      * @param podId
      * @param channelId
      * @returns TableGrantsResponse Successful Response
@@ -18186,7 +18187,8 @@ var LemmaClient = (() => {
     }
     /**
      * Remove Table Grant
-     * The group no longer reads or adds to the table.
+     * The group no longer reads or adds to the table. Whoever may manage the
+     * group may take it back, whether or not they can read the table.
      * @param podId
      * @param channelId
      * @param tableName
@@ -18216,7 +18218,9 @@ var LemmaClient = (() => {
      * Give the group these columns of the table to read, and those to fill.
      *
      * Everybody in the group reads what is granted -- the people outside the
-     * pod included -- through the granting member's own access.
+     * pod included -- through the granting member's own access. A person's act:
+     * an agent or a function, which may be reading what strangers wrote in the
+     * group, is refused (403).
      * @param podId
      * @param channelId
      * @param tableName

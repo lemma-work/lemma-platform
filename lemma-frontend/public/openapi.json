@@ -37292,7 +37292,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/table-grants": {
       "get": {
-        "description": "The tables the group's people outside the pod may read or add to.",
+        "description": "The tables the group's people outside the pod may read or add to --\nthose the caller may read themselves.",
         "operationId": "channel.table_grant.list",
         "parameters": [
           {
@@ -37393,7 +37393,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}": {
       "delete": {
-        "description": "The group no longer reads or adds to the table.",
+        "description": "The group no longer reads or adds to the table. Whoever may manage the\ngroup may take it back, whether or not they can read the table.",
         "operationId": "channel.table_grant.remove",
         "parameters": [
           {
@@ -37497,7 +37497,7 @@
         }
       },
       "put": {
-        "description": "Give the group these columns of the table to read, and those to fill.\n\nEverybody in the group reads what is granted -- the people outside the\npod included -- through the granting member's own access.",
+        "description": "Give the group these columns of the table to read, and those to fill.\n\nEverybody in the group reads what is granted -- the people outside the\npod included -- through the granting member's own access. A person's act:\nan agent or a function, which may be reading what strangers wrote in the\ngroup, is refused (403).",
         "operationId": "channel.table_grant.set",
         "parameters": [
           {
