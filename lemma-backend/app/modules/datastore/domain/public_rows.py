@@ -186,7 +186,7 @@ def _fills_itself(column: ColumnSchema, primary_key: str) -> bool:
     return column.name == primary_key and column.type in _SELF_KEYED_TYPES
 
 
-def _reveals_existing(column: ColumnSchema, primary_key: str) -> bool:
+def reveals_existing(column: ColumnSchema, primary_key: str) -> bool:
     """Whether accepting or refusing this answer says what the table holds."""
     return column.unique or column.name == primary_key or column.foreign_key is not None
 
@@ -216,7 +216,7 @@ def opening_problem(
         return f"People outside can't fill in {', '.join(refused)}"
     if audience is PublicAudience.ANYONE:
         telling = [
-            name for name in chosen if _reveals_existing(by_name[name], primary_key)
+            name for name in chosen if reveals_existing(by_name[name], primary_key)
         ]
         if telling:
             return (
