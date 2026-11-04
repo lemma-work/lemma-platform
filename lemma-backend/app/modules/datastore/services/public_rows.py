@@ -270,6 +270,36 @@ def _visitor_view(
     )
 
 
+async def validate_visitor_row(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    pod_id: UUID,
+    table_name: str,
+    answers: dict[str, object],
+    vouched: bool,
+) -> None:
+    """Validate a visitor's answers without creating a row or identity.
+
+    The public endpoint calls this before opening an anonymous session. The
+    eventual insert repeats the checks in its own transaction, so a concurrent
+    schema or permission change cannot bypass validation.
+    """
+    async with uow_factory() as uow:
+        found = await _open_row(uow, pod_id, table_name)
+        opened = _visitor_view(pod_id, *found) if found else None
+        if found is None or opened is None:
+            raise PublicRowsClosed(table_name)
+        if opened.audience is PublicAudience.CONTACTS and not vouched:
+            raise PublicRowsClosed(table_name)
+        row = public_values(opened.columns, answers)
+        # A contact-owned row receives its real contact id only after the
+        # anonymous session is opened. A fixed UUID validates the column shape
+        # without creating a contact or making a database write.
+        if opened.contact_owned:
+            row[CONTACT_COLUMN] = str(UUID(int=0))
+        await _validate_as(uow, found[1].opened_by, opened, row)
+
+
 async def add_visitor_row(
     uow_factory: UnitOfWorkFactory,
     *,
