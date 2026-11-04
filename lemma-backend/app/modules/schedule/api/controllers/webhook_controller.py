@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
-from app.core.api.request_body import read_body_limited
+from app.core.api.request_body import BodyTooLargeError, read_body_limited
 from app.core.log.log import get_logger
 from app.modules.schedule.api.dependencies import (
     WebhookHandlerDep,
@@ -61,7 +61,18 @@ async def handle_webhook(
             detail="Unsupported or unverified webhook source",
         )
 
-    raw_body = await read_body_limited(request, max_bytes=MAX_WEBHOOK_BODY_BYTES)
+    try:
+        raw_body = await read_body_limited(request, max_bytes=MAX_WEBHOOK_BODY_BYTES)
+    except BodyTooLargeError as refused:
+        # Logged here because nothing else will: a 4xx domain error reaches the
+        # request log as a status on a route template, without the source. The
+        # size is what arrived, not what the sender declared.
+        logger.warning(
+            "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
+            source=source,
+            size=refused.received,
+        )
+        raise
 
     delivery = WebhookDelivery(
         source=source,

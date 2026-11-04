@@ -95,10 +95,23 @@ WEBHOOK_BODY_LIMITS: Mapping[SurfacePlatform, int] = {
     SurfacePlatform.WHATSAPP: 3 * _MIB,
 }
 
+#: The ceiling for a path that does not name its platform: one surface's own
+#: callback URL. Its platform is the surface's, and the caller has proved
+#: nothing yet -- a ceiling chosen by it would answer the same unsigned body
+#: with a 413 for one surface and a 401 for another, and so say which platform
+#: each is on. That route takes the largest, and its 413 is the same for all.
+ANY_PLATFORM_BODY_LIMIT = max(WEBHOOK_BODY_LIMITS.values())
 
-async def read_webhook_body(request: Request, platform: SurfacePlatform) -> bytes:
-    """The body exactly as sent, refused with a 413 past ``platform``'s ceiling."""
-    return await read_body_limited(request, max_bytes=WEBHOOK_BODY_LIMITS[platform])
+
+async def read_webhook_body(
+    request: Request, platform: SurfacePlatform | None = None
+) -> bytes:
+    """The body exactly as sent, refused with a 413 past ``platform``'s ceiling,
+    or past ``ANY_PLATFORM_BODY_LIMIT`` when the path does not name one."""
+    limit = (
+        ANY_PLATFORM_BODY_LIMIT if platform is None else WEBHOOK_BODY_LIMITS[platform]
+    )
+    return await read_body_limited(request, max_bytes=limit)
 
 
 def parse_webhook_platform(platform: str) -> SurfacePlatform:

@@ -381,13 +381,14 @@ async def handle_surface_webhook(
     """Handle webhooks addressed to one concrete surface."""
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
     # short scope for the surface lookup, nothing held across a provider call.
-    # The lookup goes first because the surface's platform sets the body's
-    # ceiling. An unknown id is AgentSurfaceNotFoundError (404) and
-    # verify_surface_request raises SurfaceWebhookAuthenticationError -- both
-    # DomainErrors, translated by the global handler.
+    # The lookup goes first so an id nothing answers to is refused unread. The
+    # ceiling is not the surface's platform's (see ANY_PLATFORM_BODY_LIMIT).
+    # An unknown id is AgentSurfaceNotFoundError (404) and verify_surface_request
+    # raises SurfaceWebhookAuthenticationError -- both DomainErrors, translated
+    # by the global handler.
     surface = await surface_by_id(surface_id)
     headers = dict(request.headers)
-    raw_body = await read_webhook_body(request, surface.surface_type)
+    raw_body = await read_webhook_body(request)
     payload = _decode_webhook_payload(raw_body, headers)
 
     await security_service.verify_surface_request(

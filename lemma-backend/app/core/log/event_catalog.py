@@ -1136,6 +1136,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.schedule_service.delete_external_schedule_s.propagated': EventSpec('debug', frozenset({'schedule_id'})),
     'schedule.trigger_resubscription.create.propagated': EventSpec('debug', frozenset()),
     'schedule.trigger_resubscription.drop.degraded': EventSpec('warning', frozenset({'schedule_id'})),
+    'schedule.webhook_controller.rejecting_oversized_delivery.degraded': EventSpec('warning', frozenset({'size', 'source'})),
     'schedule.webhook_controller.rejecting_unknown_webhook_source_s.degraded': EventSpec('warning', frozenset({'source'})),
     'schedule.webhook_controller.source_verifier_raised.degraded': EventSpec('warning', frozenset({'source'})),
     'schedule.webhook_controller.verified_whatsapp_webhook.observed': EventSpec('debug', frozenset()),

@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from starlette.requests import Request
 
-from app.core.api.request_body import read_body_limited
+from app.core.api.request_body import BodyTooLargeError, read_body_limited
 from app.core.domain.errors import PayloadTooLargeError
 
 
@@ -54,22 +54,25 @@ async def test_a_declared_length_over_the_ceiling_is_refused_before_any_read():
         [b"x" * 9], headers=[(b"content-length", b"9")]
     )
 
-    with pytest.raises(PayloadTooLargeError) as refused:
+    with pytest.raises(BodyTooLargeError) as refused:
         await read_body_limited(request, max_bytes=8)
 
     assert delivered == []
     assert refused.value.status_code == 413
     assert refused.value.code == "UPLOAD_TOO_LARGE"
     assert refused.value.details == {"field": "request", "max_bytes": 8}
+    # The declared 9 is the sender's claim; none of it arrived.
+    assert refused.value.received == 0
 
 
 async def test_a_chunked_body_with_no_length_stops_at_the_chunk_that_crosses():
     request, delivered = _streaming_request([b"x" * 8, b"y", b"never read"])
 
-    with pytest.raises(PayloadTooLargeError):
+    with pytest.raises(BodyTooLargeError) as refused:
         await read_body_limited(request, max_bytes=8)
 
     assert delivered == [b"x" * 8, b"y"]
+    assert refused.value.received == 9
 
 
 async def test_an_underdeclared_length_is_not_trusted():

@@ -43,9 +43,9 @@ PooledNumberLookup = Callable[[str], Awaitable["WhatsAppNumberEntity | None"]]
 
 #: Reads the surface a per-surface callback path names.
 #:
-#: Called before the body is read, not after: the surface's platform decides
-#: how much of the body the route will hold, and the lookup's scope has closed
-#: by the time the first byte arrives.
+#: Called before the body is read, not after: an id nothing answers to is
+#: refused with nothing read, and the lookup's scope has closed by the time the
+#: first byte arrives.
 SurfaceLookup = Callable[[UUID], Awaitable[AgentSurfaceEntity]]
 
 #: Classifies one inbound delivery and answers or stores it, in the request.

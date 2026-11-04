@@ -37,7 +37,10 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.errors import AgentSurfaceNotFoundError
+from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceNotFoundError,
+    SurfaceWebhookAuthenticationError,
+)
 from app.modules.agent_surfaces.domain.whatsapp_numbers import WhatsAppNumberEntity
 from app.modules.agent_surfaces.services.inbound_acceptor import InboundDelivery
 from app.modules.agent_surfaces.services.webhook_security_service import (
@@ -77,7 +80,8 @@ class _Recorded:
     """Every collaborator the routes reach after the read, recording what they
     were handed -- so "never verified" is ``verified == []``."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, refuse: bool = False) -> None:
+        self.refuse = refuse
         self.verified: list[bytes] = []
         self.accepted: list[InboundDelivery] = []
         self.updates: list[dict[str, object]] = []
@@ -86,6 +90,8 @@ class _Recorded:
         self, *, surface: AgentSurfaceEntity, headers: dict[str, str], raw_body: bytes
     ) -> None:
         self.verified.append(raw_body)
+        if self.refuse:
+            raise SurfaceWebhookAuthenticationError("Invalid webhook signature")
 
     async def handle_update(self, payload: dict[str, object]) -> None:
         self.updates.append(payload)
@@ -147,7 +153,9 @@ _ROUTES = [
         3 * _MIB,
         id="whatsapp-number",
     ),
-    pytest.param(f"/surfaces/{_TELEGRAM.id}/webhook", (), _MIB, id="surface-telegram"),
+    pytest.param(
+        f"/surfaces/{_TELEGRAM.id}/webhook", (), 3 * _MIB, id="surface-telegram"
+    ),
     pytest.param(
         f"/surfaces/{_WHATSAPP.id}/webhook", (), 3 * _MIB, id="surface-whatsapp"
     ),
@@ -202,6 +210,46 @@ async def test_an_address_nothing_answers_to_is_refused_before_its_body_is_read(
 
     assert refused.status == 404
     assert refused.chunks_read == 0
+
+
+@pytest.mark.parametrize("declared", [True, False], ids=["declared", "chunked"])
+async def test_a_surfaces_413_is_the_same_whatever_its_platform(declared):
+    """The per-surface path does not name its platform, so nothing it answers
+    before the signature may depend on one -- not the status, not the body."""
+    answers = []
+    for surface in (_TELEGRAM, _WHATSAPP):
+        chunks = past_ceiling(3 * _MIB)
+        answers.append(
+            await deliver(
+                _app(_Recorded()),
+                f"/surfaces/{surface.id}/webhook",
+                chunks,
+                declared_length=sum(map(len, chunks)) if declared else None,
+            )
+        )
+
+    telegram, whatsapp = answers
+    assert telegram.status == whatsapp.status == 413
+    assert telegram.json() == whatsapp.json()
+
+
+async def test_an_unsigned_body_too_big_for_telegram_is_answered_as_for_whatsapp():
+    """2 MiB is past Telegram's ceiling and inside WhatsApp's. Read under each
+    surface's own, it was a 413 for one and a 401 for the other."""
+    answers = []
+    for surface in (_TELEGRAM, _WHATSAPP):
+        answers.append(
+            await deliver(
+                _app(_Recorded(refuse=True)),
+                f"/surfaces/{surface.id}/webhook",
+                chunks_of(json.dumps({"padding": "x" * (2 * _MIB)}).encode()),
+                headers=((b"content-type", b"application/json"),),
+            )
+        )
+
+    telegram, whatsapp = answers
+    assert telegram.status == whatsapp.status == 401
+    assert telegram.json() == whatsapp.json()
 
 
 def test_every_platform_has_a_ceiling_and_whatsapp_holds_what_meta_sends():

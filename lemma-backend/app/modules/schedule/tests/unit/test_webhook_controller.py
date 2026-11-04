@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,7 @@ from app.modules.schedule.contracts.webhook_source import (
     WebhookSourceRegistry,
 )
 from app.modules.test_support.body_ceiling import (
+    CHUNK_BYTES,
     app_with,
     chunks_of,
     chunks_to_cross,
@@ -261,3 +263,44 @@ async def test_the_source_verifies_the_bytes_exactly_as_they_arrived():
     assert answered.status == 200
     assert answered.json() == {"message": "handshake"}
     assert source.verified == [body]
+
+
+def _oversized_deliveries(caplog) -> list[dict[str, object]]:
+    return [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event")
+        == "schedule.webhook_controller.rejecting_oversized_delivery.degraded"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("declared", "received"),
+    [
+        (True, 0),
+        (False, chunks_to_cross(MAX_WEBHOOK_BODY_BYTES) * CHUNK_BYTES),
+    ],
+    ids=["declared", "chunked"],
+)
+async def test_a_refused_delivery_is_logged_with_its_source_and_what_arrived(
+    caplog, declared, received
+):
+    """The request log records a 413 as a status on `/webhooks/{source}` and no
+    more, so this warning is the only place a flood names its source. The size
+    is what was read, never the length the sender declared."""
+    chunks = past_ceiling(MAX_WEBHOOK_BODY_BYTES)
+
+    with caplog.at_level(logging.WARNING):
+        refused = await deliver(
+            _app(_RecordingSource()),
+            "/webhooks/github",
+            chunks,
+            declared_length=sum(map(len, chunks)) if declared else None,
+        )
+
+    assert refused.status == 413
+    assert [
+        (warning["source"], warning["size"])
+        for warning in _oversized_deliveries(caplog)
+    ] == [("github", received)]
