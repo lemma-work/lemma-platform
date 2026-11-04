@@ -17,7 +17,7 @@ import pytest
 
 from app.core.domain.errors import DomainError
 from app.modules.identity.contracts.account_deletion import AccountDeletionRefusal
-from app.modules.identity.domain.events import UserDeletedEvent, UserMobileChangedEvent
+from app.modules.identity.domain.events import UserDeletedEvent
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -282,11 +282,8 @@ async def test_the_account_becomes_a_tombstone_that_names_nobody(world: World):
     )
     assert account.preferences is None
     assert world.users.forgotten_emails == ["test+leaving@example.com"]
-    # The number's bindings are let go, and the sign-in removal is owed.
-    assert {type(event) for event in world.users.events} == {
-        UserMobileChangedEvent,
-        UserDeletedEvent,
-    }
+    # One event: what the account answered to is let go by its subscribers.
+    assert [type(event) for event in world.users.events] == [UserDeletedEvent]
 
 
 async def test_an_organization_others_work_in_is_left_and_keeps_its_pods(world: World):

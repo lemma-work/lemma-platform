@@ -106,15 +106,11 @@ class UserEntity(AggregateRoot):
         user". The address is replaced by one under ``.example``, which no
         mail system delivers to, so the real one is free to sign up again.
         """
-        from app.modules.identity.domain.events import (
-            UserDeletedEvent,
-            UserMobileChangedEvent,
-        )
+        from app.modules.identity.domain.events import UserDeletedEvent
 
-        if self.mobile_number is not None or self.mobile_verified_at is not None:
-            # What was bound to the number -- a surface identity resolved
-            # through it -- is unbound by the work this fact causes.
-            self.add_event(UserMobileChangedEvent(user_id=self.id))
+        # No `UserMobileChangedEvent` for the number this clears: what was
+        # bound to it is let go by the surfaces' `AccountDeleted` subscriber,
+        # which revokes every identity the person proved, phone-bound or not.
         self.email = deleted_user_email(self.id)
         self.first_name = DELETED_USER_FIRST_NAME
         self.last_name = DELETED_USER_LAST_NAME
