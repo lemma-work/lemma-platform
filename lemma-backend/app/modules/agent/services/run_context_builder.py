@@ -20,6 +20,7 @@ from app.core.infrastructure.db.transient_errors import raise_if_database_unavai
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.surface_prompts import is_group_conversation
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_memory_paths import (
     memory_is_active,
@@ -179,6 +180,7 @@ async def build_run_context(
                 pod_id=conversation.pod_id,
                 owner_user_id=user_id,
                 contact_id=audience.contact_id,
+                in_group=is_group_conversation(ctx),
             )
         else:
             brief = await AgentContextBriefBuilder(uow_factory).build(
