@@ -9,7 +9,9 @@ one rule:
   binding, the sender cache, nor the resolver says it is the member, and it can
   be proved again;
 * nobody unlinks an account for somebody else, and a binding made some other
-  way -- a shared phone number -- is neither listed nor unlinked here.
+  way -- a shared phone number -- is neither listed nor unlinked here;
+* a member proves no more accounts than the list shows, so every one of them
+  has a row to unlink.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
     ExternalSurfaceUserRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (  # noqa: E501
+    MAX_PROVED_ACCOUNTS,
     VerifiedSurfaceIdentityRepository,
 )
 from app.modules.agent_surfaces.services.identity_resolution_service import (
@@ -50,6 +53,7 @@ pytestmark = pytest.mark.e2e
 MEMBERS_ACCOUNT = 7_000_303
 THEIR_ACCOUNT = 7_000_404
 PHONE_ACCOUNT = 7_000_505
+MANY_ACCOUNTS_FROM = 7_001_000
 ACCOUNTS = "/surfaces/me/telegram-accounts"
 
 
@@ -175,3 +179,47 @@ async def test_nobody_unlinks_an_account_for_somebody_else(
     # Theirs is listed to them, and only to them.
     [listed] = await _listed(async_client, headers=auth_headers(other))
     assert listed["id"] == str(their_id)
+
+
+async def test_a_member_proves_no_more_accounts_than_the_list_shows(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    pod_id = test_pod["id"]
+    bot = await _bot(authenticated_client, pod_id, monkeypatch, fake_telegram)
+    repository = VerifiedSurfaceIdentityRepository(SqlAlchemyUnitOfWork(db_session))
+
+    async def prove(account: int) -> bool:
+        return (
+            await repository.prove_by_session(
+                binding_key=binding_key_of(
+                    "TELEGRAM", None, installation_id=None, actor=str(account)
+                ),
+                platform="TELEGRAM",
+                external_user_id=str(account),
+                user_id=UUID(fixed_test_user["id"]),
+                surface_id=UUID(bot["id"]),
+            )
+            is not None
+        )
+
+    first, one_more = MANY_ACCOUNTS_FROM, MANY_ACCOUNTS_FROM + MAX_PROVED_ACCOUNTS
+    for account in range(first, one_more):
+        assert await prove(account)
+    assert not await prove(one_more), "past the cap, a new account is refused"
+    assert await prove(first), "proving one they have again is not another"
+    await db_session.commit()
+
+    listed = await _listed(authenticated_client)
+    assert len(listed) == MAX_PROVED_ACCOUNTS
+
+    # Unlinking one makes room for another.
+    unlinked = await authenticated_client.delete(f"{ACCOUNTS}/{listed[-1]['id']}")
+    assert unlinked.status_code == 204, unlinked.text
+    db_session.expire_all()
+    assert await prove(one_more)

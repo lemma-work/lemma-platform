@@ -84,7 +84,9 @@ export function LinkTelegramEntry() {
     const mine = useQuery({ queryKey: ["telegram-surfaces", "mine"], queryFn: myTelegramSurfaces, staleTime: 60_000 });
     const accounts = useQuery({ queryKey: ["telegram-accounts", "mine"], queryFn: linkedTelegramAccounts });
     const reread = () => cache.invalidateQueries({ queryKey: ["telegram-accounts"] });
-    const unlink = useMutation({ mutationFn: unlinkTelegramAccount, onSuccess: reread });
+    /* Re-read on a failure too: one already unlinked in another tab is a 404,
+       and its row should go rather than stay to be tried again. */
+    const unlink = useMutation({ mutationFn: unlinkTelegramAccount, onSettled: reread });
     const linked = accounts.data ?? [];
     const through = mine.data?.surfaceIds.length ? mine.data : null;
     if (!through && !linked.length) return null;

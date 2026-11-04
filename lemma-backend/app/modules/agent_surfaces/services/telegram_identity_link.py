@@ -238,7 +238,8 @@ async def bind_confirmed(
     """Bind the account to the member who confirmed it.
 
     ``False`` when the account is already somebody else's: proving it again is
-    not how it changes hands.
+    not how it changes hands. ``False`` too when the member has already linked
+    as many accounts as one person may.
     """
     identity = await VerifiedSurfaceIdentityRepository(uow).prove_by_session(
         binding_key=binding_key_of(

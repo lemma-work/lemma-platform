@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import false, select, update
+from sqlalchemy import false, func, select, update
 
 from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
@@ -11,7 +11,8 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 )
 
 
-#: The platform accounts one person proved from a Lemma session: a handful.
+#: The platform accounts one person may prove from a Lemma session: a handful.
+#: Proving holds them to it, so a read of them all can stop here.
 MAX_PROVED_ACCOUNTS = 20
 
 
@@ -108,11 +109,29 @@ class VerifiedSurfaceIdentityRepository:
         again from another session is not how an account changes hands. A
         revoked binding is nobody's, and is taken over with nothing of its
         previous owner's left on it.
+
+        ``None`` too for a new account once the person has
+        ``MAX_PROVED_ACCOUNTS``: the profile lists them all to unlink, and
+        stops there. Proving one they already have again is never refused.
         """
         identity = await self.by_binding_key(binding_key)
+        if (
+            identity is not None
+            and identity.user_id != user_id
+            and identity.revoked_at is None
+        ):
+            return None
+        already_theirs = (
+            identity is not None
+            and identity.user_id == user_id
+            and identity.revoked_at is None
+            and identity.session_proved_at is not None
+        )
+        if not already_theirs and (
+            await self._count_session_proved(user_id, platform) >= MAX_PROVED_ACCOUNTS
+        ):
+            return None
         if identity is not None and identity.user_id != user_id:
-            if identity.revoked_at is None:
-                return None
             identity.user_id = user_id
             identity.verified_phone = None
         if identity is None:
@@ -129,6 +148,19 @@ class VerifiedSurfaceIdentityRepository:
         identity.proved_through_surface_id = surface_id
         await self.session.flush()
         return identity
+
+    async def _count_session_proved(self, user_id: UUID, platform: str) -> int:
+        count = await self.session.scalar(
+            select(func.count())
+            .select_from(VerifiedSurfaceIdentity)
+            .where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.platform == platform,
+                VerifiedSurfaceIdentity.session_proved_at.is_not(None),
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+        )
+        return count or 0
 
     async def session_proved(
         self, user_id: UUID, platform: str
