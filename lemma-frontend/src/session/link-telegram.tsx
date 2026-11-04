@@ -8,7 +8,7 @@
    can link one. */
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { isOwnBot } from "@/data/surface-settings";
 import { LinkTelegramSteps } from "@/channels/identity-link";
@@ -16,7 +16,11 @@ import { problemOf } from "@/channels/problem";
 import { ChannelIcon } from "@/shell/channels";
 import { Modal } from "@/shell/modal";
 import { lemma } from "./client";
-import { botChoices, readMine, spacesSaid, type BotChoice, type MyTelegramSurfaces, type TelegramBot } from "./telegram-bots";
+import { linkedTelegramAccounts, unlinkTelegramAccount } from "./telegram-accounts";
+import {
+    botChoices, linkedWhen, readMine, spacesSaid,
+    type BotChoice, type MyTelegramSurfaces, type TelegramBot,
+} from "./telegram-bots";
 
 /** The sample's member is in two spaces on Lemma's bot, and one of them has a
  *  bot of its own too. */
@@ -70,23 +74,58 @@ function detail(choice: BotChoice): string {
     return choice.spaces.length > 1 ? "Its own bot in " + spaces : spaces + "’s own bot";
 }
 
-/** The profile's row: what linking is for, and the button that starts it.
- *  Only for somebody one of whose spaces has a Telegram bot: without one there
- *  is nothing to open the code with. */
+/** The profile's row: the accounts already linked, each to unlink, and the
+ *  button that links one. The button only for somebody one of whose spaces has
+ *  a Telegram bot -- without one there is nothing to open the code with -- and
+ *  the row only when there is something to show. */
 export function LinkTelegramEntry() {
     const [open, setOpen] = useState(false);
+    const cache = useQueryClient();
     const mine = useQuery({ queryKey: ["telegram-surfaces", "mine"], queryFn: myTelegramSurfaces, staleTime: 60_000 });
-    if (!mine.data?.surfaceIds.length) return null;
+    const accounts = useQuery({ queryKey: ["telegram-accounts", "mine"], queryFn: linkedTelegramAccounts });
+    const reread = () => cache.invalidateQueries({ queryKey: ["telegram-accounts"] });
+    const unlink = useMutation({ mutationFn: unlinkTelegramAccount, onSuccess: reread });
+    const linked = accounts.data ?? [];
+    const through = mine.data?.surfaceIds.length ? mine.data : null;
+    if (!through && !linked.length) return null;
     return (
         <div className="field profile-telegram">
             <span>Telegram</span>
-            <p className="profile-form__hint-line">
-                Link your Telegram account so your spaces’ bots know it is you, in groups as well as in private chats.
-            </p>
-            <button type="button" className="btn" onClick={() => setOpen(true)}>
-                <ChannelIcon platform="TELEGRAM" size={15} /> Link Telegram
-            </button>
-            {open && <LinkTelegramFromProfile mine={mine.data} onClose={() => setOpen(false)} />}
+            {linked.length ? (
+                <ul className="profile-telegram__accounts">
+                    {linked.map((account) => {
+                        const name = account.name ?? "A Telegram account";
+                        const when = linkedWhen(account.provedAt);
+                        return (
+                            <li key={account.id}>
+                                <ChannelIcon platform="TELEGRAM" size={15} />
+                                <span className="profile-telegram__name">{name}</span>
+                                {when && <span className="profile-telegram__when">linked {when}</span>}
+                                <button
+                                    type="button"
+                                    className="linkish"
+                                    disabled={unlink.isPending}
+                                    aria-label={"Unlink " + name}
+                                    onClick={() => unlink.mutate(account.id)}
+                                >
+                                    Unlink
+                                </button>
+                            </li>
+                        );
+                    })}
+                </ul>
+            ) : (
+                <p className="profile-form__hint-line">
+                    Link your Telegram account so your spaces’ bots know it is you, in groups as well as in private chats.
+                </p>
+            )}
+            {unlink.isError && <em className="profile-form__problem" role="alert">{problemOf(unlink.error, "Couldn’t unlink it.")}</em>}
+            {through && (
+                <button type="button" className="btn" onClick={() => setOpen(true)}>
+                    <ChannelIcon platform="TELEGRAM" size={15} /> {linked.length ? "Link another account" : "Link Telegram"}
+                </button>
+            )}
+            {open && through && <LinkTelegramFromProfile mine={through} onClose={() => { setOpen(false); void reread(); }} />}
         </div>
     );
 }

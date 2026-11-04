@@ -21,6 +21,9 @@ for a stranger, and the code also names that person's Telegram id: opened from
 any other account it is spent at once, and the member is told so. The bot's
 reply to whoever opened it never names the member.
 
+The member's profile lists the accounts they proved, and they may unlink one
+(``unlink_account``): only their own, and only one proved this way.
+
 One use, ten minutes, kept in Redis like the group link's code
 (``telegram_group_links``). Names are never matched on to bind anybody
 (``identity_resolution_service``): a name that looks like a member's only
@@ -281,6 +284,70 @@ async def decline_link(secret: str, *, user_id: UUID, redis=None) -> None:
     code = await _code(client, secret)
     if code is not None and code.user_id == user_id:
         await _forget(client, _CODE + secret, _OPENED + secret)
+
+
+@dataclass(frozen=True, slots=True)
+class ProvedAccount:
+    """A Telegram account its owner proved from a Lemma session, still theirs."""
+
+    id: UUID
+    #: The name Telegram last gave it. Its @username is not kept: it is not
+    #: who the account is, and anybody can take a free one.
+    name: str | None
+    proved_at: datetime | None
+
+
+async def proved_accounts(
+    uow: SqlAlchemyUnitOfWork, user_id: UUID
+) -> list[ProvedAccount]:
+    """The Telegram accounts this member proved from a Lemma session."""
+    identities = await VerifiedSurfaceIdentityRepository(uow).session_proved(
+        user_id, SurfacePlatform.TELEGRAM.value
+    )
+    known = await ExternalSurfaceUserRepository(uow).known_by_external_ids(
+        platform=SurfacePlatform.TELEGRAM.value,
+        tenant_id=None,
+        external_user_ids=[identity.external_user_id for identity in identities],
+    )
+    return [
+        ProvedAccount(
+            id=identity.id,
+            name=known.get(identity.external_user_id, (None, None))[1],
+            proved_at=identity.session_proved_at,
+        )
+        for identity in identities
+    ]
+
+
+async def unlink_account(
+    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, account_id: UUID
+) -> bool:
+    """The member says an account they proved is not theirs any more.
+
+    The binding is revoked, and the sender cache forgets it is them. Revoking
+    alone is enough for the resolver, which reads the binding first, but not
+    for what reads the cache directly: a group's roster and log would still
+    seat the account as the member, and their notifications would still be
+    sent to it (``list_by_resolved_users``). The next line from it is a
+    stranger's. What the proof already moved stays moved: the lines and seats
+    a contact for the account had became the member's when they confirmed
+    (``fold_proved_account``), and are not handed back.
+
+    ``False`` when it was not theirs to unlink.
+    """
+    identity = await VerifiedSurfaceIdentityRepository(uow).revoke_session_proved(
+        account_id, user_id=user_id, platform=SurfacePlatform.TELEGRAM.value
+    )
+    if identity is None:
+        return False
+    await ExternalSurfaceUserRepository(uow).forget_resolution(
+        platform=SurfacePlatform.TELEGRAM.value,
+        tenant_id=None,
+        external_user_id=identity.external_user_id,
+        resolved_user_id=user_id,
+    )
+    logger.info("agent_surfaces.telegram_identity_link.unlinked.observed")
+    return True
 
 
 def is_shared_bot_surface(surface: AgentSurfaceEntity) -> bool:

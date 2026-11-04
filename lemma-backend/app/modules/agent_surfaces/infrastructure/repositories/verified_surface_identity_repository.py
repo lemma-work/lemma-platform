@@ -130,6 +130,57 @@ class VerifiedSurfaceIdentityRepository:
         await self.session.flush()
         return identity
 
+    async def session_proved(
+        self, user_id: UUID, platform: str
+    ) -> list[VerifiedSurfaceIdentity]:
+        """This person's bindings on ``platform`` that a Lemma session proved,
+        still theirs, the newest proof first."""
+        rows = await self.session.scalars(
+            select(VerifiedSurfaceIdentity)
+            .where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.platform == platform,
+                VerifiedSurfaceIdentity.session_proved_at.is_not(None),
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+            .order_by(VerifiedSurfaceIdentity.session_proved_at.desc())
+            .limit(MAX_PROVED_ACCOUNTS)
+        )
+        return list(rows)
+
+    async def revoke_session_proved(
+        self, identity_id: UUID, *, user_id: UUID, platform: str
+    ) -> VerifiedSurfaceIdentity | None:
+        """Revoke one of this person's session-proved bindings.
+
+        ``None`` when it is not theirs, not live, or not proved from a session:
+        nobody unlinks an account for somebody else, and a binding made some
+        other way is not this one's to undo. Revoked is nobody's, so nothing of
+        theirs is left on it -- the number and the route go with the proof, as
+        ``ck_surface_identity_route_is_live`` requires of a revoked row.
+        """
+        identity = await self.session.scalar(
+            select(VerifiedSurfaceIdentity)
+            .where(
+                VerifiedSurfaceIdentity.id == identity_id,
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.platform == platform,
+                VerifiedSurfaceIdentity.session_proved_at.is_not(None),
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if identity is None:
+            return None
+        identity.revoked_at = datetime.now(timezone.utc)
+        identity.session_proved_at = None
+        identity.proved_through_surface_id = None
+        identity.verified_phone = None
+        identity.installation_surface_id = None
+        identity.pod_id = None
+        await self.session.flush()
+        return identity
+
     async def session_proved_accounts(self, user_id: UUID, platform: str) -> list[str]:
         """The accounts on ``platform`` this person proved from a Lemma
         session, still theirs."""
