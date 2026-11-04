@@ -81,7 +81,6 @@ window rather than a differently cut one.
 | --- | --- |
 | `/pods/{pod_id}/schedules` | Create/list/get/update/delete logical schedules |
 | `POST /webhooks/{source}` | Verify a delivery against its source plugin, normalize it, match schedules, and publish or enqueue filtering |
-| `GET /webhooks/{source}/verify` | Provider challenge/verification path |
 
 ## Webhook sources
 
