@@ -6,15 +6,18 @@ import pytest
 
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.public_rows import (
+    MAX_ATTACHMENT_NAME_CHARS,
     PublicAudience,
     PublicColumn,
     PublicRowRefused,
+    attachment_name,
     input_kind,
     is_fillable,
     opening_problem,
     public_column,
     public_values,
     refusal_for,
+    too_large,
 )
 
 pytestmark = pytest.mark.unit
@@ -189,6 +192,7 @@ def test_a_required_yes_needs_a_yes():
         (_col("starts", "DATE"), "date"),
         (_col("starts_at", "DATETIME"), "datetime-local"),
         (_col("track", "ENUM", options=["a"]), "select"),
+        (_col("cv", "FILE_PATH"), "file"),
         (_col("work_email"), "email"),
         (_col("mobile_number"), "tel"),
         (_col("message"), "textarea"),
@@ -206,3 +210,91 @@ def test_a_validator_finding_is_said_in_the_persons_words():
     assert refusal_for(seats, "type").message == "Seats needs to be a number"
     assert "options" in refusal_for(track, "enum").message
     assert refusal_for(None, None).column is None
+
+
+# -- attachments ------------------------------------------------------------
+
+APPLICATIONS = [
+    _col("id", "UUID", default="gen_random_uuid()"),
+    _col("full_name", required=True),
+    _col("cv", "FILE_PATH", required=True),
+    _col("portfolio", "FILE_PATH"),
+]
+
+
+def test_a_file_column_is_offered_only_where_a_file_can_be_attached():
+    cv = next(c for c in APPLICATIONS if c.name == "cv")
+    assert not is_fillable(cv, "id")
+    assert is_fillable(cv, "id", attachments=True)
+
+
+def test_a_web_form_opens_a_file_column_and_a_group_does_not():
+    chosen = ["full_name", "cv"]
+    assert (
+        opening_problem(APPLICATIONS, "id", chosen, audience=ANYONE, attachments=True)
+        is None
+    )
+    refused = opening_problem(APPLICATIONS, "id", chosen, audience=CONTACTS)
+    assert refused is not None and "can't fill in cv" in refused
+
+
+def test_a_required_file_column_left_shut_is_one_nobody_could_fill():
+    problem = opening_problem(
+        APPLICATIONS, "id", ["full_name"], audience=ANYONE, attachments=True
+    )
+    assert problem is not None and "needs cv" in problem
+    shut = opening_problem(APPLICATIONS, "id", ["full_name"], audience=CONTACTS)
+    assert shut is not None and "can't fill in" in shut
+
+
+ATTACHING = tuple(
+    public_column(c) for c in APPLICATIONS if c.name in {"full_name", "cv", "portfolio"}
+)
+
+
+def test_a_typed_path_never_fills_a_file_column():
+    row = public_values(
+        ATTACHING,
+        {"full_name": "Ana", "cv": "/finance/payroll.xlsx", "portfolio": "/x"},
+        attached={"cv"},
+    )
+    assert row == {"full_name": "Ana"}
+
+
+def test_a_required_file_is_refused_before_anything_is_stored():
+    with pytest.raises(PublicRowRefused) as refused:
+        public_values(ATTACHING, {"full_name": "Ana", "cv": "/somewhere/cv.pdf"})
+    assert refused.value.column == "cv"
+    assert refused.value.message == "Cv is required"
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored"),
+    [
+        ("cv.pdf", "cv.pdf"),
+        ("  cv.pdf ", "cv.pdf"),
+        ("../../etc/passwd", "passwd"),
+        ("C:\\Users\\ana\\cv.pdf", "cv.pdf"),
+        ("", "attachment"),
+        (None, "attachment"),
+        ("..", "attachment"),
+    ],
+)
+def test_a_strangers_file_name_is_one_segment(raw, stored):
+    assert attachment_name(raw) == stored
+
+
+def test_a_long_file_name_keeps_its_extension():
+    name = attachment_name("a" * 300 + ".pdf")
+    assert len(name) == MAX_ATTACHMENT_NAME_CHARS
+    assert name.endswith(".pdf")
+
+
+def test_too_large_names_the_file_or_the_whole_response():
+    cv = next(c for c in ATTACHING if c.name == "cv")
+    one = too_large(cv, 10 * 1024 * 1024)
+    assert one.column == "cv"
+    assert one.message == "Cv is too big. Attach a file under 10 MB"
+    whole = too_large(None, 25 * 1024 * 1024)
+    assert whole.column is None
+    assert "25 MB in all" in whole.message

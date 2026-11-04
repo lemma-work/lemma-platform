@@ -81,6 +81,9 @@ anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
 its rows through a widget's key: the hosted `{page_url}?table=t`, the embed script
 with `data-lemma-table`, a `<form data-lemma-table>`, or `Lemma.addRow(t, values)`.
 Rows are added as the member who opened the table, with only the open columns.
+A FILE_PATH column takes an attached file: stored as that member under
+`/forms/{t}/`, its path in the row. A group's guests can't attach one, so a
+group grant never opens a file column.
 
 **Showing a table on a page** — a page reads a table the pod marked **Public**
 with `Lemma.readRows(t, {orderBy})` (`GET /public/web/{key}/rows?table=t`), as the
