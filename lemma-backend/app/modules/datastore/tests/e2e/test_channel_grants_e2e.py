@@ -234,17 +234,18 @@ async def test_a_table_each_member_reads_alone_is_not_given(pod_api: DatastoreAp
 async def test_a_table_made_per_user_after_it_was_given_closes_to_the_group(
     pod_api: DatastoreApi, db_session: AsyncSession
 ):
-    """Given while everybody read every row, then made per-user: its rows are
-    now each member's own, and the granter's are not the group's to read."""
+    """Given while everybody read every row, then made per-user (a table is
+    switched only while empty): the rows written since are each member's own,
+    and the granter's are not the group's to read."""
     channel_id = await _group(pod_api)
     table = await _ledger(pod_api)
-    await pod_api.create_record(table, {"what": "granter's own", "amount": 1})
     granted = await _grant(
         pod_api, channel_id, table, read_columns=["what"], add_columns=["what"]
     )
     assert granted.status_code == status.HTTP_200_OK, granted.text
 
     await pod_api.update_table(table, {"enable_rls": True})
+    await pod_api.create_record(table, {"what": "granter's own", "amount": 1})
 
     for attempt in (
         read_granted_rows(
