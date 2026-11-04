@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.caches import RECENT_LEAVES, surface_caches
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
@@ -886,6 +887,67 @@ async def test_a_member_who_leaves_a_private_slack_channel_leaves_its_mirror(
         ),
     )
     assert (await _mirror(db_session, SUPPORT_CHANNEL))["archived"] is False
+
+
+async def test_a_member_who_joins_a_slack_channel_is_in_its_mirror_before_speaking(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+):
+    """Out when Slack says they left, back in when it says they joined --
+    seated by the platform, so the next leave takes them out again. A join
+    worked moments after a leave is not taken to undo it: updates can be
+    worked out of order."""
+    pod_id = test_pod["id"]
+    await _slack_surface(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        user_id=fixed_test_user["id"],
+        fake_slack=fake_slack,
+    )
+    await _seed_external_user(
+        db_session,
+        platform="SLACK",
+        external_user_id=slack_payloads.SENDER_ID,
+        tenant_id=slack_payloads.TEAM_ID,
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
+    await _hear(db_session, "slack", _slack_in_channel("morning", ts=_ts()))
+    mirror = await _mirror(db_session, SUPPORT_CHANNEL)
+    moved = {
+        "user": slack_payloads.SENDER_ID,
+        "channel": SUPPORT_CHANNEL,
+        "channel_type": "C",
+        "team": slack_payloads.TEAM_ID,
+    }
+    await _platform_says(
+        db_session, _slack_event({"type": "member_left_channel", **moved})
+    )
+    assert not await _seated(db_session, mirror["channel_id"], fixed_test_user["id"])
+
+    joined = _slack_event({"type": "member_joined_channel", **moved})
+    await _platform_says(db_session, joined)
+    assert not await _seated(db_session, mirror["channel_id"], fixed_test_user["id"])
+
+    # Minutes later, a join is news again.
+    source_id = await db_session.scalar(
+        select(ChannelSourceModel.id).where(
+            ChannelSourceModel.external_channel_id == SUPPORT_CHANNEL
+        )
+    )
+    await surface_caches.get(RECENT_LEAVES).delete(
+        f"{source_id}:{slack_payloads.SENDER_ID}"
+    )
+    await _platform_says(db_session, joined)
+    assert await _seated(db_session, mirror["channel_id"], fixed_test_user["id"])
+
+    await _platform_says(
+        db_session, _slack_event({"type": "member_left_channel", **moved})
+    )
+    assert not await _seated(db_session, mirror["channel_id"], fixed_test_user["id"])
 
 
 async def test_a_slack_leave_from_another_workspace_changes_nothing_here(

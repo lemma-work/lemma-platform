@@ -22,4 +22,18 @@ export class UserSurfacesNamespace {
       AgentSurfacesMeService.agentSurfaceSetMyDefault(payload),
     );
   }
+
+  /** The Telegram accounts I proved from a Lemma session; every bot knows them as me. */
+  telegramAccounts() {
+    return this.client.request(() =>
+      AgentSurfacesMeService.agentSurfaceListMyTelegramAccounts(),
+    );
+  }
+
+  /** Unlink one of them: from its next message it is a stranger's. */
+  unlinkTelegramAccount(accountId: string) {
+    return this.client.request(() =>
+      AgentSurfacesMeService.agentSurfaceUnlinkMyTelegramAccount(accountId),
+    );
+  }
 }
