@@ -265,6 +265,14 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
     # Per-test: reap only this test's sandbox pods, NOT the shared
     # session testcontainers (which carry the same lemma.e2e label).
     e2e_base._cleanup_e2e_workspace_containers(sandboxes_only=True)
+    # Removed behind the sandbox service's back, so it must also forget them.
+    # It takes a sandbox ensured in the last few seconds at its word, and a
+    # module's tests share one identity -- so one sandbox -- now: the next
+    # test's first tool call got the container just removed here, and failed
+    # on "sandbox container ... no longer exists".
+    from app.modules.workspace.services.sandbox_service import SandboxService
+
+    SandboxService._recent.clear()
 
 
 #: Per-test phase durations, and which test paid for the session fixtures.

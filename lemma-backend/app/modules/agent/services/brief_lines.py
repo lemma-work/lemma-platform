@@ -151,6 +151,19 @@ def run_source_of(agent_run) -> str | None:
     return source_of(getattr(agent_run, "metadata", None))
 
 
+def call_brief(conversation) -> str:
+    """The coordinator's brief, while a live call is held in this conversation.
+
+    Per run rather than in the conversation's instructions: a call can happen
+    in any chat, and the chat must read as itself again once the call ends.
+    """
+    from app.modules.agent.domain.calls import call_mark, coordinator_brief
+
+    metadata = getattr(conversation, "metadata", None)
+    mark = call_mark(metadata if isinstance(metadata, dict) else None)
+    return coordinator_brief() if mark is not None and mark.live_coordinator else ""
+
+
 def run_framing(
     conversation, *, run_source: str | None = None, platform: str | None = None
 ) -> str:

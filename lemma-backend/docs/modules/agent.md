@@ -83,6 +83,18 @@ context; destructive operations require a standing grant or session approval.
 Agent Host runs are fenced by a per-run lease row, so a host that reconnects
 cannot double-dispatch a run already in flight.
 
+Every harness's events pass one place before anything reads them
+(`run_event_pump._split_message_event`): reasoning a model wrote into its text
+becomes a thought (`core/text/thinking_tags`, which also catches a block the
+prompt opened and only `</think>` closes, and on the live stream withdraws what
+it showed with a `stream_reset`), and an approval the agent asks for is
+preceded by its `message` to the person (`domain/approval_message`), so a run
+that stops for one never ends on a half sentence. A provider's tool call ids
+are not trusted to be unique: a response is executed and stored with one call
+per id (`domain/tool_call_ids`), and a call reusing an id the conversation
+already holds is stored under a new one, its return following it
+(`RunMessageWriter._unique_call_id`).
+
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
@@ -108,6 +120,18 @@ the runs carried whole get their background -- an older run is reduced to its
 requests and answer -- so the read is bounded and moves in elision's blocks.
 A run answering a line in Lemma answers the lines whose words it read
 (`services/channel_answers`, recorded in `channel_line_answers`).
+
+A message the person sends while a run is finishing is steered into it
+(`capabilities/pending_user_messages`), and the run goes on to answer that
+too. The answer it had already written is then not the run's final answer --
+its output is still the last -- but it was an answer: the pydantic-ai node
+loop marks it `answered_before_steer` when the request that sent the run on
+carries the person's words rather than a retry (`domain/steered_answers`).
+`contracts/run_replies` reads up to five of them, and each is a line of its own
+ahead of the final answer, in Lemma and on a platform (`run:{run}:{n}`, the
+final answer staying `run:{run}`). Such a line rides none of the run's files,
+finishes no live stream, and is not sent at all where the run's Slack stream
+already shows it.
 
 Three kinds of message belong to no run and still reach the model, placed by
 sequence among the runs around them: notifications; what somebody outside

@@ -352,7 +352,7 @@ function Connectors({ pod, detail }: { pod: Pod; detail: AgentDetail }) {
                     </select>
                     <button className="btn" type="submit" disabled={!adding || save.isPending}>{save.isPending ? "Saving…" : "Add"}</button>
                 </form>
-            ) : list.length === 0 ? <p className="agentpage__quiet">{pod.name} has no connectors yet. Add them under About → Connections.</p> : null)}
+            ) : list.length === 0 ? <p className="agentpage__quiet">{pod.name} has no connectors yet. Add them under About {pod.name} → Connections.</p> : null)}
             {connectors.isError && <p className="agentpage__quiet" role="alert">Couldn’t read {pod.name}’s connectors.</p>}
             {save.isError && <ProblemLine className="agentpage__quiet" error={save.error} fallback="That could not be saved." />}
         </Rail>

@@ -8,7 +8,9 @@ from app.modules.agent.domain.value_objects import JsonObject
 
 _CONNECTOR = (
     "The pod connector, by its slug, as `list_connectors` names it (e.g. "
-    "`gmail`, `support-inbox`)."
+    "`gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) "
+    "works too: browsing it needs nothing connected, and running it answers "
+    "with a `connect_url` until your person has connected it."
 )
 
 
@@ -62,4 +64,13 @@ class RunConnectorOperationRequest(BaseModel):
     output_path: str | None = Field(
         default=None,
         description="Pod path to save a file result to, e.g. /me/report.pdf.",
+    )
+
+
+class ConnectConnectorRequest(BaseModel):
+    connector: str = Field(
+        description=(
+            "What to connect: a pod connector's slug, an installation's name, or "
+            "a catalog connector id such as `gmail`."
+        )
     )

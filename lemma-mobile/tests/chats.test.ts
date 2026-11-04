@@ -64,7 +64,8 @@ describe("the chat list", () => {
 
     it("puts chats and shared chats in one list, newest first, and leaves contacts to their queue", () => {
         const rows = chatEntries({ ...base, filter: "all" });
-        expect(rows.map((one) => one.title)).toEqual(["Launch team", "Digest", "Refund", "WhatsApp"]);
+        /* The reader's own line is named for the Lemma it is with (the web's `channelTitle`). */
+        expect(rows.map((one) => one.title)).toEqual(["Launch team", "Digest", "Refund", "Support"]);
         expect(rows[0]).toMatchObject({ unread: 3, needsYou: true, said: "Sam: Photos are in", href: chatsRoutes.shared("pod", "g"), glyph: { kind: "hash" } });
         expect(rows[1]).toMatchObject({ said: "Schedule · Digest", glyph: { kind: "automation" } });
         expect(rows[2]).toMatchObject({ needsYou: true, href: "/chat/pod/Refund" });
@@ -74,7 +75,7 @@ describe("the chat list", () => {
     it("cuts the list the way the web's filters do", () => {
         expect(chatEntries({ ...base, filter: "chats" }).map((one) => one.title)).toEqual(["Refund"]);
         expect(chatEntries({ ...base, filter: "automations" }).map((one) => one.title)).toEqual(["Digest"]);
-        expect(chatEntries({ ...base, filter: "shared" }).map((one) => one.title)).toEqual(["Launch team", "WhatsApp"]);
+        expect(chatEntries({ ...base, filter: "shared" }).map((one) => one.title)).toEqual(["Launch team", "Support"]);
         expect(chatEntries({ ...base, filter: "all", search: "launch" }).map((one) => one.title)).toEqual(["Launch team", "Digest", "Refund"]);
     });
 

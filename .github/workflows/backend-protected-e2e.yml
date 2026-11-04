@@ -21,16 +21,187 @@ permissions:
   contents: read
 
 jobs:
-  protected-runtime:
-    name: Real runtime, surface, and document processors
+  # The single job used to run all ~210 tests serially: 21-27 minutes green,
+  # nearly an hour on a red night (timeouts are 300s each), every Desktop
+  # release waiting on it. Most of that was per-test setup that does not need
+  # to happen one test after another, and 136s of it was the first workspace
+  # test building the sandbox image inside its own fixture.
+  #
+  # So it is split across runners, by `.github/protected-e2e-shards.json`,
+  # which `scripts/plan_e2e_shards.py --protected-run-id <run> [...]` generates
+  # from the merged JUnit this workflow publishes -- balanced on measured time,
+  # one test file never split. The sandbox and service images are built or
+  # restored once per run, below, and every shard loads them, exactly as
+  # `e2e.yml` does for the PR lane.
+  plan:
+    name: Plan shards and image keys
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: backend-protected-e2e
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.shards.outputs.value }}
+      sandbox_images_key: ${{ steps.sandbox-key.outputs.value }}
+      service_images: ${{ steps.service-key.outputs.images }}
+      service_images_key: ${{ steps.service-key.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Load the shard matrix
+        id: shards
+        run: echo "value=$(jq -c '.shards' .github/protected-e2e-shards.json)" >> "$GITHUB_OUTPUT"
+      # The same key `e2e.yml` computes, over the same inputs, so a run on a
+      # commit whose images main's PR lane already built restores them instead
+      # of building. Should the two lists ever drift, nothing breaks: this
+      # workflow builds under its own key and the shards load that.
+      - name: Resolve the sandbox image cache key
+        id: sandbox-key
+        run: echo "value=e2e-sandbox-images-${{ hashFiles(
+              'lemma-backend/sandbox-images/**',
+              'lemma-backend/sandbox_runtime/**',
+              'lemma-backend/Makefile',
+              'lemma-python/**',
+              'lemma-pod-bundle/**',
+              'lemma-cli/**',
+              'lemma-skills/**'
+            ) }}" >> "$GITHUB_OUTPUT"
+      # Read out of `test_utils.py`, as `e2e.yml` does, so a fixture image
+      # cannot be missing from the list and silently pulled at test time.
+      - name: Resolve the service image list and cache key
+        id: service-key
+        run: |
+          images="$(grep -oE '^[A-Z_]+_IMAGE = "[^"]+"' lemma-backend/app/core/test_utils.py | cut -d'"' -f2 | sort | tr '\n' ' ')"
+          test -n "$images" || { echo "::error::no *_IMAGE pins found in test_utils.py"; exit 1; }
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "value=e2e-service-images-$(echo "$images" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+  # Built once per run instead of inside whichever test first asked for it.
+  # Read-only against the GHCR layer cache: only main's PR lane writes it.
+  sandbox-images:
+    name: Build or restore sandbox images
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: read
     defaults:
       run:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
+      - name: Is the image already cached?
+        id: probe
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-sandbox-images.tar
+          key: ${{ needs.plan.outputs.sandbox_images_key }}
+          lookup-only: true
+      - uses: docker/setup-buildx-action@v4
+        if: steps.probe.outputs.cache-hit != 'true'
+      - name: Log in to GHCR for the layer cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build sandbox images
+        if: steps.probe.outputs.cache-hit != 'true'
+        run: make sandbox-images
+        env:
+          SANDBOX_CACHE_REPO: ghcr.io/lemma-work/ci-cache/sandbox
+      - name: Save sandbox images to cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        run: |
+          # shellcheck disable=SC2046 # one argument per image name, on purpose
+          docker save -o /tmp/e2e-sandbox-images.tar \
+            $(make print-sandbox-images | awk '{print $2}')
+      - name: Upload the image cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/e2e-sandbox-images.tar
+          key: ${{ needs.plan.outputs.sandbox_images_key }}
+
+  # Postgres, Redis, SuperTokens, Kreuzberg: pulled once, through the GHCR
+  # mirror, rather than cold by every shard from upstream registries.
+  service-images:
+    name: Pull or restore service images
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Is the image set already cached?
+        id: probe
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-service-images.tar
+          key: ${{ needs.plan.outputs.service_images_key }}
+          lookup-only: true
+      - name: Pull service images
+        if: steps.probe.outputs.cache-hit != 'true'
+        uses: ./.github/actions/pull-images
+        with:
+          images: ${{ needs.plan.outputs.service_images }}
+      - name: Save service images
+        if: steps.probe.outputs.cache-hit != 'true'
+        env:
+          IMAGES: ${{ needs.plan.outputs.service_images }}
+        run: |
+          # shellcheck disable=SC2086 # one argument per image name, on purpose
+          docker save -o /tmp/e2e-service-images.tar $IMAGES
+      - name: Upload the image cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/e2e-service-images.tar
+          key: ${{ needs.plan.outputs.service_images_key }}
+
+  protected-runtime:
+    name: Protected (${{ matrix.shard.name }})
+    needs: [plan, sandbox-images, service-images]
+    runs-on: ubuntu-latest
+    # The heaviest shard plans at ~10 minutes green. Forty leaves room for a
+    # red night's 300s timeouts and still catches a hang.
+    timeout-minutes: 40
+    environment: backend-protected-e2e
+    strategy:
+      # Every shard runs to the end, so one red shard does not hide another.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+      # Both jobs above either found these keys or created them, so a miss is a
+      # broken assumption, not something to paper over by building here.
+      - name: Restore service images
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-service-images.tar
+          key: ${{ needs.plan.outputs.service_images_key }}
+          fail-on-cache-miss: true
+      - name: Restore sandbox images
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-sandbox-images.tar
+          key: ${{ needs.plan.outputs.sandbox_images_key }}
+          fail-on-cache-miss: true
+      # In the background while dependencies install, as in `e2e.yml`; joined
+      # by `Wait for the images` before any test.
+      - name: Start loading the images
+        run: |
+          load() {
+            ( if docker load -i "$1" > "/tmp/$2-load.log" 2>&1; then rc=0; else rc=$?; fi
+              echo "$rc" > "/tmp/$2-load.rc" ) &
+          }
+          load /tmp/e2e-service-images.tar service
+          load /tmp/e2e-sandbox-images.tar sandbox
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -52,6 +223,39 @@ jobs:
         # Matches what actually ships: lemma-backend/Dockerfile and every
         # other backend workflow sync `--extra local`.
         run: uv sync --extra local
+      - name: Restore the local embedding model
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/lemma/fastembed
+          key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
+          restore-keys: fastembed-
+      - name: Wait for the images
+        run: |
+          for name in service sandbox; do
+            waited=0
+            while [ ! -f "/tmp/$name-load.rc" ]; do
+              waited=$((waited + 1))
+              if [ "$waited" -gt 600 ]; then
+                cat "/tmp/$name-load.log" || true
+                echo "::error::loading the $name images did not finish in 10 minutes"
+                exit 1
+              fi
+              sleep 1
+            done
+            cat "/tmp/$name-load.log"
+            [ "$(cat "/tmp/$name-load.rc")" = 0 ] || { echo "::error::loading the $name images failed"; exit 1; }
+          done
+      # `make sandbox-images` tags with SANDBOX_TAG=dev, not the fingerprint
+      # the fixtures would look for, so the tags are handed to them explicitly
+      # -- otherwise `workspace_image` builds its own, inside the first test.
+      - name: Resolve sandbox image tags
+        run: |
+          make print-sandbox-images | while read -r kind image; do
+            case "$kind" in
+              workspace:) echo "WORKSPACE_E2E_IMAGE=$image" >> "$GITHUB_ENV" ;;
+              function:)  echo "FUNCTION_E2E_IMAGE=$image"  >> "$GITHUB_ENV" ;;
+            esac
+          done
       # Two clauses have come out of this filter, both because what they select
       # cannot report a defect from here. Every release gate reads this run, so
       # a red that is not a defect costs a Desktop release and a nightly DMG.
@@ -80,12 +284,11 @@ jobs:
       # report, and is one of the workflows notify-failure.yml watches. A
       # latency budget belongs in the lane that trends it, not in the one that
       # decides whether a build may be cut.
+      #
+      # The filter is the same for every shard; only the paths differ. Serial
+      # within a shard, as the single job was: see PROTECTED_SHARDS in the
+      # planner for why the split is across runners and not xdist workers.
       - name: Run protected suite
-        run: >-
-          uv run pytest
-          -m "e2e and (slow or workspace or indexing or protected) and not provider and not benchmark"
-          --junitxml=protected-e2e.xml
-          -o timeout=300
         env:
           E2E_REAL: "1"
           # Keep the protected Docker/runtime axis real without requiring a
@@ -93,11 +296,81 @@ jobs:
           # deterministic model unless a dedicated real-provider run opts in.
           E2E_LLM_MODE: "mock"
           LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
+          SHARD_ARGS: ${{ matrix.shard.args }}
+        run: |
+          # shellcheck disable=SC2086 # the shard's paths, one argument each
+          uv run pytest \
+            -m "e2e and (slow or workspace or indexing or protected) and not provider and not benchmark" \
+            --junitxml=protected-e2e.xml \
+            -o timeout=300 \
+            $SHARD_ARGS
+      - name: Report the slowest tests in this shard
+        if: always()
+        run: python3 ../scripts/e2e_durations.py protected-e2e.xml >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload this shard's JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: protected-e2e-junit-${{ matrix.shard.name }}
+          path: lemma-backend/protected-e2e.xml
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # The run's verdict, and its evidence. `require-backend-protected-e2e` reads
+  # the *workflow run's* conclusion, which a failed shard already turns red --
+  # but a skipped shard does not, so this job refuses anything short of every
+  # shard succeeding rather than trusting a run with nothing in it to be green.
+  protected-e2e-passed:
+    name: Backend protected E2E passed
+    if: ${{ !cancelled() }}
+    needs: [plan, sandbox-images, service-images, protected-runtime]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: protected-e2e-junit-*
+          path: junit
+      # One file, as the single job published, so the evidence keeps its shape
+      # and `plan_e2e_shards.py --protected-run-id` can measure it.
+      - name: Merge the shard JUnit files
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          files = sorted(pathlib.Path("junit").rglob("*.xml"))
+          if not files:
+              sys.exit("no shard published a JUnit file")
+          merged = ET.Element("testsuites")
+          for path in files:
+              root = ET.parse(path).getroot()
+              suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+              for suite in suites:
+                  suite.set("name", f"{suite.get('name', 'pytest')}:{path.parent.name}")
+                  merged.append(suite)
+          for field in ("tests", "failures", "errors", "skipped"):
+              merged.set(field, str(sum(int(s.get(field, 0)) for s in merged)))
+          merged.set("time", f"{sum(float(s.get('time', 0)) for s in merged):.3f}")
+          ET.ElementTree(merged).write("protected-e2e.xml", encoding="utf-8", xml_declaration=True)
+          print(f"merged {len(files)} shard files: {merged.get('tests')} tests")
+          PY
       - name: Publish commit-linked evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: backend-protected-e2e-${{ github.sha }}
-          path: lemma-backend/protected-e2e.xml
+          path: protected-e2e.xml
           if-no-files-found: error
           retention-days: 14
+      - name: Every job succeeded
+        if: always()
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -e 'to_entries | all(.value.result == "success")' > /dev/null || {
+            echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+            echo "::error::a protected job did not succeed"
+            exit 1
+          }

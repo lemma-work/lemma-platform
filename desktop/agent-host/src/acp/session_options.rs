@@ -130,6 +130,35 @@ impl LemmaTools {
     }
 }
 
+/// Claude Code's own tools that deliver, publish, notify or schedule somewhere
+/// Lemma's access rules do not reach, or that only live as long as this run.
+///
+/// A Claude Code signed in to claude.ai offers `Artifact`, whose own
+/// description tells the model to publish finished work as a claude.ai page
+/// unprompted -- and it did, inside Lemma: a report built from pod data went
+/// to claude.ai instead of a pod file the person could open. The rest are the
+/// same shape: claude.ai artifacts' comments and data, design and plugin
+/// publishing, push notifications and remote triggers, and the crons, wake-ups
+/// and monitors of a session that ends with the run. Lemma has its own for each
+/// (pod files and `display_resource`, `lemma_say`, `lemma schedules`,
+/// `lemma_wait_for`). An older Claude Code without a tool ignores its name.
+const CLAUDE_CODE_TOOLS_OUTSIDE_LEMMA: [&str; 14] = [
+    "Artifact",
+    "ArtifactComments",
+    "ArtifactData",
+    "DesignSync",
+    "PublishPlugin",
+    "ShareOnboardingGuide",
+    "PushNotification",
+    "RemoteTrigger",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "Monitor",
+    "ReportFindings",
+];
+
 /// Claude Code, through `claude-agent-acp`'s `_meta` (its `createSession`).
 ///
 /// - `systemPrompt.append` adds Lemma's instructions to Claude Code's own
@@ -186,6 +215,11 @@ fn claude_code(
     upstream_version: Option<&str>,
 ) -> SessionOptions {
     let mut disallowed = vec![json!("mcp__claude-in-chrome")];
+    disallowed.extend(
+        CLAUDE_CODE_TOOLS_OUTSIDE_LEMMA
+            .iter()
+            .map(|tool| json!(tool)),
+    );
     if lemma_tools.web_search {
         disallowed.push(json!("WebSearch"));
     }
@@ -193,7 +227,17 @@ fn claude_code(
         disallowed.push(json!("WebFetch"));
     }
     if lemma_tools.spawn_subagent {
-        disallowed.extend([json!("Agent"), json!("Task")]);
+        disallowed.extend(
+            [
+                "Agent",
+                "Task",
+                "Workflow",
+                "ListAgents",
+                "SendMessage",
+                "TaskStop",
+            ]
+            .map(|tool| json!(tool)),
+        );
     }
     let reads_always_load = upstream_version
         .is_some_and(|version| version_is_at_least(version, CLAUDE_CODE_ALWAYS_LOAD));

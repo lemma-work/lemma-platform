@@ -53,6 +53,11 @@ def _parse_response(
 
         return response_404
 
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
@@ -88,9 +93,10 @@ def sync_detailed(
 ) -> Response[CallResponse | ErrorResponse]:
     """Open a call
 
-     Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call,
-    hands work to sub-agents and shows things on the call's canvas. Connect to
-    `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new
+    conversation. The call is held in that conversation: its agent coordinates the call, hands work to
+    sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket`
+    to talk.
 
     Args:
         pod_id (UUID):
@@ -124,9 +130,10 @@ def sync(
 ) -> CallResponse | ErrorResponse | None:
     """Open a call
 
-     Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call,
-    hands work to sub-agents and shows things on the call's canvas. Connect to
-    `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new
+    conversation. The call is held in that conversation: its agent coordinates the call, hands work to
+    sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket`
+    to talk.
 
     Args:
         pod_id (UUID):
@@ -155,9 +162,10 @@ async def asyncio_detailed(
 ) -> Response[CallResponse | ErrorResponse]:
     """Open a call
 
-     Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call,
-    hands work to sub-agents and shows things on the call's canvas. Connect to
-    `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new
+    conversation. The call is held in that conversation: its agent coordinates the call, hands work to
+    sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket`
+    to talk.
 
     Args:
         pod_id (UUID):
@@ -189,9 +197,10 @@ async def asyncio(
 ) -> CallResponse | ErrorResponse | None:
     """Open a call
 
-     Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call,
-    hands work to sub-agents and shows things on the call's canvas. Connect to
-    `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new
+    conversation. The call is held in that conversation: its agent coordinates the call, hands work to
+    sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket`
+    to talk.
 
     Args:
         pod_id (UUID):

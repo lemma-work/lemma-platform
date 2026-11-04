@@ -10290,7 +10290,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.9.0";
+  var SDK_VERSION = "0.10.1";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var APP_HEADER_NAME = "X-Lemma-App";
   var KNOWN_CLIENTS = [
@@ -10846,7 +10846,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.9.0",
+    VERSION: "0.10.1",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -14481,6 +14481,7 @@ var LemmaClient = (() => {
     }
     /**
      * Declare A Pod Connector
+     * Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.
      * @param podId
      * @param requestBody
      * @returns PodConnectorResponse Successful Response
@@ -16738,6 +16739,92 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Create Identity Link
+     * A one-time code that proves, once confirmed, a Telegram account is the
+     * caller's. Ten minutes long, one use.
+     * @param podId
+     * @param requestBody
+     * @returns IdentityLinkResponse Successful Response
+     * @throws ApiError
+     */
+    static telegramIdentityLinkCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-identity-links",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Identity Link
+     * Whether the caller's code was opened yet, and from which account.
+     * @param podId
+     * @param code
+     * @returns IdentityLinkStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static telegramIdentityLinkGet(podId, code) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/telegram-identity-links/{code}",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Confirm Identity Link
+     * The account the code was opened from is the caller's: bind it.
+     * @param podId
+     * @param code
+     * @returns TelegramAccountResponse Successful Response
+     * @throws ApiError
+     */
+    static telegramIdentityLinkConfirm(podId, code) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-identity-links/{code}/confirm",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Decline Identity Link
+     * The account the code was opened from is not the caller's: spend it.
+     * @param podId
+     * @param code
+     * @returns void
+     * @throws ApiError
+     */
+    static telegramIdentityLinkDecline(podId, code) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-identity-links/{code}/decline",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Widgets
      * @param podId
      * @returns WebWidgetListResponse Successful Response
@@ -18085,6 +18172,95 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Table Grants
+     * The tables the group's people outside the pod may read or add to --
+     * those the caller may read themselves.
+     * @param podId
+     * @param channelId
+     * @returns TableGrantsResponse Successful Response
+     * @throws ApiError
+     */
+    static channelTableGrantList(podId, channelId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/table-grants",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Remove Table Grant
+     * The group no longer reads or adds to the table. Whoever may manage the
+     * group may take it back, whether or not they can read the table.
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    static channelTableGrantRemove(podId, channelId, tableName) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "table_name": tableName
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Set Table Grant
+     * Give the group these columns of the table to read, and those to fill.
+     *
+     * Everybody in the group reads what is granted -- the people outside the
+     * pod included -- through the granting member's own access. A person's act:
+     * an agent or a function, which may be reading what strangers wrote in the
+     * group, is refused (403).
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @param requestBody
+     * @returns TableGrantResponse Successful Response
+     * @throws ApiError
+     */
+    static channelTableGrantSet(podId, channelId, tableName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "table_name": tableName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
      * Get Inbox
      * What is new for the reader across the pod: the badges, the questions
      * waiting on them, the unread lines naming them -- newest first -- and the
@@ -18337,6 +18513,55 @@ var LemmaClient = (() => {
     telegramLink(podId, surfaceName) {
       return this.client.request(
         () => ChannelSourcesService.channelTelegramLinkCreate(podId, { surface_name: surfaceName })
+      );
+    }
+    /** A ten-minute code proving, once confirmed, a Telegram account is the
+     *  caller's. With `contactId`, only that person's account may open it. */
+    identityLink(podId, surfaceId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return AgentSurfacesService.telegramIdentityLinkCreate(podId, {
+            surface_id: surfaceId,
+            contact_id: (_a = options.contactId) != null ? _a : null
+          });
+        }
+      );
+    }
+    /** Whether the caller's code was opened, and from which account. */
+    identityLinkStatus(podId, code) {
+      return this.client.request(() => AgentSurfacesService.telegramIdentityLinkGet(podId, code));
+    }
+    /** The account that opened the code is the caller's: bind it. */
+    confirmIdentityLink(podId, code) {
+      return this.client.request(
+        () => AgentSurfacesService.telegramIdentityLinkConfirm(podId, code)
+      );
+    }
+    /** The tables a group's people outside the pod may read or add to. */
+    tableGrants(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelTableGrantList(podId, channelId));
+    }
+    /** Give a group a table: the columns everybody there may read, and those
+     *  they may fill in a new row. Everybody in the group reads what is granted. */
+    setTableGrant(podId, channelId, table, grant) {
+      return this.client.request(
+        () => ChannelsService.channelTableGrantSet(podId, channelId, table, {
+          read_columns: grant.readColumns,
+          add_columns: grant.addColumns
+        })
+      );
+    }
+    /** The group no longer reads or adds to the table. */
+    removeTableGrant(podId, channelId, table) {
+      return this.client.request(
+        () => ChannelsService.channelTableGrantRemove(podId, channelId, table)
+      );
+    }
+    /** The account that opened the code is not the caller's: spend it. */
+    declineIdentityLink(podId, code) {
+      return this.client.request(
+        () => AgentSurfacesService.telegramIdentityLinkDecline(podId, code)
       );
     }
   };
@@ -19852,7 +20077,7 @@ var LemmaClient = (() => {
   var CallsService = class {
     /**
      * Open a call
-     * Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     * Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new conversation. The call is held in that conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
      * @param podId
      * @param requestBody
      * @returns CallResponse Successful Response
@@ -19869,8 +20094,9 @@ var LemmaClient = (() => {
         mediaType: "application/json",
         errors: {
           403: `The caller may not run this agent.`,
-          404: `The agent was not found.`,
-          422: `Validation Error`,
+          404: `The agent, or the conversation, was not found.`,
+          409: `That conversation cannot hold a call.`,
+          422: `The caller cannot run the model the agent runs on.`,
           503: `No voice engine is configured.`
         }
       });

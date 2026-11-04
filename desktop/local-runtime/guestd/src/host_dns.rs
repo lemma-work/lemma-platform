@@ -30,15 +30,25 @@
 //!
 //! Only the resident `serve-vsock` guest serves it, which is the VZ guest on
 //! macOS. WSL resolves through Windows (`generateResolvConf`) and never starts
-//! it. Sandbox containers are in their own network namespaces, where this
-//! address is their own loopback: they keep the gateway's DNS, which their
-//! firewall already allows.
+//! it.
+//!
+//! **Sandbox containers.** They are in their own network namespaces, where
+//! `127.0.0.2` is their own loopback, and nerdctl drops loopback servers from
+//! the resolv.conf it gives them -- so they used to keep the gateway alone,
+//! and under WARP every lookup in every sandbox failed (Chrome reported it as
+//! `ERR_TUNNEL_CONNECTION_FAILED`, through the fall-through proxy) while the
+//! guest itself resolved fine. resolved now also listens on the sandbox
+//! bridge's gateway (`DNSStubListenerExtra` in `resolved.conf.d/lemma.conf`),
+//! and a sandbox is run with `--dns` naming it once this relay is serving
+//! (`sandbox_dns_server`). It gets what the guest gets: the relay, then the
+//! gateway, first good answer. The sandbox firewall rejects only the core
+//! service ports on that address, never 53.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -50,6 +60,27 @@ pub const HOST_DNS_VSOCK_PORT: u32 = 42_414;
 /// resolved's own proxy-mode stub; `127.0.0.2` is on `lo` like every other
 /// 127/8 address and needs no configuration to bind.
 pub(crate) const HOST_DNS_ADDRESS: &str = "127.0.0.2:53";
+
+/// The sandbox bridge's gateway: nerdctl's default `bridge` network,
+/// `10.4.0.0/24` on `nerdctl0` (`SANDBOX_BRIDGE_INTERFACE`). resolved answers
+/// here too (`DNSStubListenerExtra`), and must name the same address.
+pub(crate) const SANDBOX_DNS_ADDRESS: &str = "10.4.0.1";
+
+/// Whether this guest's relay is serving, so sandboxes may be pointed at the
+/// resolved listener in front of it. False on WSL, and on a guest whose relay
+/// could not bind -- where a sandbox keeps nerdctl's own choice.
+static RELAY_SERVING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn mark_relay_serving() {
+    RELAY_SERVING.store(true, Ordering::Release);
+}
+
+/// The name server a sandbox is run with, when it is not nerdctl's default.
+pub(crate) fn sandbox_dns_server() -> Option<&'static str> {
+    RELAY_SERVING
+        .load(Ordering::Acquire)
+        .then_some(SANDBOX_DNS_ADDRESS)
+}
 
 /// The largest query forwarded. The host refuses anything larger too
 /// (`HostDNSBridge.maximumQueryBytes`); a real query is a few hundred bytes.

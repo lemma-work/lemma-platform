@@ -22,7 +22,6 @@
     "app/modules/connectors/services/account_identity.py::_telegram_identity::debug-only-broad-catch::connectors.account_identity.telegram_getme_while_resolving_account.diagnostic": 1,
     "app/modules/connectors/services/account_identity.py::resolve_account_identity::silent-broad-catch::Exception -> return": 1,
     "app/modules/datastore/infrastructure/reranker.py::LocalCrossEncoderReranker.rerank::debug-only-broad-catch::datastore.reranker.local_reranker_keeping_first_stage.diagnostic": 1,
-    "app/modules/datastore/infrastructure/reranker.py::OpenAICompatReranker.rerank::debug-only-broad-catch::datastore.reranker.openai_compat_reranker_keeping_first.diagnostic": 1,
     "app/modules/icon/services/icon_service.py::IconService.delete_storage_path::debug-only-broad-catch::icon.icon_service.delete_icon_asset.diagnostic": 1,
     "app/modules/pod/services/pod_member_service.py::PodMemberService.remove_member_from_pod::debug-only-broad-catch::pod.pod_member_service.fetch_user_info_event_emission.diagnostic": 1,
     "app/modules/pod_bundle/events/handlers.py::_fail::debug-only-broad-catch::pod_bundle.handlers.persist_state_export_s_s.diagnostic": 1,

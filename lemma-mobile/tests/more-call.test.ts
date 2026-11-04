@@ -191,7 +191,7 @@ function harness(options: { sound?: boolean; failConnect?: boolean } = {}) {
     const link: CallLink = {
         sendAudio: (pcm) => { audio.push(pcm); },
         send: (control) => { sent.push(control); },
-        close: () => { closed += 1; handlers?.onClose(null); },
+        close: () => { closed += 1; handlers?.onClose(null, false); },
     };
     const source: CallSource = {
         sound: options.sound ?? true,
@@ -213,7 +213,7 @@ function harness(options: { sound?: boolean; failConnect?: boolean } = {}) {
         closed: () => closed,
         frame: (frame: CallFrame) => handlers?.onFrame(frame),
         voice: (bytes: number[]) => handlers?.onAudio(new Uint8Array(bytes).buffer),
-        drop: (reason: string | null) => handlers?.onClose(reason),
+        drop: (reason: string | null) => handlers?.onClose(reason, reason !== null),
         types: () => posted.map((one) => one.type),
     };
 }

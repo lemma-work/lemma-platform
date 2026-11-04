@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.modules.datastore.infrastructure import pod_schema_memo
+from app.modules.datastore.infrastructure.pod_schema_catalog import VERSIONS_TABLE
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.infrastructure.query_role import (
     _is_transient_conflict,
@@ -228,6 +229,15 @@ async def test_a_createrole_app_role_can_enter_the_roles_it_makes_and_drop_them(
             )
         )
         await conn.execute(text(f'GRANT CREATE ON DATABASE "{database}" TO "{login}"'))
+        # The suite's superuser made the versions table first; a deployed app
+        # role made it itself and owns it. Dropping a schema forgets its row.
+        if await conn.scalar(text(f"SELECT to_regclass('{VERSIONS_TABLE}')")):
+            await conn.execute(
+                text(
+                    f"GRANT SELECT, INSERT, UPDATE, DELETE ON {VERSIONS_TABLE} "
+                    f'TO "{login}"'
+                )
+            )
     engine = create_async_engine(
         admin.url.set(username=login, password=password),
         poolclass=NullPool,

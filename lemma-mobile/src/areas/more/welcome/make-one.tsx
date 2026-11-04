@@ -102,7 +102,7 @@ export function MakeOne({ email, name, secondary, busy, initialKind, inviteOnly 
                     </Say>
                 </View>
             ) : (
-                <Say>{personalName === "Personal" ? "Private to you. You can invite people later." : `Private to you. It will be called ${personalName}.`}</Say>
+                <Say>{personalName === personalNameFor(null) ? "Private to you. You can invite people later." : `Private to you. It will be called ${personalName}.`}</Say>
             )}
 
             <Button

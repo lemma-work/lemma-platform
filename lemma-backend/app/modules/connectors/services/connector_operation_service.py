@@ -14,9 +14,10 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
     OperationSummary,
 )
-from app.modules.connectors.domain.connector import kind_to_provider
+from app.modules.connectors.domain.connector import AuthProvider, kind_to_provider
 from app.modules.connectors.domain.errors import (
     ConnectorNotFoundError,
+    ConnectorReauthRequiredError,
     OperationNotFoundError,
 )
 from app.modules.connectors.domain.ports import (
@@ -35,8 +36,9 @@ from app.modules.connectors.services.operation_visibility import (
 )
 from app.modules.connectors.services.pod_connector_resolution import (
     PodConnectorResolver,
+    reauth_required_for,
 )
-from app.modules.connectors.domain.account import AccountEntity
+from app.modules.connectors.domain.account import AccountEntity, AccountStatus
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
 from app.modules.connectors.services.auth.github_bindings import routable_external_ref
 from app.modules.connectors.services.connector_service import ConnectorService
@@ -48,6 +50,10 @@ from app.modules.connectors.services.execution.plumbing import (
     build_dispatcher,
     execution_failures_translated,
     execution_request,
+)
+from app.modules.connectors.services.installation_reach import (
+    browsable,
+    connector_for_call,
 )
 from app.modules.connectors.services.credential_freshness import (
     is_oauth_account,
@@ -427,26 +433,44 @@ class ConnectorOperationService:
         query: str | None = None,
         limit: int | None = None,
     ) -> OperationDiscoverResponse:
-        """The operations a pod connector offers, to someone who may run them."""
-        _, auth_config = await self._usable_pod_connector(ctx, pod_id, slug)
+        """The operations a pod connector offers, to someone who may run them
+        -- or, named by an installation or catalog id the pod has no connector
+        for, what it would offer: browsing declares nothing."""
+        connector_id, kind, auth_config_id = await self._browse(ctx, pod_id, slug)
         return await self.discover_operations(
-            auth_config.connector_id,
+            connector_id,
             query=query,
             limit=limit,
-            kind=auth_config.kind.value,
-            auth_config_id=auth_config.id,
+            kind=kind,
+            auth_config_id=auth_config_id,
         )
 
     async def pod_connector_operation(
         self, ctx: Context, *, pod_id: UUID, slug: str, operation_name: str
     ) -> OperationDetail:
-        _, auth_config = await self._usable_pod_connector(ctx, pod_id, slug)
+        connector_id, kind, auth_config_id = await self._browse(ctx, pod_id, slug)
         return await self.get_operation_details(
-            auth_config.connector_id,
-            operation_name,
-            kind=auth_config.kind.value,
-            auth_config_id=auth_config.id,
+            connector_id, operation_name, kind=kind, auth_config_id=auth_config_id
         )
+
+    async def _browse(
+        self, ctx: Context, pod_id: UUID, name: str
+    ) -> tuple[str, str | None, UUID | None]:
+        """Connector, kind and install whose operations ``name`` shows: a pod
+        connector the caller may use, else an installation or catalog entry
+        the pod has none for (``browsable``)."""
+        if self.connector_service is not None:
+            found = await browsable(
+                self.pod_connector_resolver,
+                self.connector_service.connector_repository,
+                ctx,
+                pod_id,
+                name,
+            )
+            if found is not None:
+                return found.connector_id, found.kind, found.auth_config_id
+        _, auth_config = await self._usable_pod_connector(ctx, pod_id, name)
+        return auth_config.connector_id, auth_config.kind.value, auth_config.id
 
     async def _usable_pod_connector(self, ctx: Context, pod_id: UUID, slug: str):
         connector = await self.pod_connector_resolver.connector(pod_id, slug)
@@ -476,16 +500,21 @@ class ConnectorOperationService:
         decide it (``PodConnectorResolver.resolve``), so nothing a caller types
         -- a model least of all -- chooses whose credential a call runs as.
         """
-        pod_connector = await self.pod_connector_resolver.connector(pod_id, slug)
-        resolved = await self.pod_connector_resolver.resolve(ctx, pod_connector)
-        return await self.execution_for(
-            ctx,
-            auth_config=resolved.auth_config,
-            account=resolved.account,
-            operation_name=operation_name,
-            payload=payload,
-            act_as=act_as,
+        pod_connector = await connector_for_call(
+            self.pod_connector_resolver, ctx, pod_id, slug
         )
+        resolved = await self.pod_connector_resolver.resolve(ctx, pod_connector)
+        try:
+            return await self.execution_for(
+                ctx,
+                auth_config=resolved.auth_config,
+                account=resolved.account,
+                operation_name=operation_name,
+                payload=payload,
+                act_as=act_as,
+            )
+        except ConnectorReauthRequiredError as exc:
+            raise reauth_required_for(ctx, pod_connector, resolved) from exc
 
     async def execution_for(
         self,
@@ -516,8 +545,16 @@ class ConnectorOperationService:
         if not operation:
             raise OperationNotFoundError(operation_name)
 
-        credentials = await self._resolve_execution_credentials(
-            account, account.user_id
+        provider = kind_to_provider(kind)
+        credentials = (
+            # A Composio call names the connection and Composio holds and
+            # refreshes its token, so a refresh here was a provider round trip
+            # bought for nothing -- and, with Composio usually reporting no
+            # expiry, one taken every few minutes. A rejected call still
+            # refreshes once on the way back (the use case's 401 path).
+            self._serialize_credentials(account.credentials)
+            if provider is AuthProvider.COMPOSIO
+            else await self._resolve_execution_credentials(account, account.user_id)
         )
         return ResolvedConnectorExecution(
             connector_id=connector_id,
@@ -526,15 +563,17 @@ class ConnectorOperationService:
             # the install's kind back onto it. Always concrete: that is what lets
             # the gateway skip its connector-validation read so the external call
             # holds NO DB connection.
-            provider=kind_to_provider(kind).value,
+            provider=provider.value,
             kind=kind,
             connection_config=getattr(auth_config, "config", None),
             execution=getattr(operation, "execution", None),
             operation_name=operation.name,
             input_schema=getattr(operation, "input_schema", None),
+            output_schema=getattr(operation, "output_schema", None),
             third_party_credentials=credentials,
             payload=payload or {},
             account_id=account.id,
+            account_reauth_pending=account.status is AccountStatus.REAUTH_REQUIRED,
             account_external_ref=await self._routable_external_ref(account),
             act_as=act_as,
             account_user_id=account.user_id,

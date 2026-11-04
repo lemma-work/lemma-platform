@@ -36,6 +36,7 @@ from app.modules.datastore.changes.schema import (
 )
 from app.modules.datastore.infrastructure import pod_schema_memo
 from app.modules.datastore.infrastructure.pod_schema_catalog import (
+    VERSIONS_TABLE,
     bootstrap_pod_schema,
 )
 from app.modules.datastore.infrastructure.query_role import (
@@ -59,8 +60,6 @@ CHANGE_LOG_VERSION = 3
 #: Version 4: the query role every pod shared loses its grants on this schema;
 #: queries run as the pod's own role (``query_role``).
 POD_QUERY_ROLE_VERSION = 4
-
-VERSIONS_TABLE = "public.lemma_pod_schema_versions"
 
 #: Serialises the database-wide catalog writes (``CREATE EXTENSION``, the
 #: versions table). The same constant the e2e harness takes before it creates

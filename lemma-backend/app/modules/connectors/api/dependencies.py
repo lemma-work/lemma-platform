@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 from uuid import UUID
 
@@ -5,7 +6,9 @@ from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
+from app.core.config import settings
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.cache.resilient_cache import ResilientJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
@@ -108,13 +111,30 @@ def _operation_repository(uow: UoWDep) -> ConnectorOperationRepository:
     return ConnectorOperationRepository(uow=uow)
 
 
+#: A Composio auth config outlives any one connect; a week bounds how long an
+#: id made under a since-rotated API key is tried before being made again.
+_COMPOSIO_AUTH_CONFIG_TTL_SECONDS = 7 * 24 * 3600
+
+
+@lru_cache(maxsize=1)
+def _composio_auth_config_ids() -> ResilientJsonCache:
+    """Composio auth config ids, shared by every replica through Redis."""
+    return ResilientJsonCache(
+        name="composio_auth_config_ids",
+        key_prefix="connectors:composio-auth-config",
+        redis_url=settings.redis_url,
+        ttl_seconds=_COMPOSIO_AUTH_CONFIG_TTL_SECONDS,
+    )
+
+
 def _auth_provider_registry(uow: UoWDep) -> AuthProviderRegistry:
     connector_repository = _connector_repository(uow)
     return AuthProviderRegistry(
         providers={
             AuthProvider.LEMMA.value: LemmaAuthProvider(),
             AuthProvider.COMPOSIO.value: ComposioAuthProvider(
-                connector_repository=connector_repository
+                connector_repository=connector_repository,
+                auth_config_ids=_composio_auth_config_ids(),
             ),
         }
     )

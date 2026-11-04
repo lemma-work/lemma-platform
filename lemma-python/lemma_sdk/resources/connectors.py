@@ -159,7 +159,7 @@ class ConnectorApps:
     def skill(self, app: str, *, kind: str | None = None) -> dict:
         """Get the skill guide markdown for a connector.
 
-        Pass kind='package' or kind='composio' for apps that ship as both.
+        Pass kind='http' or kind='composio' for apps that ship as both.
         Falls back to the generic doc when no kind-specific file exists.
         """
         transport = self._parent._transport
@@ -536,17 +536,22 @@ class BoundConnectors(BoundResource):
 
     def declare_pod_connector(
         self,
-        slug: str,
-        auth_config_id: str,
-        mode: str,
+        slug: str | None = None,
+        auth_config_id: str | None = None,
+        mode: str = "PER_MEMBER",
         *,
+        connector_id: str | None = None,
         shared_pod_account_id: str | None = None,
         required: bool = False,
         purpose: str | None = None,
     ) -> PodConnectorResponse:
-        """Declare one of the org's installations in this pod, as ``slug``.
+        """Declare a connector in this pod: one of the org's installations
+        (``auth_config_id``), or a catalog connector (``connector_id``, e.g.
+        ``gmail``) -- its org default, or Lemma's own app installed now when
+        the org has none and you may install connectors.
 
-        ``mode`` is ``PER_MEMBER`` (each caller's own account) or ``SHARED``
+        ``slug`` defaults to the installation's name. ``mode`` is
+        ``PER_MEMBER`` (each caller's own account, the default) or ``SHARED``
         (the one pod account ``shared_pod_account_id`` names, which its owner
         must already have shared). Needs ``pod.connector.manage``.
         """
@@ -557,6 +562,7 @@ class BoundConnectors(BoundResource):
                 {
                     "slug": slug,
                     "auth_config_id": auth_config_id,
+                    "connector_id": connector_id,
                     "mode": mode,
                     "shared_pod_account_id": shared_pod_account_id,
                     "required": required,

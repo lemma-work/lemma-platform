@@ -27,7 +27,16 @@ import, apps, functions, workflows, schedules, members, connectors, and grants.
 A new table is one command — an `id` key is added for you, and
 `"enable_rls": false` makes it shared by the pod rather than private per person:
 `lemma tables create expenses --data '{"columns":[{"name":"day","type":"DATE"},{"name":"amount","type":"FLOAT"},{"name":"category","type":"TEXT"}],"enable_rls":false}'`.
-Then add its rows with `pod_write_record`.
+Column types: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, JSON, UUID, USER,
+FILE_PATH, ENUM (with `"options"`). Then add its rows with `pod_write_record`.
+
+A recurring task is one command:
+`lemma schedules create --name daily-digest --agent POD_DEFAULT --instruction "…" --cron "0 9 * * 1-5" --timezone Europe/Berlin`.
+A cron is read in UTC unless `--timezone` (an IANA zone) says otherwise; use
+the person's own zone. The reply's `next_fire_at` (UTC) and
+`next_fire_at_local` say when it will fire, so do not create a test schedule
+and wait to find out. To try the work itself, do it now in this conversation.
+A schedule you created and no longer want: `lemma schedules delete <name> --yes`.
 
 ## Editing a file that already exists
 

@@ -85,22 +85,30 @@ def _archive_dist_dir(dist_dir: Path) -> str:
     return temp_file.name
 
 
-def _should_exclude_source_path(path: str) -> bool:
-    excluded = {
-        "node_modules",
-        ".git",
-        "dist",
-        "build",
-        ".next",
-        ".turbo",
-        ".cache",
-        "coverage",
-        "__pycache__",
-    }
-    return any(part in excluded for part in Path(path).parts)
+# Never part of an app at any depth: dependencies, VCS state, caches, OS litter.
+_NEVER_SHIPPED_PARTS = frozenset(
+    {"node_modules", ".git", ".cache", "__pycache__", ".DS_Store"}
+)
+
+# A Vite project's build output and tool state, which live at the project root.
+# Only there: `src/build/` or `src/dist/` is source somebody wrote, and matching
+# these names at any depth silently dropped it from the stored source.
+_PROJECT_OUTPUT_DIRS = frozenset({"dist", "build", ".next", ".turbo", "coverage"})
 
 
-def _archive_source_dir(source_dir: Path) -> str:
+def _should_exclude_source_path(path: str, *, tier: str = "vite") -> bool:
+    """Whether ``path`` (relative to the app root) stays out of an upload.
+
+    A no-build app (``html``/``static``) *is* its output, so a ``build/`` or
+    ``dist/`` directory in it is assets the page loads, not output to skip.
+    """
+    parts = Path(path).parts
+    if any(part in _NEVER_SHIPPED_PARTS for part in parts):
+        return True
+    return tier == "vite" and bool(parts) and parts[0] in _PROJECT_OUTPUT_DIRS
+
+
+def _archive_source_dir(source_dir: Path, *, tier: str = "vite") -> str:
     temp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     temp_file.close()
     with ZipFile(temp_file.name, "w", compression=ZIP_DEFLATED) as archive:
@@ -108,7 +116,7 @@ def _archive_source_dir(source_dir: Path) -> str:
             if not path.is_file():
                 continue
             relative_path = path.relative_to(source_dir)
-            if _should_exclude_source_path(relative_path.as_posix()):
+            if _should_exclude_source_path(relative_path.as_posix(), tier=tier):
                 continue
             archive.write(path, arcname=relative_path.as_posix())
     return temp_file.name
@@ -155,7 +163,7 @@ def _materialize_static_dist(source: Path, tier: str) -> Path:
         if not path.is_file():
             continue
         relative_path = path.relative_to(source)
-        if _should_exclude_source_path(relative_path.as_posix()):
+        if _should_exclude_source_path(relative_path.as_posix(), tier=tier):
             continue
         target = dist_dir / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -272,10 +280,14 @@ def deploy_app_bundle(
     source_archive_path: str | None = None
     try:
         dist_archive_path = _archive_dist_dir(dist_dir)
-        # The Vite tier preserves project source for re-builds; no-build tiers
-        # have no separate source, so the dist is the canonical artifact.
-        source_root = source if tier == "vite" else dist_dir
-        source_archive_path = _archive_source_dir(source_root)
+        # The Vite tier preserves project source for re-builds. A no-build app
+        # has no separate source: it is the files it serves, so the source
+        # archive is made from the very directory the bundle was, and the two
+        # cannot hold different files.
+        if tier == "vite":
+            source_archive_path = _archive_source_dir(source, tier=tier)
+        else:
+            source_archive_path = _archive_dist_dir(dist_dir)
         return pod_sdk.apps.upload_bundle(
             app_name,
             source_archive=source_archive_path,

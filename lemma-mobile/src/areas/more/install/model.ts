@@ -5,6 +5,7 @@ import { PUBLIC_TEMPLATES, findPublicTemplateBySource, templateCoverPath, templa
 import type { ImportStatus, ImportStatusResponse, PlanStep, StepStatus, VariableSpec } from "@web/site/import-types";
 import { WORKING, groupSteps, humanize, installedApp, statusLine, suggestedValue, teammateName, type StepGroup } from "@web/site/import/plan";
 import { extractReadmePresentation, resolveReadmeAssetUrl, resolveReadmeLinkUrl } from "@web/site/github/public-repository";
+import { personalNameFor } from "@web/org/arrival";
 
 /** The phone's own reading on top of the web's install modules (`web/`):
  *  what the templates list, the install page and its journey, and the remix
@@ -152,15 +153,14 @@ export function withResolvedLinks(markdown: string, owner: string, repo: string,
 
 /* ── who it is for ───────────────────────────────────────────────────── */
 
-/** The organization made for somebody with none: their first name's
- *  Personal, as the web's `personalNameFor` names it. An address's local
- *  part is not a name, so without a real one it is plain Personal. */
+/** The organization made for somebody with none, named by the web's
+ *  `personalNameFor`. A name that is only the address's local part, or the
+ *  app's "You", is not a name, so the web reads one off the address. */
 export function personalName(me: { name?: string | null; firstName?: string | null; email?: string | null } | null | undefined): string {
     const name = (me?.name ?? "").trim();
     const local = (me?.email ?? "").split("@")[0] ?? "";
     const real = name && name !== "You" && name !== local ? name : (me?.firstName ?? "").trim();
-    const first = real.split(/\s+/)[0] ?? "";
-    return first && first !== local ? first + "'s Personal" : "Personal";
+    return personalNameFor(real && real !== local ? real : null, me?.email);
 }
 
 /** "A new Lemma", or one of the organization's. */

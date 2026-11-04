@@ -1,0 +1,17 @@
+{
+    // The tests, held to the app's compiler options in a program of their
+    // own: the app's tsconfig.json is the one `next build` fails on, and
+    // `npm test` strips types without checking them, so nothing else would
+    // notice a test that keeps an input the code no longer takes.
+    // `npm run typecheck` checks this after the app.
+    "extends": "../tsconfig.json",
+    "compilerOptions": {
+        // A test names the file it imports (`../src/usage/allowance.ts`),
+        // which is how Node's loader finds it.
+        "allowImportingTsExtensions": true
+    },
+    // The src modules a test imports come in through its imports. Listed here
+    // are only the ambient declarations those modules lean on, which nothing
+    // imports.
+    "include": ["**/*.ts", "../next-env.d.ts", "../src/**/*.d.ts"]
+}

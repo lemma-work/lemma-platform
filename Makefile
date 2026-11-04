@@ -1288,6 +1288,10 @@ desktop-runtime-fetch:
 # adopt its runtime, and erase its pods on cleanup. The name is baked into the
 # binary at build time rather than passed at launch, so it holds however the
 # candidate is started.
+# A release build must not set LEMMA_DESKTOP_DATA_DIR_NAME at all. Passing it
+# empty made the app keep its data in Application Support itself rather than
+# Application Support/Lemma -- where "reset local data" would have reached every
+# other app's data too.
 ifeq ($(QA),1)
 DESKTOP_DMG_CONFIG   := tauri.qa.conf.json
 DESKTOP_DMG_DATA_DIR := Lemma Candidate QA
@@ -1334,12 +1338,14 @@ desktop-dmg:
 		--sign "$${APPLE_SIGNING_IDENTITY:--}" \
 		$(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE) 2>/dev/null
 	@codesign --verify --strict $(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE)
-	@# `--ci` is not about being in CI. Without it the DMG bundler runs
+	@# `CI=true` is not about being in CI. Without it the DMG bundler runs
 	@# AppleScript against Finder purely to position the icons, and a shell
 	@# with no Automation grant -- an SSH session, an agent, a fresh terminal
 	@# -- gets "Not authorised to send Apple events to Finder. (-1743)" and the
 	@# build fails after the .app is already built and signed. The documented
-	@# command has to work where it is documented to be run.
+	@# command has to work where it is documented to be run. It is the
+	@# environment variable that does it: the bundler passes create-dmg's
+	@# --skip-jenkins only when CI is set, and `--ci` alone no longer does.
 	@# The `lemma` CLI the Agent Host lets a hosted workspace's runs use
 	@# without asking (desktop/agent-host/src/lemma_cli.rs). Signed here, before
 	@# the bundler signs the app around it, for the same reason as lemma-vz:
@@ -1351,8 +1357,8 @@ desktop-dmg:
 		--sign "$${APPLE_SIGNING_IDENTITY:--}" \
 		$(if $(PYTHON_ROOT),--python-root $(PYTHON_ROOT),) >/dev/null
 	@echo "→ Bundling the self-contained DMG…"
-	@cd $(DESKTOP_DIR) && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
-		LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)" \
+	@cd $(DESKTOP_DIR) && CI=true APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
+		$(if $(DESKTOP_DMG_DATA_DIR),LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)",) \
 		npx -y $(TAURI_CLI) build --ci --config $(DESKTOP_DMG_CONFIG) \
 		--config tauri.lemma-cli.conf.json
 	@$(MAKE) --no-print-directory _desktop-verify-dist-app

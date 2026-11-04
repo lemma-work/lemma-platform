@@ -299,6 +299,7 @@ async def request_approval(
     args: JsonObject,
     title: str,
     reason: str | None = None,
+    message: str | None = None,
     payload: JsonObject | None = None,
     permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse:
@@ -317,12 +318,14 @@ async def request_approval(
         args: Complete arguments for that tool, e.g. {"cmd": "lemma records delete orders --id 42"}.
         title: Short user-facing title for the approval card.
         reason: Why this needs approval.
+        message: Your whole reply above the card: what you did, what this does, why.
         payload: Extra structured detail for rendering or audit.
         permission_ids: Copy `approval.permission_ids` from the failed tool result, to
             show on the card. What an approval allows comes from the refusal the
             server recorded, not from this.
     """
-    del payload  # rendered from the persisted tool call; not needed at runtime
+    # Read from the persisted call: by the card, and before it (approval_message).
+    del payload, message
     # Rendered on the card too, and nothing else: an approval lends what the
     # server recorded refusing the call for (``approval_denials``), never this.
     del permission_ids

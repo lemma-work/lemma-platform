@@ -26,10 +26,11 @@ tag newer than the last PyPI publish:
 uv tool install --force --python 3.14 "lemma-terminal @ git+https://github.com/lemma-work/lemma-platform.git#subdirectory=lemma-cli"
 ```
 
-`main` carries the version currently being developed, and its `lemma-sdk` pin
-names that same version — which is on PyPI only from the moment that release is
-published. Until then, take the SDK from the same commit, so the two are resolved
-together instead of against the index:
+Versions are bumped only at release, so between releases `main`'s `lemma-sdk`
+pin still names the last published SDK while the CLI already uses what has been
+added to the SDK since (resolved against PyPI, `lemma datastore watch` fails on a
+missing `lemma_sdk.live`). Take the SDK from the same commit, so the two are
+resolved together instead of against the index:
 
 ```bash
 uv tool install --force --python 3.14 "lemma-terminal @ git+https://github.com/lemma-work/lemma-platform.git#subdirectory=lemma-cli" --with "lemma-sdk @ git+https://github.com/lemma-work/lemma-platform.git#subdirectory=lemma-python"

@@ -59,7 +59,10 @@ first, pre-transition occurrence. The zone is resolved once, in
 `due_schedule_claimer.next_cursor_for`; `schedules.next_fire_at` is always a UTC
 instant. Zone names are checked against `zoneinfo.available_timezones()` rather
 than by constructing a `ZoneInfo`, which succeeds for a miscased name on a
-case-insensitive filesystem.
+case-insensitive filesystem. Every schedule response carries `next_fire_at`
+(UTC) and `next_fire_at_local` (that instant in the schedule's zone), and the
+CLI prints both after `schedules create`, so nobody has to create a test
+schedule and wait to learn which zone a cron is read in.
 
 The poller owns the concrete time job set: `next_fire_at` is the whole index,
 claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
@@ -190,7 +193,10 @@ before the row is written and drops the old one after the commit
 (`provider_trigger_id`, a GitHub routing key) survive an edit that left them out. Each fire claims one durable schedule run;
 PostgreSQL deduplicates target dispatch and tracks retry/dead-letter state.
 `DISPATCHED` means the target run was created, not that the target completed.
-Consecutive-failure policy is durable on the schedule row, and a
+Consecutive-failure policy is durable on the schedule row. The streak is
+recounted from the run ledger on every outcome, back to `failures_reset_at`:
+a person reactivating the schedule sets it, so the failures that paused it do
+not count again and one more failure cannot switch it straight back off. A
 deactivation event is staged in the same transaction as that state change —
 including the poller's own retirements, so no schedule goes inactive silently.
 A schedule whose target was deleted keeps its row (`workflow_id` and `agent_id`
@@ -237,7 +243,12 @@ reaches it -- while one saved before stays editable and can be cleared.
 
 ## Authorization and security
 
-Schedule CRUD is pod-authorized. Webhook ingress is public by necessity and
+Schedule CRUD is pod-authorized. `schedule.delete` is a destructive action no
+agent holds by default, with one exception: `created_by_workload_id` records
+the agent that created a schedule (the pod's id for its default assistant),
+and that agent, acting for the schedule's owner, may delete it with
+`schedule.create` -- the authority it created it with -- so cleaning up after
+itself needs no approval. Webhook ingress is public by necessity and
 uses source-specific verification adapters plus schedule matching. Deletion of
 a pod is consumed as a system event to tear down schedules and external jobs.
 

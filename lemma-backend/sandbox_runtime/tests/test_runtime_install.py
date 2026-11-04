@@ -615,3 +615,48 @@ def test_a_module_that_imports_from_outside_the_overlay_is_not_accepted(
         )
 
     assert runtime_install.probe(root, site_packages=site)["version"] is None
+
+
+def test_an_upgrade_is_smoke_tested_against_the_new_overlay_not_current(
+    tmp_path: Path, root: Path, site: Path, monkeypatch
+) -> None:
+    """A sandbox that already has an overlay must be able to take a newer one.
+
+    The image's interpreter reads `lemma-runtime-overlay.pth`, which puts
+    `<root>/current/site-packages` at the front of `sys.path` after PYTHONPATH
+    -- so the smoke test found every module in the *previous* version, refused
+    the new one, and no sandbox with an overlay could ever be upgraded. The
+    stand-in interpreter here does what that .pth does.
+    """
+    first, first_version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    runtime_install.install(
+        root=root,
+        archive=first,
+        version=first_version,
+        requires=["probe_pkg"],
+        site_packages=site,
+    )
+    # Built after the first install, which consumes its archive: both carry
+    # the same package, as two releases of the real bundle do.
+    second, second_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'second'"
+    )
+    interpreter = tmp_path / "image-python"
+    current = root / runtime_install.CURRENT_LINK / "site-packages"
+    interpreter.write_text(
+        "#!/bin/sh\n"
+        f'exec {sys.executable} -c "import sys; sys.path.insert(0, {str(current)!r}); '
+        "exec(compile(sys.argv[1], '<smoke>', 'exec'))\" \"$2\"\n"
+    )
+    interpreter.chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(interpreter))
+
+    runtime_install.install(
+        root=root,
+        archive=second,
+        version=second_version,
+        requires=["probe_pkg"],
+        site_packages=site,
+    )
+
+    assert runtime_install.probe(root, site_packages=site)["version"] == second_version

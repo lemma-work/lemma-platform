@@ -109,8 +109,9 @@ Rules:
 - Handler signature is `(ctx: FunctionContext, data: <InputModel>) -> <OutputModel>`,
   async or sync.
 - `FunctionContext` fields: `ctx.pod_id`, `ctx.function_id`, `ctx.user_id`,
-  `ctx.user_email` (the **invoking** user — your delegated identity), `ctx.config`,
-  and `ctx.pod` (a ready `Pod` client — see below).
+  `ctx.user_email` (the **invoking** user — your delegated identity; both `None`
+  when a contact's conversation called it), `ctx.contact_id` (that contact, else
+  `None`), `ctx.config`, and `ctx.pod` (a ready `Pod` client — see below).
 - Keep input/output models small and JSON-serializable. Return ids and compact
   summaries, not big record lists.
 - A function is only runnable once it reaches **`READY`**, which happens when it is
@@ -312,7 +313,7 @@ urls.expires_at   # when urls.url stops working
 
 # 2) Public signed link — for anyone OUTSIDE the pod (no login). Expiring + hit-capped
 #    so a leaked link to a big file can't run up egress.
-link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 3h, 50 downloads
+link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 24h, 200 downloads
 link = pod.files.create_signed_url("/reports/summary.pdf",
                                    expires_seconds=604800, max_hits=5)           # 7d, 5 downloads
 link.signed_url   # https://<api>/public/s/<code>  — short, copy-pasteable
@@ -355,9 +356,9 @@ events = pod.connectors.execute(
 ).to_dict()["result"]
 ```
 
-Operation ids and payload keys differ between connector **kinds** (`package` vs
-`composio`) — always confirm with `operations details` for the kind your org
-installed. Nothing takes an account: the pod connector decides it. A member
+Operation ids and payload keys differ between connector **kinds** (`http` vs
+`composio`) — always confirm with `lemma connectors run <slug> <operation> --dry-run`
+(prints the input schema) for the kind your org installed. Nothing takes an account: the pod connector decides it. A member
 with no account on a PER_MEMBER connector gets `CONNECTION_REQUIRED`, and the
 SDK error carries `err.connect_url` — let it surface. The pod connector must be
 granted to the function (`resource_type: "connector"` — see Permissions below).

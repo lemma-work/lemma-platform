@@ -33,7 +33,7 @@ from typing import Protocol
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pydantic_ai import ModelRequestNode, CallToolsNode
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, UserPromptPart
 from pydantic_ai.run import AgentRun
 from pydantic_ai.result import FinalResult
 from pydantic_graph import End
@@ -56,7 +56,12 @@ from app.modules.agent.tools.tool_errors import (
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.tool_call_ids import first_per_call_id
+from app.modules.agent.domain.steered_answers import ANSWERED_BEFORE_STEER
+from app.modules.agent.domain.tool_call_ids import (
+    call_signature,
+    unique_per_call_id,
+    unparsed_signature,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -84,6 +89,41 @@ def _tool_call_id_of(event: AgentEvent) -> str | None:
     return draft.tool_call_id
 
 
+def _tool_call_signature(event: AgentEvent) -> str | None:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    return call_signature(draft.tool_name, draft.tool_args)
+
+
+def _raw_tool_call_signature(event: AgentEvent) -> str:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    return unparsed_signature(draft.tool_name, draft.tool_args)
+
+
+def _under_call_id(event: AgentEvent, call_id: str) -> AgentEvent:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    return event.model_copy(
+        update={"data": draft.model_copy(update={"tool_call_id": call_id})}
+    )
+
+
+def unique_stored_calls(events: list[AgentEvent]) -> list[AgentEvent]:
+    """The stored half of `UniqueToolCallIdsCapability`, by the same rule: a
+    call the provider repeated under one id is stored once, as it runs once,
+    and a different call under a taken id is stored under the id it ran under.
+    """
+    kept, _repeats = unique_per_call_id(
+        events,
+        call_id=_tool_call_id_of,
+        signature=_tool_call_signature,
+        raw_signature=_raw_tool_call_signature,
+        renamed=_under_call_id,
+    )
+    return kept
+
+
 def _canonical(value: object) -> str:
     """One spelling per value, so equal arguments and results compare equal."""
     return json.dumps(value, sort_keys=True, default=str)
@@ -106,13 +146,29 @@ def _is_open_answer(event: AgentEvent) -> bool:
     )
 
 
-def _not_final(event: AgentEvent) -> AgentEvent:
+def _not_final(event: AgentEvent, *, steered: bool = False) -> AgentEvent:
+    """Not the run's final answer -- but, ``steered``, an answer all the same:
+    given before the person said more (``domain/steered_answers``)."""
     draft = event.data
     assert isinstance(draft, MessageDraft)
     metadata = {**(draft.metadata or {}), "is_final_answer": False}
+    if steered:
+        metadata[ANSWERED_BEFORE_STEER] = True
     return event.model_copy(
         update={"data": draft.model_copy(update={"metadata": metadata})}
     )
+
+
+def _carries_the_persons_words(node: object) -> bool:
+    """Whether a request is the person's steered message, rather than a retry.
+
+    A run that would end with messages waiting is sent on with them as the
+    next request's user prompt (pydantic-ai's end-of-run drain); a retry's
+    request carries the retry's prompt instead.
+    """
+    request = getattr(node, "request", None)
+    parts = getattr(request, "parts", None) or ()
+    return any(isinstance(part, UserPromptPart) for part in parts)
 
 
 def settle_response_answers(
@@ -235,8 +291,11 @@ class NodeLoop[DepsT]:
             try:
                 async for node in run:
                     if PydanticAIAgent.is_model_request_node(node):
-                        # Another request: the run went on past that answer.
-                        await self._release_undecided(final=False)
+                        # Another request: the run went on past that answer --
+                        # which was one, when the person saying more sent it on.
+                        await self._release_undecided(
+                            final=False, steered=_carries_the_persons_words(node)
+                        )
                         # Counted before the request, not after: the ceiling is
                         # on what the run is about to spend, and a check that
                         # only ran afterwards would always allow one call past
@@ -276,12 +335,14 @@ class NodeLoop[DepsT]:
                 # so when a provider reports a count that cannot be true.
                 warn_if_implausible_usage(getattr(run, "usage", None))
 
-    async def _release_undecided(self, *, final: bool) -> None:
+    async def _release_undecided(self, *, final: bool, steered: bool = False) -> None:
         """Hand on the held closing text, final or not as the run turned out."""
         held, self._undecided = self._undecided, []
         for event in held:
             settled = (
-                event if final or not _is_open_answer(event) else _not_final(event)
+                event
+                if final or not _is_open_answer(event)
+                else _not_final(event, steered=steered)
             )
             await self.queue.put(("event", settled))
 
@@ -391,9 +452,7 @@ class NodeLoop[DepsT]:
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
-        # The stored half of `UniqueToolCallIdsCapability`: a call the
-        # provider repeated under one id is stored once, as it runs once.
-        buffered, _repeats = first_per_call_id(buffered, _tool_call_id_of)
+        buffered = unique_stored_calls(buffered)
         settled, self._undecided = settle_response_answers(buffered)
         for held in settled:
             self._remember_tool_call(held)

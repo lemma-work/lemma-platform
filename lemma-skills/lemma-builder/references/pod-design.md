@@ -30,7 +30,7 @@ Given a problem statement, answer these in order:
    **Reach for the most direct primitive** (heuristic #6): a lone record write is a direct records-API call, not a function; a function earns its place only when the deterministic step does several writes at once, write + compute, or a connector call. And don't wrap an agent in a function — call it directly, or grant it as a tool.
 4. **Process → workflow.** Reach for a workflow when humans must **see progress, approve, or be assigned steps**, or when deterministic and judgment steps interleave in a durable, resumable, observable sequence (heuristics #2, #5). FORM nodes carry assignees, so any multi-actor process — code + agents + one or more humans — is naturally a workflow. A single continuous judgment with no human checkpoint is *just an agent*; single-step automation stays a bare function or agent. Keep the graph minimal — the fewest nodes that satisfy the use case.
 5. **Starts → schedules.** When does work begin? A schedule is **time-based** (`TIME` — cron / one-shot) or **event-based**, and event-based has two sources: a **table write/update** (`DATASTORE`) or a **connector event** (`WEBHOOK`, e.g. inbound email). The table-event source enables **reactive choreography** — a workload writes a row, a `DATASTORE` schedule fires, another workload reacts; chain these for complex pods (heuristic #4), minding the trigger-loop/burst guardrails in `schedules-and-triggers.md`. (Manual runs need no schedule.)
-6. **External actions → connectors.** Which third-party apps are touched (Gmail, Slack, Calendar)? Note the connector ids and the operations needed; they get wired through an org auth config and granted (`connector.use`) to the workloads that call them. Connectors are **not** part of the bundle — record their setup in the README (see `connectors.md`).
+6. **External actions → connectors.** Which third-party apps are touched (Gmail, Slack, Calendar)? Note the catalog ids, the operations needed, and whose account each call runs as — each member's own (`PER_MEMBER`) or one shared account (`SHARED`). Each becomes a **pod connector** under a slug (`connectors/<slug>/<slug>.json` in the bundle, or `lemma connectors pod-add`), granted to the workloads that call it (`connector:<slug>:use`). The connected accounts are **not** part of the bundle — record in the README who has to connect what (see `connectors.md`).
 7. **Experience → chat, surface, or app.** How do users meet the pod? The interface is often the whole product — design it like the thing people will live in, not an afterthought. For an app, the design-doc-first method lives in `apps.md` → "Plan first".
    - occasional Q&A or ad-hoc tasks → agent chat is enough
    - users live in Slack/Teams/Telegram/WhatsApp/email → **surface** (`surfaces.md`)
@@ -38,7 +38,7 @@ Given a problem statement, answer these in order:
 
    **Surface vs. event-workflow** (heuristic #3): if a *human converses* on a chat platform, it's a **surface**; if a *system event* (inbound mail treated as data, a row change) drives *unattended* work, it's an **event-based schedule → workflow/agent**. Both can be about email at once — the pod's own agent address answers people conversationally (a **surface**) while a `WEBHOOK` schedule on the Gmail *connector* runs the intake pipeline. Note that Gmail and Outlook are **connectors, not surfaces**: a pod is reached on email at its own provisioned address (`surfaces.md`). See the *Reacting to events* table below.
 8. **Hero moment → the one demo-able "oh".** Name the single thing this pod does that a one-shot chatbot or a CRUD form can't — the agent doing real work on its own, behind an interface someone adopts. Make it screenshottable in ~60 seconds with no narration ("the agent texts you on WhatsApp before declining the meeting"; "a stale lead turns red and the scout has already drafted the nudge"). The hero moment is the agentic unlock made visible — design the app, surface, and seed data so it lands the moment someone opens the pod. If you can't point to one, the pod is plumbing, not a product; rethink before building.
-9. **Seed it so it demos itself.** Sample rows, a few files, one completed workflow run — enough that opening the pod or app shows the hero moment immediately instead of an empty state. Put seed commands in a `seed/seed.sh` (CLI calls / a small SDK script) so anyone can reproduce the live demo after import. (File contents and records are not part of bundle import — the seed script is how they get there; record it in the README.)
+9. **Seed it so it demos itself.** Sample rows, a few files, one completed workflow run — enough that opening the pod or app shows the hero moment immediately instead of an empty state. Put seed commands in a `seed/seed.sh` (CLI calls / a small SDK script) so anyone can reproduce the live demo after import. (File bytes and records stay out of a bundle unless named on export and asked for on import — the seed script is the re-runnable way to get them there; record it in the README.)
 10. **Success criteria.** Write the one end-to-end scenario that proves the pod works. This becomes your final verification script.
 
 Keep the note short (half a page). Name every resource in it — those names become folder names in the bundle and are the upsert keys forever, so choose stable snake_case/kebab-case names you can live with. Copy the final resource list, non-bundled setup, and smoke test into `README.md` so the next builder can import, connect, seed, and verify the pod without rediscovering the plan.
@@ -118,11 +118,11 @@ Pod **members** (humans) hold one of four roles, assigned by an admin. It is a d
 | Role | Can |
 | --- | --- |
 | `POD_VIEWER` | Read tables, records, and files |
-| `POD_USER` | + write records; run agents, functions, and workflows; use connectors and connected accounts; create their own schedules |
-| `POD_EDITOR` | + create/update tables, agents, functions, workflows, apps and schedules; write files |
-| `POD_ADMIN` | + delete tables/files/agents/functions/workflows/apps/schedules; manage members, roles and connector accounts |
+| `POD_USER` | + write and delete records (their own rows on an RLS table); run agents, functions, and workflows; use the pod's connectors; create their own schedules |
+| `POD_EDITOR` | + create/update tables, agents, functions, workflows, apps and schedules; write files; declare pod connectors; message the pod's contacts |
+| `POD_ADMIN` | + delete tables/files/agents/functions/workflows/apps/schedules and the pod; manage members and roles |
 
-The bottom two rows are the destructive set from `authorization-model.md` §3 — which is why an approval from an `EDITOR` cannot unlock a delete, and why a pod whose automation deletes things needs an admin behind it.
+The `POD_ADMIN` row, plus deleting rows and changing the pod's connectors, is the destructive set from `authorization-model.md` §3: a workload needs a standing grant or the person's session approval for each. An approval only opens the gate, which is why an `EDITOR`'s approval cannot unlock deleting a table, and why a pod whose automation deletes resources needs an admin behind it.
 
 Record writes require `POD_USER` or above on **both** RLS and shared tables — RLS changes *which rows* a member touches, not *whether* they can write. On an RLS table **everyone is scoped to their own rows, pod admins included**; reading across all members takes an explicit `mode=admin` request and table-admin permission (see `tables.md`).
 
@@ -143,7 +143,7 @@ Applying the method:
 9. **Seed:** `seed/seed.sh` loads a handful of tickets across statuses (plus one parked on an approval) so the app shows a live queue, not an empty table, the instant it opens.
 10. **Success:** send a test email → ticket exists, triaged, approval form appears for the lead, submitting it resolves the ticket and sends a reply, app shows the whole journey.
 
-Use this worked example as a design pattern, not as a referenced bundle. If you implement it, create the bundle from the named resources above and document any Gmail auth config, uploaded policy files, seed payloads, and verification steps in the pod README.
+Use this worked example as a design pattern, not as a referenced bundle. If you implement it, create the bundle from the named resources above and document who connects Gmail (or which account is shared), uploaded policy files, seed payloads, and verification steps in the pod README.
 
 ## Anti-Patterns
 
@@ -185,7 +185,7 @@ the next layer onto an unverified one:
 8. **The whole thing** — run the success-criteria scenario against seed data and
    confirm the **hero moment** is visible on open.
 
-Put the final scenario, the non-bundled setup (connector auth configs, uploaded
+Put the final scenario, the non-bundled setup (who connects which connector, uploaded
 files, seed payloads), and per-layer smoke commands in `README.md` so the next
 builder can import, connect, seed, and verify without rediscovering the plan.
 

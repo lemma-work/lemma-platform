@@ -30,7 +30,7 @@ import {
     type Channel,
     type Line,
 } from "../src/channels/model.ts";
-import { bellCount } from "../src/channels/waiting.ts";
+import { bellCount, readInbox } from "../src/channels/waiting.ts";
 
 const ME = "user-dana";
 const dana = { kind: "MEMBER", id: ME, name: "Dana Jones" };
@@ -81,11 +81,13 @@ test("reads a contact's inbox fields off the channel itself", () => {
 });
 
 test("names a chat the way its reader sees it", () => {
-    /* Your private line is named by where you reach it, or is the notices
-       the teammate sends you. */
-    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }] }, "Marketing"), "WhatsApp");
-    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }, { platform: "TELEGRAM", title: null }] }, "Marketing"), "WhatsApp and Telegram");
-    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [] }, "Marketing"), "Notices");
+    /* Your private line is named after the teammate it is with -- never
+       "Email" beside chats named for people -- and, where no teammate name
+       is to hand, by where you reach it or the notices it sends you. */
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "RESEND", title: null }] }, "Marketing"), "Marketing");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }] }, ""), "WhatsApp");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }, { platform: "TELEGRAM", title: null }] }, ""), "WhatsApp and Telegram");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [] }, ""), "Notices");
     assert.equal(channelTitle(contact, "Marketing"), "Tomás");
     assert.equal(channelTitle(launch, "Marketing"), "launch");
     // A group with no title of its own is called where it is.
@@ -114,12 +116,16 @@ test("says what is new, and the sidebar's badge puts questions first", () => {
     assert.equal(sayUnread(launch.unread), "100 or more new, mentions you");
     assert.equal(sayUnread({ lines: 0, mentions: 0, waiting: 0, readSeq: 0 }), null);
     /* What the bell counts, so the two agree. */
-    assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 1 }), { count: 3, tone: "waiting", said: "1 question waiting on you, 2 mentions of you" });
-    assert.deepEqual(inboxBadge({ channels: 3, mentions: 2, waiting: 0 }), { count: 2, tone: "mention", said: "2 mentions of you" });
-    assert.deepEqual(inboxBadge({ channels: 0, mentions: 0, waiting: 0 }, 4), { count: 4, tone: "new", said: "4 new messages for you" });
+    assert.deepEqual(inboxBadge({ mentions: 2, waiting: 1 }), { count: 3, tone: "waiting", said: "1 question waiting on you, 2 mentions of you" });
+    assert.deepEqual(inboxBadge({ mentions: 2, waiting: 0 }), { count: 2, tone: "mention", said: "2 mentions of you" });
+    assert.deepEqual(inboxBadge({ mentions: 0, waiting: 0 }, 4), { count: 4, tone: "new", said: "4 new messages for you" });
     /* A group with new lines and nothing for the reader -- every public
-       group they never joined -- is not counted: the bell says nothing new. */
-    assert.equal(inboxBadge({ channels: 11, mentions: 0, waiting: 0 }), null);
+       group they never joined -- is not counted: the bell says nothing new.
+       The inbox still counts the channels with new lines, so the bell is
+       handed an inbox as read, the way the sidebar hands it one. */
+    const unjoined = readInbox({ totals: { channels: 11, mentions: 0, waiting: 0 } });
+    assert.equal(inboxBadge(unjoined), null);
+    assert.equal(bellCount(unjoined, 0).badge, null);
     for (const [totals, direct] of [[{ mentions: 2, waiting: 1 }, 3], [{ mentions: 0, waiting: 0 }, 0], [{ mentions: 5, waiting: 0 }, 0]] as const) {
         const bell = bellCount(totals, direct);
         assert.equal(inboxBadge(totals, direct)?.count.toString() ?? null, bell.badge);

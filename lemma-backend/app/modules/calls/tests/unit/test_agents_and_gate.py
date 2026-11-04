@@ -8,7 +8,15 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.calls.services.agents import CallAgents, Party, Relay, Shown, Working
+from app.modules.calls.services.agents import (
+    CallAgents,
+    Failed,
+    Finished,
+    Party,
+    Relay,
+    Shown,
+    Working,
+)
 from app.modules.calls.services.gate import Caller, Route, route_turn
 from app.modules.decisions.contracts import DecisionResult, DecisionUnavailableError
 from app.modules.decisions.domain.answers import Answer
@@ -147,7 +155,10 @@ async def test_a_stream_that_fails_tells_the_voice_and_does_not_stop_the_call_cl
         yield
 
     agents = CallAgents(
-        call_id=uuid4(), party=Party(user_id=uuid4(), pod_id=uuid4()), stream=broken
+        call_id=uuid4(),
+        party=Party(user_id=uuid4(), pod_id=uuid4()),
+        stream=broken,
+        retry_seconds=0,
     )
     agents._watch(agents.call_id)
     await agents._watching[agents.call_id]
@@ -208,3 +219,71 @@ async def test_a_gate_that_cannot_decide_sends_the_turn_to_the_agents(
         raise failure
 
     assert await route_turn("book it", [], _caller(), decide=decide) is Route.TEAM
+
+
+def _run_frame(kind: str, run_id: str, **fields: object) -> dict[str, object]:
+    return {"type": kind, "agent_run_id": run_id, **fields}
+
+
+def test_working_lasts_while_anyone_in_the_call_runs() -> None:
+    agents, _ = _agents()
+    child = uuid4()
+    agents._read(agents.call_id, _run_frame("status", "r1", data={}))
+    agents._read(child, _run_frame("status", "c1", data={}))
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    # The coordinator finished, but its sub-agent is still going.
+    assert [s for s in _signals(agents) if isinstance(s, Working)] == [
+        Working(running=True)
+    ]
+    agents._read(child, _run_frame("completed", "c1", data={}))
+    assert [s for s in _signals(agents) if isinstance(s, Working)] == [
+        Working(running=False)
+    ]
+
+
+def test_a_failed_coordinator_run_says_why_and_is_not_also_called_silent() -> None:
+    agents, _ = _agents()
+    agents._read(agents.call_id, _run_frame("status", "r1", data={}))
+    agents._read(
+        agents.call_id, _run_frame("error", "r1", data="The usage limit is reached.")
+    )
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    signals = _signals(agents)
+    assert Failed(reason="The usage limit is reached.") in signals
+    assert not [s for s in signals if isinstance(s, Finished)]
+
+
+def test_a_run_that_ends_without_relaying_is_heard_with_its_last_words() -> None:
+    agents, _ = _agents()
+    agents._read(agents.call_id, _run_frame("status", "r1", data={}))
+    agents._read(
+        agents.call_id,
+        {
+            "type": "message",
+            "data": {
+                "agent_run_id": "r1",
+                "role": "assistant",
+                "kind": "TEXT",
+                "text": "Goa Palms is the cheapest.",
+            },
+        },
+    )
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    assert Finished(answer="Goa Palms is the cheapest.") in _signals(agents)
+
+
+def test_a_run_that_relayed_is_not_reported_again_when_it_ends() -> None:
+    agents, _ = _agents()
+    agents._read(agents.call_id, _run_frame("status", "r1", data={}))
+    agents._read(
+        agents.call_id,
+        _message(
+            "TOOL_CALL",
+            "relay_to_voice",
+            "x1",
+            agent_run_id="r1",
+            tool_args={"text": "on it", "urgency": "context"},
+        ),
+    )
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    assert not [s for s in _signals(agents) if isinstance(s, Finished)]

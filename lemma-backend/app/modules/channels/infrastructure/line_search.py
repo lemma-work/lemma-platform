@@ -13,7 +13,13 @@ matches to that channel's.
 
 What is found is what the reader may see and reads in full -- an answer
 withheld from them is not found by what it said -- filtered in the same
-statement, before the page is cut.
+statement, before the page is cut. Whether a line's channel is one they may
+see is asked of that line, a probe of the channel by its key, and never a
+join to ``channels``: joined, the planner sizes the pod's matches by the
+channels table across every pod (this channel one in so many thousand),
+judges a common word rare and finds and sorts every match -- or walks back
+through the whole history for a rare one. Asked per line, the choice is
+made from the lines' and the words' own statistics.
 
 Words are matched by how they start, so a search finds as it is typed:
 "alph" finds "alpha". Each is looked up both stemmed (``english``: "run"
@@ -134,12 +140,11 @@ class LineSearch:
             .outerjoin(
                 ChannelQuestionModel, ChannelQuestionModel.message_id == message.id
             )
-            .join(ChannelModel, ChannelModel.id == message.channel_id)
             .where(
                 # The pod beside the words: one GIN (``btree_gin``) finds both.
                 message.pod_id == viewer.pod_id,
                 message.search.op("@@")(words),
-                visible_to(viewer),
+                _in_a_channel_they_see(viewer, within),
                 shown_in_full_to(viewer),
                 message.deleted_at.is_(None),
                 *_narrowed(within),
@@ -215,15 +220,38 @@ def snippet(body: str, query: str) -> str | None:
     return f"{'… ' if start > 0 else ''}{shown}{' …' if end < len(words) else ''}"
 
 
+def _in_a_channel_they_see(viewer: Viewer, within: SearchFilter) -> ColumnElement[bool]:
+    """The line's channel is one ``viewer`` may see, of the kind and archived
+    state searched: a probe of that one channel, per line.
+
+    ``OFFSET 0`` keeps it a probe. Without it Postgres makes the ``EXISTS`` a
+    semi-join, sized by how many channels every pod holds -- the estimate
+    that sent a common word to "find every match and sort them"."""
+    channel = ChannelModel
+    narrowed: list[ColumnElement[bool]] = []
+    if not within.archived:
+        narrowed.append(channel.archived_at.is_(None))
+    if within.kind is not None:
+        narrowed.append(channel.kind == within.kind.value)
+    return (
+        select(channel.id)
+        .where(
+            channel.id == ChannelMessageModel.channel_id,
+            visible_to(viewer),
+            *narrowed,
+        )
+        .correlate(ChannelMessageModel)
+        .offset(0)
+        .exists()
+    )
+
+
 def _narrowed(within: SearchFilter) -> list[ColumnElement[bool]]:
+    """The lines' own narrowing; the channel's is ``_in_a_channel_they_see``."""
     message = ChannelMessageModel
     found: list[ColumnElement[bool]] = []
-    if not within.archived:
-        found.append(ChannelModel.archived_at.is_(None))
     if within.channel_id is not None:
         found.append(message.channel_id == within.channel_id)
-    if within.kind is not None:
-        found.append(ChannelModel.kind == within.kind.value)
     if within.sender is not None:
         found += _said_by(within.sender)
     if within.after is not None:

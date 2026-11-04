@@ -16,7 +16,9 @@ import { deriveScreen, diagnosticSourceForState } from "./screen-state.mjs";
       diagnosticLogs: (source, cursor = null) =>
         invoke("diagnostic_logs", { source, cursor }),
       chooseConnectionMode: () => invoke("choose_connection_mode"),
-      setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
+      // `server` only when the person typed one: Lemma Cloud's call is unchanged.
+      setConnectionMode: (mode, server = null) =>
+        invoke("set_connection_mode", server ? { mode, server } : { mode }),
       getState: () => invoke("get_state"),
       recoveryOptions: () => invoke("local_recovery_options"),
       openRecovery: () => invoke("open_control_center", { page: "recovery" }),
@@ -823,6 +825,46 @@ confirmLocalBtn.addEventListener("click", async () => {
     localSetupError.hidden = false;
     confirmLocalBtn.disabled = false;
     confirmLocalBtn.textContent = "Try local setup again";
+  }
+});
+const chooseServerBtn = document.getElementById("choose-server");
+const serverForm = document.getElementById("server-form");
+const serverInput = document.getElementById("server-url");
+const connectServerBtn = document.getElementById("connect-server");
+const serverSetupError = document.getElementById("server-setup-error");
+chooseServerBtn.addEventListener("click", () => {
+  const opening = serverForm.hidden;
+  serverForm.hidden = !opening;
+  chooseServerBtn.setAttribute("aria-expanded", String(opening));
+  if (opening) serverInput.focus({ preventScroll: true });
+});
+serverForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const server = serverInput.value.trim();
+  serverSetupError.hidden = true;
+  if (!server) {
+    serverSetupError.textContent = "Enter your Lemma server's address.";
+    serverSetupError.hidden = false;
+    serverInput.focus();
+    return;
+  }
+  connectServerBtn.disabled = true;
+  connectServerBtn.textContent = "Checking…";
+  try {
+    // The shell checks the address answers as a Lemma server before it saves
+    // anything, and says why when it does not -- so a typo is said here, on
+    // the form, rather than as a blank window.
+    await window.lemmaDesktop.setConnectionMode("hosted", server);
+    hideConnectionChoice();
+    say("Taking you to your Lemma server.");
+    truth.textContent = server;
+  } catch (error) {
+    serverSetupError.textContent = String(error || "Couldn't connect to that server.");
+    serverSetupError.hidden = false;
+    serverInput.focus();
+  } finally {
+    connectServerBtn.disabled = false;
+    connectServerBtn.textContent = "Connect";
   }
 });
 document.getElementById("choose-cloud").addEventListener("click", async () => {

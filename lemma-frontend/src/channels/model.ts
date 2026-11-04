@@ -501,16 +501,21 @@ export function nameless(channel: Pick<Channel, "sources">): string {
     return channel.sources.some((source) => source.platform === "WEB") ? "A website visitor" : "A contact";
 }
 
+/** Where the reader's private line with the teammate comes through
+ *  ("WhatsApp and Email"), or "Notices" when it is only what the teammate
+ *  sends them. A qualifier for the line, never its name on its own. */
+export function directPlaces(channel: Pick<Channel, "sources">): string {
+    const names = [...new Set(channel.sources.map((source) => platformName(source.platform)))];
+    return names.length ? sayList(names) : "Notices";
+}
+
 /** A chat's name. The reader's default chat -- their private line with the
- *  teammate -- is named by where they reach it ("WhatsApp"), or "Notices"
- *  when it is only what the teammate sends them; a contact's is the
- *  contact; a group is what it was called, or where it is. `space` is kept
- *  for callers that name things after the space. */
-export function channelTitle(channel: Pick<Channel, "kind" | "title" | "person" | "sources">, _space: string): string {
-    if (channel.kind === "DIRECT") {
-        const names = [...new Set(channel.sources.map((source) => platformName(source.platform)))];
-        return names.length ? sayList(names) : "Notices";
-    }
+ *  teammate -- is named after the teammate it is with (`space`), because a
+ *  chat called "Email" beside chats named for people read as an inbox; where
+ *  no teammate name is to hand, by where it comes through. A contact's is the
+ *  contact; a group is what it was called, or where it is. */
+export function channelTitle(channel: Pick<Channel, "kind" | "title" | "person" | "sources">, space: string): string {
+    if (channel.kind === "DIRECT") return space.trim() || directPlaces(channel);
     if (channel.kind === "CONTACT") return channel.person?.name ?? channel.title ?? nameless(channel);
     return channel.title ?? channel.sources.find((source) => source.title)?.title ?? "Untitled chat";
 }

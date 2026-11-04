@@ -22,7 +22,9 @@
  *
  * A page with its own design marks <form data-lemma-table="signups">, or calls
  * Lemma.addRow("signups", {...}). Either way the table decides which columns
- * may be written; the page only asks. A table the pod marked Public is read
+ * may be written; the page only asks. A file column is answered with a File
+ * (an <input type="file">, or Lemma.addRow("jobs", { cv: input.files[0] })),
+ * and the pod keeps the file. A table the pod marked Public is read
  * with Lemma.readRows("open_slots", { orderBy: "starts_at" }): every row, the
  * same reading the pod's chat does for this visitor.
  * Lemma.sendCode(email) and Lemma.verifyCode(email, code) confirm the visitor's
@@ -37,9 +39,11 @@
  * The wire: POST /session trades the session secret kept in localStorage (or a
  * host token, or nothing) for a fifteen-minute access token, which rides as
  * `Authorization: Bearer` on every other call and is never stored. Bodies are
- * JSON. Answers arrive on a fetch stream of one JSON object per line, whose
- * first line is a handshake; polling /history is the fallback, and catches up
- * whatever a stream missed whenever one opens or ends.
+ * JSON, but for a row with files attached: that goes as multipart to
+ * /rows/with-files, the typed answers as JSON in its `values` field and each
+ * file under its column's name. Answers arrive on a fetch stream of one JSON
+ * object per line, whose first line is a handshake; polling /history is the
+ * fallback, and catches up whatever a stream missed whenever one opens or ends.
  */
 (function () {
   "use strict";
@@ -91,10 +95,12 @@
     var headers = {};
     if (options.auth !== false && state.access) headers.Authorization = "Bearer " + state.access;
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    // A FormData body names its own type, boundary included.
+    var sends = options.body !== undefined || options.form !== undefined;
     return fetch(base + path, {
-      method: options.method || (options.body !== undefined ? "POST" : "GET"),
+      method: options.method || (sends ? "POST" : "GET"),
       headers: headers,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: options.form || (options.body !== undefined ? JSON.stringify(options.body) : undefined),
       signal: options.signal,
       credentials: "omit",
     });
@@ -329,6 +335,9 @@
     "box-shadow:0 0 0 3px color-mix(in srgb,var(--a) 18%,transparent)}",
     ".lw-field.lw-bad input,.lw-field.lw-bad textarea,.lw-field.lw-bad select{border-color:#e5484d}",
     ".lw-check{flex-direction:row;align-items:center;gap:10px}.lw-check input{width:18px;height:18px;accent-color:var(--a)}",
+    ".lw-field input[type=file]{border-style:dashed;cursor:pointer;padding:8px 10px}",
+    ".lw-field input[type=file]::file-selector-button{border:0;border-radius:8px;padding:6px 10px;margin-right:10px;",
+    "background:color-mix(in srgb,var(--a) 12%,transparent);color:var(--a);font:inherit;font-weight:500;cursor:pointer}",
     ".lw-err{color:#e5484d;font-size:12.5px;min-height:0}",
     ".lw-submit{width:100%;border:0;border-radius:12px;padding:12px;background:var(--a);color:#fff;font:inherit;",
     "font-weight:500;cursor:pointer;transition:opacity .15s,transform .15s;margin-top:4px}",
@@ -520,6 +529,7 @@
     // The old conversation's stream says nothing more into the new one's log.
     if (streamStop) streamStop.abort();
     streamStop = null;
+    held = null;
     lastSequence = -1;
     unconfirmed = [];
     live = null;
@@ -537,8 +547,11 @@
   function scrollDown() {
     if (log) log.scrollTop = log.scrollHeight;
   }
-  function add(node) {
-    if (typingRow && typingRow.parentNode === log) log.insertBefore(node, typingRow);
+  // At the log's end, above the typing dots; or above ``before``, a reply
+  // still being written, when history catches up on what was said ahead of it.
+  function add(node, before) {
+    if (!before && typingRow && typingRow.parentNode === log) before = typingRow;
+    if (before && before.parentNode === log) log.insertBefore(node, before);
     else log.appendChild(node);
     scrollDown();
     if (!isOpen()) shell.classList.add("lw-unread");
@@ -571,8 +584,8 @@
   // it so chunks arriving in bursts read as steady typing. While it is being
   // written each new piece is one more text node; the markdown is built once,
   // when the reply is finished, rather than the whole bubble on every frame.
-  function Reply(animate) {
-    this.node = add(el("div", "lw-msg lw-assistant"));
+  function Reply(animate, before) {
+    this.node = add(el("div", "lw-msg lw-assistant"), before);
     this.raw = this.node.appendChild(el("p", "lw-raw"));
     this.caret = this.raw.appendChild(el("span", "lw-caret"));
     this.target = "";
@@ -602,7 +615,9 @@
     this.frame = window.requestAnimationFrame(function () {
       self.frame = null;
       var left = self.target.length - self.shown;
-      if (left > 0) self.shown += Math.max(2, Math.ceil(left / 10));
+      // Never past the end: what arrives next is painted from where this
+      // frame stopped, so a step past the end would skip its first character.
+      if (left > 0) self.shown += Math.min(left, Math.max(2, Math.ceil(left / 10)));
       self.paint();
       if (self.shown < self.target.length) self.tick();
     });
@@ -642,7 +657,54 @@
     else hideTyping();
   }
 
+  // A message frame ahead of what this page has drawn may answer a question
+  // asked in another of the visitor's tabs, which only history holds: drawn
+  // straight away, it would move this page's place in history past that
+  // question, and no later read would return it. So history is read up to the
+  // frame first and drawn above its reply, while the frames after it wait
+  // their turn. Thinking and tool calls take numbers too, so a gap is no proof
+  // anything was missed -- but no gap is proof nothing was. A read still out
+  // after five seconds is given up on: the answer is not held back for it.
+  var held = null;
+  function catchUp(frame) {
+    var waiting = (held = []);
+    var read = withSession(function () {
+      return call("/history?after=" + lastSequence);
+    }).then(function (data) {
+      if (held !== waiting) return;
+      (data.messages || []).forEach(function (message) {
+        if (message.sequence < frame.sequence) show(message, false, live && live.node);
+      });
+    });
+    var slow = new Promise(function (resolve) {
+      window.setTimeout(resolve, 5000);
+    });
+    Promise.race([read, slow])
+      .catch(function () {})
+      .then(function () {
+        if (held !== waiting) return;
+        held = null;
+        onMessage(frame);
+        waiting.forEach(onFrame);
+      });
+  }
+  function onMessage(frame) {
+    if (typeof frame.sequence === "number") {
+      if (frame.sequence <= lastSequence) return;
+      lastSequence = frame.sequence;
+    }
+    hideTyping();
+    if (live) live.finish(frame.text);
+    else new Reply(true).finish(frame.text);
+    live = null;
+    if (busy) showTyping();
+  }
+
   function onFrame(frame) {
+    if (held) {
+      held.push(frame);
+      return;
+    }
     if (frame.type === "typing") {
       setBusy(true);
     } else if (frame.type === "delta") {
@@ -653,15 +715,8 @@
     } else if (frame.type === "reset") {
       if (live) live.reset();
     } else if (frame.type === "message") {
-      if (typeof frame.sequence === "number") {
-        if (frame.sequence <= lastSequence) return;
-        lastSequence = frame.sequence;
-      }
-      hideTyping();
-      if (live) live.finish(frame.text);
-      else new Reply(true).finish(frame.text);
-      live = null;
-      if (busy) showTyping();
+      if (typeof frame.sequence === "number" && frame.sequence > lastSequence + 1) catchUp(frame);
+      else onMessage(frame);
     } else if (frame.type === "fill") {
       onFill(frame);
     } else if (frame.type === "error") {
@@ -778,7 +833,7 @@
       });
   }
 
-  function show(message, animate) {
+  function show(message, animate, before) {
     if (message.sequence <= lastSequence) return;
     lastSequence = message.sequence;
     if (message.role === "user") {
@@ -787,12 +842,13 @@
         unconfirmed.splice(mine, 1);
         return;
       }
-      add(el("div", "lw-msg lw-user", message.text));
+      add(el("div", "lw-msg lw-user", message.text), before);
       return;
     }
-    if (live) return;
+    // The reply being written is this one, unless this is drawn above it.
+    if (live && !before) return;
     hideTyping();
-    new Reply(animate).finish(message.text);
+    new Reply(animate, before).finish(message.text);
     if (busy && message.role === "assistant" && !streaming) setBusy(false);
   }
   function poll(initial) {
@@ -1099,13 +1155,36 @@
   }
 
   function setValue(control, value) {
+    // Only the visitor can choose a file; nothing else can put one here.
+    if (control.type === "file") return;
     if (control.type === "checkbox") control.checked = value === true || value === "true";
     else control.value = value == null ? "" : String(value);
   }
 
+  function isFile(value) {
+    return typeof Blob !== "undefined" && value instanceof Blob;
+  }
+
+  // A value that is a File is attached: the row then goes as multipart, the
+  // typed answers as JSON beside the files. A file for a column the table did
+  // not open is left out, as a typed answer for one is ignored.
   function addRow(table, values) {
+    var typed = {};
+    var files = [];
+    Object.keys(values || {}).forEach(function (name) {
+      if (isFile(values[name])) files.push([name, values[name]]);
+      else typed[name] = values[name];
+    });
     return withSession(function () {
-      return call("/rows", { body: { table: table, values: values } });
+      if (!files.length) return call("/rows", { body: { table: table, values: typed } });
+      return columnsOf(table).then(function (open) {
+        var form = new FormData();
+        form.append("values", JSON.stringify(typed));
+        files.forEach(function (file) {
+          if (open.indexOf(file[0]) >= 0) form.append(file[0], file[1], file[1].name || file[0]);
+        });
+        return call("/rows/with-files?table=" + encodeURIComponent(table), { form: form });
+      });
     });
   }
 
@@ -1227,6 +1306,10 @@
       var out = {};
       Object.keys(rows).forEach(function (name) {
         var control = rows[name].control;
+        if (control.type === "file") {
+          if (control.files && control.files[0]) out[name] = control.files[0];
+          return;
+        }
         out[name] = control.type === "checkbox" ? control.checked : control.value;
       });
       return out;
@@ -1354,6 +1437,8 @@
     var values = {};
     new FormData(form).forEach(function (value, name) {
       if (typeof value === "string") values[name] = value;
+      // An empty file input still yields a File: no name, no bytes.
+      else if (isFile(value) && value.size) values[name] = value;
     });
     addRow(form.getAttribute("data-lemma-table"), values)
       .then(function () {

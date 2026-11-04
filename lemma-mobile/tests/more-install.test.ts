@@ -179,10 +179,11 @@ describe("what the install page shows", () => {
 
 describe("who it is for", () => {
     it("names a first organization after the person, never their address", () => {
-        expect(personalName({ name: "Ada Park", firstName: "Ada", email: "ada@acme.example" })).toBe("Ada's Personal");
-        expect(personalName({ name: "ada.park", firstName: "ada.park", email: "ada.park@acme.example" })).toBe("Personal");
-        expect(personalName({ name: "You", firstName: null, email: null })).toBe("Personal");
-        expect(personalName(null)).toBe("Personal");
+        expect(personalName({ name: "Ada Park", firstName: "Ada", email: "ada@acme.example" })).toBe("Ada's workspace");
+        expect(personalName({ name: "ada.park", firstName: "ada.park", email: "ada.park@acme.example" })).toBe("Ada's workspace");
+        expect(personalName({ name: "You", firstName: null, email: "ada0196+99@acme.example" })).toBe("My workspace");
+        expect(personalName({ name: "You", firstName: null, email: null })).toBe("My workspace");
+        expect(personalName(null)).toBe("My workspace");
     });
 
     it("speaks of the new Lemma by its name, and an existing one by its own", () => {

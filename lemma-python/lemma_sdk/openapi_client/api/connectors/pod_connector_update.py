@@ -81,6 +81,8 @@ def sync_detailed(
         slug (str):
         body (PodConnectorUpdateRequest): Fields left out are unchanged; `shared_pod_account_id:
             null` clears it.
+            Its slug and installation are fixed: a different one is a different
+            connector, which apps, agents and bundles already address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -117,6 +119,8 @@ def sync(
         slug (str):
         body (PodConnectorUpdateRequest): Fields left out are unchanged; `shared_pod_account_id:
             null` clears it.
+            Its slug and installation are fixed: a different one is a different
+            connector, which apps, agents and bundles already address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -148,6 +152,8 @@ async def asyncio_detailed(
         slug (str):
         body (PodConnectorUpdateRequest): Fields left out are unchanged; `shared_pod_account_id:
             null` clears it.
+            Its slug and installation are fixed: a different one is a different
+            connector, which apps, agents and bundles already address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -182,6 +188,8 @@ async def asyncio(
         slug (str):
         body (PodConnectorUpdateRequest): Fields left out are unchanged; `shared_pod_account_id:
             null` clears it.
+            Its slug and installation are fixed: a different one is a different
+            connector, which apps, agents and bundles already address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

@@ -38,6 +38,10 @@ AGGREGATORS = {
     # Every job in security.yml is path-filtered, so none of them can be named
     # in a ruleset directly; this is the one that can.
     "security.yml": "security-passed",
+    # Not a required check: the release gates read this workflow's run
+    # conclusion. But its jobs are a generated matrix and the setup jobs that
+    # feed it, and a job left out of this one's `needs` is the same hole.
+    "backend-protected-e2e.yml": "protected-e2e-passed",
 }
 
 # Jobs that legitimately stand outside their workflow's aggregator: they are

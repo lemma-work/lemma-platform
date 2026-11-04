@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, type Pod, type PodConnector } from "@/data";
+import { source, type Connector, type Pod, type PodConnector } from "@/data";
 import {
     askedLine, connectorName, coverageLine, freshSlug, mayUseOnceConnected, modeBadge, myStatus, slugProblem, statusNote, truncatedLine, waitingLine, wantsCoverage,
     type PodConnectorMode, type PodConnectorPatch,
@@ -18,7 +18,9 @@ import { Modal } from "@/shell/modal";
 import { CheckCircleIcon, PlusIcon, WarningIcon } from "@/ui/icons";
 import { LoadingIndicator } from "@/ui/loading";
 import { ProblemLine } from "./connection-problem";
-import { useConnectFlow, useConnectionsData, usePodMay } from "./pod-connect";
+import { addChoices, focusTarget, type FocusTarget } from "./choices";
+import { useConnectFlow, useConnectionsData, usePodMay, type SignIn } from "./pod-connect";
+import { SignInLink } from "./sign-in-link";
 import type { Install } from "./install";
 
 /** `pod.connector.manage`: add, change and remove the pod's connectors, and
@@ -49,12 +51,22 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
     const podMayUse = podUse.answered ? podUse.allowed : null;
     const flow = useConnectFlow(pod, data.titles, data.installs.data);
     const [editing, setEditing] = useState<PodConnector | "new" | null>(null);
+    /* The connector just added, drawn as if a link had named it: the row
+       its Connect is on, in view. */
+    const [added, setAdded] = useState<string | null>(null);
 
     const list = data.connectors.data ?? [];
     const podAccounts = accounts.data ?? [];
     const ownerName = (userId: string) =>
         userId && userId === me ? "you" : pod.members.find((one) => one.userId === userId)?.name ?? "";
     const titleOf = (connectorId: string) => data.titles.get(connectorId)?.title ?? connectorId;
+    const usableInstalls = (data.installs.data ?? []).filter((one) => one.status !== "DISABLED");
+    /* Read only once the lists it is judged against are in: until then a
+       catalog id reads as a name that matches nothing. The installations
+       may be refused to a member, which leaves the catalog to match. */
+    const settled = data.connectors.isSuccess && !data.catalog.isPending && !data.installs.isPending;
+    const target = settled ? focusTarget(focus, list, usableInstalls, data.catalog.data ?? []) : { kind: "none" as const };
+    const focusedSlug = target.kind === "connector" ? target.slug : added;
 
     return (
         <div className="podconn">
@@ -76,7 +88,7 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
                 )}
                 {data.connectors.isSuccess && list.length === 0 && (
                     <p className="aboutpage__quiet">
-                        None yet. {may ? "Add one from the organization’s connectors, and say whose account it runs as." : "Someone who can change " + pod.name + " adds them."}
+                        None yet. {may ? "Add one, and say whose account it runs as." : "Someone who can change " + pod.name + " adds them."}
                     </p>
                 )}
                 {list.length > 0 && (
@@ -89,11 +101,13 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
                                 title={titleOf(connector.connectorId)}
                                 owner={ownerName(connector.sharedOwnerId)}
                                 status={myStatus(connector, data.mine, me, ownedBy(podAccounts, me).find((one) => one.authConfigId === connector.authConfigId && one.isMemberDefault)?.accountId)}
-                                focused={focus === connector.slug}
+                                focused={focusedSlug === connector.slug}
                                 may={may}
                                 usable={mayUseOnceConnected(connector, podMayUse)}
                                 busy={flow.busy === connector.slug}
+                                pending={flow.pending}
                                 waiting={flow.waiting === connector.slug}
+                                signIn={flow.link?.slug === connector.slug ? flow.link : null}
                                 problem={flow.problem?.slug === connector.slug ? flow.problem.text : ""}
                                 onConnect={(reconnect) => flow.connect(connector, reconnect)}
                                 onEdit={() => setEditing(connector)}
@@ -101,7 +115,10 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
                         ))}
                     </ul>
                 )}
-                {focus && data.connectors.isSuccess && !list.some((one) => one.slug === focus) && (
+                {target.kind === "connect" && focus && (
+                    <ConnectOffer pod={pod} name={focus} target={target} flow={flow} />
+                )}
+                {target.kind === "unknown" && (
                     <p className="aboutpage__quiet" role="alert">{pod.name} has no connector called {focus} any more.</p>
                 )}
             </section>
@@ -114,11 +131,14 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
                     pod={pod}
                     editing={editing === "new" ? null : editing}
                     connectors={list}
-                    installs={(data.installs.data ?? []).filter((one) => one.status !== "DISABLED")}
+                    installs={usableInstalls}
+                    catalog={data.catalog.data ?? []}
                     accounts={podAccounts}
                     titleOf={titleOf}
                     ownerName={ownerName}
                     onClose={() => setEditing(null)}
+                    onConnect={(made) => { setEditing(null); setAdded(made.slug); flow.connect(made); }}
+                    onAdded={(made) => setAdded(made.slug)}
                 />
             )}
             {flow.element}
@@ -126,7 +146,44 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
     );
 }
 
-function ConnectorRow({ pod, connector, title, owner, status, focused, may, usable, busy, waiting, problem, onConnect, onEdit }: {
+/** What a link named that this pod has no connector for: an app from the
+ *  catalog, or an installation of the organization's. Agents send people
+ *  here for exactly that, so it is said as the thing to do, with the button
+ *  that does it — connecting the person's own account, which the server
+ *  installs the app for on the way where it may. */
+function ConnectOffer({ pod, name, target, flow }: {
+    pod: Pod;
+    name: string;
+    target: Extract<FocusTarget, { kind: "connect" }>;
+    flow: ReturnType<typeof useConnectFlow>;
+}) {
+    /* A connector in shape only, so the flow that connects the pod's own can
+       connect this one: keyed by the name the link used, which no pod
+       connector has. */
+    const stand: PodConnector = useMemo(() => ({
+        id: "", slug: name, connectorId: target.connectorId, authConfigId: target.installId, installationName: "",
+        mode: "PER_MEMBER", status: "READY", purpose: "", required: false, sharedAccount: "", sharedPodAccountId: "", sharedOwnerId: "",
+        visibility: "POD", canUse: null,
+    }), [name, target.connectorId, target.installId]);
+    const offer = useRef<HTMLDivElement>(null);
+    useEffect(() => { offer.current?.scrollIntoView({ block: "center" }); }, []);
+    return (
+        <div ref={offer} className="podconn__offer" role="region" aria-label={"Connect " + target.title}>
+            <span className="podconn__what">
+                <b>Connect {target.title} for {pod.name}</b>
+                <span>Sign in with your own {target.title} account, so {pod.name} can work with it for you.</span>
+                {flow.waiting === name && <span className="podconn__mine" role="status">Finish in the other tab…</span>}
+                {flow.link?.slug === name && <SignInLink url={flow.link.url} app={flow.link.app} opened={flow.link.opened} />}
+                {flow.problem?.slug === name && <span className="reachrow__error" role="alert">{flow.problem.text}</span>}
+            </span>
+            <button className="btn btn--primary" disabled={flow.pending} onClick={() => flow.connect(stand)}>
+                {flow.busy === name ? <LoadingIndicator inline label="Opening sign-in" /> : "Connect"}
+            </button>
+        </div>
+    );
+}
+
+function ConnectorRow({ pod, connector, title, owner, status, focused, may, usable, busy, pending, waiting, signIn, problem, onConnect, onEdit }: {
     pod: Pod;
     connector: PodConnector;
     title: string;
@@ -138,7 +195,10 @@ function ConnectorRow({ pod, connector, title, owner, status, focused, may, usab
      *  could not use offers no Connect: an account nothing would use. */
     usable: boolean;
     busy: boolean;
+    /** A sign-in is being fetched for some connector on this page. */
+    pending: boolean;
     waiting: boolean;
+    signIn: SignIn | null;
     problem: string;
     onConnect: (reconnect: boolean) => void;
     onEdit: () => void;
@@ -212,12 +272,13 @@ function ConnectorRow({ pod, connector, title, owner, status, focused, may, usab
                     {ok ? <CheckCircleIcon size={13} /> : <WarningIcon size={13} />} {shut ? "Not one you can use in " + pod.name : status.note || statusNote(connector)}
                 </span>
                 {waiting && <span className="podconn__mine" role="status">Finish in the other tab…</span>}
+                {signIn && <SignInLink url={signIn.url} app={signIn.app} opened={signIn.opened} />}
                 {problem && <span className="reachrow__error" role="alert">{problem}</span>}
                 {remove.isError && <ProblemLine as="small" className="reachrow__error" error={remove.error} fallback="It could not be removed." />}
             </span>
             <span className="acct__acts">
                 {asks && !shut && (
-                    <button className="btn btn--primary" disabled={busy} onClick={() => onConnect(status.standing === "reconnect")}>
+                    <button className="btn btn--primary" disabled={busy || pending} onClick={() => onConnect(status.standing === "reconnect")}>
                         {busy ? <LoadingIndicator inline label="Opening sign-in" /> : status.standing === "reconnect" ? "Reconnect" : "Connect"}
                     </button>
                 )}
@@ -238,67 +299,135 @@ function ConnectorRow({ pod, connector, title, owner, status, focused, may, usab
 
 /** Adding a connector, or changing one. The installation is fixed once it
  *  exists — a different installation is a different connector — and so is
- *  the slug, which apps and agents already call it by. */
-function ConnectorForm({ pod, editing, connectors, installs, accounts, titleOf, ownerName, onClose }: {
+ *  the slug, which apps and agents already call it by.
+ *
+ *  Adding picks from the organization's installations, and from the
+ *  catalog's apps it has none of yet: in a new organization the first list
+ *  is empty, and a picker of only that was a dead end. One from the catalog
+ *  is added by its id, and the server installs Lemma's own app for it — or,
+ *  for somebody who may not install, says who can. A connector that runs as
+ *  each person's own account then offers to connect mine at once, so one
+ *  sitting ends with something that works. */
+function ConnectorForm({ pod, editing, connectors, installs, catalog, accounts, titleOf, ownerName, onClose, onConnect, onAdded }: {
     pod: Pod;
     editing: PodConnector | null;
     connectors: PodConnector[];
     installs: Install[];
+    catalog: Connector[];
     accounts: PodAccount[];
     titleOf: (connectorId: string) => string;
     ownerName: (userId: string) => string;
     onClose: () => void;
+    /** Close, and start connecting my own account on the one just added. */
+    onConnect: (made: PodConnector) => void;
+    onAdded: (made: PodConnector) => void;
 }) {
     const cache = useQueryClient();
+    const choices = addChoices(installs, catalog, titleOf);
+    const installed = choices.filter((one) => one.from === "install");
+    const fromCatalog = choices.filter((one) => one.from === "catalog");
     /* Nothing picked until somebody picks: a slug suggested for an
        installation nobody chose is one they have to notice and undo. */
-    const [installId, setInstallId] = useState(editing?.authConfigId ?? "");
-    const install = installs.find((one) => one.id === installId);
+    const [choiceKey, setChoiceKey] = useState("");
+    const picked = choices.find((one) => one.key === choiceKey) ?? null;
+    const installId = editing?.authConfigId ?? picked?.installId ?? "";
     const [slug, setSlug] = useState(editing?.slug ?? "");
     const [slugTouched, setSlugTouched] = useState(Boolean(editing));
     const [mode, setMode] = useState<PodConnectorMode>(editing?.mode ?? "PER_MEMBER");
     const [purpose, setPurpose] = useState(editing?.purpose ?? "");
     const [required, setRequired] = useState(editing?.required ?? false);
     const [shared, setShared] = useState(editing?.sharedPodAccountId ?? "");
+    const [made, setMade] = useState<PodConnector | null>(null);
     const taken = connectors.filter((one) => one.slug !== editing?.slug).map((one) => one.slug);
     /* Named for its app until somebody names it -- and nothing to suggest
        until there is an app to name it for. */
-    const shownSlug = slugTouched ? slug : install ? freshSlug(install.connector_id, taken) : "";
-    const choices = shareableFor(accounts, installId);
-    const problem = editing || !installId ? "" : slugProblem(shownSlug, taken);
+    const shownSlug = slugTouched ? slug : picked ? freshSlug(picked.connectorId, taken) : "";
+    /* An app nobody installed has no accounts to share yet. */
+    const shareable = installId ? shareableFor(accounts, installId) : [];
+    const problem = editing || !picked ? "" : slugProblem(shownSlug, taken);
+    const ready = Boolean(editing || picked);
 
     const save = useMutation({
-        mutationFn: async () => {
+        mutationFn: async (): Promise<PodConnector | null> => {
             if (editing) {
                 const patch: PodConnectorPatch = connectorChanges(editing, { mode, purpose, required: mode === "PER_MEMBER" && required, sharedPodAccountId: mode === "SHARED" ? shared : "" });
-                if (Object.keys(patch).length === 0) return;
+                if (Object.keys(patch).length === 0) return null;
                 await source.changePodConnector(pod.id, editing.slug, patch);
-                return;
+                return null;
             }
-            await source.addPodConnector(pod.id, { slug: shownSlug, authConfigId: installId, mode, sharedPodAccountId: shared, required, purpose });
+            if (!picked) return null;
+            const saved = await source.addPodConnector(pod.id, {
+                slug: shownSlug, authConfigId: picked.installId, connectorId: picked.connectorId, mode, sharedPodAccountId: shared, required, purpose,
+            });
+            return { ...saved, connectorId: saved.connectorId || picked.connectorId };
         },
-        onSuccess: () => {
+        onSuccess: (saved) => {
             void cache.invalidateQueries({ queryKey: ["pod-connectors", pod.id] });
             void cache.invalidateQueries({ queryKey: ["pod-accounts", pod.id] });
+            /* An app installed on the way is now one of the organization's. */
+            if (picked?.from === "catalog") void cache.invalidateQueries({ queryKey: ["installs", pod.orgId] });
+            if (saved) onAdded(saved);
+            if (saved && saved.mode === "PER_MEMBER") { setMade(saved); return; }
             onClose();
         },
     });
 
+    if (made) {
+        const app = titleOf(made.connectorId);
+        return (
+            <Modal title={"Added " + made.slug} narrow onClose={onClose}>
+                <div className="podconn__added">
+                    <p className="connect-result" role="status">
+                        <CheckCircleIcon size={18} /> {pod.name} can use {app} now, as each person’s own account.
+                    </p>
+                    <p>Connect your {app} account so it works for you. Everyone else connects theirs the first time {pod.name} needs it.</p>
+                    <div className="record-form__actions">
+                        <button className="btn btn--primary" onClick={() => onConnect(made)}>Connect yours</button>
+                        <button className="btn" onClick={onClose}>Later</button>
+                    </div>
+                </div>
+            </Modal>
+        );
+    }
+
     return (
         <Modal title={editing ? "Change " + editing.slug : "Add a connector to " + pod.name} narrow onClose={onClose}>
-            <form className="record-form podconn__form" onSubmit={(event) => { event.preventDefault(); if (!problem && installId) save.mutate(); }}>
+            <form className="record-form podconn__form" onSubmit={(event) => { event.preventDefault(); if (!problem && ready) save.mutate(); }}>
                 <fieldset disabled={save.isPending} className="surface-setup__fieldset">
                     <label className="record-form__field">
-                        <span>From the organization’s connectors</span>
-                        <select value={installId} disabled={Boolean(editing)} onChange={(event) => { setInstallId(event.target.value); setShared(""); }}>
-                            {!installs.length && <option value="">Nothing installed yet</option>}
-                            {!editing && installs.length > 0 && <option value="">Choose one…</option>}
-                            {editing && !install && <option value={editing.authConfigId}>{editing.installationName || titleOf(editing.connectorId)}</option>}
-                            {installs.map((one) => (
-                                <option key={one.id} value={one.id}>{titleOf(one.connector_id)}{one.name && one.name !== one.connector_id ? " — " + one.name : ""}</option>
-                            ))}
-                        </select>
-                        {!installs.length && <small>An organization owner or editor installs connectors, in Settings → Connectors.</small>}
+                        <span>App</span>
+                        {editing ? (
+                            <select value={editing.authConfigId} disabled>
+                                <option value={editing.authConfigId}>
+                                    {installs.find((one) => one.id === editing.authConfigId)
+                                        ? choices.find((one) => one.installId === editing.authConfigId)?.label
+                                        : editing.installationName || titleOf(editing.connectorId)}
+                                </option>
+                            </select>
+                        ) : (
+                            <select value={choiceKey} onChange={(event) => { setChoiceKey(event.target.value); setShared(""); }}>
+                                <option value="">{choices.length ? "Choose one…" : "Nothing to add yet"}</option>
+                                {installed.length > 0 && (
+                                    <optgroup label="Set up in the organization">
+                                        {installed.map((one) => <option key={one.key} value={one.key}>{one.label}</option>)}
+                                    </optgroup>
+                                )}
+                                {fromCatalog.length > 0 && (
+                                    <optgroup label="More apps">
+                                        {fromCatalog.map((one) => <option key={one.key} value={one.key}>{one.label}</option>)}
+                                    </optgroup>
+                                )}
+                            </select>
+                        )}
+                        {!editing && (
+                            <small>
+                                {picked?.from === "catalog"
+                                    ? "Set up for the organization as it is added, signing in with Lemma’s own app."
+                                    : choices.length
+                                        ? "Not here? An organization owner or editor sets other apps up from the organization menu → Connectors."
+                                        : "An organization owner or editor sets apps up from the organization menu → Connectors."}
+                            </small>
+                        )}
                     </label>
                     <label className="record-form__field">
                         <span>Name apps and agents call it by</span>
@@ -322,16 +451,16 @@ function ConnectorForm({ pod, editing, connectors, installs, accounts, titleOf, 
                             <span>Shared account</span>
                             <select value={shared} onChange={(event) => setShared(event.target.value)}>
                                 <option value="">None yet — it waits for one</option>
-                                {choices.map((one) => (
+                                {shareable.map((one) => (
                                     <option key={one.id} value={one.id}>
                                         {(one.label || titleOf(one.connectorId)) + (ownerName(one.ownerId) ? " · " + ownerName(one.ownerId) : "")}
                                     </option>
                                 ))}
                             </select>
                             <small>
-                                {choices.length
+                                {shareable.length
                                     ? "Only accounts their owners shared with " + pod.name + " are here."
-                                    : "Nobody has shared an account on this connector with " + pod.name + " yet. Its owner shares it, under My accounts here."}
+                                    : "Nobody has shared an account on this connector with " + pod.name + " yet. Its owner shares it, under “Your accounts in " + pod.name + "” on this page."}
                             </small>
                         </label>
                     )}
@@ -349,7 +478,7 @@ function ConnectorForm({ pod, editing, connectors, installs, accounts, titleOf, 
                 </fieldset>
                 {save.isError && <ProblemLine className="library-problem" error={save.error} fallback="That could not be saved." />}
                 <div className="record-form__actions">
-                    <button className="btn btn--primary" type="submit" disabled={save.isPending || Boolean(problem) || !installId}>
+                    <button className="btn btn--primary" type="submit" disabled={save.isPending || Boolean(problem) || !ready}>
                         {save.isPending ? "Saving…" : editing ? "Save" : "Add"}
                     </button>
                     <button className="btn" type="button" onClick={onClose}>Cancel</button>

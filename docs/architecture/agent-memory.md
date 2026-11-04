@@ -111,10 +111,17 @@ reads that turn: what the person said, what the agent did and answered, and the
 reply before it. Some of what a turn answers is stored on other runs: a manual
 retry's original message stays on the run that failed, and the person's answer
 to `ask_user` is stored beside the question on the run that paused. The pass
-reads those too. It also gets the four indexes, and keeps what is durable by
-the same contract, without its `When to write` section
+reads those too.
+
+It reads in two steps, because most turns hold nothing to keep. First a screen
+([`memory_screen.md`](../../lemma-backend/app/modules/agent/prompts/memory_screen.md)):
+one request with the turn and no memory and no tools, which lists what in it
+may be worth keeping or says `nothing` -- and most passes end there. Only a list
+reaches the keeper, which gets the four indexes and that list (not the turn
+again), and keeps what is new by the same contract, without its `When to
+write` section
 ([`memory_pass.md`](../../lemma-backend/app/modules/agent/prompts/memory_pass.md)
-frames it). In doing so it:
+frames it, and asks it to batch its reads and its writes). In doing so it:
 
 - acts as the agent did, for the person the run worked for. That is not always
   the conversation's owner: in a shared conversation it is whoever spoke. It
@@ -129,7 +136,9 @@ frames it). In doing so it:
 - runs one at a time per pod, because every agent shares `/memory/AGENTS.md`,
   and in the automation work class, so it never queues ahead of a person's turn.
 - is best effort. A failed attempt is retried once; a refusal that would only
-  repeat, such as a usage limit or a model no longer configured, is not.
+  repeat, such as a usage limit or a model no longer configured, is not. A
+  keeper that reaches its step limit keeps what it already wrote, and one that
+  wrote nothing is retried rather than given up on.
 
 The consequence is timing. A fact mentioned in passing lands in memory a few
 seconds *after* the answer, not before it. A follow-up in the same conversation

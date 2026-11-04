@@ -328,6 +328,19 @@ body {
 .local-option li { padding-left: 15px; position: relative; }
 .local-option li::before { content: "·"; position: absolute; left: 0; color: var(--gold-deep); }
 .local-option #choose-local { margin-top: auto; padding: 8px 0; font-size: 14px; }
+.local-option #choose-server { margin-top: 10px; padding: 4px 0; font-size: 13px; font-weight: 500; color: var(--ink-soft); }
+#server-form { width: 100%; margin-top: 12px; }
+#server-form label { display: block; margin-bottom: 6px; font-size: 12px; color: var(--ink-soft); }
+.server-row { display: flex; gap: 8px; }
+#server-url { flex: 1; min-width: 0; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--ink) 22%, transparent); border-radius: 8px; background: var(--canvas); color: var(--ink); font: 14px var(--sans); }
+#server-url:focus-visible { outline: 3px solid color-mix(in srgb, var(--gold) 34%, transparent); outline-offset: 1px; border-color: var(--gold); }
+#connect-server { padding: 9px 14px; border: 1px solid var(--solid); border-radius: 8px; background: var(--solid); color: var(--on-solid); font: 600 14px var(--sans); cursor: pointer; }
+#connect-server:disabled { cursor: wait; opacity: 0.55; }
+#server-form .server-hint { margin: 8px 0 0; font-size: 12px; }
+/* The error takes the hint's place: at the smallest window both together ran
+   into the corner links. */
+#server-form:has(#server-setup-error:not([hidden])) .server-hint { display: none; }
+#server-form .setup-error { margin-top: 8px; }
 .welcome-notes { margin: 20px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
 .welcome-notes p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-soft); }
 @media (prefers-color-scheme: dark) {

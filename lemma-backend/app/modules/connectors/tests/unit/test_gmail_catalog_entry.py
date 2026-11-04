@@ -41,9 +41,12 @@ def test_gmail_installs_as_http_with_its_own_oauth(gmail_entry):
     # at the first expiry.
     assert oauth["extra_params"] == {"access_type": "offline", "prompt": "consent"}
     assert "https://www.googleapis.com/auth/gmail.modify" in oauth["default_scopes"]
+    # Never the login client: it is not verified for gmail.modify.
     assert gmail_entry["system_oauth"]["client_id_env"] == [
-        "CONNECTOR_GOOGLE_CLIENT_ID",
-        "GOOGLE_CLIENT_ID",
+        "CONNECTOR_GOOGLE_CLIENT_ID"
+    ]
+    assert gmail_entry["system_oauth"]["client_secret_env"] == [
+        "CONNECTOR_GOOGLE_CLIENT_SECRET"
     ]
 
 

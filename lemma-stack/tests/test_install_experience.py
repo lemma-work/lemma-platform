@@ -326,6 +326,9 @@ def test_install_ps1_structure():
     assert "LEMMA_STACK_SOURCE" in content, "install.ps1 must support local checkout override"
     assert "LEMMA_STACK_CLI_ONLY" in content, "install.ps1 must support managed CLI-only setup"
     assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
+    # PowerShell 6.1+ only; Windows PowerShell 5.1 rejects them as unknown.
+    for parameter in ("-MaximumRetryCount", "-RetryIntervalSec"):
+        assert parameter not in content, f"install.ps1 must run on PowerShell 5.1: {parameter}"
 
 
 def test_install_sh_structure():

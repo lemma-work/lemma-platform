@@ -8,6 +8,7 @@ People use the apps; you work through the same underlying resources.
 For requested recurring work, establish the trigger, action, output destination,
 and human decisions. Most recurring work is a schedule that wakes you with the
 instruction — `lemma schedules create --agent POD_DEFAULT --instruction "…"
---cron "…"` — and needs nothing built; write a function or workflow only when
+--cron "…" --timezone <the person's IANA zone>` (without `--timezone` the cron
+is UTC) — and needs nothing built; write a function or workflow only when
 the work is fixed code with no judgment in it. If recurrence is your
 suggestion, propose it after finishing the current task.

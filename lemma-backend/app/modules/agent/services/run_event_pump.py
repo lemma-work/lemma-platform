@@ -13,13 +13,15 @@ terminal, which is how the driver knows to stop consuming.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 
 from app.core.log.log import get_logger
+from app.core.text.thinking_tags import RESET as SPLITTER_RESET
 from app.core.text.thinking_tags import ThinkingStreamSplitter
+from app.modules.agent.domain.approval_message import with_approval_message
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -342,7 +344,7 @@ class RunEventPump:
                 if should_stop:
                     break
                 if (
-                    boundary.observe(event)
+                    boundary.observe(self._call_as_stored(event))
                     and yield_requested is not None
                     and yield_requested()
                 ):
@@ -384,15 +386,55 @@ class RunEventPump:
             data=event.data,
         )
         sent_as = getattr(event.data, "tool_call_id", None)
-        if sent_as and saved_message.tool_call_id not in (None, sent_as):
+        if sent_as and saved_message.kind is MessageKind.TOOL_CALL:
+            # Every call, renamed or not: a provider that reuses an id means
+            # the newest call under it is the one the next return answers.
+            if saved_message.tool_call_id in (None, sent_as):
+                self._stored_ids.pop(sent_as, None)
+            else:
+                self._stored_ids[sent_as] = saved_message.tool_call_id
+        elif sent_as and saved_message.tool_call_id not in (None, sent_as):
             self._stored_ids[sent_as] = saved_message.tool_call_id
         await publish_conversation_event(
             run.conversation_id,
             message_payload(run.agent_run_id, message_to_payload(saved_message)),
         )
 
+    def _call_as_stored(self, event: AgentEvent) -> AgentEvent:
+        """A call event under the id it was just stored under, which is the id
+        its return (translated by ``_addressed_as_stored``) will carry."""
+        draft = event.data
+        if (
+            event.type is not AgentEventType.MESSAGE
+            or not isinstance(draft, MessageDraft)
+            or draft.kind is not MessageKind.TOOL_CALL
+            or draft.tool_call_id not in self._stored_ids
+        ):
+            return event
+        stored_id = self._stored_ids[draft.tool_call_id]
+        return event.model_copy(
+            update={"data": draft.model_copy(update={"tool_call_id": stored_id})}
+        )
+
     def _addressed_as_stored(self, event: AgentEvent) -> AgentEvent:
-        """A WAITING event naming its pause by the id the pause is stored under."""
+        """An event naming its call by the id the call is stored under.
+
+        A WAITING event names its pause, and a return names its call, by the
+        provider's id; ``RunMessageWriter`` stored the call under another when
+        the provider reused one. A return arrives after its call is stored and
+        before any later call can reuse the id, so the newest renaming is its.
+        """
+        draft = event.data
+        if (
+            event.type is AgentEventType.MESSAGE
+            and isinstance(draft, MessageDraft)
+            and draft.kind is MessageKind.TOOL_RETURN
+            and draft.tool_call_id in self._stored_ids
+        ):
+            stored_id = self._stored_ids[draft.tool_call_id]
+            return event.model_copy(
+                update={"data": draft.model_copy(update={"tool_call_id": stored_id})}
+            )
         if event.type is not AgentEventType.WAITING or not isinstance(event.data, dict):
             return event
         stored = self._stored_ids.get(str(event.data.get("tool_call_id")))
@@ -428,10 +470,10 @@ class RunEventPump:
             return [(kind, text)]
         if kind != "text":
             return [(kind, text)]
-        return list(self._token_splitter.feed(text))
+        return _as_token_lanes(self._token_splitter.feed(text))
 
     async def _drain_tokens(self, run: RunIdentity) -> None:
-        for kind, chunk in self._token_splitter.flush():
+        for kind, chunk in _as_token_lanes(self._token_splitter.flush()):
             await publish_conversation_event(
                 run.conversation_id,
                 token_payload(run.agent_run_id, chunk, kind=kind),
@@ -492,18 +534,37 @@ async def drive_harness(
         raise
 
 
+def _as_token_lanes(segments: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The splitter's segments as the token lanes clients read.
+
+    Its ``reset`` -- what it released of this stream was not what it said --
+    is the lane a retry already uses to clear the bubble, and every client of
+    the stream (the web chat, a visitor's page, a channel) acts on it.
+    """
+    return [
+        (_STREAM_RESET_KIND if kind == SPLITTER_RESET else kind, chunk)
+        for kind, chunk in segments
+    ]
+
+
 def _split_message_event(event: AgentEvent) -> list[AgentEvent]:
     """One message event, split into the messages it should actually become.
 
     Identity for everything that is not an assistant message carrying reasoning
-    in its text, which is all but a handful of events -- the list is returned
-    unchanged rather than rebuilt so the common path allocates nothing.
+    in its text, or an approval the agent asked for -- which is preceded by
+    what it tells the person about it (``domain/approval_message``) -- so all
+    but a handful of events; the list is returned unchanged rather than rebuilt
+    so the common path allocates nothing.
     """
     if event.type is not AgentEventType.MESSAGE or not isinstance(
         event.data, MessageDraft
     ):
         return [event]
-    drafts = split_reasoning_drafts(event.data)
+    drafts = [
+        split
+        for draft in with_approval_message(event.data)
+        for split in split_reasoning_drafts(draft)
+    ]
     if len(drafts) == 1 and drafts[0] is event.data:
         return [event]
     return [event.model_copy(update={"data": draft}) for draft in drafts]

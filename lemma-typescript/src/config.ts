@@ -1,4 +1,4 @@
-import type { KnownClient } from "./version";
+import type { KnownClient } from "./version.js";
 
 export interface LemmaAppConfig {
   name?: string;

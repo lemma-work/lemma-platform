@@ -310,14 +310,23 @@ async def test_a_healthy_loop_is_ticked_far_faster_than_the_watchdog_interval(
     the cpu_bound limiter. Every stall was therefore inflated by up to half a
     second, and a busy worker could report one with the loop perfectly healthy.
     That is why loop lag improved 29 -> 6 while the stall count did not move.
+
+    Told by ticks arriving at all while the watchdog sleeps, not by the gaps
+    between them. Its interval here is longer than the test waits, so a tick
+    still riding on it could come once and never again; the tick's own timer
+    has had dozens of chances by then however busy the runner is.
     """
-    monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.5)
-    monkeypatch.setattr(settings, "loop_stall_tick_seconds", 0.01)
-    ticks: list[float] = []
+    monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 60)
+    monkeypatch.setattr(settings, "loop_stall_tick_seconds", 0.001)
+    ticks = 0
+    ticked_repeatedly = asyncio.Event()
 
     class _Sampler:
         def note_loop_alive(self) -> None:
-            ticks.append(asyncio.get_running_loop().time())
+            nonlocal ticks
+            ticks += 1
+            if ticks >= 5:
+                ticked_repeatedly.set()
 
         def stop(self) -> None:
             pass
@@ -329,19 +338,9 @@ async def test_a_healthy_loop_is_ticked_far_faster_than_the_watchdog_interval(
 
     task = asyncio.create_task(loop_watchdog.loop_lag_watchdog(service_name="test"))
     try:
-        await asyncio.sleep(0.2)
+        await asyncio.wait_for(ticked_repeatedly.wait(), timeout=10)
     finally:
         await _stop(task)
-
-    # Within one 0.5s watchdog interval the loop has been ticked many times.
-    # Tying this to the watchdog interval rather than a raw count keeps it
-    # honest on a loaded machine: the point is the ratio, not the throughput.
-    assert len(ticks) > 5, f"only {len(ticks)} ticks in 0.2s; the tick is too coarse"
-    gaps = [later - earlier for earlier, later in zip(ticks, ticks[1:])]
-    assert max(gaps) < settings.loop_lag_watchdog_interval_seconds, (
-        "a gap as wide as the watchdog interval means the tick is still riding "
-        f"on it: {max(gaps):.3f}s"
-    )
 
 
 @pytest.mark.asyncio

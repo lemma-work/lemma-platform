@@ -24,7 +24,6 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationMemberEntity,
     OrganizationRole,
 )
-from app.modules.identity.domain.organization_slugs import normalize_organization_slug
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.services.organization_service import OrganizationService
 
@@ -1393,23 +1392,31 @@ async def test_resolving_names_keeps_a_name_another_org_carries(
 
 
 @pytest.mark.asyncio
-async def test_resolving_names_steps_past_a_taken_slug_too(
+async def test_resolving_names_moves_the_handle_and_never_numbers_the_name(
     organization_service: OrganizationService,
     organization_repository_mock: AsyncMock,
 ):
-    """A free name whose slug is taken is not a free identity."""
+    """A taken handle moves aside; the name stays the one onboarding chose.
+
+    The walk used to number the name, and production grew a workspace called
+    "Personal 5" -- a counter on somebody's workspace that says nothing about
+    them.
+    """
     organization_repository_mock.get_by_slug.side_effect = lambda slug: (
-        OrganizationEntity(name="Other", slug=slug) if slug == "acme" else None
+        OrganizationEntity(name="Other", slug=slug)
+        if slug in {"anukul-s-workspace", "anukul-s-workspace-2"}
+        else None
     )
     organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     organization = await organization_service.create_organization(
-        OrganizationEntity(name="Acme", slug=""),
+        OrganizationEntity(name="Anukul's workspace", slug=""),
         owner_user_id=uuid4(),
         resolve_name_conflicts=True,
     )
 
-    assert organization.name == "Acme 2"
+    assert organization.name == "Anukul's workspace"
+    assert organization.slug == "anukul-s-workspace-3"
 
 
 @pytest.mark.asyncio
@@ -1430,8 +1437,37 @@ async def test_resolving_names_falls_back_to_a_suffix_it_cannot_lose(
         resolve_name_conflicts=True,
     )
 
-    assert organization.name.startswith("Acme ")
-    assert normalize_organization_slug("", organization.name) not in readable
+    assert organization.name == "Acme"
+    assert organization.slug.startswith("acme-")
+    assert organization.slug not in readable
+
+
+@pytest.mark.asyncio
+async def test_a_domain_another_organization_holds_is_refused_with_its_own_code(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+    user_repository_mock: AsyncMock,
+):
+    """The browser offers joining or an invite-only team on this code, rather
+    than leaving "already taken" on screen as a dead end."""
+    user_repository_mock.get.return_value = UserEntity(email="ada@acme.com")
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.get_email_domain_org.return_value = OrganizationEntity(
+        name="Acme", slug="acme"
+    )
+
+    with pytest.raises(OrganizationConflictError) as conflict:
+        await organization_service.create_organization(
+            OrganizationEntity(
+                name="Acme Two",
+                slug="",
+                join_policy=OrganizationJoinPolicy.EMAIL_DOMAIN,
+                email_domain="acme.com",
+            ),
+            owner_user_id=uuid4(),
+        )
+
+    assert conflict.value.code == OrganizationConflictError.DOMAIN_TAKEN
 
 
 @pytest.mark.asyncio

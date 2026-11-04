@@ -339,6 +339,12 @@ adopt any one design system.
   In React use `useConversationMessages().finalOutputText`; never match first/last.
   (See `app-recipes/agent-chat.md`.)
 - `public_slug` is globally unique — conflicts auto-suffix on import.
+- **New apps are private to the pod** (`visibility: "POD"`): the app host serves
+  one to whoever may view it, after they sign in. Opening it to anyone with the
+  link is a deliberate step — `"visibility": "PUBLIC"` in
+  `apps/<name>/<name>.json` (or `lemma apps update <app> -d '{"visibility":
+  "PUBLIC"}'`, or the share dialog). An app's data calls are authorized on their
+  own either way.
 
 ## See also
 

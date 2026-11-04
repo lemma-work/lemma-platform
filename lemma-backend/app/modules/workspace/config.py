@@ -258,6 +258,18 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("E2B_FUNCTION_TEMPLATE"),
         description="E2B template backing function runtime sandboxes",
     )
+    e2b_workspace_template_size: str = Field(
+        default="1x2048",
+        pattern=r"^[1-9][0-9]*x[1-9][0-9]*$",
+        validation_alias=AliasChoices("E2B_WORKSPACE_TEMPLATE_SIZE"),
+        description=(
+            "The size E2B_WORKSPACE_TEMPLATE was built at, keyed like "
+            "E2B_WORKSPACE_SIZE_TEMPLATES. A plan selling this size is served "
+            "from it with no template of its own. The default is what "
+            "`build_templates.py` builds when E2B_WORKSPACE_CPU_COUNT and "
+            "E2B_WORKSPACE_MEMORY_MB are unset."
+        ),
+    )
     e2b_workspace_size_templates: dict[str, str] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("E2B_WORKSPACE_SIZE_TEMPLATES"),

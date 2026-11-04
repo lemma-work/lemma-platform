@@ -190,6 +190,7 @@ impl<E: Engine + 'static> GuestService<E> {
                 &env_file,
                 &self.host_gateway,
                 &relay_directory,
+                crate::host_dns::sandbox_dns_server(),
             );
             let result = match replacing {
                 None => self.run_checked(&arguments).map(|_| ()),

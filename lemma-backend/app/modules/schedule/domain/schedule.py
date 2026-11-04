@@ -411,6 +411,13 @@ class ScheduleEntity(Entity):
     #: Why the platform paused it (``fire_cap``, ``consecutive_failures``, ...);
     #: ``None`` when it is running or a person paused it.
     paused_reason: str | None = None
+    #: The next instant a TIME schedule is due, in UTC; ``None`` otherwise.
+    next_fire_at: datetime | None = None
+    #: When a person last reactivated it; the failure streak stops there.
+    failures_reset_at: datetime | None = None
+    #: The agent that created it (the pod's id for its default assistant);
+    #: ``None`` when a person did.
+    created_by_workload_id: UUID | None = None
 
     @property
     def time_config(self) -> TimeScheduleConfig | None:
@@ -479,6 +486,7 @@ class ScheduleCreateEntity(BaseModel):
     # schedules default to POD; other schedules default to PERSONAL.
     visibility: str | None = None
     is_internal: bool = False
+    created_by_workload_id: UUID | None = None
 
     @model_validator(mode="after")
     def _require_explicit_datastore_operations(self) -> "ScheduleCreateEntity":

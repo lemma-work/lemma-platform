@@ -170,6 +170,36 @@ class ConnectorNotFoundError(_ConnectorNotFoundBase):
         self.code = "CONNECTOR_NOT_FOUND"
 
 
+class ConnectorNotInstalledError(_ConnectorNotFoundBase):
+    """A connector the catalog has, and this organization has not installed.
+
+    Said apart from ``ConnectorNotFoundError``: "Connector 'gmail' not found"
+    told a person, and an agent, that Gmail does not exist, when what was
+    missing was the organization's install of it -- and who can add one.
+    """
+
+    def __init__(self, connector_id: str, *, title: str | None = None, reason: str):
+        name = title or connector_id
+        super().__init__(
+            f"{name} is not installed in this organization yet. An organization "
+            "owner or editor adds it: organization menu -> Connectors -> "
+            f"Available -> {name} -> Connect.",
+            details={"connector_id": connector_id, "reason": reason},
+        )
+        self.code = "CONNECTOR_NOT_INSTALLED"
+
+
+class InstallationNotFoundError(_ConnectorNotFoundBase):
+    """No installation in this organization goes by the name a caller used."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            f"This organization has no connector installation named '{name}'.",
+            details={"installation": name, "reason": "installation_not_found"},
+        )
+        self.code = "INSTALLATION_NOT_FOUND"
+
+
 class ConnectorTriggerNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, trigger_id: str):
         _ConnectorNotFoundBase.__init__(self, f"Trigger '{trigger_id}' not found")

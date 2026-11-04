@@ -140,20 +140,37 @@ def organization_name_from_work_domain(domain: str) -> str | None:
     return to_title_case(label.replace("-", " ").replace("_", " ")) or None
 
 
+def personal_organization_name(full_name: str | None) -> str | None:
+    """ "Ada's workspace", or ``None`` when there is no name to use.
+
+    A personal workspace is named after its person, never numbered: the web
+    onboarding once produced "Personal 5", which says nothing about whose it is.
+    """
+    first = (full_name or "").strip().split(" ")[0]
+    return f"{first}'s workspace" if first else None
+
+
 def organization_name_candidate(
-    *, email: str, work_domain: str | None = None, attempt: int = 0
+    *,
+    email: str,
+    work_domain: str | None = None,
+    attempt: int = 0,
+    full_name: str | None = None,
 ) -> str:
     """What to call the organization on this attempt.
 
     Later attempts exist because the name may already be taken: the company
     name, then the bare domain, then numbered, and finally a generated name that
-    no company will collide with.
+    no company will collide with. Without a company, the person's own name
+    comes first, and a generated name only when there is none.
     """
     company_name = (
         organization_name_from_work_domain(work_domain) if work_domain else None
     )
     if not company_name:
-        return generated_organization_name(email, attempt)
+        return personal_organization_name(full_name) or generated_organization_name(
+            email, attempt
+        )
 
     if attempt == 0:
         return company_name

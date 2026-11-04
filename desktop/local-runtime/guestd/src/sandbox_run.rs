@@ -39,6 +39,7 @@ pub(crate) const SANDBOX_OOM_SCORE_ADJ: i32 = 500;
 /// older copy.
 pub(crate) const RUNTIME_OVERLAY_MOUNT: &str = "/opt/lemma-runtime";
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_run_arguments(
     parameters: &EnsureParameters,
     workspace: Option<&Path>,
@@ -47,6 +48,7 @@ pub(crate) fn build_run_arguments(
     env_file: &Path,
     host_gateway: &str,
     host_loopback_directory: &Path,
+    dns_server: Option<&str>,
 ) -> Vec<String> {
     let metadata = serde_json::to_string(&parameters.metadata)
         .expect("validated sandbox metadata must serialize");
@@ -138,6 +140,12 @@ pub(crate) fn build_run_arguments(
         "--hostname".into(),
         parameters.sandbox_id.clone(),
     ];
+    // The guest's own resolver on the sandbox bridge, in front of the Mac's
+    // (`host_dns`). Without it a sandbox asks vmnet's gateway alone, which
+    // cannot resolve behind WARP, Tailscale or a split-DNS VPN.
+    if let Some(dns) = dns_server {
+        arguments.extend(["--dns".into(), dns.to_owned()]);
+    }
     if parameters.host_access {
         arguments.extend([
             "--add-host".into(),

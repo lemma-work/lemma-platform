@@ -74,8 +74,8 @@ Rules:
   - `"instruction": {"$file": "instruction.md"}`
   - `"config": {"$json_file": "config.json"}` — parsed as JSON
 - `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows/schedules and round-trips through export/import.
-- `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`; `4` when the bundle declares a pod connector under `connectors/`, which readers of 3 would skip. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
-- `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, account setup JSON, seed records, and the end-to-end smoke test there.
+- `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`; `format_version` is `4` when the bundle declares a pod connector under `connectors/`, which readers of 3 would skip. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
+- `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, seed records, and the end-to-end smoke test there.
 
 ### Per-resource JSON shapes
 
@@ -141,15 +141,20 @@ granted to read it. Scaffold it, then import.
 
 ```bash
 lemma pods create demo --org <org>            # import never creates the pod shell
-lemma pod init demo                           # writes pod.json + a starter table + agent + AGENTS.md
+lemma pod init demo --no-starter              # writes pod.json + README.md + AGENTS.md
 cd demo
 lemma tables init tickets --shared            # tables/tickets/tickets.json (enable_rls:false)
 lemma agents init triage                      # agents/triage/{triage.json,instruction.md}
 lemma agents grant triage tickets:read,write  # merges into permissions.grants
-lemma pods import . --dry-run && lemma pods import .
-lemma records create tickets --data '{"title":"smoke","status":"new"}'
-lemma agents chat triage "How many open tickets are there?"
+lemma pods import . --pod demo --dry-run && lemma pods import . --pod demo
+lemma records create tickets --pod demo --data '{"title":"smoke","status":"new"}'
+lemma agents chat triage "How many open tickets are there?" --pod demo
 ```
+
+A created pod is **not** made the active one, so name it with `--pod` (or
+`export LEMMA_POD_ID=<id>`) — otherwise the import lands in whatever pod was
+active before. `lemma pods create demo --with-starter` instead scaffolds `./demo`,
+imports it and binds that folder to the new pod in one step.
 
 The on-disk result — folder names equal the JSON `name` of each resource:
 
@@ -159,6 +164,7 @@ demo/
   tables/tickets/tickets.json
   agents/triage/triage.json          + instruction.md     (JSON carries permissions.grants)
   README.md
+  AGENTS.md
 ```
 
 ```jsonc
@@ -192,7 +198,7 @@ lemma pods import ./my-pod/tables/tickets        # single resource
 lemma pods import ./my-pod/functions             # one resource collection
 
 lemma pods export ./bundles --force              # export active pod
-lemma pods export ./bundles <pod> --resource functions --name score_ticket
+lemma pods export ./bundles --pod <pod> --resource functions --name score_ticket
 lemma pods export ./bundles --exclude apps
 ```
 
@@ -357,12 +363,13 @@ lemma schedules create --datastore tickets --on all --workflow intake   # --on a
 # connectors / surfaces / tools
 lemma connectors run gmail "list recent emails" --dry-run    # resolve connector -> op -> input schema
 lemma connectors run gmail gmail_list_messages -d '{"max_results":5}'   # ...then run it
-lemma connectors list|get|describe|overview|status            # overview = the table of installed auth-configs + accounts
-lemma connectors auth-configs list|create|get|delete
-lemma connectors accounts list|get|create|delete
-lemma connectors connect-requests create <connector> --auth-config-id <id>
-lemma connectors operations search|list|get|details|execute [<auth-config-or-connector>] [...]
-lemma connectors triggers list|get [<auth-config-or-connector>] [...]
+lemma connectors pod-list                                     # the pod's connectors: slug, mode, status
+lemma connectors pod-add <slug> <catalog-id-or-install> [--mode PER_MEMBER|SHARED]   # declare one
+lemma connectors pod-operations <slug> "send email"           # search one connector's operations
+lemma connectors connect-requests create gmail                # → authorization_url for your own account
+lemma connectors list|get|describe|overview|status            # catalog, kind skill doc, org installs + accounts
+lemma connectors auth-configs list|get|create|update|delete|refresh-operations   # org installations
+lemma connectors triggers list|get [<install>] [...]          # events for a WEBHOOK schedule
 lemma surfaces list|get|upsert|enable|disable|setup|channels|available-channels|delete   # keyed by PLATFORM (slack, telegram, resend, …)
 lemma feedback --category cli|skill|platform|docs|other --subject … --issue-encountered … --expected-behavior … --actual-behavior …
 

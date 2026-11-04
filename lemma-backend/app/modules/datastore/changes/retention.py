@@ -34,6 +34,7 @@ from uuid import UUID
 from opentelemetry import metrics
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.core.infrastructure.work import (
     SYSTEM_NAMESPACE,
@@ -50,7 +51,11 @@ from app.modules.datastore.changes.cursor import (
     encode_cursor,
 )
 from app.modules.datastore.changes.reader import count_between, read_after
-from app.modules.datastore.changes.schema import FLOORS_TABLE, changes_table
+from app.modules.datastore.changes.schema import (
+    CHANGES_TABLE,
+    FLOORS_TABLE,
+    changes_table,
+)
 from app.modules.datastore.changes.subscribers import (
     LapsedSpan,
     SubscriberRow,
@@ -133,6 +138,10 @@ async def retain(pod_id: UUID, subscribers: list[SubscriberRow]) -> int:
     total = 0
     while True:
         async with engine.begin() as conn:
+            if not await _log_exists(conn, pod_id):
+                # The pod was deleted after the page was listed. There is
+                # nothing left to keep to a window.
+                return total
             row = (
                 await conn.execute(
                     text(
@@ -156,6 +165,15 @@ async def retain(pod_id: UUID, subscribers: list[SubscriberRow]) -> int:
         total += int(row)
         if int(row) < DELETE_CHUNK:
             return total
+
+
+async def _log_exists(conn: AsyncConnection, pod_id: UUID) -> bool:
+    return bool(
+        await conn.scalar(
+            text("SELECT to_regclass(:table) IS NOT NULL"),
+            {"table": changes_table(schema_name_for_pod(pod_id))},
+        )
+    )
 
 
 async def _live_subscribers(ctx: JobContext, pod_id: UUID) -> list[SubscriberRow]:
@@ -276,10 +294,16 @@ async def _schemas_with_log(after: str) -> list[str]:
             text(f"SELECT to_regclass('{VERSIONS_TABLE}') IS NOT NULL")
         ):
             return []
+        # The log itself must still be there, not just the version row: a
+        # pod deleted before its schema forgot its version left one behind,
+        # and one such pod failed the whole page it was listed in, every hour,
+        # so no pod after it on the page was ever retained.
         rows = await conn.execute(
             text(
                 f"SELECT schema_name FROM {VERSIONS_TABLE} "
                 "WHERE version >= :version AND schema_name > :after "
+                "AND to_regclass(format('%I.%I', schema_name, "
+                f"'{CHANGES_TABLE}')) IS NOT NULL "
                 "ORDER BY schema_name LIMIT :limit"
             ),
             {"version": CHANGE_LOG_VERSION, "after": after, "limit": RETENTION_PAGE},

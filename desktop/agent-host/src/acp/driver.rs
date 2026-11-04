@@ -376,6 +376,15 @@ pub(crate) const MODEL_OPTION_SET_LIMIT: usize = 32;
 /// does not answer one model is not asked about the next.
 pub(crate) const MODEL_OPTION_SET_DEADLINE: Duration = Duration::from_secs(10);
 
+/// How long all the models' options may take together.
+///
+/// The whole probe has 20s (`refresh_harnesses`), and asking each model in
+/// turn is most of it: Claude Code answers about one model a second, so its
+/// thirteen took 15s of the 20 on an idle Mac -- and on a busy one the probe
+/// ran out, and the agent was published as failed rather than with fewer
+/// per-model sets. Past this, the rest keep the top level's options.
+pub(crate) const MODEL_OPTION_SETS_BUDGET: Duration = Duration::from_secs(8);
+
 /// Give each model the options it offers, under `MODEL_OPTION_SET_KEY` on
 /// that model's entry.
 ///
@@ -398,7 +407,17 @@ async fn attach_model_option_sets(
     let model_id = model.id.clone();
     let default = model.current_value.as_str().map(str::to_owned);
     let mut last_asked: Option<String> = None;
+    let budget_ends = tokio::time::Instant::now() + MODEL_OPTION_SETS_BUDGET;
     for entry in model.options.iter_mut().take(MODEL_OPTION_SET_LIMIT) {
+        let remaining = budget_ends.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            tracing::info!(
+                harness = %adapter_key,
+                budget_secs = MODEL_OPTION_SETS_BUDGET.as_secs(),
+                "out of time for models' own options; the rest keep the top level's"
+            );
+            break;
+        }
         let Some(value) = option_value(entry)
             .and_then(Value::as_str)
             .map(str::to_owned)
@@ -412,7 +431,7 @@ async fn attach_model_option_sets(
             SessionConfigOptionValue::value_id(value.clone()),
         );
         match tokio::time::timeout(
-            MODEL_OPTION_SET_DEADLINE,
+            MODEL_OPTION_SET_DEADLINE.min(remaining),
             connection.send_request(request).block_task(),
         )
         .await

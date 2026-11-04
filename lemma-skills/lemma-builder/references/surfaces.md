@@ -152,12 +152,19 @@ platform-side setup**.
 ```bash
 # 1. Credentials: your own account, shared with the pod as a SHARED connector —
 #    Slack/Teams only (Telegram/WhatsApp default to the system bot; email is provisioned)
-lemma connectors auth-configs create slack --name workspace-slack
-lemma connectors connect-requests create slack --auth-config-id <auth-config-id>
+#    Lemma's own Slack app needs no setup: with no install yet, this installs it
+#    and returns the sign-in link.
+lemma connectors connect-requests create slack        # -> authorization_url
 lemma connectors accounts list --app slack            # grab the <account-id>
-lemma connectors pod-share <account-id> --visibility POD     # -> <pod-account-id>
-lemma connectors pod-add support-slack <auth-config-id> --mode SHARED \
+lemma connectors pod-share <account-id>               # owner only; -> <pod-account-id>
+lemma connectors pod-add support-slack slack --mode SHARED \
   --shared-account <pod-account-id>
+#    Your own Slack app instead: create the install first (field names from
+#    `lemma connectors get slack`, kinds[].install_config_schema; Slack also needs
+#    signing_secret), then pass --auth-config-id to connect-requests and the
+#    install's name to pod-add. `surfaces setup` then lists the webhook steps.
+#    lemma connectors auth-configs create slack --kind http --name workspace-slack \
+#      --config-source ORG_CUSTOM -d '{"client_id": "...", "client_secret": "...", "signing_secret": "..."}'
 
 # 2. Create/update the surface (one command per platform — covers create AND edits)
 lemma surfaces upsert slack --agent triage-agent --connector support-slack
@@ -188,8 +195,8 @@ lemma surfaces upsert resend-inbox-agent \
   --allowed-domain example.com --allowed-email vip@partner.com
 
 # Managed Telegram bot, end to end
-lemma surfaces telegram-setup --agent triage-agent   # prints the link that creates the bot
-lemma surfaces telegram-setup-status                 # how far it got
+lemma surfaces telegram-setup --agent triage-agent   # prints the link (and a setup id)
+lemma surfaces telegram-setup-status <setup-id>      # poll until bot_username is set
 
 # Allow-list the Slack channels this surface's agent answers in (replaces ALL routes)
 lemma surfaces available-channels slack                # list routable channels

@@ -454,15 +454,15 @@ function AppsTab({ pod, go }: { pod: Pod; go: Go }) {
                     {apps.map((app) => {
                         const inFrame = to({ name: "app", podId: pod.id, app: app.id.replace(/^app:/, "") }, go);
                         return (
-                            <article key={app.id} className="ox-app">
-                                <a className="ox-app__cover" {...inFrame}>
+                            <article key={app.id} className="ox-app" aria-label={app.label}>
+                                <a className="ox-app__cover" {...inFrame} aria-label={"Open " + app.label}>
                                     <AppCover url={app.url} fallback={<span className="ox-app__blank"><Icon name="app" size={22} /></span>} />
                                 </a>
                                 <p className="ox-app__name">{app.label}</p>
                                 <p className="ox-app__meta">{[app.visibility && app.visibility.toLowerCase(), app.updated && `updated ${ageOf(Date.parse(app.updated), Date.now())} ago`].filter(Boolean).join(" · ")}</p>
                                 <div className="ox-app__acts">
-                                    <a className="ox-btn ox-btn--primary" {...inFrame}>Open</a>
-                                    <button type="button" className="ox-btn" onClick={async () => setCopied((await copy(app.url)) ? app.id : null)}>{copied === app.id ? "Link copied" : "Copy link"}</button>
+                                    <a className="ox-btn ox-btn--primary" {...inFrame} aria-label={"Open " + app.label}>Open</a>
+                                    <button type="button" className="ox-btn" aria-label={copied === app.id ? undefined : "Copy link to " + app.label} onClick={async () => setCopied((await copy(app.url)) ? app.id : null)}>{copied === app.id ? "Link copied" : "Copy link"}</button>
                                     <a className="ox-btn ox-btn--icon" href={app.url} target="_blank" rel="noreferrer" aria-label={`Open ${app.label} in a new tab`} title="Open in a new tab"><Icon name="out" size={14} /></a>
                                 </div>
                             </article>

@@ -120,6 +120,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 #: The channels tests' pod: an owner, an editor, a user and a viewer.
 pod = channel_pod.pod
+channel_world = channel_pod.channel_world
 
 
 # ------------------------------------------------------------------- harness

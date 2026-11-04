@@ -411,7 +411,7 @@ test("turning sandbox use off returns the account as saved, with the server's no
 }));
 
 test("editors declare, change and remove connectors; owners share and withdraw accounts", (context) => withApi(async () => {
-    const requests = await recorded(context, (path, method, body) => method === "DELETE"
+    const requests = await recorded(context, (_path, method, body) => method === "DELETE"
         ? { status: 204, body: null }
         : { body: { ...body, id: "x", pod_id: "p1", slug: "gmail", mode: "PER_MEMBER", status: "READY", required: true, visibility: "POD", created_at: "", updated_at: "",
             account_id: "acc", auth_config_id: "ac", owner_user_id: "me", is_member_default: true, source: "MANUAL" } });
@@ -568,7 +568,7 @@ test("the Connections page draws each connector's badge and my standing, and edi
     assert.equal(slugInput().value, "");
     assert.equal(form.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled, true);
     await act(async () => {
-        install.value = "ac-gmail";
+        install.value = "install:ac-gmail";
         install.dispatchEvent(new window.Event("change", { bubbles: true }));
     });
     assert.equal(slugInput().value, "gmail-2", "named for its app once there is one");
@@ -590,6 +590,45 @@ test("the Connections page draws each connector's badge and my standing, and edi
     const seen = [...viewer.holder.querySelectorAll("button")].map((one) => one.textContent);
     assert.ok(!seen.includes("Connect") && !seen.includes("Reconnect"), "a viewer is offered no account nothing would use");
     assert.match(viewer.holder.textContent ?? "", /Not one you can use in Kit/);
+});
+
+test("a link naming an app the pod has no connector for offers to connect it, and the add picker offers the catalog", async (t) => {
+    const window = dom();
+    const { PodConnections } = await import("../src/connect/pod-connections.tsx");
+    const { createRoot } = await import("react-dom/client");
+    const cache = seeded(["pod.read", "pod.connector.manage", "connector.use"]);
+    const signInReady = [{ kind: "composio", auth_scheme: "OAUTH2", system_default_available: true }];
+    cache.setQueryData(["connectors"], [
+        { id: "gmail", title: "Gmail", description: "", icon: "", active: true, kinds: signInReady },
+        { id: "notion", title: "Notion", description: "", icon: "", active: true, kinds: [] },
+        { id: "linear", title: "Linear", description: "", icon: "", active: true, kinds: signInReady },
+    ]);
+    const draw = async (focus: string) => {
+        const holder = window.document.createElement("div");
+        window.document.body.append(holder);
+        const root = createRoot(holder);
+        t.after(() => act(async () => root.unmount()));
+        await act(async () => {
+            root.render(createElement(QueryClientProvider, { client: cache }, createElement(PodConnections, { pod: POD, focus })));
+        });
+        return holder;
+    };
+
+    const offered = await draw("linear");
+    const offer = offered.querySelector(".podconn__offer");
+    assert.match(offer?.textContent ?? "", /Connect Linear for Kit/);
+    assert.ok([...(offer?.querySelectorAll("button") ?? [])].some((one) => one.textContent === "Connect"));
+    assert.doesNotMatch(offered.textContent ?? "", /no connector called/, "a catalog app is not a connector that is gone");
+
+    const gone = await draw("nothing-like-it");
+    assert.match(gone.textContent ?? "", /Kit has no connector called nothing-like-it any more/);
+    assert.equal(gone.querySelector(".podconn__offer"), null);
+
+    const add = [...offered.querySelectorAll("button")].find((one) => one.textContent?.includes("Add a connector"));
+    await act(async () => { add?.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const form = window.document.querySelector(".podconn__form")!;
+    const values = [...form.querySelectorAll("option")].map((one) => one.value);
+    assert.deepEqual(values, ["", "install:ac-gmail", "catalog:linear"], "the installation, then the catalog's apps it has none of");
 });
 
 test("a shared account of mine offers the sandbox switch, saying plainly who gets its token", async (t) => {
@@ -617,10 +656,19 @@ test("turning sandbox use off draws the account as saved, and the server's notic
     /* The source's own PATCH is pinned above, against the recorded API; here
        the page is handed its answer (the SDK sends by XHR under a window). */
     const sent: unknown[] = [];
+    let saved: (typeof ACCOUNTS)[number] | undefined;
     t.mock.method(liveSource, "changePodAccount", async (_podId: string, podAccountId: string, patch: { sandboxes?: boolean }) => {
         sent.push([podAccountId, patch]);
-        return readPodAccounts({ items: [{ ...ACCOUNTS_RAW_MINE, visibility: "POD", allow_sandbox_use: patch.sandboxes, notice }] })[0];
+        saved = readPodAccounts({ items: [{ ...ACCOUNTS_RAW_MINE, visibility: "POD", allow_sandbox_use: patch.sandboxes, notice }] })[0];
+        return saved;
     });
+    /* A save invalidates both lists, and the refetch went out over the real
+       source: it settled after this test had ended, against a window the next
+       test had replaced, and failed the run as an unhandled rejection. Read
+       back here, so no request leaves the test. */
+    t.mock.method(liveSource, "listPodAccounts", async () =>
+        ACCOUNTS.map((one) => (one.id === "pa-mine" ? (saved ?? { ...one, visibility: "POD" as const, sandboxes: true }) : one)));
+    t.mock.method(liveSource, "listPodConnectors", async () => CONNECTORS);
     const cache = seeded(["pod.read", "connector.use"]);
     cache.setQueryData(["pod-accounts", "p1"], ACCOUNTS.map((one) => (one.id === "pa-mine" ? { ...one, visibility: "POD" as const, sandboxes: true } : one)));
     const holder = window.document.createElement("div");
@@ -637,6 +685,10 @@ test("turning sandbox use off draws the account as saved, and the server's notic
     assert.deepEqual(sent, [["pa-mine", { sandboxes: false }]]);
     assert.equal(holder.querySelector<HTMLInputElement>("input[role=switch]")?.checked, false, "the answer is drawn, not the old row");
     assert.match(holder.textContent ?? "", /loses it on its next git command/);
+    /* A save refreshes the pod's accounts and connectors. Left running, that
+       refetch outlived this test, reached for the window the next test had
+       replaced, and failed the whole file on another test's turn. */
+    await act(async () => { await cache.cancelQueries(); });
 });
 
 test("the banner asks for the required connectors I have not connected, and nothing when I have", async (t) => {

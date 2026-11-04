@@ -17,6 +17,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.tools.contact_tools import build_contact_toolset
+from app.modules.agent.tools.group_history import build_group_history_toolset
 from app.modules.agent.tools.form_tools import build_form_toolset
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.vision import AgentVisionMode
@@ -274,6 +275,8 @@ class RunToolAssembler:
         toolsets: list[AbstractToolset[ConversationContext]] = []
         if audience.is_contact and not _in_a_group(conversation):
             toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
+        if audience.is_contact and _in_a_group(conversation):
+            toolsets.append(build_group_history_toolset(uow_factory=self.uow_factory))
         if audience.answers_outsiders and _on_a_web_page(conversation):
             toolsets.append(build_form_toolset(uow_factory=self.uow_factory))
         return toolsets
@@ -324,13 +327,15 @@ def _call_toolsets(
     """The voice, for a live call's coordinator.
 
     By the conversation's call mark rather than a declared toolset: an agent
-    gets it by being called, whatever it was configured with. Its sub-agents
-    show things with `display_resource` like any run, and only it speaks.
+    gets it by being called, whatever it was configured with, and only while a
+    socket holds the call -- a chat a call happened in has no voice to relay
+    to once it is over. Its sub-agents show things with `display_resource`
+    like any run, and only it speaks.
     """
-    from app.modules.agent.domain.calls import CallRole, call_mark
+    from app.modules.agent.domain.calls import call_mark
 
     mark = call_mark(conversation.metadata if conversation is not None else None)
-    if mark is None or mark.role is not CallRole.COORDINATOR:
+    if mark is None or not mark.live_coordinator:
         return []
     from app.modules.agent.tools.call.pydantic_adapter import coordinator_toolset
 

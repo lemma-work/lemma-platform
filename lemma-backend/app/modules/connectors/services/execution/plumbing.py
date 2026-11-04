@@ -39,6 +39,7 @@ def execution_request(dispatcher: KindDispatcher, resolved: Any):
             name=resolved.operation_name or resolved.operation_execution_name,
             provider_operation_name=resolved.operation_execution_name,
             input_schema=resolved.input_schema,
+            output_schema=resolved.output_schema,
             execution=resolved.execution,
         ),
         payload=resolved.payload or {},

@@ -46,7 +46,14 @@ def _no_reach() -> SimpleNamespace:
     return SimpleNamespace(
         offered=AsyncMock(return_value=[]),
         installation=AsyncMock(return_value=None),
+        unconnected=AsyncMock(return_value=None),
+        account_standing=AsyncMock(return_value={}),
         slug_for=AsyncMock(side_effect=lambda ctx, pod_id, name: name),
+        declare=AsyncMock(side_effect=lambda ctx, pod_id, offer: offer.name),
+        may_install=AsyncMock(return_value=True),
+        connect_url=lambda pod_id, name: (
+            f"https://lemma.test/pods/{pod_id}/connections?connector={name}"
+        ),
     )
 
 
@@ -62,7 +69,7 @@ def _patch_services(monkeypatch, services) -> None:
     monkeypatch.setattr(adapter, "connector_services", fake_connector_services)
 
 
-def test_the_toolset_is_four_tools_not_one_per_operation():
+def test_the_toolset_is_a_handful_of_tools_not_one_per_operation():
     """Compiling a tool per operation would blow the budget the moment a tenant
     installs an MCP server; discovery stays dynamic instead."""
     assert set(adapter.connectors_toolset.tools) == {
@@ -70,12 +77,14 @@ def test_the_toolset_is_four_tools_not_one_per_operation():
         "search_connector_operations",
         "describe_connector_operation",
         "run_connector_operation",
+        "connect_connector",
     }
 
 
 def _connector(slug: str) -> SimpleNamespace:
     return SimpleNamespace(
         slug=slug,
+        auth_config_id=uuid4(),
         connector_id="gmail",
         mode=SimpleNamespace(value="PER_MEMBER"),
         purpose=None,
@@ -470,14 +479,17 @@ async def test_searching_an_own_installation_declares_nothing(monkeypatch):
     assert result["items"][0]["connector"] == "gmail"
 
 
-async def test_running_an_own_installation_declares_and_commits_it_first(
+async def test_running_an_own_installation_declares_it_without_committing(
     monkeypatch,
 ):
-    """The first run declares the pod connector and commits it before the
-    call is authorized, so a named agent refused it can be offered the grant
-    on a connector that exists; the run then goes through the declared slug."""
+    """The first run declares the pod connector in the call's own transaction
+    and never commits it on the way: a refusal rolls it back, so a refused
+    call leaves no connector in the pod. The grant card a named agent is then
+    offered names the installation instead, and approving declares it."""
+    offer = _offer("gmail")
     reach = _no_reach()
-    reach.slug_for = AsyncMock(return_value="gmail-2")
+    reach.installation = AsyncMock(return_value=offer)
+    reach.declare = AsyncMock(return_value="gmail-2")
     uow = SimpleNamespace(commit=AsyncMock())
     detail = AsyncMock(return_value=SimpleNamespace(input_schema=None))
     refusal = DomainError("no", code="MISSING_WORKLOAD_RESOURCE_GRANT", status_code=403)
@@ -499,7 +511,112 @@ async def test_running_an_own_installation_declares_and_commits_it_first(
         RunConnectorOperationRequest(connector="gmail", operation="send"),
     )
 
-    uow.commit.assert_awaited_once()
+    uow.commit.assert_not_awaited()
     assert detail.await_args.kwargs["slug"] == "gmail-2"
     assert result["success"] is False
     assert result["connector"] == "gmail-2"
+
+
+async def test_running_something_not_connected_hands_back_a_link(monkeypatch):
+    """One call, and the answer is the link the person clicks -- not a 404,
+    and not directions through the menus."""
+    reach = _no_reach()
+    reach.unconnected = AsyncMock(
+        return_value=SimpleNamespace(
+            connector_id="gmail", auth_config_id=None, kind=None
+        )
+    )
+    detail = AsyncMock()
+    _patch_services(
+        monkeypatch,
+        SimpleNamespace(
+            ctx=object(),
+            reach=reach,
+            operations=SimpleNamespace(pod_connector_operation=detail),
+        ),
+    )
+
+    result = await adapter.run_connector_operation(
+        _run_ctx(),
+        RunConnectorOperationRequest(connector="gmail", operation="send"),
+    )
+
+    assert result["code"] == "CONNECTION_REQUIRED"
+    assert "/connections?connector=gmail" in result["connect_url"]
+    detail.assert_not_awaited()
+
+
+async def test_someone_who_may_not_install_is_told_who_can(monkeypatch):
+    reach = _no_reach()
+    reach.unconnected = AsyncMock(
+        return_value=SimpleNamespace(
+            connector_id="notion", auth_config_id=None, kind=None
+        )
+    )
+    reach.may_install = AsyncMock(return_value=False)
+    _patch_services(monkeypatch, SimpleNamespace(ctx=object(), reach=reach))
+
+    result = await adapter.run_connector_operation(
+        _run_ctx(),
+        RunConnectorOperationRequest(connector="notion", operation="search"),
+    )
+
+    assert result["code"] == "CONNECTOR_NOT_INSTALLED"
+    assert "owner or editor" in result["error"]
+    assert "connect_url" not in result
+
+
+async def test_a_catalog_connector_can_be_browsed_before_it_is_connected(
+    monkeypatch,
+):
+    reach = _no_reach()
+    reach.unconnected = AsyncMock(
+        return_value=SimpleNamespace(
+            connector_id="gmail", auth_config_id=None, kind=None
+        )
+    )
+    discover = AsyncMock(return_value=SimpleNamespace(items=[{"name": "send"}]))
+    _patch_services(
+        monkeypatch,
+        SimpleNamespace(
+            ctx=object(),
+            reach=reach,
+            operations=SimpleNamespace(discover_operations=discover),
+        ),
+    )
+
+    result = await adapter.search_connector_operations(
+        _run_ctx(), SearchConnectorOperationsRequest(connector="gmail", query="send")
+    )
+
+    assert discover.await_args.args == ("gmail",)
+    assert result["items"][0]["connector"] == "gmail"
+
+
+async def test_the_list_says_whether_the_person_has_connected_each_one(
+    monkeypatch,
+):
+    """Every listed connector read as working, so agents told people Gmail
+    was connected when the first call was going to ask them to connect it."""
+    connected, missing = _connector("gmail"), _connector("calendar")
+    reach = _no_reach()
+    reach.account_standing = AsyncMock(
+        return_value={connected.auth_config_id: "CONNECTED"}
+    )
+    _patch_services(
+        monkeypatch,
+        SimpleNamespace(
+            ctx=object(),
+            reach=reach,
+            pod_connectors=SimpleNamespace(
+                usable_connectors=AsyncMock(return_value=[connected, missing])
+            ),
+        ),
+    )
+
+    result = await adapter.list_connectors(_run_ctx())
+
+    assert [item["your_account"] for item in result["items"]] == ["CONNECTED", None]
+    assert "not connected yet" in adapter._connector_line(
+        missing, {connected.auth_config_id: "CONNECTED"}
+    )

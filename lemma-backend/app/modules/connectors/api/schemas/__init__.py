@@ -11,6 +11,7 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationSummary,
 )
 from app.core.api.schemas import BaseSchema
+from app.modules.connectors.api.schemas.strict_patch import StrictPatch
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
 
@@ -341,7 +342,12 @@ class AuthConfigResponseSchema(BaseSchema):
     updated_at: datetime.datetime
 
 
-class AuthConfigUpdateSchema(BaseModel):
+class AuthConfigUpdateSchema(StrictPatch):
+    fixed_fields = frozenset(
+        {"connector_id", "kind", "config_source", "organization_id"}
+    )
+    fixed_remedy = "add a new installation instead"
+
     name: Optional[str] = Field(
         default=None,
         description=(

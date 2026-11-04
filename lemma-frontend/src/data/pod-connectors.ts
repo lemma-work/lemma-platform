@@ -462,11 +462,16 @@ export function bannerLine(missing: { connector: PodConnector; status: MyStatus 
 
 /* ── writing one ────────────────────────────────────────────────────── */
 
-/** A connector to declare: an installation of the organization's, under a
- *  slug, with whose account it runs as. */
+/** A connector to declare: an installation of the organization's, or an app
+ *  from the catalog, under a slug, with whose account it runs as. */
 export interface PodConnectorDraft {
+    /** Empty lets the server name it after its installation, made free here. */
     slug: string;
+    /** The installation it runs through. Empty with `connectorId` set: the
+     *  server uses the organization's default installation of that app, or
+     *  installs Lemma's own for it when the person may. */
     authConfigId: string;
+    connectorId?: string;
     mode: PodConnectorMode;
     /** SHARED: the pod account it runs as — one its owner already shared.
      *  Empty declares it with none, and it waits for one. */
@@ -487,8 +492,10 @@ export interface PodConnectorPatch {
 export function connectorCreateBody(draft: PodConnectorDraft): Record<string, unknown> {
     const shared = draft.mode === "SHARED" && draft.sharedPodAccountId;
     return {
-        slug: draft.slug,
-        auth_config_id: draft.authConfigId,
+        ...(draft.slug ? { slug: draft.slug } : {}),
+        /* One or the other: an installation is exact, and a catalog id is
+           all a new organization has before it has installed anything. */
+        ...(draft.authConfigId ? { auth_config_id: draft.authConfigId } : { connector_id: draft.connectorId ?? "" }),
         mode: draft.mode,
         ...(shared ? { shared_pod_account_id: draft.sharedPodAccountId } : {}),
         /* Asking every member to connect means something only when each brings

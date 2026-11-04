@@ -46,7 +46,7 @@ default-members = ["."]
 [workspace.package]
 # One version for six crates. Release used to rewrite desktop/Cargo.toml alone,
 # so the moment the other five moved in here they would have drifted silently.
-version = "0.9.0"
+version = "0.10.1"
 
 [workspace.dependencies]
 # Hoisted because feature unification makes the *emergent* feature set of a
@@ -60,7 +60,7 @@ version = "0.9.0"
 # Note what the union hands locald: system-proxy, which it never asked for. See
 # the no_proxy() calls on its loopback clients — a proxy configured without a
 # `<local>` bypass would otherwise route locald's own health checks through it.
-reqwest = { version = "=0.13.4", default-features = false, features = [
+reqwest = { version = "=0.13.5", default-features = false, features = [
     "blocking",
     "json",
     "native-tls",
@@ -109,7 +109,14 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSColor", "NSColorSpace"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Storage_FileSystem",
+    # ShellExecuteW: the one documented way to hand a URL to the default
+    # browser, with COM initialized on its thread first as it requires.
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

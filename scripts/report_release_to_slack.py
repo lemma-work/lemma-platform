@@ -1,33 +1,40 @@
 #!/usr/bin/env python3
-"""Announce a release in Slack, and say what is actually installable.
+"""Follow a release in Slack, and say what is actually installable.
 
-Not a "we shipped" message. The interesting half is the second one: it asks the
-indexes what they are serving and prints that beside the version being
-announced.
+Not a "we shipped" message. With ``--track`` it runs alongside the release from
+the tag push and posts as things happen: that the release started, each package
+as its registry starts serving it (with a link to that exact version), each
+release workflow run that fails (with a link to the run), and a final summary
+that names, registry by registry, what has the version and what does NOT.
 
-This exists because of 0.7.2. The GitHub Release was published on 2026-09-01 and
-looked exactly like a release; PyPI and npm went on serving 0.7.1 for ten days,
-because the release was created by a workflow and GitHub will not start a new
-workflow run from an event the default GITHUB_TOKEN raised, so nothing that
-publishes a package ever ran. Every dashboard said the release had happened. An
-announcement that repeated that claim would have made it worse -- it would have
-told the team a version was available that they could not install.
+This exists because releases have gone missing quietly, more than once:
 
-So a component that has not landed is named as missing, and the message says so
-in its first line. The announcement is the check.
+- 0.7.2: the GitHub Release was published and PyPI and npm went on serving
+  0.7.1 for ten days. The release was created by a workflow, and GitHub will
+  not start a run from an event the default GITHUB_TOKEN raised, so nothing
+  that publishes a package ever ran.
+- 0.8.0: all three package workflows failed on the tag push (the version
+  expression was empty on that trigger), and the failure notifier announces
+  tag pushes for nothing, so the only message anyone got was the announcement
+  -- which arrived because the image release succeeded.
+
+So the source of truth is the registries, asked for the exact version, and a
+component that has not landed is named in the first line of the summary. The
+run fails when anything is missing, so the job goes red as well as the message.
 
 The prose comes from the changelog entry the release already has, in
-``lemma-frontend/content/changelog/`` (what lemma.work/changelog renders), rather than from generated commit notes:
-it is the one description of the release written for a person to read.
+``lemma-frontend/content/changelog/`` (what lemma.work/changelog renders).
 
 Usage::
 
-    python3 scripts/report_release_to_slack.py 0.8.0
-    python3 scripts/report_release_to_slack.py v0.8.0 --dry-run
+    python3 scripts/report_release_to_slack.py v0.10.0 --track --require-complete
+    python3 scripts/report_release_to_slack.py 0.10.0 --dry-run      # summary only
 
-Reads ``SLACK_WEBHOOK_URL`` from the environment. Without it the message is
-printed and the script exits 0 -- a missing webhook must not fail a release that
-otherwise succeeded, and neither must a Slack outage.
+Reads ``SLACK_WEBHOOK_URL`` from the environment. Without it every message is
+printed and nothing fails -- a missing webhook or a Slack outage must not fail a
+release that otherwise succeeded. ``GITHUB_TOKEN`` and ``GITHUB_REPOSITORY``,
+which Actions sets, let it read workflow runs and avoid the unauthenticated API
+rate limit.
 """
 
 from __future__ import annotations
@@ -39,13 +46,21 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import release_registry  # noqa: E402
+from release_registry import ABSENT, PACKAGES, RELEASE_WORKFLOWS  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG_DIR = REPO_ROOT / "lemma-frontend/content/changelog"
-REPOSITORY = "lemma-work/lemma-platform"
+REPOSITORY = os.environ.get("GITHUB_REPOSITORY") or "lemma-work/lemma-platform"
 
 #: Slack renders a `text` payload well past this, but stops being read long
 #: before it. The headings carry the shape of the release; the changelog carries
@@ -54,64 +69,36 @@ MAX_HEADINGS = 12
 
 NETWORK_TIMEOUT = 20
 
-#: How often to re-ask the indexes while waiting for a release to finish
-#: landing. They are third-party and cached; asking faster buys nothing.
-POLL_SECONDS = 30
+#: How often to re-ask the registries and the Actions API while tracking. Five
+#: workflows plus two GitHub reads a minute stays far inside the token's limit.
+POLL_SECONDS = 60
+
+#: Once no release run is queued or running, how long to keep watching with
+#: nothing changing before giving the final word. Covers the gap between the
+#: image release finishing and the Desktop release it dispatches appearing, and
+#: a registry's CDN catching up with an upload.
+QUIET_SECONDS = 15 * 60
+
+#: Workflow runs that conclude in one of these are reported as failures.
+FAILED_CONCLUSIONS = {"failure", "timed_out", "cancelled", "startup_failure"}
 
 
-#: Returned for a 404, which is an answer rather than a failure to get one.
-ABSENT = object()
+def _token() -> str:
+    return os.environ.get("GITHUB_TOKEN", "")
 
 
 def _read(url: str):
-    """The JSON at ``url``, ``ABSENT`` for a 404, or None when unknown.
-
-    Never raises. A registry being slow or unreachable must not turn a
-    successful release into a failed announcement -- the message says "could not
-    check" and a person looks, which is strictly better than the script dying
-    and nobody hearing anything at all.
-
-    A 404 is separated out because it is not that kind of failure. "No release
-    is tagged v0.8.0" and "GitHub did not answer" read the same to a caller that
-    collapses both to None, and they mean opposite things: the first is the
-    missing-component case this script exists to shout about, and reporting it
-    as "could not check" is how it would go quiet at exactly the wrong moment.
-    """
-    try:
-        with urllib.request.urlopen(url, timeout=NETWORK_TIMEOUT) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        return ABSENT if error.code == 404 else None
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-        return None
+    """See ``release_registry.read_json``. Authenticated for api.github.com."""
+    token = _token() if url.startswith("https://api.github.com/") else ""
+    return release_registry.read_json(url, token)
 
 
 def pypi_has(package: str, version: str) -> Optional[bool]:
-    """Whether PyPI can install ``version`` of ``package``. None when unknown.
-
-    The version has to be present *and* carry at least one distribution file.
-    A key in ``releases`` with an empty list is a version PyPI knows the name of
-    and cannot serve -- every file yanked or deleted, or a registration that
-    never completed its upload -- and ``pip install package==version`` fails on
-    it. Reporting that as published is the exact shape of lie this script exists
-    to catch, one level further in.
-    """
-    data = _read("https://pypi.org/pypi/{}/json".format(package))
-    if data is ABSENT:
-        return False
-    if data is None:
-        return None
-    return bool((data.get("releases") or {}).get(version))
+    return release_registry.pypi_has(package, version)
 
 
 def npm_has(package: str, version: str) -> Optional[bool]:
-    """Whether npm serves ``version`` of ``package``. None when unknown."""
-    data = _read("https://registry.npmjs.org/{}".format(package))
-    if data is ABSENT:
-        return False
-    if data is None:
-        return None
-    return version in (data.get("versions") or {})
+    return release_registry.npm_has(package, version)
 
 
 def github_release_exists(version: str) -> Optional[bool]:
@@ -156,6 +143,58 @@ def desktop_is_live(version: str) -> Optional[bool]:
     return str(feed.get("version", "")).removeprefix("v") == version
 
 
+@dataclass(frozen=True)
+class Component:
+    """One thing a release has to put somewhere, and how to say where it is."""
+
+    label: str
+    #: "PyPI has lemma-sdk 0.10.0" -- the sentence the summary prints, with
+    #: ``{verb}`` replaced by "has" or "does NOT have".
+    sentence: str
+    link: str
+    state: Optional[bool]
+
+
+def release_page(version: str) -> str:
+    return "https://github.com/{}/releases/tag/v{}".format(REPOSITORY, version)
+
+
+def components(version: str) -> List[Component]:
+    """Every component of the release, each asked for this exact version."""
+    found = []
+    for package in PACKAGES:
+        check = pypi_has if package.registry == "pypi" else npm_has
+        found.append(
+            Component(
+                label=package.label,
+                sentence="{} {{verb}} {} {}".format(
+                    package.registry_label, package.name, version
+                ),
+                link=package.page(version),
+                state=check(package.name, version),
+            )
+        )
+    found.append(
+        Component(
+            label="GitHub Release",
+            sentence="GitHub {{verb}} the v{} release".format(version),
+            link=release_page(version),
+            state=github_release_exists(version),
+        )
+    )
+    found.append(
+        Component(
+            label="Desktop app and update feed",
+            sentence="GitHub {{verb}} the Desktop {} DMG and update feed".format(
+                version
+            ),
+            link=release_page(version),
+            state=desktop_is_live(version),
+        )
+    )
+    return found
+
+
 def changelog_path(version: str) -> Path:
     """The entry for this version. Named with dashes: 0.8.0 -> 0-8-0.mdx."""
     return CHANGELOG_DIR / "{}.mdx".format(version.replace(".", "-"))
@@ -187,39 +226,43 @@ def headings(body: str) -> List[str]:
     return re.findall(r"(?m)^##\s+(.+?)\s*$", body)
 
 
-def _mark(state: Optional[bool]) -> str:
-    if state is None:
-        return ":grey_question:"
-    return ":white_check_mark:" if state else ":x:"
+def _summary_line(component: Component) -> str:
+    if component.state is None:
+        return ":grey_question: {}: could not check".format(
+            component.sentence.format(verb="has")
+        )
+    if component.state:
+        return ":white_check_mark: {} — {}".format(
+            component.sentence.format(verb="has"), component.link
+        )
+    return ":x: {}".format(component.sentence.format(verb="does NOT have"))
 
 
 def compose(version: str) -> Tuple[str, bool]:
-    """The Slack message, and whether every component is actually live."""
+    """The final summary, and whether every component is actually live."""
     entry = changelog_path(version)
     if entry.is_file():
         fields, body = split_frontmatter(entry.read_text(encoding="utf-8"))
     else:
         fields, body = {}, ""
 
-    components = [
-        ("lemma-sdk (PyPI)", pypi_has("lemma-sdk", version)),
-        ("lemma-terminal (PyPI)", pypi_has("lemma-terminal", version)),
-        ("lemma-sdk (npm)", npm_has("lemma-sdk", version)),
-        ("GitHub Release", github_release_exists(version)),
-        ("Desktop app and update feed", desktop_is_live(version)),
-    ]
-    missing = [name for name, state in components if state is False]
-    unknown = [name for name, state in components if state is None]
+    found = components(version)
+    missing = [component.label for component in found if component.state is False]
+    unknown = [component.label for component in found if component.state is None]
     complete = not missing and not unknown
 
     if complete:
-        headline = "*Lemma {} is out* — every component is installable".format(version)
+        headline = ":white_check_mark: *Lemma {} is out* — every component is installable".format(
+            version
+        )
     elif missing:
-        headline = "*Lemma {} is partly published* — {} still missing".format(
-            version, ", ".join(missing)
+        headline = (
+            ":red_circle: *Lemma {} is NOT fully published* — missing: {}".format(
+                version, ", ".join(missing)
+            )
         )
     else:
-        headline = "*Lemma {} released* — could not verify {}".format(
+        headline = ":warning: *Lemma {} released* — could not verify {}".format(
             version, ", ".join(unknown)
         )
 
@@ -236,27 +279,170 @@ def compose(version: str) -> Tuple[str, bool]:
         for title in section_titles[:MAX_HEADINGS]:
             lines.append("• {}".format(title))
         if len(section_titles) > MAX_HEADINGS:
-            lines.append(
-                "• …and {} more".format(len(section_titles) - MAX_HEADINGS)
-            )
+            lines.append("• …and {} more".format(len(section_titles) - MAX_HEADINGS))
     elif not entry.is_file():
         lines.append("")
-        lines.append(
-            "_No changelog entry at {}_".format(entry.relative_to(REPO_ROOT))
-        )
+        lines.append("_No changelog entry at {}_".format(entry.relative_to(REPO_ROOT)))
 
     lines.append("")
-    lines.append("*Published*")
-    for name, state in components:
-        lines.append("{} {}".format(_mark(state), name))
+    lines.append("*Where {} is*".format(version))
+    for component in found:
+        lines.append(_summary_line(component))
 
     lines.append("")
-    lines.append(
-        "https://github.com/{}/releases/tag/v{}".format(REPOSITORY, version)
-    )
+    lines.append(release_page(version))
     lines.append("https://lemma.work/changelog")
 
     return "\n".join(lines), complete
+
+
+# --- Tracking -------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Run:
+    """One attempt of one release workflow run, as the Actions API reports it."""
+
+    id: int
+    attempt: int
+    workflow: str
+    status: str
+    conclusion: Optional[str]
+    url: str
+
+    @property
+    def active(self) -> bool:
+        return self.status != "completed"
+
+
+def release_runs(
+    tag: str, since: datetime, include_dispatches: bool
+) -> Optional[List[Run]]:
+    """Every run of a release workflow that belongs to this release.
+
+    A run belongs to it when it was started for the tag: the tag push, a
+    hand-cut release, and the Desktop build dispatched on the tag all report the
+    tag as their branch. When the tracker itself was dispatched -- to follow a
+    repair -- hand dispatches from any branch started since then count too,
+    since that is how a failed publish is re-run. Not otherwise: the nightly
+    dispatches the image release from main, and its failures are not this
+    release's. None when the API could not be read, so a blip is not mistaken
+    for "nothing is running".
+    """
+    runs = []
+    since_stamp = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = {"per_page": "100"}
+    if include_dispatches:
+        # No `created` filter: a repair is usually a re-run of the tag push's
+        # own failed run, which keeps the creation time it had before the
+        # tracker started. Its `updated_at` moves when it is re-run, so that
+        # is what is compared, below.
+        pass
+    else:
+        query["created"] = ">=" + since_stamp
+        # `branch` matches the tag too, and keeps the nightly's own runs of the
+        # image release from crowding this release's off the first page.
+        query["branch"] = tag
+    for workflow in RELEASE_WORKFLOWS:
+        url = "https://api.github.com/repos/{}/actions/workflows/{}/runs?{}".format(
+            REPOSITORY, workflow, urllib.parse.urlencode(query)
+        )
+        data = _read(url)
+        if data is ABSENT:
+            continue
+        if data is None:
+            return None
+        for item in data.get("workflow_runs") or []:
+            ours = item.get("head_branch") == tag or (
+                include_dispatches and item.get("event") == "workflow_dispatch"
+            )
+            if include_dispatches and (item.get("updated_at") or "") < since_stamp:
+                # Untouched since the tracker started: not part of this repair.
+                ours = False
+            if ours:
+                runs.append(
+                    Run(
+                        id=int(item["id"]),
+                        attempt=int(item.get("run_attempt") or 1),
+                        workflow=item.get("name") or workflow,
+                        status=item.get("status") or "",
+                        conclusion=item.get("conclusion"),
+                        url=item.get("html_url") or "",
+                    )
+                )
+    return runs
+
+
+def started_message(version: str, sha: str, tracker_url: str) -> str:
+    targets = ", ".join(
+        "{} → {}".format(package.name, package.registry_label) for package in PACKAGES
+    )
+    lines = [
+        ":rocket: *Lemma {} release started* — tag `v{}`{}".format(
+            version, version, " (`{}`)".format(sha[:7]) if sha else ""
+        ),
+        "Publishing {}, the GitHub Release and Desktop. Progress follows here; "
+        "the last message says what landed and what did not.".format(targets),
+    ]
+    if tracker_url:
+        lines.append(tracker_url)
+    return "\n".join(lines)
+
+
+def landed_message(version: str, component: Component) -> str:
+    return ":white_check_mark: {} — {}".format(
+        component.sentence.format(verb="has"), component.link
+    )
+
+
+def failed_message(version: str, run: Run) -> str:
+    attempt = " (attempt {})".format(run.attempt) if run.attempt > 1 else ""
+    return ":x: *{} failed* for v{}{} — {}".format(
+        run.workflow, version, attempt, run.url
+    )
+
+
+@dataclass
+class Tracker:
+    """What has been said so far, so each event is posted exactly once."""
+
+    version: str
+    landed: set[str] = field(default_factory=set)
+    reported_runs: set[tuple[int, int]] = field(default_factory=set)
+    seen_runs: dict[tuple[int, int], str] = field(default_factory=dict)
+    last_change: float = 0.0
+
+    def observe(
+        self, found: List[Component], runs: Optional[List[Run]], now: float
+    ) -> List[str]:
+        """The messages this observation adds, oldest news first."""
+        messages = []
+        for component in found:
+            if component.state and component.label not in self.landed:
+                self.landed.add(component.label)
+                messages.append(landed_message(self.version, component))
+                self.last_change = now
+        for run in runs or []:
+            key = (run.id, run.attempt)
+            if self.seen_runs.get(key) != run.status:
+                self.seen_runs[key] = run.status
+                self.last_change = now
+            if (
+                not run.active
+                and run.conclusion in FAILED_CONCLUSIONS
+                and key not in self.reported_runs
+            ):
+                self.reported_runs.add(key)
+                messages.append(failed_message(self.version, run))
+        return messages
+
+    def settled(
+        self, runs: Optional[List[Run]], now: float, quiet_seconds: float
+    ) -> bool:
+        """Nothing is running and nothing has changed for ``quiet_seconds``."""
+        if runs is None or any(run.active for run in runs):
+            return False
+        return now - self.last_change >= quiet_seconds
 
 
 def post(text: str) -> None:
@@ -270,7 +456,7 @@ def post(text: str) -> None:
         return
     request = urllib.request.Request(
         webhook,
-        data=json.dumps({"text": text}).encode("utf-8"),
+        data=json.dumps({"text": text, "unfurl_links": False}).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
     try:
@@ -281,20 +467,63 @@ def post(text: str) -> None:
         print("::warning title=Slack post failed::{}".format(error))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def track(
+    version: str,
+    *,
+    say: Callable[[str], None],
+    wait_seconds: int,
+    quiet_seconds: int = QUIET_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Post progress until the release has landed, gone quiet, or run out of time."""
+    since = datetime.now(timezone.utc) - timedelta(minutes=10)
+    include_dispatches = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    tracker_url = ""
+    if os.environ.get("GITHUB_RUN_ID"):
+        tracker_url = "{}/{}/actions/runs/{}".format(
+            os.environ.get("GITHUB_SERVER_URL", "https://github.com"),
+            REPOSITORY,
+            os.environ["GITHUB_RUN_ID"],
+        )
+    say(started_message(version, os.environ.get("GITHUB_SHA", ""), tracker_url))
+
+    tracker = Tracker(version, last_change=clock())
+    deadline = clock() + max(wait_seconds, 0)
+    while True:
+        found = components(version)
+        runs = release_runs("v" + version, since, include_dispatches)
+        for message in tracker.observe(found, runs, clock()):
+            say(message)
+        if all(component.state for component in found):
+            return
+        if clock() >= deadline or tracker.settled(runs, clock(), quiet_seconds):
+            return
+        sleep(POLL_SECONDS)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("version", help="Release version, for example 0.8.0 or v0.8.0")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the message without posting it.",
+        help="Print the messages without posting them.",
+    )
+    parser.add_argument(
+        "--track",
+        action="store_true",
+        help=(
+            "Post that the release started, each package as it lands and each "
+            "release run that fails, then the summary."
+        ),
     )
     parser.add_argument(
         "--require-complete",
         action="store_true",
         help=(
-            "Exit non-zero when a component is missing from its index. For a "
-            "job that should go red when a release only half-happened."
+            "Exit non-zero when a component is missing or could not be checked, "
+            "so the job goes red when a release only half-happened."
         ),
     )
     parser.add_argument(
@@ -303,37 +532,42 @@ def main() -> int:
         default=0,
         metavar="N",
         help=(
-            "Re-check for up to N seconds before posting, and stop as soon as "
-            "every component is live. The publishes finish minutes apart, so "
-            "without this a healthy release announces itself as broken -- and "
-            "a false alarm every time is how a channel stops being read."
+            "Keep watching for up to N seconds before the summary, and stop as "
+            "soon as every component is live. The publishes finish minutes "
+            "apart, so without this a healthy release announces itself as broken."
         ),
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
 
-    version = arguments.version.lstrip("vV")
-    if not re.match(r"^[0-9]+\.[0-9]+\.[0-9]+", version):
-        print("Not a version: {}".format(arguments.version), file=sys.stderr)
+    try:
+        version = release_registry.normalize_version(arguments.version)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
         return 2
 
-    deadline = time.monotonic() + max(arguments.wait_seconds, 0)
-    while True:
-        text, complete = compose(version)
-        if complete or time.monotonic() >= deadline:
-            break
-        remaining = int(deadline - time.monotonic())
-        print("Not every component is live yet; {}s left to wait.".format(remaining))
-        time.sleep(min(POLL_SECONDS, max(remaining, 1)))
+    def say(text: str) -> None:
+        print(text)
+        print()
+        if not arguments.dry_run:
+            post(text)
 
-    print(text)
+    if arguments.track:
+        track(version, say=say, wait_seconds=arguments.wait_seconds)
+    else:
+        deadline = time.monotonic() + max(arguments.wait_seconds, 0)
+        while not all(component.state for component in components(version)):
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(POLL_SECONDS)
 
-    if not arguments.dry_run:
-        post(text)
+    text, complete = compose(version)
+    say(text)
 
     if arguments.require_complete and not complete:
         print(
-            "Not every component is published for {}.".format(version),
-            file=sys.stderr,
+            "::error title=Lemma {} is not fully published::{}".format(
+                version, text.splitlines()[0]
+            )
         )
         return 1
     return 0

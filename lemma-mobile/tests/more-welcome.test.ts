@@ -32,8 +32,8 @@ describe("the arrival's three rungs", () => {
         expect(canOpenToDomain("ada@gmail.com")).toBe(false);
         expect(freshTeamNameFor("ada@acme.example", ["Acme"])).toBe("");
         expect(freshTeamNameFor("ada@acme.example", [])).toBe("Acme");
-        expect(personalNameFor("Ada Park")).toBe("Ada's Personal");
-        expect(personalNameFor("")).toBe("Personal");
+        expect(personalNameFor("Ada Park")).toBe("Ada's workspace");
+        expect(personalNameFor("")).toBe("My workspace");
     });
 
     it("says the two kinds the phone's way", () => {

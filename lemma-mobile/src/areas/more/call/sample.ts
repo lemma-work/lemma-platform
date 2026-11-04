@@ -89,7 +89,7 @@ export function scriptedCall(podId: string, callId: string, handlers: CallSocket
             for (const timer of held) clearTimeout(timer);
             held.clear();
             /* As the real socket does on a close of its own: an ordinary end. */
-            handlers.onClose(null);
+            handlers.onClose(null, false);
         },
     };
 }

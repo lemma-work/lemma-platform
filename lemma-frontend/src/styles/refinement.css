@@ -1785,6 +1785,15 @@ button svg, a svg { flex-shrink:0; }
 .arrival__note code { font-size:12px; }
 
 .arrival__problem { color:var(--bad);font-size:13px;margin:14px 0 0; }
+/* The opt-out of domain auto-join: the note's sentence, with its box. */
+.arrival__open { cursor:pointer; }
+.arrival__open input { flex:none;margin:3px 0 0;accent-color:var(--accent); }
+/* A domain another organization holds: what happened, and the ways on. */
+.arrival__taken { width:100%;text-align:left;margin:16px 0 0;font-size:13px;color:var(--ink-2);line-height:1.5; }
+.arrival__taken p { display:flex;align-items:flex-start;gap:8px;margin:0 0 12px; }
+.arrival__taken p svg { flex:none;margin-top:2px;color:var(--bad); }
+.arrival__taken code { font-size:12px; }
+.arrival__taken-acts { display:flex;flex-wrap:wrap;gap:8px; }
 /* The lists could not be read: said above the rungs, with the way to ask again. */
 .arrival__unread { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 16px; }
 .arrival__unread svg { flex:none; }

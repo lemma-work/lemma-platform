@@ -55,11 +55,8 @@ GMAIL_NATIVE_CAPABILITIES = [
         # *set* is still resolved per request, which is what
         # `system_default_available` reports.
         "system_oauth": {
-            "client_id_env": ["CONNECTOR_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID"],
-            "client_secret_env": [
-                "CONNECTOR_GOOGLE_CLIENT_SECRET",
-                "GOOGLE_CLIENT_SECRET",
-            ],
+            "client_id_env": ["CONNECTOR_GOOGLE_CLIENT_ID"],
+            "client_secret_env": ["CONNECTOR_GOOGLE_CLIENT_SECRET"],
         },
     }
 ]
@@ -685,11 +682,11 @@ async def test_gmail_system_default_connect_request_uses_env_google_client(
     """Native Gmail must also be connectable with the system Google OAuth client.
 
     When an org picks config_source=SYSTEM_DEFAULT for the Lemma provider, the
-    backend resolves GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET from env and combines
+    backend resolves CONNECTOR_GOOGLE_CLIENT_ID/CONNECTOR_GOOGLE_CLIENT_SECRET from env and combines
     them with the registry OAuth defaults to build the Google authorization URL.
     """
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "system-google-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "system-google-client-secret")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_ID", "system-google-client-id")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_SECRET", "system-google-client-secret")
 
     app = Connector(
         id="gmail",
@@ -733,7 +730,7 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
 ):
     """The connector API resolves system availability live.
 
-    `system_default_available` follows GOOGLE_CLIENT_ID/SECRET env presence on
+    `system_default_available` follows CONNECTOR_GOOGLE_CLIENT_ID/SECRET env presence on
     each request rather than a stale DB value, and the row's own OAuth endpoints
     are surfaced while the env var *names* behind them are not.
     """
@@ -747,8 +744,8 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
     db_session.add(app)
     await db_session.commit()
 
-    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
-    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("CONNECTOR_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CONNECTOR_GOOGLE_CLIENT_SECRET", raising=False)
     response = await authenticated_client.get("/connectors/gmail")
     assert response.status_code == 200, response.text
     capability = response.json()["kinds"][0]
@@ -765,8 +762,8 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
         settings.api_url.rstrip("/") + "/connectors/connect-requests/oauth/callback"
     )
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "system-google-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "system-google-client-secret")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_ID", "system-google-client-id")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_SECRET", "system-google-client-secret")
     response = await authenticated_client.get("/connectors/gmail")
     assert response.status_code == 200, response.text
     capability = response.json()["kinds"][0]

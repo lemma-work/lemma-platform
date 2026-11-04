@@ -7,11 +7,15 @@ from uuid import uuid4
 import pytest
 from pydantic import BaseModel
 
+from app.core.authorization.actor import Person
+from app.modules.connectors.domain.account import AccountStatus
+from app.modules.connectors.domain.pod_connector_errors import ReauthRequiredError
 from app.modules.connectors.domain.connector import (
     ConnectorKind,
     ConnectorEntity,
 )
 from app.modules.connectors.domain.errors import (
+    ConnectorReauthRequiredError,
     OperationExecutionError,
     OperationExecutionNotFoundError,
 )
@@ -457,6 +461,7 @@ def _account() -> SimpleNamespace:
         auth_config_id=uuid4(),
         external_ref=None,
         credentials={"access_token": "token"},
+        status=AccountStatus.CONNECTED,
     )
 
 
@@ -475,6 +480,9 @@ def _resolver(account: SimpleNamespace) -> SimpleNamespace:
     )
     return SimpleNamespace(
         connector=AsyncMock(return_value=SimpleNamespace()),
+        pod_connectors=SimpleNamespace(
+            get_by_slug=AsyncMock(return_value=SimpleNamespace())
+        ),
         resolve=AsyncMock(
             return_value=SimpleNamespace(auth_config=auth_config, account=account)
         ),
@@ -869,4 +877,63 @@ async def test_an_install_operation_wins_by_its_provider_alias_too():
     assert by_alias.items[0].input_schema["title"] == "install", (
         "the provider alias resolved to the catalog's schema while the "
         "operation's own name resolved to the install's"
+    )
+
+
+async def test_a_marked_account_whose_grant_is_confirmed_gone_asks_for_a_reconnect():
+    """Resolution let a marked account through to be verified, and the refresh
+    confirmed the grant is gone: the answer is the pod's reconnect, with its
+    link, exactly as if resolution had refused it outright."""
+    account = _account()
+    account.status = AccountStatus.REAUTH_REQUIRED
+    account.credentials = {"access_token": "old", "refresh_token": "r"}
+    pod_id = uuid4()
+    resolver = _resolver(account)
+    resolver.pod_connectors.get_by_slug = AsyncMock(
+        return_value=SimpleNamespace(slug="bigquery", pod_id=pod_id)
+    )
+    resolver.resolve.return_value.pod_account = SimpleNamespace(
+        owner_user_id=account.user_id
+    )
+    # An install whose token Lemma refreshes itself. A Composio call skips the
+    # refresh -- Composio holds the token -- and is verified by the call.
+    resolver.resolve.return_value.auth_config.kind = ConnectorKind.HTTP
+    operation_repository = AsyncMock()
+    operation_repository.get_by_connector_kind_and_name.return_value = (
+        ConnectorOperationEntity(
+            id="googlebigquery:query",
+            connector_id="googlebigquery",
+            name="query",
+            provider_operation_name="GOOGLEBIGQUERY_QUERY",
+            description="Query",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+    )
+    connector_service = _composio_install_service()
+    connector_service.get_account_credentials = AsyncMock(
+        side_effect=ConnectorReauthRequiredError(reason="refresh_revoked")
+    )
+    service = ConnectorOperationService(
+        connector_repository=AsyncMock(),
+        operation_repository=operation_repository,
+        operation_gateway=AsyncMock(),
+        pod_connector_resolver=resolver,
+        connector_service=connector_service,
+    )
+    ctx = SimpleNamespace(
+        actor=Person(user_id=account.user_id),
+        delegating_user_id=None,
+        user_id=account.user_id,
+    )
+
+    with pytest.raises(ReauthRequiredError) as raised:
+        await service.resolve_pod_connector_execution(
+            ctx, pod_id=pod_id, slug="bigquery", operation_name="query", payload={}
+        )
+
+    assert raised.value.code == "REAUTH_REQUIRED"
+    assert str(pod_id) in str(raised.value.details)
+    connector_service.get_account_credentials.assert_awaited_once_with(
+        account.id, account.user_id, account.organization_id, force_refresh=True
     )

@@ -351,6 +351,18 @@ fn a_release_build_keeps_its_data_where_installed_lemma_already_has_it() {
     );
 }
 
+/// A data directory name set but empty is the release one, never the parent of
+/// every app's data.
+#[test]
+fn an_empty_data_directory_name_is_lemma_not_application_support_itself() {
+    assert_eq!(data_dir_name(Some("")), "Lemma");
+    assert_eq!(data_dir_name(None), "Lemma");
+    assert_eq!(
+        data_dir_name(Some("Lemma Candidate QA")),
+        "Lemma Candidate QA"
+    );
+}
+
 #[test]
 fn a_resume_target_from_another_release_is_refused() {
     // The failure this prevents: installing a new build over an old one,
