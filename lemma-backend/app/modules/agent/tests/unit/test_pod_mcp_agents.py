@@ -55,7 +55,10 @@ from app.modules.agent.services.pod_mcp_agents import (
     opened_by,
     read_answer,
 )
-from app.modules.agent.services.pod_mcp_service import PodMCPService
+from app.modules.agent.services.pod_mcp_service import (
+    PodMCPService,
+    _external_caller,
+)
 from app.modules.mcp_access.contracts import McpPrincipal, Scope
 
 pytestmark = pytest.mark.unit
@@ -478,6 +481,35 @@ async def test_a_read_only_connection_that_calls_ask_anyway_is_refused():
     )
     assert result.is_error
     assert "allowed to change things" in result.content[0].text
+
+
+async def test_an_outside_tool_that_raises_is_still_audited_as_failed(
+    caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+):
+    """Every outside client's call writes its audit line, the ones that blow up
+    included, and the failure still reaches the client."""
+    principal = _principal(Scope.READ, Scope.WRITE)
+
+    async def broken(name, arguments, *, principal):
+        raise RuntimeError("the database went away")
+
+    with pytest.raises(RuntimeError, match="the database went away"):
+        await PodMCPService()._call_outside_tool(
+            _external_caller(principal, pod_id=POD),
+            ASK_AGENT,
+            {},
+            allowed=True,
+            call=broken,
+            refusal="Not here.",
+        )
+    audited = [
+        line
+        for line in (caplog.text + capsys.readouterr().out).splitlines()
+        if "agent.pod_mcp_service.external_tool.called" in line
+    ]
+    assert len(audited) == 1
+    assert "failed" in audited[0]
+    assert ASK_AGENT in audited[0]
 
 
 @pytest.mark.parametrize(

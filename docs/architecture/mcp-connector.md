@@ -152,9 +152,20 @@ hand-off is removed from denied results: it points a Lemma agent at
 as themselves a denial is the answer. One call needs more than its tool's
 scope: `pod_get_file_url` with `url_type: public` mints a link anyone can open
 for up to a week, which outlives the connection, so it needs `pod:write`, and
-the tool is marked open-world. A connection allowed to change things also gets
-a tool per pod app and two that hand a request to one of the pod's agents
-([mcp-plugin.md](mcp-plugin.md) §b and §e).
+the tool is marked open-world.
+
+Beside the pod toolset, a connection allowed to change things gets:
+
+- a tool per pod app;
+- two tools that hand a request to one of the pod's agents;
+- a tool per function the person may run (`lemma_run_<function>`), with
+  `lemma_pod_function_run` to read a run later.
+
+A connection that can see any of the pod's workflows gets two reads:
+`lemma_pod_workflow_run` and `lemma_pod_waiting_on_me`. If it may also change
+things, it gets `lemma_pod_start_workflow` and `lemma_pod_submit_workflow_form`
+for the workflows the person may start. These tools are covered in
+[mcp-plugin.md](mcp-plugin.md) §b, §e and §f.
 
 **An outside client's token is honoured only where it was checked.** The public
 mount verifies the token, applies the rate limit and the Origin check, and

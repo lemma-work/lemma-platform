@@ -344,9 +344,16 @@ class PodMCPService:
         if caller.principal is None or not allowed:
             _audit(caller, name, outcome="refused")
             return tool_call_error(name, PermissionError(refusal))
-        result = await call(name, dict(arguments or {}), principal=caller.principal)
-        _audit(caller, name, outcome="failed" if result.is_error else "ok")
-        return result
+        # A `finally` rather than a catch-all: a call that raises is audited as
+        # failed like any other, and still reaches the client as an error.
+        outcome: Literal["ok", "failed"] = "failed"
+        try:
+            result = await call(name, dict(arguments or {}), principal=caller.principal)
+            if not result.is_error:
+                outcome = "ok"
+            return result
+        finally:
+            _audit(caller, name, outcome=outcome)
 
     async def _require_caller(
         self, *, pod_id: UUID, token: str, principal: McpPrincipal | None = None
