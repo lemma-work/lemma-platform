@@ -1,19 +1,26 @@
-"""The one place the table and record services are put together.
+"""The one place the table, record and file services are put together.
 
 Below the API layer on purpose: contracts and services build these too -- a
-visitor's row, a contact's read -- and a contract reaching up into
-``api.dependencies`` for its wiring drags the request layer along with it.
-``api.dependencies`` wraps these for request injection and nothing more.
+visitor's row and the files attached to it, a contact's read -- and a contract
+reaching up into ``api.dependencies`` for its wiring drags the request layer
+along with it. ``api.dependencies`` wraps these for request injection and
+nothing more.
 """
 
 from __future__ import annotations
 
 from app.core.authorization.factory import create_authorization_data_service
+from app.modules.datastore.composition import get_datastore_composition
 from app.modules.datastore.infrastructure.record_repository import (
     DatastoreRecordRepository,
 )
-from app.modules.datastore.infrastructure.repositories import DatastoreTableRepository
+from app.modules.datastore.infrastructure.repositories import (
+    DatastoreFileRepository,
+    DatastoreTableRepository,
+)
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
+from app.modules.datastore.infrastructure.storage import create_datastore_storage
+from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
 from app.modules.identity.contracts.organizations import build_user_directory
@@ -51,6 +58,16 @@ def build_table_service(uow) -> TableService:
         table_repository=DatastoreTableRepository(uow),
         schema_manager=get_schema_manager(),
         authorization_service=create_authorization_data_service(uow),
+    )
+
+
+def build_file_service(uow) -> DatastoreFileService:
+    """Construct a DatastoreFileService from a unit of work (single wiring source)."""
+    return DatastoreFileService(
+        file_repository=DatastoreFileRepository(uow),
+        storage=create_datastore_storage(),
+        authorization_service=create_authorization_data_service(uow),
+        search_service_factory=get_datastore_composition().build_search_service,
     )
 
 
