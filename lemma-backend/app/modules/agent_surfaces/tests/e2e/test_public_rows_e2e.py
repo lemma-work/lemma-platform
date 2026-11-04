@@ -14,6 +14,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -216,6 +217,33 @@ async def test_a_first_anonymous_row_opens_a_contact_and_keeps_the_same_visitor(
         script=[script_text("Of course, Ana.")],
     )
     assert await _contact_of(db_session, conversation_id) == contact_id
+
+
+async def test_invalid_anonymous_first_row_does_not_open_a_session_or_contact(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+):
+    pod_id = test_pod["id"]
+    table = await _signups(authenticated_client, pod_id, "invalid_first_write")
+    assert (await _open(authenticated_client, pod_id, table)).status_code == 200
+    widget = await _widget(authenticated_client, pod_id, name="Invalid first write door")
+
+    refused = await authenticated_client.post(
+        f"/public/web/{widget['public_key']}/rows",
+        json={"table": table, "values": {"work_email": "ana@client.example"}},
+        headers=_page(),
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert "Full name is required" in refused.json()["message"]
+    db_session.expire_all()
+    session_id = await db_session.scalar(
+        select(VisitorSessionModel.id).where(
+            VisitorSessionModel.widget_id == UUID(widget["id"])
+        )
+    )
+    assert session_id is None
 
 
 async def test_a_contacts_only_table_refuses_a_first_write_without_a_session(
