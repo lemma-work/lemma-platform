@@ -425,9 +425,14 @@ class WebChat:
         *,
         table: str,
         answers: dict[str, object],
+        address: str,
         vouched: bool = False,
     ) -> None:
-        """Check an anonymous first submission before opening its identity."""
+        """Check limits and answers before opening an anonymous first identity."""
+        if not await self.limiter.allow_submission(
+            widget_id=widget.id, address=address
+        ):
+            raise refused("Too many answers. Try again later.", 429, "rate_limited")
         if widget.answer is WidgetAnswer.KNOWN and not vouched:
             raise refused("This is for existing customers only", 403, "not_a_contact")
         _opened, contacts_only = await self.visitor_table(widget, table=table)
@@ -456,6 +461,7 @@ class WebChat:
         table: str,
         answers: dict[str, object],
         address: str,
+        submission_limit_checked: bool = False,
     ) -> None:
         vouched = visitor is not None and visitor.session.is_vouched
         if widget.answer is WidgetAnswer.KNOWN and not vouched:
@@ -463,7 +469,7 @@ class WebChat:
         _opened, contacts_only = await self.visitor_table(widget, table=table)
         if contacts_only and not vouched:
             raise refused("Confirm your email first", 403, "needs_contact")
-        if not await self.limiter.allow_submission(
+        if not submission_limit_checked and not await self.limiter.allow_submission(
             widget_id=widget.id, address=address
         ):
             raise refused("Too many answers. Try again later.", 429, "rate_limited")
