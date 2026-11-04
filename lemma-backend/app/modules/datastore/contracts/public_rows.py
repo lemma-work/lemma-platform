@@ -18,6 +18,7 @@ from app.modules.datastore.domain.public_rows import (
 )
 from app.modules.datastore.services.public_rows import (
     add_visitor_row,
+    validate_visitor_row,
     visitor_table,
 )
 from app.modules.datastore.services.public_rows import (
@@ -31,6 +32,7 @@ __all__ = [
     "PublicRowRefused",
     "PublicRowsClosed",
     "add_visitor_row",
+    "validate_visitor_row",
     "open_table_names",
     "public_values",
     "visitor_table",
