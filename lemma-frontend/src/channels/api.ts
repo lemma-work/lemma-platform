@@ -114,7 +114,33 @@ export interface ChannelApi {
     updateSource(channelId: string, sourceId: string, change: SourceChange): Promise<SourceSettings>;
     startWhatsAppGroup(body: { surfaceName: string; title: string; answersOutsiders: boolean }): Promise<SourceSettings>;
     telegramLink(surfaceName: string): Promise<{ url: string; expiresAt: string }>;
+    /** A ten-minute code proving, once the caller confirms, that a Telegram
+     *  account is theirs. With `contactId`, only that person's account may
+     *  open it. */
+    identityLink(surfaceId: string, contactId?: string): Promise<{ code: string; url: string; expiresAt: string }>;
+    identityLinkStatus(code: string): Promise<IdentityLinkStatus>;
+    /** The tables a group's people outside the space may read or add to. */
+    tableGrants(channelId: string): Promise<TableGrant[]>;
+    setTableGrant(channelId: string, table: string, grant: { readColumns: string[]; addColumns: string[] }): Promise<TableGrant>;
+    removeTableGrant(channelId: string, table: string): Promise<void>;
+    confirmIdentityLink(code: string): Promise<TelegramAccount>;
+    declineIdentityLink(code: string): Promise<void>;
 }
+
+export interface TableGrant {
+    table: string;
+    readColumns: string[];
+    addColumns: string[];
+}
+
+export interface TelegramAccount {
+    name: string | null;
+    username: string | null;
+}
+
+export type IdentityLinkStatus =
+    | { state: "WAITING" | "OTHER_ACCOUNT" | "GONE" }
+    | { state: "OPENED"; account: TelegramAccount };
 
 export interface PostBody {
     text: string;
@@ -274,6 +300,35 @@ function liveApi(podId: string): ChannelApi {
         async telegramLink(surfaceName) {
             const link = await client().channels.sources.telegramLink(podId, surfaceName);
             return { url: link.url, expiresAt: link.expires_at };
+        },
+        async identityLink(surfaceId, contactId) {
+            const link = await client().channels.sources.identityLink(podId, surfaceId, { contactId });
+            return { code: link.code, url: link.url, expiresAt: link.expires_at };
+        },
+        async identityLinkStatus(code) {
+            const found = await client().channels.sources.identityLinkStatus(podId, code);
+            if (found.state === "OPENED" && found.account) {
+                return { state: "OPENED", account: { name: found.account.name ?? null, username: found.account.username ?? null } };
+            }
+            return { state: found.state === "OPENED" ? "GONE" : found.state };
+        },
+        async confirmIdentityLink(code) {
+            const account = await client().channels.sources.confirmIdentityLink(podId, code);
+            return { name: account.name ?? null, username: account.username ?? null };
+        },
+        async declineIdentityLink(code) {
+            await client().channels.sources.declineIdentityLink(podId, code);
+        },
+        async tableGrants(channelId) {
+            const listed = await client().channels.sources.tableGrants(podId, channelId);
+            return listed.items.map((grant) => ({ table: grant.table, readColumns: grant.read_columns, addColumns: grant.add_columns }));
+        },
+        async setTableGrant(channelId, table, grant) {
+            const saved = await client().channels.sources.setTableGrant(podId, channelId, table, grant);
+            return { table: saved.table, readColumns: saved.read_columns, addColumns: saved.add_columns };
+        },
+        async removeTableGrant(channelId, table) {
+            await client().channels.sources.removeTableGrant(podId, channelId, table);
         },
     };
 }

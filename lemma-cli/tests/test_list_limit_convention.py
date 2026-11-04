@@ -30,6 +30,14 @@ COMPLETE_SET_LISTINGS = {
         "the org's runtime profiles — the endpoint takes neither limit nor "
         "page_token and answers with all of them"
     ),
+    "channel grants list": (
+        "the tables one group was given -- the endpoint takes no limit or "
+        "cursor and answers with all of them"
+    ),
+    "channels grants list": (
+        "the tables one group was given -- the endpoint takes no limit or "
+        "cursor and answers with all of them"
+    ),
     "channel deliveries list": (
         "every send of one line -- the endpoint takes no limit or cursor and "
         "answers with all of them"
