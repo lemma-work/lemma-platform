@@ -277,10 +277,21 @@ observer renders them on the surface and a submission resumes the run.
   share their own contact; proven, the account stays resolved whatever their
   handle later says. A managed bot's creator is not bound by opening the setup
   link -- a link can leak -- and is recognised the same way, by a contact share
-  in the new bot. Someone with no verified number cannot be recognised on a
-  pod's own bot: they verify their number in account settings first, or sign up
-  through the shared bot, whose email-code step verifies the contact they
-  share. A number a profile merely lists does not match by
+  in the new bot. Someone with no verified number proves their Telegram account
+  from their signed-in Lemma session instead (`services/telegram_identity_link`,
+  `/pods/{pod_id}/telegram-identity-links`): a one-time, ten-minute code opened
+  as `/start lk_<code>` in a private chat with the bot, then confirmed back in the
+  same session after it shows them the account that opened it. Nothing binds
+  before that confirm, so a forwarded link gives whoever opened it nothing; a
+  code minted from a group's people for somebody the pod took for a stranger
+  ("This is me") works only from that person's account and is spent by any
+  other. The binding (`surface_verified_identities.session_proved_at`) holds on
+  every bot, without a phone and through a phone change, and the group log
+  reads it as well as the cache, so the member's lines in groups are theirs.
+  When somebody new speaks in a Telegram group and their first name is a
+  member's, that member is told once, in their own chat, to check
+  (`services/link_nudges`) -- the name decides who is asked, never who anybody
+  is. A number a profile merely lists does not match by
   default: it would hand the number's real owner's messages -- and the agent's
   replies, sent from the shared number -- to whoever typed it. That sender goes
   through signup instead. A deployment can accept that risk with
@@ -383,17 +394,29 @@ is answered *for the pod*, in a group the pod has opened to them.
   the next message naming the new type; nothing turns one back.
 - **Who is in a mirror follows the platform.** A person who leaves the place --
   Slack `member_left_channel`, Teams `membersRemoved`, Telegram
-  `left_chat_member` -- leaves its channel, unless somebody in Lemma put them
-  there (a member added them, or an admin joined on request): a seat the
-  platform made has no `added_by_user_id`. The bot taken out (Slack
+  `left_chat_member`, WhatsApp `group_participants_remove` -- leaves its
+  channel, unless somebody in Lemma put them there (a member added them, or an
+  admin joined on request): a seat the platform made has no
+  `added_by_user_id`. A person who joins -- Slack `member_joined_channel`,
+  Teams `membersAdded`, Telegram `new_chat_members`, WhatsApp
+  `group_participants_add` -- is seated before they say a word
+  (`services/group_joiners.py`): the member their account resolves to or was
+  proved to be (in the pod), else the contact the pod already holds for it.
+  A join never opens a contact or nudges anyone -- anybody with a group's link
+  can join -- so a stranger is seated when they first speak. Leaves are
+  resolved the same way, and remembered for ten minutes
+  (`services/recent_leaves.py`): updates are worked as separate items in no
+  promised order, and a join worked after its leave must not seat somebody
+  gone. The seat carries the name the platform showed, never a number, and
+  counts among the group's participants a member's run is told of, placed by
+  when it was made. The bot taken out (Slack
   `channel_left` / `group_left`, Teams removing the bot, Telegram
   `my_chat_member` to left or kicked) archives the channel; put back, it
   returns. Slack `channel_shared` / `channel_unshared` set `shared_externally`.
   These arrive as `surface.platform_update` items, read by each adapter's
   `parse_group_updates` and applied by `services/group_updates.py` to the
   places on that chat in the receiving surfaces, or -- on a shared app's
-  webhook -- in the workspace or tenant the event names. WhatsApp's
-  participant updates are not read.
+  webhook -- in the workspace or tenant the event names.
 - **An app removed from Slack stands down what ran on it.** Slack's
   `app_uninstalled`, or `tokens_revoked` naming the bot, sends no leave per
   channel and refuses every later send. Both are classified to
@@ -425,7 +448,8 @@ is answered *for the pod*, in a group the pod has opened to them.
   it. A confirmation that overtakes its pending row is handed back to the
   inbox to retry. Asking again for the same title answers from the row. The
   deployment's Meta app must subscribe to the `group_lifecycle_update` webhook
-  field, or groups stay pending. Everything that names a group -- creating it,
+  field, or groups stay pending -- and to `group_participants_update`, or
+  people joining and leaving are not seen until they speak. Everything that names a group -- creating it,
   its link, a message to it -- goes to Graph `v23.0`, the version the Groups
   API was published under; ordinary messaging stays where it was.
 - **A created group belongs to the pod that created it**
@@ -475,11 +499,16 @@ is answered *for the pod*, in a group the pod has opened to them.
     dispatcher drop anything not on the list, however it arrived. A workspace
     -- sandbox, host session, the owner's files -- is never opened for such a
     run (`refuse_owner_workspace`), and a test fails until any new tool in a
-    kept toolset is classified.
+    kept toolset is classified. In a group it also has `group_history` (the
+    group it sits in, from its seat, never another), and `group_records` and
+    `group_add_record` for the tables the group was given (channels' "Tables
+    a group was given"), read and added as the member who gave them.
   - **What it is told.** A brief naming the owner by display name only -- no
     email, no ids -- as who looks after the conversation; no task list; no
-    sandbox described. The agent's and conversation's own instructions are
-    pod configuration and stay.
+    sandbox described; only the tools it has, and in a group the group's brief
+    with the tables it was given. It never says a thing was saved unless a
+    tool said so. The agent's and conversation's own instructions are pod
+    configuration and stay.
   - **What it remembers.** Nothing a private note started: the owner's note in
     a contact's conversation, and its run's answer, are left out of every later
     turn of theirs. From the group's log, nothing the bot answered with a
@@ -522,10 +551,23 @@ is answered *for the pod*, in a group the pod has opened to them.
   recent lines as background, chosen by whose access it acts with
   (`group_log.group_background`): a contact's run reads what the channel lets
   a contact read -- never an answer made with a member's access; a member's run
-  is not shown what people outside the pod wrote, the bot's answers to them,
-  or members' notes -- on Slack, lines from another workspace are left out the
-  same way. What is left out is counted. Each line is one quoted line however
-  many it spanned. Nothing is deleted automatically. The run's message keeps
+  is shown everything said in the group, what people outside the pod wrote
+  marked `(not in this pod)` and fenced as information rather than a request,
+  and not members' notes. On Slack, read live, a line is marked by whether the
+  pod resolves its author to one of its members (`live_group_roster.live_members`),
+  not by Slack's own mark, which only names another company's lines; when that
+  cannot be read, every line but the asker's is marked. What is left out is
+  counted. Each line is one quoted line however many it spanned. A member's
+  run that reads such a line marks its conversation, and while it is marked
+  the authorizer asks the member before the run does anything beyond reading
+  and writing the pod's own records and files (`OUTSIDE_TEXT_REQUIRES_APPROVAL`,
+  `core/authorization/outside_text.py`, set by `agent/services/outside_text.py`
+  as a turn starts, when a steered message brings a background, and when
+  `channel_read`/`channel_search` return a stranger's line). It covers every
+  path the authorizer sees -- in-process tools, MCP, the sandbox's `lemma` CLI,
+  approved re-runs -- and not what does not ask it: `channel_post`, a raw
+  network call from the sandbox, Agent Host's native tools, or the answer
+  itself, which is why the prompt says it too. Nothing is deleted automatically. The run's message keeps
   which lines, not what they said (`services/run_background.py`): they are read
   from the timeline as its prompt is built, so an edit or a forgotten contact
   reaches it. A platform's history read live keeps the lines the pod heard as
