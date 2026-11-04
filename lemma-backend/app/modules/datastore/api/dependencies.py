@@ -7,15 +7,12 @@ from fastapi import Depends
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.datastore.application.file_use_cases import FileUseCases
-from app.modules.datastore.infrastructure.repositories import DatastoreFileRepository
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
-from app.modules.datastore.infrastructure.storage import create_datastore_storage
-from app.core.authorization.factory import create_authorization_data_service
-from app.modules.datastore.composition import get_datastore_composition
 from app.modules.datastore.services.wiring import (
+    build_file_service,
     build_record_service,
     build_table_service,
     close_schema_manager,
@@ -40,16 +37,6 @@ __all__ = [
 
 
 SchemaManagerDep = Annotated[SchemaManager, Depends(get_schema_manager)]
-
-
-def build_file_service(uow) -> DatastoreFileService:
-    """Construct a DatastoreFileService from a unit of work (single wiring source)."""
-    return DatastoreFileService(
-        file_repository=DatastoreFileRepository(uow),
-        storage=create_datastore_storage(),
-        authorization_service=create_authorization_data_service(uow),
-        search_service_factory=get_datastore_composition().build_search_service,
-    )
 
 
 def get_table_service(

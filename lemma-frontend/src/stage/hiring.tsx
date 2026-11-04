@@ -19,6 +19,7 @@ import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import { openSettings } from "@/desktop/open-settings";
 import { ResumeInstall } from "@/site/import/resume-install";
+import { captureEvent } from "@/site/analytics/client";
 
 /** One candidate.
  *
@@ -132,6 +133,14 @@ export function HiringView({
     const created = useRef<Pod | null>(null);
     const queryClient = useQueryClient();
 
+    /* Each step as it is shown. The whole of hiring is one overlay at one
+       address, so a pageview cannot tell the shelf from the reveal, and
+       somebody who leaves before pressing Hire makes no request at all. */
+    const step = describing && stage === "shelf" ? "describe" : stage;
+    useEffect(() => {
+        captureEvent("hire.step_viewed", { step });
+    }, [step]);
+
     /* Whether a new teammate here would have a model to answer with. Same
        queries, and the same reading, as the "runs on" picker — a new pod
        follows the organization default, so it has no choice of its own. */
@@ -170,6 +179,7 @@ export function HiringView({
         if (!chosen) return;
         const clean = (now?.name ?? name).trim();
         if (!clean) return;
+        captureEvent("hire.started", { path: now ? "explore" : chosen.id === "blank" ? "described" : "role" });
         setDescribing(false);
         setStage("making");
         setDone([]);

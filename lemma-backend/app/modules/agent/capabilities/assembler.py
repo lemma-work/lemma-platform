@@ -176,8 +176,14 @@ def _graceful(
     return toolset  # pragma: no cover - defensive
 
 
+#: Guidance a run answering somebody outside the pod is not given: how to
+#: write records and files, build tables, post to members and channels -- all
+#: of it withheld there, and a run told it believed it could.
+_NOT_FOR_OUTSIDERS: frozenset[int] = frozenset({id(pod_toolset), id(messaging_toolset)})
+
+
 def _instructions_for(
-    toolset: object, *, host_execution: bool = False
+    toolset: object, *, host_execution: bool = False, answers_outsider: bool = False
 ) -> tuple[str, Callable[[], str]] | None:
     """The usage guidance a toolset carries, whether it ends up visible or deferred.
 
@@ -188,6 +194,8 @@ def _instructions_for(
     waiting for a reply that arrives as a tool result never. Advertising the
     tool in the deferred hint while withholding that is the worst of both.
     """
+    if answers_outsider and id(toolset) in _NOT_FOR_OUTSIDERS:
+        return None
     if is_workspace_cli_toolset(toolset):
         # The VM's contract -- a persistent home, preinstalled libraries,
         # `lit` -- is not the Mac's, and an agent told otherwise installs into
@@ -205,6 +213,7 @@ def _visible_capability(
     toolset: AbstractToolset[ConversationContext],
     *,
     host_execution: bool = False,
+    answers_outsider: bool = False,
 ) -> AgentCapability[ConversationContext]:
     """Wrap one visible toolset as a capability.
 
@@ -216,7 +225,9 @@ def _visible_capability(
     """
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
-    guidance = _instructions_for(toolset, host_execution=host_execution)
+    guidance = _instructions_for(
+        toolset, host_execution=host_execution, answers_outsider=answers_outsider
+    )
     if guidance is None:
         return ToolsetCapability(_graceful(toolset))
     name, loader = guidance
@@ -229,6 +240,7 @@ def _deferred_capability(
     toolset: AbstractToolset[ConversationContext],
     *,
     host_execution: bool = False,
+    answers_outsider: bool = False,
 ) -> AgentCapability[ConversationContext]:
     """Wrap one extra toolset as a deferred-loading capability.
 
@@ -241,7 +253,9 @@ def _deferred_capability(
     if not isinstance(toolset, AbstractToolset):
         return ToolsetCapability(toolset)  # pragma: no cover - defensive
     deferred = GracefulToolset(toolset).defer_loading()
-    guidance = _instructions_for(toolset, host_execution=host_execution)
+    guidance = _instructions_for(
+        toolset, host_execution=host_execution, answers_outsider=answers_outsider
+    )
     if guidance is None:
         return ToolsetCapability(deferred)
     name, loader = guidance
@@ -290,8 +304,12 @@ async def _build_lemma_harness_tooling(
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
     host_execution = getattr(ctx, "host_workspace", None) is not None
+    outsider = run_audience(ctx).answers_outsiders
     capabilities: list[AgentCapability[ConversationContext]] = [
-        _visible_capability(obj, host_execution=host_execution) for obj in core
+        _visible_capability(
+            obj, host_execution=host_execution, answers_outsider=outsider
+        )
+        for obj in core
     ]
     # A provider that repeats a tool call under one id must not run it twice.
     # No instructions, so the cached prefix is untouched.
@@ -350,7 +368,10 @@ async def _build_lemma_harness_tooling(
         # wake-up names (see `reveal_referenced_tools`).
         capabilities.append(RevealReferencedToolsCapability())
         capabilities.extend(
-            _deferred_capability(obj, host_execution=host_execution) for obj in extra
+            _deferred_capability(
+                obj, host_execution=host_execution, answers_outsider=outsider
+            )
+            for obj in extra
         )
         # ...and a static hint so the model knows those tools exist to search for.
         # `deferred_hint` sorts its tool names specifically to keep it
