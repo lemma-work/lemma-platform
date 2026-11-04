@@ -1151,14 +1151,26 @@
   }
 
   function addRow(table, values) {
-    return withSession(function () {
-      return call("/rows", { body: { table: table, values: values } });
-    }).then(function (data) {
-      // A page that writes without an existing session receives one with its
-      // first row; adopt it so any later chat message is the same visitor.
-      if (data && data.session && data.session.access_token) adopt(data.session);
-      return data;
-    });
+    // Keep a row operation tied to the identity that authorized it. identify()
+    // may run while a session refresh is in flight; in that case wait for the
+    // new identity's session before sending, and never adopt an older response.
+    var operationIdentity = identity;
+    function submit() {
+      if (operationIdentity !== identity) {
+        operationIdentity = identity;
+        return ensureSession().then(submit);
+      }
+      return call("/rows", { body: { table: table, values: values } }).then(function (data) {
+        // A page that writes without an existing session receives one with its
+        // first row; adopt it only if this operation still owns the identity.
+        if (
+          operationIdentity === identity &&
+          data && data.session && data.session.access_token
+        ) adopt(data.session);
+        return data;
+      });
+    }
+    return withSession(submit);
   }
 
   // A Public table, read as this visitor: with their session when there is
