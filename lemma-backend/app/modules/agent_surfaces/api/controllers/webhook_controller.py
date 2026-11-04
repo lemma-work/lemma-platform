@@ -22,10 +22,11 @@ from app.core.api.dependencies import get_uow_factory
 from app.modules.agent_surfaces.api.controllers.webhook_seams import (
     InboundAccept,
     PooledNumberLookup,
+    SurfaceLookup,
     get_inbound_accept,
     get_pooled_number_lookup,
+    get_surface_lookup,
 )
-from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceWebhookSecurityServiceDep,
@@ -41,6 +42,7 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _redacted_headers,
     _verify_inbound_request,
     parse_webhook_platform,
+    read_webhook_body,
     slack_url_verification,
 )
 from app.modules.agent_surfaces.api.controllers.webhook_verification import (
@@ -94,7 +96,8 @@ async def handle_telegram_manager_webhook(
         )
     if not constant_time_equals(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
-    payload = _decode_webhook_payload(await request.body(), dict(request.headers))
+    raw_body = await read_webhook_body(request, SurfacePlatform.TELEGRAM)
+    payload = _decode_webhook_payload(raw_body, dict(request.headers))
     try:
         await service.handle_update(payload)
     except TelegramManagedBotProvisioningInProgressError as exc:
@@ -128,7 +131,7 @@ async def handle_platform_webhook(
     resolved = parse_webhook_platform(platform)
     source = resolved.value.lower()
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await read_webhook_body(request, resolved)
     payload = _decode_webhook_payload(raw_body, headers)
 
     # Resend inbound: a catch-all address webhook. Resolve the destination
@@ -274,7 +277,7 @@ async def handle_whatsapp_number_webhook(
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
     # short scope for the pool lookup, nothing held across a provider call.
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await read_webhook_body(request, SurfacePlatform.WHATSAPP)
 
     # The order below is the whole point of this route, and it looks odd enough
     # to be worth stating. The body names a `metadata.phone_number_id`, and
@@ -372,21 +375,21 @@ async def handle_surface_webhook(
     surface_id: UUID,
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
-    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    surface_by_id: SurfaceLookup = Depends(get_surface_lookup),
     accept: InboundAccept = Depends(get_inbound_accept),
 ):
     """Handle webhooks addressed to one concrete surface."""
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
     # short scope for the surface lookup, nothing held across a provider call.
+    # The lookup goes first because the surface's platform sets the body's
+    # ceiling. An unknown id is AgentSurfaceNotFoundError (404) and
+    # verify_surface_request raises SurfaceWebhookAuthenticationError -- both
+    # DomainErrors, translated by the global handler.
+    surface = await surface_by_id(surface_id)
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await read_webhook_body(request, surface.surface_type)
     payload = _decode_webhook_payload(raw_body, headers)
 
-    # get_surface raises AgentSurfaceNotFoundError (404) and verify_surface_request
-    # raises SurfaceWebhookAuthenticationError — both DomainErrors, translated by
-    # the global handler.
-    async with uow_scope(uow_factory) as uow:
-        surface = await get_surface_service(uow).get_surface(surface_id)
     await security_service.verify_surface_request(
         surface=surface,
         headers=headers,

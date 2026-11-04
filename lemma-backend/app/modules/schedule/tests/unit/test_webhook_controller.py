@@ -5,7 +5,27 @@ import pytest
 from app.modules.connectors.infrastructure.webhook_sources.composio import (
     _reshape as _normalize_composio_payload,
 )
-from app.modules.schedule.api.controllers.webhook_controller import router
+from app.modules.schedule.api.controllers.webhook_controller import (
+    MAX_WEBHOOK_BODY_BYTES,
+    router,
+)
+from app.modules.schedule.api.dependencies import (
+    get_webhook_handler,
+    get_webhook_source_registry,
+)
+from app.modules.schedule.contracts.webhook_source import (
+    VerifiedDelivery,
+    WebhookDelivery,
+    WebhookSourceRegistry,
+)
+from app.modules.test_support.body_ceiling import (
+    app_with,
+    chunks_of,
+    chunks_to_cross,
+    deliver,
+    past_ceiling,
+    too_large,
+)
 
 
 def test_direct_schedule_webhook_route_is_removed():
@@ -156,3 +176,88 @@ def test_the_published_verification_is_async_so_it_can_offload() -> None:
     from app.modules.connectors.contracts.triggers import verify_webhook
 
     assert inspect.iscoroutinefunction(verify_webhook)
+
+
+class _RecordingSource:
+    """GitHub, as far as the route can tell: it records the bytes it is asked
+    to verify and answers each delivery as a handshake, so nothing is matched."""
+
+    source = "github"
+
+    def __init__(self) -> None:
+        self.verified: list[bytes] = []
+
+    async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
+        self.verified.append(delivery.raw_body)
+        return VerifiedDelivery(
+            delivery=delivery, payload={}, reply={"message": "handshake"}
+        )
+
+    async def observe(self, verified: VerifiedDelivery) -> None:
+        return None
+
+    def normalize(self, verified: VerifiedDelivery) -> None:
+        return None
+
+
+def _app(source: _RecordingSource):
+    return app_with(
+        router,
+        {
+            get_webhook_source_registry: lambda: WebhookSourceRegistry([source]),
+            get_webhook_handler: lambda: None,
+        },
+    )
+
+
+async def test_github_is_refused_past_one_mib_before_reading_when_it_says_so():
+    """GitHub allows 25 MB; this route does not, and does not read to find out."""
+    source = _RecordingSource()
+
+    refused = await deliver(
+        _app(source),
+        "/webhooks/github",
+        [b"\0" * (MAX_WEBHOOK_BODY_BYTES + 1)],
+        declared_length=MAX_WEBHOOK_BODY_BYTES + 1,
+    )
+
+    assert refused.status == 413
+    assert refused.json() == too_large(MAX_WEBHOOK_BODY_BYTES)
+    assert refused.chunks_read == 0
+    assert source.verified == []
+
+
+async def test_a_chunked_delivery_with_no_length_is_refused_as_it_crosses():
+    source = _RecordingSource()
+
+    refused = await deliver(
+        _app(source), "/webhooks/github", past_ceiling(MAX_WEBHOOK_BODY_BYTES)
+    )
+
+    assert refused.status == 413
+    assert refused.json() == too_large(MAX_WEBHOOK_BODY_BYTES)
+    assert refused.chunks_read == chunks_to_cross(MAX_WEBHOOK_BODY_BYTES)
+    assert source.verified == []
+
+
+async def test_an_unknown_source_is_refused_before_its_body_is_read():
+    refused = await deliver(
+        _app(_RecordingSource()),
+        "/webhooks/not-a-source",
+        past_ceiling(MAX_WEBHOOK_BODY_BYTES),
+    )
+
+    assert refused.status == 403
+    assert refused.chunks_read == 0
+
+
+async def test_the_source_verifies_the_bytes_exactly_as_they_arrived():
+    """At the ceiling, chunked with no length: every byte, in order, once."""
+    source = _RecordingSource()
+    body = bytes(range(256)) * (MAX_WEBHOOK_BODY_BYTES // 256)
+
+    answered = await deliver(_app(source), "/webhooks/github", chunks_of(body))
+
+    assert answered.status == 200
+    assert answered.json() == {"message": "handshake"}
+    assert source.verified == [body]

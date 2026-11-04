@@ -1,10 +1,10 @@
 """Turning a raw platform webhook into a stored delivery, before any route sees it.
 
-Signature checks, payload decoding, and the per-platform special cases that have
-to happen inside the HTTP request: a Resend catch-all address resolved to a
-surface, a WhatsApp verification code that is identity traffic rather than a
-message, and a Slack modal whose ``trigger_id`` expires before a worker could
-ever reach it.
+Body ceilings, signature checks, payload decoding, and the per-platform special
+cases that have to happen inside the HTTP request: a Resend catch-all address
+resolved to a surface, a WhatsApp verification code that is identity traffic
+rather than a message, and a Slack modal whose ``trigger_id`` expires before a
+worker could ever reach it.
 """
 
 from __future__ import annotations
@@ -14,8 +14,9 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
+from app.core.api.request_body import read_body_limited
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.slack_manager import InboundVerification
 from app.modules.agent_surfaces.services.slack_manager_install import (
@@ -73,6 +74,31 @@ from app.modules.agent_surfaces.api.controllers.slack_webhook_verification impor
 # Slack's challenge is a short opaque token. Anything else is not Slack's, and
 # echoing it would make this unauthenticated branch a reflector.
 _SLACK_CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+_MIB = 1024 * 1024
+
+#: How much of a webhook body each platform may make this process hold before
+#: its signature is checked. Every route here has to read the body first, since
+#: the signature is over it, and every one is unauthenticated until then.
+#:
+#: One entry per platform, so a new platform is a decision rather than a
+#: default. They carry event envelopes, not files: Slack, Teams and Telegram
+#: send an attachment as a reference to fetch, and Resend's ``email.received``
+#: is metadata only, with the message read from its API afterwards. WhatsApp is
+#: larger because Meta documents webhook payloads of up to 3 MB, and a ceiling
+#: under that would refuse real messages.
+WEBHOOK_BODY_LIMITS: Mapping[SurfacePlatform, int] = {
+    SurfacePlatform.SLACK: _MIB,
+    SurfacePlatform.TEAMS: _MIB,
+    SurfacePlatform.TELEGRAM: _MIB,
+    SurfacePlatform.RESEND: _MIB,
+    SurfacePlatform.WHATSAPP: 3 * _MIB,
+}
+
+
+async def read_webhook_body(request: Request, platform: SurfacePlatform) -> bytes:
+    """The body exactly as sent, refused with a 413 past ``platform``'s ceiling."""
+    return await read_body_limited(request, max_bytes=WEBHOOK_BODY_LIMITS[platform])
 
 
 def parse_webhook_platform(platform: str) -> SurfacePlatform:
