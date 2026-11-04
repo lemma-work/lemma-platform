@@ -52,6 +52,15 @@ async def test_a_changed_number_revokes_only_identities_bound_to_another_number(
 
 
 @pytest.mark.asyncio
+async def test_a_revoked_identity_loses_its_route_in_the_same_write():
+    """``ck_surface_identity_route_is_live``: a revoked row keeps no route."""
+    statement = await _revoke("+15550001111")
+
+    assert "installation_surface_id=NULL" in statement
+    assert "pod_id=NULL" in statement
+
+
+@pytest.mark.asyncio
 async def test_an_identity_its_owner_proved_from_lemma_loses_the_number_and_stays():
     """It stands on the session proof; the number was only ever beside it."""
     cleared, revoked = await _statements("+15550001111")
