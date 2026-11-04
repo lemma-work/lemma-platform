@@ -126,12 +126,17 @@ async def test_a_failed_read_costs_the_notice_not_the_line():
 
 
 async def test_a_failed_notice_is_rolled_back_alone_so_the_line_still_lands():
-    """The notice is written in the group line's own unit of work: a failed
-    write is undone to its savepoint, not left poisoning the line's insert."""
+    """Each notice is written in the group line's own unit of work, in its own
+    savepoint: a failed write is undone to it -- not left poisoning the line's
+    insert, and not taking the other members' notices with it."""
     pod, uow = _Pod(), _Uow()
+    pod.members.append(SimpleNamespace(name="Anu Varma", user_id=uuid4()))
+    told: list[object] = []
 
-    async def refused(_uow, **_said):
-        raise OperationalError("insert", {}, Exception("refused"))
+    async def second_refused(_uow, **said):
+        if told:
+            raise OperationalError("insert", {}, Exception("refused"))
+        told.append(said["user_id"])
 
     await link_nudges.nudge_lookalikes(
         uow,
@@ -139,8 +144,8 @@ async def test_a_failed_notice_is_rolled_back_alone_so_the_line_still_lands():
         contact_id=uuid4(),
         name="Anu",
         directory=pod.directory,
-        notice=refused,
+        notice=second_refused,
     )
 
-    [savepoint] = uow.savepoints
-    assert savepoint.rolled_back
+    assert told == [pod.members[0].user_id]
+    assert [savepoint.rolled_back for savepoint in uow.savepoints] == [False, True]

@@ -392,7 +392,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         /* `first_name`/`last_name`, not `name` — there is no `name` on the
            account, and reading one gave the arrival screen nothing to work
            with, so it fell back to the local part of an address and offered
-           to call somebody's workspace "deepakjha0196+99's Personal". */
+           to call somebody's workspace "ada+99's Personal". */
         queryFn: () => lemma().users.current() as Promise<{ id?: string; email?: string; first_name?: string; last_name?: string; created_at?: string } | undefined>,
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,

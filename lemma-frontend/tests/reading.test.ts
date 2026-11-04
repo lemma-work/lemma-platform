@@ -87,7 +87,7 @@ test("an acronym is shouted, not sentence-cased", () => {
 
 test("a name that was already written for people is left as it was", () => {
     // Only the first letter is touched, so a capital inside a word survives.
-    assert.equal(readableName("LEDFlex"), "LEDFlex");
+    assert.equal(readableName("ACMEWorks"), "ACMEWorks");
     assert.equal(readableName("Customer Pulse"), "Customer Pulse");
 });
 

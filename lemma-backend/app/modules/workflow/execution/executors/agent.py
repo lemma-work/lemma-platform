@@ -26,6 +26,13 @@ class AgentExecutor:
             pod_id=step.pod_id,
             user_id=step.user_id,
             workflow_run_id=step.run_id,
+            # Which workflow, not only which run: the title names the agent,
+            # so a list of a pod's runs could only tell workflows apart by
+            # parsing it.
+            conversation_metadata={
+                "workflow_id": str(step.flow_id),
+                "workflow_name": step.flow_name,
+            },
             instructions=config.instructions,
             model_name=config.model_name,
             generation=config.generation,

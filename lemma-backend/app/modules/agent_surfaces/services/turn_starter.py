@@ -89,10 +89,7 @@ from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedup
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
-from app.modules.agent_surfaces.services.live_group_roster import (
-    RosterReads,
-    roster_reads,
-)
+from app.modules.agent_surfaces.services import live_group_roster as roster
 from app.modules.agent_surfaces.services.run_background import (
     reply_all_audience,
     run_background,
@@ -122,6 +119,10 @@ type ReplySink = Callable[[SurfaceReplyContext], Awaitable[bool]]
 
 _COULD_NOT_READ = "I couldn't read that message. Could you send it again?"
 PROCESSING_FAILED_REPLY = "I couldn't process that message. Please send it again."
+USAGE_LIMIT_REPLY = (
+    "I can't answer this right now: the usage limit for this account has been "
+    "reached. Please try again once it resets."
+)
 
 
 class SurfaceTurnStarter:
@@ -137,7 +138,7 @@ class SurfaceTurnStarter:
         pooled_numbers: PooledNumberReader | None = None,
         ingest_memo: AttachmentIngestMemo | None = None,
         reprepare: Reprepare | None = None,
-        roster_reads: RosterReads = roster_reads,
+        roster_reads: roster.RosterReads = roster.roster_reads,
         write_scope: WriteScope | None = None,
         reply_sink: ReplySink | None = None,
         channel_lines: ChannelLinesFor = ChannelLinesInDatabase,

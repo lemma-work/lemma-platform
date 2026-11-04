@@ -264,6 +264,7 @@ class RunStepper:
         return StepContext(
             run_id=run.id,
             flow_id=flow.id,
+            flow_name=flow.name,
             pod_id=run.pod_id,
             user_id=run.user_id,
             context=RunContextReader(run.execution_context),
