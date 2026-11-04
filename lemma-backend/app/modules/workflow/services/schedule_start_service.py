@@ -127,6 +127,7 @@ def _conversation_metadata(
     """
     started: FiringMetadata = {
         "started_by": "SCHEDULE",
+        "schedule_id": str(schedule.id),
         "schedule_type": getattr(
             schedule.schedule_type, "value", str(schedule.schedule_type)
         ),

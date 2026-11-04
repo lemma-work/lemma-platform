@@ -93,7 +93,7 @@ A seat in `channel_members` means one of four things, by the channel:
 | A public `GROUP` | a subscription: whom its lines are pushed to and counted as unread for (anybody in the pod reads it) |
 
 and says why it was taken (`seated_by`): `PLATFORM` (the platform shows them
-in the place it mirrors, or they spoke there), `SPOKE` (they wrote in it in
+in the place it mirrors -- they joined it, or spoke there), `SPOKE` (they wrote in it in
 Lemma), `ADDED` (a member added them), `CREATOR` (they made it, or it was made
 for them), `JOINED` (they joined it themselves). Seated again for a stronger
 reason -- the platform's, then speaking in Lemma, then anything the pod chose
@@ -194,6 +194,26 @@ them, shared or not (`may_read`). Migration `0061_answers_shared` added the
 column true, so every group already there shows the answers posted from then
 on.
 
+### Tables a group was given
+
+People outside the pod in a group act as nobody: they read what is Public and
+nothing else. Whoever may manage a group (its owners, or an admin) can give it
+one table at a time (`api/grant_controller.py`, stored by `datastore`'s
+`channel_grants`): the columns everybody in the group may read, and the
+columns they may fill in a new row. A guest's run reads and adds through
+`group_records` and `group_add_record`, as the member who gave it -- their
+access rebuilt on every call -- and an added row is marked as from outside,
+naming the contact. Everybody in the group reads what is given, so whoever
+gives a column gives it to the whole group; a table where each member sees only
+their own rows is never given, nor read once it becomes one.
+
+Giving is a person's act: an agent's or a function's context is refused (403),
+since an agent in the group reads what strangers wrote there. The person giving
+must hold what the grant will use -- the table's settings and its rows, and
+writing them to give adding. Taking a grant back needs only the group: its
+owners or an admin, whether or not they can read the table. The list shows a
+reader only the tables they can read themselves.
+
 ## Posting a line
 
 `services/posting.Timeline.post` is the only way a line is written. Under the
@@ -280,9 +300,11 @@ never what they said, and read from the timeline whenever its prompt is built
 edited, a deleted line or a forgotten contact's is gone, and nothing anybody
 said is copied into another conversation to outlive them there. A member's run
 in Lemma is shown a contact's lines too, quoted and marked as said by somebody
-outside the pod; a member's run in a group on a platform is not shown them
-(the answer is posted where everybody reads it); a contact's run reads what
-the channel lets a contact read. A platform's history read live (Slack, Teams)
+outside the pod; a member's run in a group on a platform is shown them the
+same way, with the bot's answers to them, and not members' notes (the answer is
+posted where everybody reads it, and a run that could not see what the room
+said answered it wrongly); a contact's run reads what the channel lets a
+contact read. A platform's history read live (Slack, Teams)
 keeps the lines the pod heard as references, and only what it never heard as
 the platform gave it.
 
@@ -373,6 +395,9 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
   `/files/{file_id}` `GET` (below). Every line a reader may read carries
   `delivered`: each place outside Lemma the line went to, with its status and
   why -- sent again on the socket when a send moves.
+- `/channels/{c}/table-grants` `GET`; `/table-grants/{table}` `PUT
+  {read_columns, add_columns}` · `DELETE` -- a group only (409 otherwise),
+  set by whoever may manage it (below).
 - `/inbox` (counts, waiting, mentions, and -- for a reader who sees contacts
   -- `contacts` waiting on a reply: asking for a person, or assigned to them
   with the contact's word last) and `/search` (Postgres full text in

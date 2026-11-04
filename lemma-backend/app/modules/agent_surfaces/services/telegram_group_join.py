@@ -76,7 +76,7 @@ async def claim_telegram_group_join(
     Called before any session is open: spending the code is a Redis call and
     the hello a Telegram one, and neither should hold a connection.
     """
-    telegram = _telegram_adapter(request, adapters)
+    telegram = telegram_adapter_for(request, adapters)
     if telegram is None:
         return False
     parsed = await telegram.parse_inbound_event(request.payload, request.headers)
@@ -97,7 +97,7 @@ async def claim_telegram_group_join(
     return True
 
 
-def _telegram_adapter(
+def telegram_adapter_for(
     request: SurfaceIngressRequest, adapters: SurfacePlatformAdapterRegistry
 ) -> SurfacePlatformAdapterPort | None:
     """The Telegram adapter, when this delivery could be a Telegram update."""

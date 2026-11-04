@@ -12144,6 +12144,81 @@
         "title": "IdentityKind",
         "type": "string"
       },
+      "IdentityLinkRequest": {
+        "properties": {
+          "contact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Somebody in a group the pod took for a stranger, who the caller says is them: the code then works only from that Telegram account.",
+            "title": "Contact Id"
+          },
+          "surface_id": {
+            "description": "The pod's Telegram bot to open it with.",
+            "format": "uuid",
+            "title": "Surface Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface_id"
+        ],
+        "title": "IdentityLinkRequest",
+        "type": "object"
+      },
+      "IdentityLinkResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "url": {
+            "description": "Opens a private chat with the bot, in Telegram.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "url",
+          "expires_at"
+        ],
+        "title": "IdentityLinkResponse",
+        "type": "object"
+      },
+      "IdentityLinkStatusResponse": {
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TelegramAccountResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/LinkState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "IdentityLinkStatusResponse",
+        "type": "object"
+      },
       "IdentityStrength": {
         "description": "Who vouched for a handle.\n\n``CHANNEL``: the platform the message came through, in a payload whose\nsignature was checked (WhatsApp, Telegram), or the receiving mail service's\nauthentication verdict (email). ``HOST`` and ``CODE``: see their values.\n``MEMBER``: a pod member added it by hand,\nwhich says who the member believes it is and nothing about who writes from\nit -- so it never makes a message count as that contact on its own.",
         "enum": [
@@ -13028,6 +13103,16 @@
         ],
         "title": "LinkPart",
         "type": "object"
+      },
+      "LinkState": {
+        "enum": [
+          "WAITING",
+          "OPENED",
+          "OTHER_ACCOUNT",
+          "GONE"
+        ],
+        "title": "LinkState",
+        "type": "string"
       },
       "ListeningResponse": {
         "description": "How a schedule on a connected MCP server's event is hearing from it.",
@@ -21680,6 +21765,79 @@
         "title": "TableDetailResponse",
         "type": "object"
       },
+      "TableGrantRequest": {
+        "properties": {
+          "add_columns": {
+            "description": "Columns they may fill in a new row; empty to only read.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Columns",
+            "type": "array"
+          },
+          "read_columns": {
+            "description": "Columns everybody in the group may read.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Read Columns",
+            "type": "array"
+          }
+        },
+        "title": "TableGrantRequest",
+        "type": "object"
+      },
+      "TableGrantResponse": {
+        "properties": {
+          "add_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Columns",
+            "type": "array"
+          },
+          "granted_by": {
+            "format": "uuid",
+            "title": "Granted By",
+            "type": "string"
+          },
+          "read_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Read Columns",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "read_columns",
+          "add_columns",
+          "granted_by"
+        ],
+        "title": "TableGrantResponse",
+        "type": "object"
+      },
+      "TableGrantsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TableGrantResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TableGrantsResponse",
+        "type": "object"
+      },
       "TableListResponse": {
         "description": "Schema for table list response.",
         "properties": {
@@ -21880,6 +22038,38 @@
           "updated_at"
         ],
         "title": "TableSummaryResponse",
+        "type": "object"
+      },
+      "TelegramAccountResponse": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "name",
+          "username"
+        ],
+        "title": "TelegramAccountResponse",
         "type": "object"
       },
       "TelegramLinkRequest": {
@@ -37100,6 +37290,334 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/table-grants": {
+      "get": {
+        "description": "The tables the group's people outside the pod may read or add to --\nthose the caller may read themselves.",
+        "operationId": "channel.table_grant.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableGrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "List Table Grants",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}": {
+      "delete": {
+        "description": "The group no longer reads or adds to the table. Whoever may manage the\ngroup may take it back, whether or not they can read the table.",
+        "operationId": "channel.table_grant.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Remove Table Grant",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.table_grant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "void",
+          "verb": "remove"
+        }
+      },
+      "put": {
+        "description": "Give the group these columns of the table to read, and those to fill.\n\nEverybody in the group reads what is granted -- the people outside the\npod included -- through the granting member's own access. A person's act:\nan agent or a function, which may be reading what strangers wrote in the\ngroup, is refused (403).",
+        "operationId": "channel.table_grant.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TableGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Set Table Grant",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.table_grant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "entity",
+          "verb": "set"
+        }
+      }
+    },
     "/pods/{pod_id}/connector-accounts": {
       "get": {
         "operationId": "pod.connector_account.list",
@@ -47807,6 +48325,249 @@
           "resource": "agent.surface.telegram_managed",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links": {
+      "post": {
+        "description": "A one-time code that proves, once confirmed, a Telegram account is the\ncaller's. Ten minutes long, one use.",
+        "operationId": "telegram_identity_link.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}": {
+      "get": {
+        "description": "Whether the caller's code was opened yet, and from which account.",
+        "operationId": "telegram_identity_link.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLinkStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}/confirm": {
+      "post": {
+        "description": "The account the code was opened from is the caller's: bind it.",
+        "operationId": "telegram_identity_link.confirm",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "confirm"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}/decline": {
+      "post": {
+        "description": "The account the code was opened from is not the caller's: spend it.",
+        "operationId": "telegram_identity_link.decline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decline Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "void",
+          "verb": "decline"
         }
       }
     },

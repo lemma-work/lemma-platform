@@ -11,6 +11,10 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 )
 
 
+#: The platform accounts one person proved from a Lemma session: a handful.
+MAX_PROVED_ACCOUNTS = 20
+
+
 class VerifiedSurfaceIdentityRepository:
     """The verified identities a person has proven on a chat platform."""
 
@@ -64,18 +68,79 @@ class VerifiedSurfaceIdentityRepository:
         the ones bound to some other number. The ``None`` arm has to be written
         as a SQL literal -- a plain Python bool inside ``or_`` reads as SQL and
         is not.
+
+        One its owner also proved from a signed-in session stands on that
+        proof: it loses the number it no longer has, and stays.
         """
         still_bound = (
             VerifiedSurfaceIdentity.verified_phone == current_phone
             if current_phone is not None
             else false()
         )
+        stale = (
+            VerifiedSurfaceIdentity.user_id == user_id,
+            VerifiedSurfaceIdentity.verified_phone.isnot(None),
+            ~still_bound,
+        )
         await self.session.execute(
             update(VerifiedSurfaceIdentity)
-            .where(
-                VerifiedSurfaceIdentity.user_id == user_id,
-                VerifiedSurfaceIdentity.verified_phone.isnot(None),
-                ~still_bound,
-            )
+            .where(*stale, VerifiedSurfaceIdentity.session_proved_at.isnot(None))
+            .values(verified_phone=None)
+        )
+        await self.session.execute(
+            update(VerifiedSurfaceIdentity)
+            .where(*stale, VerifiedSurfaceIdentity.session_proved_at.is_(None))
             .values(revoked_at=datetime.now(timezone.utc))
         )
+
+    async def prove_by_session(
+        self,
+        *,
+        binding_key: str,
+        platform: str,
+        external_user_id: str,
+        user_id: UUID,
+        surface_id: UUID,
+    ) -> VerifiedSurfaceIdentity | None:
+        """Bind a platform account to the person who proved it from Lemma.
+
+        ``None`` when the account is already somebody else's, live: proving it
+        again from another session is not how an account changes hands. A
+        revoked binding is nobody's, and is taken over with nothing of its
+        previous owner's left on it.
+        """
+        identity = await self.by_binding_key(binding_key)
+        if identity is not None and identity.user_id != user_id:
+            if identity.revoked_at is None:
+                return None
+            identity.user_id = user_id
+            identity.verified_phone = None
+        if identity is None:
+            identity = VerifiedSurfaceIdentity(
+                binding_key=binding_key,
+                platform=platform,
+                tenant_id="",
+                external_user_id=external_user_id,
+                user_id=user_id,
+            )
+            self.session.add(identity)
+        identity.revoked_at = None
+        identity.session_proved_at = datetime.now(timezone.utc)
+        identity.proved_through_surface_id = surface_id
+        await self.session.flush()
+        return identity
+
+    async def session_proved_accounts(self, user_id: UUID, platform: str) -> list[str]:
+        """The accounts on ``platform`` this person proved from a Lemma
+        session, still theirs."""
+        rows = await self.session.scalars(
+            select(VerifiedSurfaceIdentity.external_user_id)
+            .where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.platform == platform,
+                VerifiedSurfaceIdentity.session_proved_at.is_not(None),
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+            .limit(MAX_PROVED_ACCOUNTS)
+        )
+        return [row for row in rows if row]
