@@ -463,10 +463,17 @@ form starts `WAITING` on it. So the form *is* its input, and
 form's fields, so the model knows what to fill in. `lemma_pod_workflow_run`
 reads where a run stands. `lemma_pod_waiting_on_me` lists the forms waiting on
 the person across the pod. Each one links to its run's own page, if the person
-may read its workflow. If they may not, it links to the pod, whose waiting list
-holds it, because the run's page would refuse them. The waiting list is
-offered even when the person can see none of the pod's workflows: being the
-assignee is the grant. Each tool needs its own scope, as every pod tool does.
+may read its workflow, and to the pod if not, because the run's page would
+refuse them. The waiting list is offered even when the person can see none of
+the pod's workflows, since being the assignee is enough to be shown a form.
+
+It is not enough to answer one. Submitting any form needs `workflow.execute`
+on its workflow, in Lemma as well as here. The engine checks that before it
+checks the assignee, and executing implies reading. So a form waiting on
+someone who may not run its workflow is listed with that reason, not with a
+place to answer it. Each run carries what the person may do with its workflow,
+read from exactly that workflow, not inferred from a capped list of the pod's
+workflows. Each tool needs its own scope, as every pod tool does.
 Reading a run or the waiting list needs `pod:read`; starting a workflow or
 submitting a form needs `pod:write`.
 

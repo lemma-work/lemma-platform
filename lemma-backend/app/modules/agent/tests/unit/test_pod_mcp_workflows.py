@@ -63,9 +63,13 @@ def _run(
     kind: str | None = "HUMAN",
     on_this_person: bool = True,
     run_id: UUID | None = None,
+    may_read: bool = True,
+    may_submit: bool = True,
 ) -> PersonWorkflowRun:
     return PersonWorkflowRun(
         id=run_id or uuid4(),
+        may_read_workflow=may_read,
+        may_submit=may_submit,
         workflow="intake",
         status=status,
         started_by=started_by,
@@ -278,28 +282,43 @@ async def test_the_waiting_list_says_where_to_answer_each_form():
     assert "in Lemma" in waiting["message"]
 
 
-async def test_a_form_on_a_workflow_the_person_cannot_read_is_sent_to_their_list():
-    """Its run's page would refuse them; the pod's waiting list holds it."""
-    gateway = _Gateway(runs=[_run(started_by=SOMEONE)], workflows=[])
+async def test_a_form_on_a_workflow_the_person_cannot_read_says_it_cannot_be_answered():
+    """Running a workflow implies reading it, so a form on one they cannot read
+    is refused in Lemma as well: sending them there would only move the refusal."""
+    gateway = _Gateway(
+        runs=[_run(started_by=SOMEONE, may_read=False, may_submit=False)],
+        workflows=[],
+    )
     result = await _workflows(gateway).call(
         WAITING_ON_ME, {}, principal=_principal(Scope.READ)
     )
     [waiting] = result.structured_content["waiting"]
+    # Its run's page would refuse them too, so it links to the pod.
     assert waiting["url"] == "https://lemma.test/space"
-    assert "from the list of what is waiting on you" in waiting["message"]
+    assert "cannot be submitted, here or in Lemma" in waiting["message"]
+    assert SUBMIT_FORM not in waiting["message"]
 
 
-async def test_a_form_on_a_workflow_they_cannot_read_is_not_offered_for_submitting():
-    """Even on their own run: submitting reads the run, which needs its workflow."""
-    gateway = _Gateway(runs=[_run()], workflows=[])
+async def test_a_form_whose_workflow_they_may_read_but_not_run_is_not_sent_to_lemma():
+    gateway = _Gateway(runs=[_run(started_by=SOMEONE, may_submit=False)])
     result = await _workflows(gateway).call(
-        WAITING_ON_ME, {}, principal=_principal(Scope.READ, Scope.WRITE)
+        WAITING_ON_ME, {}, principal=_principal(Scope.READ)
     )
     [waiting] = result.structured_content["waiting"]
-    assert SUBMIT_FORM not in waiting["message"]
-    assert waiting["message"].startswith(
-        "Answer it in Lemma, at https://lemma.test/space"
+    assert waiting["url"] == f"https://lemma.test/run/{waiting['run_id']}"
+    assert "you may not run its workflow" in waiting["message"]
+
+
+async def test_a_form_they_may_not_submit_is_not_submitted_even_on_their_own_run():
+    gateway = _Gateway(runs=[_run(may_submit=False)])
+    result = await _workflows(gateway).call(
+        SUBMIT_FORM,
+        {"run_id": str(uuid4()), "inputs": {"title": "Laptop"}},
+        principal=_principal(Scope.READ, Scope.WRITE),
     )
+    assert result.is_error
+    assert gateway.submits == []
+    assert "you may not run its workflow" in result.structured_content["error"]
 
 
 async def test_the_waiting_list_is_offered_for_a_form_on_a_workflow_nobody_shows():

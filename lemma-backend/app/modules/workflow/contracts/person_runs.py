@@ -63,6 +63,11 @@ class PersonWorkflowRun:
     started_by: UUID
     error: str | None
     waiting: RunWait | None
+    #: Whether the person may read the run's workflow, which its own page
+    #: needs, and run it, which submitting any of its forms needs -- in Lemma
+    #: as here (``WorkflowEngine.submit_form`` checks it before the assignee).
+    may_read_workflow: bool = False
+    may_submit: bool = False
 
 
 async def pod_workflows(
@@ -115,7 +120,7 @@ async def start_workflow_run(
         run = await engine.start_run(workflow.id, user_id, ctx=ctx)
     except (DomainError, ValueError) as exc:
         raise WorkflowRefused(str(exc)) from exc
-    return await _person_run(uow, run, workflow_name=workflow.name, user_id=user_id)
+    return await _person_run(uow, run, user_id=user_id, ctx=ctx)
 
 
 async def workflow_run(
@@ -138,17 +143,24 @@ async def workflow_run(
         run = None
     if run is None or run.pod_id != pod_id:
         raise WorkflowRefused("No workflow run you may read has that id.")
-    return await _person_run(uow, run, user_id=user_id)
+    return await _person_run(uow, run, user_id=user_id, ctx=ctx)
 
 
 async def waiting_on(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID, limit: int
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    user_id: UUID,
+    ctx: Context,
+    limit: int,
 ) -> list[PersonWorkflowRun]:
     """The runs with a form waiting on the person, newest first.
 
     No per-run read check, as the API's own queue has none: being the named
-    assignee is the grant, and a refusal on one restricted workflow must not
-    empty the whole list.
+    assignee is enough to be shown it, and a refusal on one restricted
+    workflow must not empty the whole list. What ``ctx`` may do with each
+    run's workflow is said on the run instead, from one read of exactly
+    those workflows.
     """
     from app.modules.pod.contracts.members import pod_member_id
     from app.modules.workflow.infrastructure.repositories.run_repository import (
@@ -167,11 +179,13 @@ async def waiting_on(
     runs = await SqlAlchemyWorkflowRunRepository(uow).list_summaries_by_ids(
         [wait.run_id for wait in waits]
     )
-    names = await _workflow_names(uow, {wait.flow_id for wait in waits})
+    access = await _workflow_access(uow, ctx, {wait.flow_id for wait in waits})
     return [
         PersonWorkflowRun(
             id=wait.run_id,
-            workflow=names.get(wait.flow_id, "workflow"),
+            workflow=access[wait.flow_id].name
+            if wait.flow_id in access
+            else "workflow",
             status=_value(runs[wait.run_id].status),
             started_by=runs[wait.run_id].user_id,
             error=runs[wait.run_id].error,
@@ -181,6 +195,8 @@ async def waiting_on(
                 payload=dict(wait.payload),
                 on_this_person=True,
             ),
+            may_read_workflow=wait.flow_id in access and access[wait.flow_id].may_read,
+            may_submit=wait.flow_id in access and access[wait.flow_id].may_run,
         )
         for wait in waits
         if wait.run_id in runs
@@ -192,7 +208,7 @@ async def _person_run(
     run: WorkflowRunEntity,
     *,
     user_id: UUID,
-    workflow_name: str | None = None,
+    ctx: Context,
 ) -> PersonWorkflowRun:
     from app.modules.pod.contracts.members import pod_member_id
     from app.modules.workflow.api.dependencies import build_workflow_engine
@@ -201,12 +217,12 @@ async def _person_run(
     member_id = (
         await pod_member_id(uow, run.pod_id, user_id) if wait is not None else None
     )
-    name = workflow_name or (await _workflow_names(uow, {run.flow_id})).get(
-        run.flow_id, "workflow"
-    )
+    access = (await _workflow_access(uow, ctx, {run.flow_id})).get(run.flow_id)
     return PersonWorkflowRun(
         id=run.id,
-        workflow=name,
+        workflow=access.name if access else "workflow",
+        may_read_workflow=access is not None and access.may_read,
+        may_submit=access is not None and access.may_run,
         status=_value(run.status),
         started_by=run.user_id,
         error=run.error,
@@ -225,20 +241,51 @@ async def _person_run(
     )
 
 
-async def _workflow_names(
-    uow: SqlAlchemyUnitOfWork, flow_ids: set[UUID]
-) -> dict[UUID, str]:
-    from app.modules.workflow.infrastructure.repositories.workflow_repository import (
-        SqlAlchemyWorkflowRepository,
-    )
+@dataclass(frozen=True, slots=True)
+class _WorkflowAccess:
+    name: str
+    may_read: bool
+    may_run: bool
 
-    repository = SqlAlchemyWorkflowRepository(uow)
-    names: dict[UUID, str] = {}
-    for flow_id in flow_ids:
-        workflow = await repository.get(flow_id)
-        if workflow is not None:
-            names[flow_id] = workflow.name
-    return names
+
+async def _workflow_access(
+    uow: SqlAlchemyUnitOfWork, ctx: Context, flow_ids: set[UUID]
+) -> dict[UUID, _WorkflowAccess]:
+    """Each workflow's name, and what ``ctx`` may do with it, in one read.
+
+    Asked of exactly these workflows rather than read off a listing: a listing
+    is capped and shows only active workflows, and a run's workflow need be
+    neither the first nor still active.
+    """
+    from sqlalchemy import select
+
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.sql_actions import allowed_actions_expr
+    from app.modules.workflow.infrastructure.models import WorkflowModel
+
+    if not flow_ids:
+        return {}
+    actions = allowed_actions_expr(
+        ctx=ctx,
+        resource_type=ResourceType.WORKFLOW,
+        resource_id_col=WorkflowModel.id,
+        pod_id_col=WorkflowModel.pod_id,
+        owner_user_id_col=WorkflowModel.user_id,
+        visibility_col=WorkflowModel.visibility,
+    )
+    rows = await uow.session.execute(
+        select(WorkflowModel.id, WorkflowModel.name, actions).where(
+            WorkflowModel.id.in_(flow_ids)
+        )
+    )
+    return {
+        flow_id: _WorkflowAccess(
+            name=name,
+            may_read=Permissions.WORKFLOW_READ in (allowed or ()),
+            may_run=Permissions.WORKFLOW_EXECUTE in (allowed or ()),
+        )
+        for flow_id, name, allowed in rows.all()
+    }
 
 
 def _value(value: object) -> str:

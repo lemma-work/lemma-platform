@@ -221,6 +221,14 @@ def submit_refusal(run: PersonWorkflowRun, *, user_id: UUID, where: str) -> str 
         return "That run is not waiting on a form."
     if not wait.on_this_person:
         return "That form is not waiting on you."
+    if not run.may_submit:
+        # Checked before whose run it is: Lemma refuses them too, so sending
+        # them there would only move the refusal.
+        return (
+            "That form is waiting on you, but you may not run its workflow, so it "
+            "cannot be submitted, here or in Lemma. Someone who manages the pod "
+            "can give you that access."
+        )
     if run.started_by != user_id:
         return (
             "That form is in a run someone else started. They are waiting on "
@@ -349,42 +357,28 @@ class PodWorkflows:
 
     async def _listing(self, principal: McpPrincipal) -> CallToolResult:
         runs = await self._gateway.waiting(principal)
-        readable = {
-            workflow.name for workflow in await self._gateway.workflows(principal)
-        }
         return tool_call_result(
             {
                 "success": True,
-                "waiting": [
-                    self._waiting_payload(run, principal, readable=readable)
-                    for run in runs
-                ],
+                "waiting": [self._waiting_payload(run, principal) for run in runs],
             }
         )
 
     def _waiting_payload(
-        self, run: PersonWorkflowRun, principal: McpPrincipal, *, readable: set[str]
+        self, run: PersonWorkflowRun, principal: McpPrincipal
     ) -> JsonObject:
         """A form waiting on the person, with where to answer it.
 
-        A run's own page reads the run, which needs its workflow; a form
-        assigned on a workflow the person may not read is answered from the
-        pod's waiting list instead, so it is linked to the pod and says so.
+        A run's own page reads the run, which needs its workflow, so a form on
+        one the person may not read links to the pod. Whether it can be
+        answered at all is ``submit_refusal``'s, from the run's own access.
         """
-        if run.workflow in readable:
-            return run_payload(
-                run, url=self._url(principal, run), user_id=principal.user_id
-            )
-        space = self._space_url(principal.pod_id)
-        payload = run_payload(run, url=space, user_id=principal.user_id)
-        # Whoever started it: submitting from here reads the run first, which
-        # needs its workflow, so the only way to answer it is Lemma's own.
-        payload["message"] = (
-            f"Answer it in Lemma, at {space} , from the list of what is waiting "
-            "on you. Its workflow is not one you can open, so it cannot be filled "
-            "in from here."
+        url = (
+            self._url(principal, run)
+            if run.may_read_workflow
+            else self._space_url(principal.pod_id)
         )
-        return payload
+        return run_payload(run, url=url, user_id=principal.user_id)
 
     def _url(self, principal: McpPrincipal, run: PersonWorkflowRun) -> str:
         return self._run_url(principal.pod_id, run.id)
@@ -439,10 +433,12 @@ class _WorkflowModule:
         from app.modules.workflow.contracts.person_runs import waiting_on
 
         async with self.uow_factory() as uow:
+            ctx = await _assistant_context(uow, principal)
             return await waiting_on(
                 uow,
                 pod_id=principal.pod_id,
                 user_id=principal.user_id,
+                ctx=ctx,
                 limit=MAX_WAITING,
             )
 
