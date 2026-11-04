@@ -19,7 +19,7 @@ bug nobody connects to the rename.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import hex_digest_signature_matches
@@ -62,7 +62,7 @@ _PULL_REQUEST_EVENTS = frozenset(
 )
 
 
-def _mapping(value: object) -> dict:
+def _mapping(value: object) -> Mapping[str, object]:
     """Treat malformed nested webhook objects as absent, not as exceptions."""
     return value if isinstance(value, dict) else {}
 
@@ -153,13 +153,16 @@ def _issue_comment_key(payload: WebhookPayload) -> str | None:
 
 
 def _workflow_run_key(payload: WebhookPayload) -> str | None:
+    # "Re-run jobs" keeps the run's id and walks it through requested,
+    # in_progress and completed again; `run_attempt` is what tells the second
+    # completion from a redelivery of the first.
     run = _mapping(payload.get("workflow_run"))
     run_id = _required_id(run.get("id"))
     action = _required_text(payload.get("action"))
     status = _required_text(run.get("status"))
     if not all((run_id, action, status)):
         return None
-    return f"{run_id}:{action}:{status}"
+    return f"{run_id}:{run.get('run_attempt')}:{action}:{status}"
 
 
 def _check_suite_key(payload: WebhookPayload) -> str | None:
@@ -173,10 +176,8 @@ def _check_suite_key(payload: WebhookPayload) -> str | None:
     # A GitHub App can receive requested/rerequested check_suite actions. A
     # rerequest resets status to queued on the same suite id; updated_at moves
     # for each new request, while a redelivery carries the same timestamp.
-    return (
-        f"{suite_id}:{action}:{status}"
-        f":{suite.get('conclusion')}:{updated_at}"
-    )
+    return f"{suite_id}:{action}:{status}:{suite.get('conclusion')}:{updated_at}"
+
 
 def _check_run_key(payload: WebhookPayload) -> str | None:
     # Unlike a suite, a run's status is not enough on its own: `rerequested`
@@ -253,8 +254,7 @@ def source_event_id(
     if not event_key:
         return None
     material = (
-        f"github:{event}:{normalized_installation}:"
-        f"{normalized_repository}:{event_key}"
+        f"github:{event}:{normalized_installation}:{normalized_repository}:{event_key}"
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 

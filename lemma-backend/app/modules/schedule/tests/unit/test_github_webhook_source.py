@@ -262,6 +262,21 @@ class TestSourceEventId:
             "workflow_run", "1", 2, run("in_progress")
         ) != source_event_id("workflow_run", "1", 2, run("completed"))
 
+    def test_a_rerun_workflow_completing_again_is_a_new_event(self):
+        def completed(attempt: int) -> dict:
+            return {
+                "action": "completed",
+                "workflow_run": {
+                    "id": 30433642,
+                    "status": "completed",
+                    "run_attempt": attempt,
+                },
+            }
+
+        first = source_event_id("workflow_run", "1", 2, completed(1))
+        assert first == source_event_id("workflow_run", "1", 2, completed(1))
+        assert first != source_event_id("workflow_run", "1", 2, completed(2))
+
     def test_an_event_missing_its_key_produces_none(self):
         """Better no id than an unstable one: a missing id is refused loudly by
         the handler, while an id derived from `None` would silently collapse
@@ -269,7 +284,6 @@ class TestSourceEventId:
         assert source_event_id("push", "1", 2, {}) is None
         assert source_event_id("push", "1", 2, {"after": "sha-one"}) is None
         assert source_event_id("unknown_event", "1", 2, {"after": "x"}) is None
-
 
     def test_a_rerequested_check_suite_is_distinct_from_a_redelivery(self):
         def suite(updated_at: str) -> dict:
@@ -710,10 +724,12 @@ class TestSourceEventIdRejectsIncompletePayloads:
     def test_missing_or_invalid_tenant_and_repository_ids_are_rejected(
         self, installation_id, repository_id
     ):
-        assert source_event_id(
-            "pull_request", installation_id, repository_id, _pull_request()
-        ) is None
-
+        assert (
+            source_event_id(
+                "pull_request", installation_id, repository_id, _pull_request()
+            )
+            is None
+        )
 
     @pytest.mark.parametrize(
         ("event", "payload"),
