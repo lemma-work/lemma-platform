@@ -594,7 +594,5 @@ def _tmpfs(is_function: bool) -> dict[str, str]:
         # the mount usable by the unprivileged function user (10001) without
         # relying on runtime-specific ownership options. The mount is private
         # to this function container.
-        "/run/lemma-function-cache": (
-            "rw,exec,nosuid,nodev,size=512m,mode=1777"
-        ),
+        "/run/lemma-function-cache": "rw,exec,nosuid,nodev,size=512m,mode=1777",
     }
