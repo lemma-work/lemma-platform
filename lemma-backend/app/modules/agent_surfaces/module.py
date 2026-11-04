@@ -127,6 +127,7 @@ def _register_work() -> None:
     import app.modules.agent_surfaces.events.ingest_work  # noqa: F401
     import app.modules.agent_surfaces.events.channel_delivery_work  # noqa: F401
     import app.modules.agent_surfaces.events.mobile_work  # noqa: F401
+    import app.modules.agent_surfaces.events.proved_account_work  # noqa: F401
     import app.modules.agent_surfaces.events.periodic_work  # noqa: F401
     import app.modules.agent_surfaces.events.platform_update_work  # noqa: F401
     import app.modules.agent_surfaces.events.pod_lifecycle_work  # noqa: F401
