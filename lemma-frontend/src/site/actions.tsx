@@ -3,13 +3,18 @@ import { InvitationDecision } from "./invitation";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/session/session";
-import { hasApiUrl } from "@/session/client";
+import { hasApiUrl, lemma } from "@/session/client";
+import { DeleteAccountForm } from "@/session/delete-account";
 import { source as data } from "@/data";
 import { afterNewOrganization, newOrganizationLink } from "@/auth/redirects";
 import type { ActionProps } from "./action-host";
 import { captureEvent } from "@/site/analytics/client";
 export function Actions(props: ActionProps) {
     const session = useSession();
+    /* Read before the session, which a deletion has just ended: the page it
+       lands on has nobody signed in to ask. */
+    if (props.action === "delete-account" && deletedJustNow())
+        return <AccountDeleted />;
     if (!hasApiUrl() || data.label === "sample")
         return (
             <p>
@@ -27,8 +32,9 @@ export function Actions(props: ActionProps) {
         );
     return <SignedIn {...props} signOut={session.signOut} />;
 }
-function SignedIn(props: ActionProps & { signOut: () => Promise<void> }) {
+function SignedIn(props: ActionProps & { signOut: (destination?: string) => Promise<void> }) {
     if (props.action === "organization") return <CreateOrganization />;
+    if (props.action === "delete-account") return <DeleteSignedInAccount />;
     if (props.action === "logout")
         return (
             <button className="btn" onClick={() => void props.signOut()}>
@@ -43,6 +49,42 @@ function SignedIn(props: ActionProps & { signOut: () => Promise<void> }) {
             />
         );
     return <Remix {...props} />;
+}
+function deletedJustNow(): boolean {
+    return new URLSearchParams(window.location.search).get("deleted") === "1";
+}
+function AccountDeleted() {
+    return (
+        <div role="status">
+            <h2>Your account has been deleted</h2>
+            <p>
+                You have been signed out everywhere. You can sign up again with
+                the same email address whenever you like; it will be a new
+                account.
+            </p>
+            <a className="btn" href="/">Back to Lemma</a>
+        </div>
+    );
+}
+function DeleteSignedInAccount() {
+    const me = useQuery({
+        queryKey: ["current-user"],
+        queryFn: () => lemma().users.current(),
+    });
+    if (me.isPending) return <p role="status">Loading your account…</p>;
+    if (me.isError)
+        return (
+            <p role="alert">
+                Your account could not be loaded.{" "}
+                <button onClick={() => void me.refetch()}>Retry</button>
+            </p>
+        );
+    return (
+        <>
+            <h2>Delete {me.data.email}</h2>
+            <DeleteAccountForm email={me.data.email} />
+        </>
+    );
 }
 /** Remix hands an app to a teammate in a conversation. Installing from
  *  GitHub has its own journey, in `import/install-panel.tsx`. */

@@ -40,8 +40,9 @@ export interface Session {
     user: Person | null;
     /** Hand off to the platform's auth portal, and come back here. */
     signIn: () => void;
-    /** End it everywhere: the server, this browser, and this tab's memory. */
-    signOut: () => Promise<void>;
+    /** End it everywhere: the server, this browser, and this tab's memory.
+     *  Lands on `destination` afterwards, the site's front page unless told. */
+    signOut: (destination?: string) => Promise<void>;
     /** Ask about the session again, after the API did not answer. */
     retry: () => void;
     /** Whether the API answers at all -- its liveness probe, not a session
@@ -117,7 +118,7 @@ export function useSession(): Session {
         window.location.assign(PORTAL_PATH + "?redirect_uri=" + encodeURIComponent(here));
     }, []);
 
-    const signOut = useCallback(async () => {
+    const signOut = useCallback(async (destination = "/") => {
         if (client && !(await client.auth.signOut())) {
             throw new Error("We couldn’t confirm sign-out. Check your connection and try again.");
         }
@@ -132,7 +133,7 @@ export function useSession(): Session {
            every in-memory copy of what the last person could see — the query
            cache, the session hook, the mounted app frames. A soft navigation
            keeps all three. */
-        window.location.assign("/");
+        window.location.assign(destination);
     }, [client, cache]);
 
     const retry = useCallback(() => {

@@ -20784,6 +20784,24 @@ var LemmaClient = (() => {
   // src/openapi_client/services/UsersService.ts
   var UsersService = class {
     /**
+     * Delete Current User
+     * Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by "Deleted user". Every session ends, the caller's included: its cookies or tokens are cleared on this response. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.
+     * @param requestBody
+     * @returns AccountDeletionResponse Successful Response
+     * @throws ApiError
+     */
+    static userCurrentDelete(requestBody) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/users/me",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Current User
      * Get the current authenticated user's information
      * @returns UserResponse Successful Response
@@ -20897,6 +20915,13 @@ var LemmaClient = (() => {
     }
     upsertProfile(payload) {
       return this.client.request(() => UsersService.userProfileUpsert(payload));
+    }
+    /** Delete the signed-in person's account for good. `confirm_email` is the
+     *  account's own address, typed by the person. Every session ends, this one
+     *  included; refusals (409 `ACCOUNT_DELETION_SOLE_OWNER`, a billing code,
+     *  400 `ACCOUNT_DELETION_CONFIRMATION_MISMATCH`) change nothing. */
+    deleteAccount(payload) {
+      return this.client.request(() => UsersService.userCurrentDelete(payload));
     }
   };
 

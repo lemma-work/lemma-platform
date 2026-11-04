@@ -5402,6 +5402,30 @@ button.filecard__open {
     border-top: 1px solid var(--line);
 }
 
+/* Deleting the account sits below signing out, under its own rule, so the
+   two are never read as one row of choices. */
+.settings-delete {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+}
+.settings-delete strong { display: block; font-weight: 500; font-size: 13px; }
+.settings-delete p { margin: 2px 0 0; max-width: 46ch; font-size: 12.5px; color: var(--ink-3); }
+
+.delete-account { display: flex; flex-direction: column; gap: 14px; text-align: left; }
+.delete-account__what { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.delete-account .field { margin-bottom: 0; }
+.delete-account__email { color: var(--ink); overflow-wrap: anywhere; }
+.delete-account__refused { font-size: 12.5px; color: var(--bad); }
+.delete-account__refused p { margin: 0; }
+.delete-account__refused p + p { margin-top: 4px; color: var(--ink-2); }
+.delete-account__actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+
 /* A settings section renders its rows, not a card around them: the pane it
    sits in already has the border, the name and the subtitle, and repeating
    those inside was a heading under a heading inside a box inside a box. */
