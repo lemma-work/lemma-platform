@@ -153,7 +153,7 @@ def test_a_failed_call_or_a_file_is_left_as_it_was() -> None:
     assert with_return_times(history) == history
 
 
-def test_a_tool_searchs_matches_stay_the_structure_pydantic_ai_reads() -> None:
+def test_a_tool_search_keeps_the_structure_pydantic_ai_reads() -> None:
     """Noted, its matches became a string, nothing found was revealed, and the
     agent's call to the tool it had just found never ran."""
     matches = {"discovered_tools": [{"name": "ask_teammate"}]}
