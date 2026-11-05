@@ -15,6 +15,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_message_send,
     agent_conversation_message_withdraw,
     agent_conversation_pending_interaction_list,
+    agent_conversation_repository_list,
     agent_conversation_retry,
     agent_conversation_stream,
     agent_conversation_stop,
@@ -23,6 +24,9 @@ from ..openapi_client.api.agent_conversations import (
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
 from ..openapi_client.models.agent_run_start_response import AgentRunStartResponse
 from ..openapi_client.models.conversation_list_response import ConversationListResponse
+from ..openapi_client.models.conversation_repository_list_response import (
+    ConversationRepositoryListResponse,
+)
 from ..openapi_client.models.conversation_response import ConversationResponse
 from ..openapi_client.models.conversation_status import ConversationStatus
 from ..openapi_client.models.conversation_type import ConversationType
@@ -124,7 +128,14 @@ class PodConversations(BoundResource):
         title: str | None = None,
         metadata: Metadata | None = None,
         parent_id: str | None = None,
+        repository: str | None = None,
     ) -> ConversationResponse:
+        """Open a conversation, in a GitHub repository's checkout if one is named.
+
+        ``repository`` is ``owner/name``, one of `repositories()`. The server
+        refuses a repository the organization's GitHub installation does not
+        cover for you, and every conversation of yours in it shares one checkout.
+        """
         return self._call(
             agent_conversation_create,
             self._pod_uuid(),
@@ -135,10 +146,15 @@ class PodConversations(BoundResource):
                     "title": title,
                     "metadata": metadata,
                     "parent_id": parent_id,
+                    "repository": repository,
                 }
             ),
             body_model=CreateConversationRequest,
         )
+
+    def repositories(self) -> ConversationRepositoryListResponse:
+        """The GitHub repositories you can open a conversation in, in this pod."""
+        return self._call(agent_conversation_repository_list, self._pod_uuid())
 
     def get(self, conversation_id: str) -> ConversationResponse:
         return self._call(
