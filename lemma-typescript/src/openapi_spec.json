@@ -3975,7 +3975,7 @@
                 "type": "null"
               }
             ],
-            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "description": "A contact's channel: its case, the one `status`, `assignee` and `attention` are read from. A channel keeps one case.",
             "title": "Case Id"
           },
           "created_at": {
@@ -4772,7 +4772,7 @@
                 "type": "null"
               }
             ],
-            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "description": "A contact's channel: its case, the one `status`, `assignee` and `attention` are read from. A channel keeps one case.",
             "title": "Case Id"
           },
           "created_at": {
