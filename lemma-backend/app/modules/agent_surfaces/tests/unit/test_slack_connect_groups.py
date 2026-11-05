@@ -138,7 +138,7 @@ def _door(group: Source) -> OutsiderDoor:
         # The group's owner is in the pod; nobody else here is.
         return [POD] if user_id == group.owner_user_id else []
 
-    async def _allow(*, group_id, sender_external_id):
+    async def _allow(*, person, place, place_per_day):
         return True
 
     door = OutsiderDoor(
