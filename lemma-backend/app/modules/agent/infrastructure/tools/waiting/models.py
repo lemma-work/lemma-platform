@@ -11,6 +11,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.modules.agent.domain.delegation import (
+    MAX_CHILDREN_PER_RUN,
+    ChildReport,
+    report_payload,
+)
 from app.modules.agent.domain.wait import AgentWaitType, AgentWaitWakeReason
 from app.modules.agent.infrastructure.tools.responses import BaseToolResponse
 
@@ -70,8 +75,17 @@ class WaitForRequest(BaseModel):
     subagent_run_id: str | None = Field(
         default=None,
         description=(
-            "Wait for a sub-agent run to finish, from `spawn_subagent`'s "
-            "`run_id`. You wake with its result."
+            "Wait for one sub-agent run to finish, a `run_id` from `delegate`. "
+            "You wake with its report."
+        ),
+    )
+    subagent_run_ids: list[str] | None = Field(
+        default=None,
+        max_length=MAX_CHILDREN_PER_RUN,
+        description=(
+            "Wait for several sub-agent runs at once. You wake once: when every "
+            "one has finished, with all their reports, or as soon as one stops "
+            "to ask a question."
         ),
     )
     max_seconds: int | None = Field(
@@ -114,6 +128,13 @@ class WaitForResponse(BaseToolResponse):
         default=None,
         description="Exit code of the process you waited on, when there was one.",
     )
+    results: list[dict[str, object]] | None = Field(
+        default=None,
+        description=(
+            "Each sub-agent you waited on: its status, its report (its last "
+            "message), its error if it failed, its question if it asked one."
+        ),
+    )
 
 
 # What the model is told on each wake. The discipline these inherit from the
@@ -152,20 +173,22 @@ _WAKE_MESSAGES: dict[tuple[AgentWaitType, AgentWaitWakeReason], str] = {
         "running — nothing about it has changed."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED): (
-        "The sub-agent run finished. Read its result with "
-        "query_subagents(mode='messages') before building on it."
+        "Every sub-agent you waited on has ended. Their reports are in "
+        "`results`. A FAILED one says why in `error`: say so plainly rather "
+        "than filling in its part yourself."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.DEADLINE): (
-        "You stopped waiting because your own limit ran out. The sub-agent may "
-        "still be running — check with query_subagents before deciding it "
-        "failed."
+        "You stopped waiting because your own limit ran out. A sub-agent marked "
+        "RUNNING in `results` may still be running; the others' reports are "
+        "there. Wait for it again with wait_for, or report it as still running."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT): (
-        "The sub-agent has not finished: it stopped to ask a question and is "
-        "waiting for an answer, and nobody but you can see it. Read what it "
-        "asked with query_subagents(mode='messages'), answer it with "
+        "A sub-agent has not finished: it stopped to ask a question (its "
+        "`question` in `results`), "
+        "and nobody but you can see it. Answer it with "
         "interact_subagent(action='send') -- or ask the person, if only they "
-        "can answer -- then wait for it again."
+        "can answer -- then wait_for(subagent_run_ids=...) on the ones still "
+        "going."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE): (
         "That sub-agent run can no longer be found, so its outcome is unknown."
@@ -234,14 +257,19 @@ def build_wait_result(
     waited_seconds: int,
     note_to_self: str | None,
     exit_code: int | None = None,
+    reports: list[ChildReport] | None = None,
 ) -> dict[str, object]:
-    """The tool return replayed for a resolved wait, whatever resolved it."""
+    """The tool return replayed for a resolved wait, whatever resolved it.
+
+    A wait on sub-agents carries their reports, cut to fit: the parent wakes
+    with what they said rather than a pointer to where to read it."""
     return WaitForResponse(
         success=reason is not AgentWaitWakeReason.CANCELLED,
         woke_because=reason.value,
         waited_seconds=waited_seconds,
         note_to_self=note_to_self,
         exit_code=exit_code,
+        results=report_payload(reports) if reports else None,
         message=wake_message(wait_type, reason, exit_code=exit_code),
     ).model_dump(mode="json")
 

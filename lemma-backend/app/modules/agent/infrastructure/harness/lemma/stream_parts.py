@@ -25,7 +25,6 @@ from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import MessageDraft
 from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     parse_tool_call_args,
-    tool_call_identity,
 )
 from app.modules.agent.infrastructure.harness.lemma.streaming import CharStreamBuffer
 
@@ -185,7 +184,7 @@ class StreamingParts:
             tool_name=part.tool_name,
             tool_call_id=part.tool_call_id,
             tool_args=tool_args,
-            metadata={"tool_name": part.tool_name, **tool_call_identity(part)},
+            metadata={"tool_name": part.tool_name},
             pause=(
                 PauseOpening(kind=kind)
                 if (kind := self._pauses.get(part.tool_name)) is not None

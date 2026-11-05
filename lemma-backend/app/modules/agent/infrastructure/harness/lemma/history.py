@@ -38,6 +38,9 @@ from app.modules.agent.infrastructure.harness.lemma.context_window import (
     FitReplyToWindow,
     MeasureRequestFootprint,
 )
+from app.modules.agent.infrastructure.harness.lemma.tool_return_times import (
+    ToolReturnTimes,
+)
 from app.modules.agent.infrastructure.providers.tokens import count_model_message_tokens
 from app.modules.agent.infrastructure.providers.summarization import SummarizationModel
 
@@ -345,6 +348,9 @@ def history_capabilities[DepsT](
     return [
         MeasureRequestFootprint(footprint),
         *(ProcessHistory(processor) for processor in processors),
+        # After the processors, which write the history back: this one writes
+        # only the request, so the log keeps what each tool returned.
+        ToolReturnTimes(),
         FitReplyToWindow(footprint, window=options.context_window),
     ]  # type: ignore[list-item]
 

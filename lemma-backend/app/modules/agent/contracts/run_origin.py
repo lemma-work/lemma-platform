@@ -12,7 +12,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.run_origin import started_in_lemma
+from app.modules.agent.domain.started_in_lemma import started_in_lemma
 from app.modules.agent.infrastructure.db.conversations import Conversations
 
 

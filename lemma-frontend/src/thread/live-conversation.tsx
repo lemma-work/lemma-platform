@@ -19,7 +19,7 @@ import { Composer } from "./composer";
 import { ModelPicker, useSavingModel } from "./model-picker";
 import { useChannelReply } from "./use-channel-reply";
 import { splitQueued, withdrawFailure, withoutSent } from "./queued";
-import { sendToConversation, steerConversation } from "./send-message";
+import { composerSend, sendToConversation, steerConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
 import { needsAiModel, pointsAtModels, runFailure } from "./model-setup";
@@ -934,6 +934,12 @@ export function LiveConversation({
     const resolveStable = useStableCallback(resolve);
     const withdrawStable = useStableCallback((id: string) => void withdraw(id));
     const sendStable = useStableCallback(send);
+    /* A send that starts a turn is handed over, not waited on: its stream lasts
+       the run, and a composer waiting on it could not steer (`composerSend`). */
+    const startsTurn = useStableCallback(
+        () => !answerWith.current && !(running && (createdHere.current ?? session.conversationId)),
+    );
+    const sendFromComposer = useMemo(() => composerSend(sendStable, startsTurn), [sendStable, startsTurn]);
     const dismissCallError = useStableCallback(() => setDismissedCallError(shownCallError));
     const filled = useStableCallback(() => {
         if (refill) setRefill(null);
@@ -1085,7 +1091,7 @@ export function LiveConversation({
                 attachments={attachments}
                 onAttach={attach}
                 onRemoveAttachment={unattach}
-                onSend={sendStable}
+                onSend={sendFromComposer}
                 onTall={setCrowded}
                 onStop={stop}
                 onVoice={onVoice}

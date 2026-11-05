@@ -55,11 +55,26 @@ logger = get_logger(__name__)
 _CONVERSATION_STREAM = "agent.conversation"
 _CANVAS_TOOLS = frozenset({"display_resource"})
 _RELAY_TOOL = "relay_to_voice"
-_SPAWN_TOOL = "spawn_subagent"
+#: The calls that start sub-agents: `delegate` lists each child it started,
+#: the deprecated `spawn_subagent` returns its one.
+_SPAWN_TOOLS = frozenset({"delegate", "spawn_subagent"})
 _RUN_ENDINGS = frozenset({"completed", "error", "stopped"})
 #: Attempts at a stream that keeps failing before the call says so.
 _FOLLOW_ATTEMPTS = 5
 _FOLLOW_BACKOFF_SECONDS = 1.0
+
+
+def _children_started(result: dict[str, object]) -> list[str]:
+    """The child conversations a spawning call's return names."""
+    named = [result.get("conversation_id")]
+    children = result.get("children")
+    if isinstance(children, list):
+        named.extend(
+            child.get("conversation_id")
+            for child in children
+            if isinstance(child, dict)
+        )
+    return [child for child in named if isinstance(child, str)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,9 +426,8 @@ class CallAgents:
     def _on_return(
         self, conversation_id: UUID, tool: str, call_id: str, result: JsonValue
     ) -> None:
-        if tool == _SPAWN_TOOL and isinstance(result, dict):
-            child = result.get("conversation_id")
-            if isinstance(child, str):
+        if tool in _SPAWN_TOOLS and isinstance(result, dict):
+            for child in _children_started(result):
                 with contextlib.suppress(ValueError):
                     self._watch(UUID(child))
             return

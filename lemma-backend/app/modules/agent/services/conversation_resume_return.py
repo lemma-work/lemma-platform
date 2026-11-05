@@ -28,7 +28,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.domain.approvals import expired_unanswered
+from app.modules.agent.domain.approvals import ANSWERED_BY_REPLY, expired_unanswered
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.ports import AgentRepository
@@ -94,6 +94,42 @@ def _denied_message(inner_tool: str, response: dict[str, object]) -> str:
     return f"User denied running {inner_tool}."
 
 
+def _question_return(
+    decision: AgentRunApprovalDecision, response: dict[str, object]
+) -> object:
+    """An ``ask_user`` return: the answers, or why there are none."""
+    from app.modules.agent.infrastructure.tools.user_interaction.models import (
+        AskUserResponse,
+    )
+
+    reply = response.get(ANSWERED_BY_REPLY)
+    if isinstance(reply, str):
+        content = AskUserResponse(
+            success=True,
+            answers={"reply": reply},
+            message=(
+                "User answered by writing back rather than on the question "
+                "card: their reply is the answer."
+            ),
+        )
+        return content.model_dump(mode="json")
+    if decision == AgentRunApprovalDecision.DENY:
+        content = AskUserResponse(success=False, message=_unanswered_message(response))
+        return content.model_dump(mode="json")
+    answers: dict[str, object] = {}
+    candidate = response.get("answers")
+    if isinstance(candidate, dict):
+        answers = candidate
+    elif response:
+        answers = response
+    content = AskUserResponse(
+        success=True,
+        answers=answers,
+        message="User answered the questions.",
+    )
+    return content.model_dump(mode="json")
+
+
 def _decision_of(pause: Pause) -> AgentRunApprovalDecision:
     """What was decided; a pause ended with no decision returns as a denial."""
     return pause.decision or AgentRunApprovalDecision.DENY
@@ -120,7 +156,6 @@ class ResumeToolReturnBuilder:
     ) -> tuple[str, object]:
         """``(tool_name, tool_result)`` for a decided pause's return."""
         from app.modules.agent.infrastructure.tools.user_interaction.models import (
-            AskUserResponse,
             RequestApprovalResponse,
         )
 
@@ -133,24 +168,7 @@ class ResumeToolReturnBuilder:
             return pause.tool_name, _budget_decision_return(decision)
 
         if pause.kind is PauseKind.QUESTION:
-            if decision == AgentRunApprovalDecision.DENY:
-                content = AskUserResponse(
-                    success=False,
-                    message=_unanswered_message(response),
-                )
-            else:
-                answers: dict[str, object] = {}
-                candidate = response.get("answers")
-                if isinstance(candidate, dict):
-                    answers = candidate
-                elif response:
-                    answers = response
-                content = AskUserResponse(
-                    success=True,
-                    answers=answers,
-                    message="User answered the questions.",
-                )
-            return pause.tool_name, content.model_dump(mode="json")
+            return pause.tool_name, _question_return(decision, response)
 
         if pause.kind is PauseKind.SIGN_IN:
             return pause.tool_name, await self._browser_sign_in_return(

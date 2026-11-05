@@ -43,7 +43,7 @@ async def test_model_http_error_emits_sanitized_ui_message(monkeypatch) -> None:
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None, runtime_profile=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None, tools=[]),
             agent_run_id=agent_run_id,
         )
     ]
@@ -82,7 +82,7 @@ async def test_unexpected_model_behavior_emits_sanitized_ui_message(
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None, runtime_profile=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None, tools=[]),
             agent_run_id=agent_run_id,
         )
     ]
@@ -115,7 +115,7 @@ async def test_usage_limit_exceeded_emits_sanitized_ui_message(monkeypatch) -> N
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None, runtime_profile=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None, tools=[]),
             agent_run_id=agent_run_id,
         )
     ]
@@ -151,7 +151,7 @@ async def test_generic_exception_emits_sanitized_ui_message(monkeypatch) -> None
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None, runtime_profile=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None, tools=[]),
             agent_run_id=agent_run_id,
         )
     ]

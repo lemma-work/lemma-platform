@@ -19,7 +19,9 @@ import pytest
 from app.core.origin import Origin, OriginKind, origin_scope
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_asks import AskChain, AskMode, PodAsk
-from app.modules.agent.domain.run_origin import conversation_origin, run_origin
+from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.run_waiters import run_work_origin
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -67,7 +69,7 @@ def test_a_scheduled_conversation_names_what_fired_it(schedule_type, kind) -> No
     conversation = _conversation(
         origin=ConversationOrigin.SCHEDULE, schedule_type=schedule_type
     )
-    assert conversation_origin(conversation) == Origin(kind)
+    assert run_work_origin(RunKind.SCHEDULE, conversation) == Origin(kind)
 
 
 def test_a_schedule_type_left_in_metadata_says_nothing() -> None:
@@ -75,45 +77,56 @@ def test_a_schedule_type_left_in_metadata_says_nothing() -> None:
     conversation = _conversation(
         origin=ConversationOrigin.SCHEDULE, metadata={"schedule_type": "WEBHOOK"}
     )
-    assert conversation_origin(conversation) == Origin(OriginKind.SCHEDULE)
+    assert run_work_origin(RunKind.SCHEDULE, conversation) == Origin(
+        OriginKind.SCHEDULE
+    )
 
 
 def test_a_surface_conversation_names_the_platform_its_surface_records() -> None:
     conversation = _conversation(origin=ConversationOrigin.SURFACE)
-    assert conversation_origin(conversation, platform="SLACK") == Origin(
+    assert run_work_origin(RunKind.SURFACE, conversation, platform="SLACK") == Origin(
         OriginKind.SURFACE, platform="slack"
     )
 
 
 def test_a_channel_conversation_heard_on_a_platform_is_that_platforms() -> None:
     conversation = _conversation(origin=ConversationOrigin.CHANNEL)
-    assert conversation_origin(conversation) is None
-    assert conversation_origin(conversation, platform="WHATSAPP") == Origin(
-        OriginKind.SURFACE, platform="whatsapp"
-    )
+    assert run_work_origin(RunKind.CHANNEL, conversation) is None
+    assert run_work_origin(
+        RunKind.CHANNEL, conversation, platform="WHATSAPP"
+    ) == Origin(OriginKind.SURFACE, platform="whatsapp")
 
 
 def test_a_workflow_step_is_the_workflow() -> None:
     conversation = _conversation(
         origin=ConversationOrigin.WORKFLOW_STEP, workflow_run_id=uuid4()
     )
-    assert conversation_origin(conversation) == Origin(OriginKind.WORKFLOW)
+    assert run_work_origin(RunKind.WORKFLOW, conversation) == Origin(
+        OriginKind.WORKFLOW
+    )
+
+
+def test_a_persons_message_into_a_schedules_conversation_is_theirs() -> None:
+    """The run's kind, not the conversation's origin, says how it arrived."""
+    conversation = _conversation(origin=ConversationOrigin.SCHEDULE)
+    assert run_work_origin(RunKind.CHAT, conversation) is None
 
 
 @pytest.mark.parametrize(
     ("kind", "fields"),
     [
-        ("chat", {}),
-        ("subagent", {"origin": ConversationOrigin.SUBAGENT, "parent_id": uuid4()}),
-        ("pod_ask", {"origin": ConversationOrigin.POD_ASK, "ask": _ask()}),
+        (RunKind.CHAT, {}),
+        (
+            RunKind.SUBAGENT,
+            {"origin": ConversationOrigin.SUBAGENT, "parent_id": uuid4()},
+        ),
+        (RunKind.POD_ASK, {"origin": ConversationOrigin.POD_ASK, "ask": _ask()}),
     ],
 )
-def test_a_conversation_that_cannot_say_which_client_answers_none(kind, fields) -> None:
+def test_a_run_that_cannot_say_which_client_answers_none(kind, fields) -> None:
     """A person's chat came through some client the row does not record. No
     origin is a gap; a guessed one is a wrong number."""
-    conversation = _conversation(**fields)
-    assert run_origin(conversation).origin == kind
-    assert conversation_origin(conversation) is None
+    assert run_work_origin(kind, _conversation(**fields)) is None
 
 
 def _usage(**fields) -> AgentRunUsage:
@@ -188,7 +201,7 @@ def test_a_turn_run_by_a_worker_takes_the_origin_its_conversation_records() -> N
         origin=ConversationOrigin.SCHEDULE,
         schedule_type="DATASTORE",
     )
-    agent_run = SimpleNamespace(started_at=None)
+    agent_run = SimpleNamespace(started_at=None, state=RunState(kind=RunKind.SCHEDULE))
 
     agent_run_id = uuid4()
     run = RunIdentity.of_turn(
@@ -205,7 +218,7 @@ def test_a_turn_run_by_a_worker_takes_the_origin_its_conversation_records() -> N
 
 def test_a_turn_run_inside_a_request_keeps_the_requests_origin() -> None:
     conversation = _conversation(origin=ConversationOrigin.SURFACE)
-    agent_run = SimpleNamespace(started_at=None)
+    agent_run = SimpleNamespace(started_at=None, state=RunState(kind=RunKind.SURFACE))
 
     with origin_scope(Origin(OriginKind.WEB)):
         run = RunIdentity.of_turn(

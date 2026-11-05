@@ -25,6 +25,7 @@ from uuid import uuid4, uuid7
 
 import pytest
 
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.tests.unit.repository_fakes import (
     pause_for_call,
     wire_repositories,
@@ -123,7 +124,7 @@ class _Repository:
 
     async def create_agent_run(self, **_kwargs):
         self.created_runs += 1
-        return SimpleNamespace(id=uuid7())
+        return SimpleNamespace(id=uuid7(), state=RunState())
 
     async def get_conversation_status(self, _conversation_id):
         return None

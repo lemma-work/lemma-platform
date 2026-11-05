@@ -129,6 +129,9 @@ class WaitSpec(BaseModel):
     #: When the wait gives up. None means it cannot say, which reads as due.
     deadline_at: LenientDatetime = None
     target_ref: str | None = None
+    #: The sub-agent runs a wait on several waits for, all of them; it wakes
+    #: once every one has ended, or one stops to ask.
+    target_refs: list[str] | None = None
     user_id: Annotated[UUID | None, _lenient(_as_uuid)] = None
     #: The unclamped asks, kept so the resolution can see what the model wanted.
     requested_seconds: int | None = None
@@ -143,6 +146,13 @@ class WaitSpec(BaseModel):
     ] = None
     #: Why its work item gave up on waking it.
     abandoned_because: str | None = None
+
+    @property
+    def targets(self) -> list[str]:
+        """Every target this wait is on: its set, or its one."""
+        if self.target_refs:
+            return list(self.target_refs)
+        return [self.target_ref] if self.target_ref else []
 
     def to_json(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

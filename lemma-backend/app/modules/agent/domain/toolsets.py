@@ -144,17 +144,21 @@ _CONNECTOR_RESOURCES = frozenset(
     }
 )
 
-# Withheld from a sub-agent, each for its own reason:
+# Refused to a sub-agent, each for its own reason:
 #
-# SUBAGENTS   -- the depth rule itself.
-# WAIT        -- a waiting child blocks its parent's tool call while the parent
-#                is still mid-run and subject to its own limits.
+# SUBAGENTS   -- the depth rule itself (``domain/delegation.MAX_DEPTH``).
 # MESSAGING   -- a sub-agent is an implementation detail of its parent's turn,
 #                and a colleague receiving a message from one has no way to
 #                place it. Whatever needs saying, the parent should say.
-_SUB_AGENT_WITHHELD = frozenset(
-    {AgentToolset.SUBAGENTS, AgentToolset.WAIT, AgentToolset.MESSAGING}
-)
+#
+# Refused when called, not taken out of view: the tools render ahead of
+# everything else in a request, so a child whose array lacked `delegate` shared
+# no cached prefix with its parent. Kept, the child's tools and guidance match
+# its parent's byte for byte up to its own framing.
+#
+# WAIT stays: a child running a long build or test suite waits on it durably
+# (the parent's own wait is a row, not a held tool call).
+_SUB_AGENT_WITHHELD = frozenset({AgentToolset.SUBAGENTS, AgentToolset.MESSAGING})
 
 # All a run answering somebody outside the pod keeps, when its agent has them:
 # ``OUTSIDER_TOOLSETS`` (``domain/outsiders``). That is only the first cut --
@@ -214,6 +218,8 @@ class ResolvedToolsets:
     names: list[AgentToolset] = field(default_factory=list)
     allow_subagents: bool = True
     derived: frozenset[AgentToolset] = frozenset()
+    #: In ``names``, so in view, but refused when called (``_SUB_AGENT_WITHHELD``).
+    refused: frozenset[AgentToolset] = frozenset()
 
 
 def is_sub_agent_run(conversation: Conversation | None) -> bool:
@@ -253,8 +259,8 @@ def resolve_toolsets(
     `resolve_agent` substitutes the same constant, and this stays correct for
     callers that did not come through it.
 
-    Order matters at the end: the sub-agent subtraction runs last, so a child
-    run does not receive MESSAGING and WAIT back through the always-on set.
+    Order matters at the end: the sub-agent refusal is decided last, so a child
+    run cannot call MESSAGING through the always-on set either.
     """
     is_pod_default = agent is None or agent.kind is AgentKind.POD_DEFAULT
     declared = list(POD_DEFAULT_AGENT_TOOLSETS if is_pod_default else agent.toolsets)
@@ -273,13 +279,16 @@ def resolve_toolsets(
         names.append(toolset)
 
     allow_subagents = not is_sub_agent_run(conversation)
-    if not allow_subagents:
-        names = [name for name in names if name not in _SUB_AGENT_WITHHELD]
     if Audience.of(conversation).answers_outsiders:
         names = [name for name in names if name in OUTSIDER_TOOLSETS]
         allow_subagents = False
+    refused = (
+        frozenset(name for name in names if name in _SUB_AGENT_WITHHELD)
+        if is_sub_agent_run(conversation)
+        else frozenset()
+    )
     return ResolvedToolsets(
-        names=names, allow_subagents=allow_subagents, derived=implied
+        names=names, allow_subagents=allow_subagents, derived=implied, refused=refused
     )
 
 
