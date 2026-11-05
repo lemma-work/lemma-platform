@@ -634,6 +634,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.telegram_manager.bot_profile_photo_best_effort': EventSpec('debug', frozenset()),
     'agent_surfaces.telegram_manager.managed_bot_provisioning_failed': EventSpec('error', frozenset()),
     'agent_surfaces.telegram_manager.polling_receiver_failed': EventSpec('error', frozenset()),
+    'agent_surfaces.telegram_manager.username_unresolved': EventSpec('warning', frozenset()),
     'agent_surfaces.telegram_manager.webhook_registration_failed': EventSpec('error', frozenset()),
     'agent_surfaces.telegram_manager.webhook_secret_missing': EventSpec('warning', frozenset()),
     'agent_surfaces.turn_starter.failure_reply_not_sent.degraded': EventSpec('warning', frozenset({'platform'})),
