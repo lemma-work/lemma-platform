@@ -11,15 +11,20 @@ about the rows and the order the "platform" saw:
 * a sender killed mid-send leaves the row SENDING; once its deadline passes
   the pump marks it UNKNOWN and never sends it again.
 
-The pump carries what has no channel line of its own (a held message, a reply
-to somebody outside any run, a "please resend"). A run's answer is a line and
-its channel delivery: ``test_run_answer_deliveries_e2e.py``.
+Every time the pump compares is the database's, so a worker whose clock runs
+behind the database still finds a row it was just handed due -- which is what
+the killed sender's one claimed run relies on.
+
+The pump carries what is said to somebody no channel holds (a reply to a
+stranger, a "please resend"). Every channel line -- a run's answer, a message
+held for a closed WhatsApp window -- is its channel delivery:
+``test_run_answer_deliveries_e2e.py``, ``test_whatsapp_reengage_e2e.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -108,17 +113,19 @@ async def test_a_retry_after_is_honoured_and_nothing_overtakes_it(test_pod):
 
     assert platform.arrived == []
     assert await _statuses(destination) == ["PENDING", "PENDING"]
-    not_before = await scalar(
-        "SELECT not_before FROM surface_deliveries WHERE content->>'text' = 'first' "
-        "AND destination_key = :d",
+    # Both by the database's clock, which every time the pump compares is in.
+    wait = await scalar(
+        "SELECT not_before - now() FROM surface_deliveries "
+        "WHERE content->>'text' = 'first' AND destination_key = :d",
         d=destination,
     )
-    assert not_before - datetime.now(UTC) > timedelta(seconds=110)
-    pump_due = await scalar(
-        "SELECT run_at FROM work_items WHERE kind = 'surface.reply' AND dedup_key = :k",
+    assert wait > timedelta(seconds=110)
+    pump_wait = await scalar(
+        "SELECT run_at - now() FROM work_items "
+        "WHERE kind = 'surface.reply' AND dedup_key = :k",
         k=f"dest:{destination}",
     )
-    assert pump_due - datetime.now(UTC) > timedelta(seconds=110), "the pump waits too"
+    assert pump_wait > timedelta(seconds=110), "the pump waits too"
 
     # The wait is over: both go, in the order they were written.
     async with async_session_maker() as session:
