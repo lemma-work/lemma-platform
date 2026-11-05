@@ -46,7 +46,6 @@ __all__ = [
     "find_place",
     "forget_chat",
     "forget_pending_group",
-    "heard_at",
     "joined_place",
     "left_place",
     "open_pending_group",
@@ -93,17 +92,13 @@ async def find_place(
     )
 
 
-async def heard_at(
-    uow: SqlAlchemyUnitOfWork, source_id: UUID, delivery_ref: Mapping[str, object]
-) -> None:
-    """The surface heard this place just now; ``delivery_ref`` is how to answer."""
-    await SourceRepository(uow.session).heard(source_id, delivery_ref)
-
-
 async def addressed_at(
     uow: SqlAlchemyUnitOfWork, source_id: UUID, delivery_ref: Mapping[str, object]
 ) -> None:
-    """How to write to a place nobody there has spoken in yet: a cold email."""
+    """How to write to this place from now: what answers the message just
+    heard there, or -- where nobody there has spoken yet -- what writing there
+    first learnt (a cold email). Not when it was heard: that is its line's to
+    say (``channels.infrastructure.lines``), once."""
     await SourceRepository(uow.session).addressed(source_id, delivery_ref)
 
 

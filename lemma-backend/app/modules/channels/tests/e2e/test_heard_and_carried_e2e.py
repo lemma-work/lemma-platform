@@ -43,9 +43,12 @@ from app.modules.channels.contracts import (
     GroupHome,
     NewLine,
     Place,
+    Principal,
     Sender,
+    SenderKind,
     Source,
     SourceKind,
+    answered_in,
     channel_by_id,
     post,
     source_for,
@@ -326,3 +329,106 @@ async def test_an_agent_answering_every_line_answers_one_carried_to_a_group(
     await _drain(WorkClass.INTERACTIVE)
 
     assert await _answering(said.json()["id"]) is not None
+
+
+# ------------------------------------------------------ heard once, taken up
+
+
+async def _a_conversation(pod: Pod) -> UUID:
+    from app.modules.agent.infrastructure.models.conversation import (
+        ConversationModel,
+    )
+
+    async with async_session_maker() as session:
+        conversation = ConversationModel(
+            user_id=UUID(pod.owner["id"]), pod_id=UUID(pod.id)
+        )
+        session.add(conversation)
+        await session.commit()
+        return conversation.id
+
+
+async def test_a_group_line_is_written_once_and_taken_up_by_the_turn_answering_it(
+    pod: Pod, db_session: AsyncSession
+):
+    """Logged as it arrived, by somebody the log could not name. Arriving
+    again -- the platform's retry -- it is the same line, unchanged. The turn
+    that takes it up says who said it and which conversation answers it, and
+    seats them; a second turn takes over neither."""
+    place = await _mirrored_group(db_session, pod)
+    uow = SqlAlchemyUnitOfWork(db_session)
+    logged = await post(
+        uow,
+        channel_id=place.channel_id,
+        line=NewLine(
+            sender=Sender(kind=SenderKind.CONTACT, display_name="Ravi"),
+            text="Any update on the partner plan?",
+            source_id=place.id,
+            external_message_id="tg-200-2",
+        ),
+    )
+    assert logged is not None
+    ravi = await open_contact(
+        uow,
+        pod_id=UUID(pod.id),
+        kind=IdentityKind.TELEGRAM,
+        value="777002",
+        strength=IdentityStrength.CHANNEL,
+        display_name="Ravi",
+    )
+    conversation = await _a_conversation(pod)
+
+    again = await post(
+        uow,
+        channel_id=place.channel_id,
+        line=NewLine(
+            sender=Sender.contact(ravi.id, display_name="Ravi"),
+            text="Any update on the partner plan?",
+            source_id=place.id,
+            external_message_id="tg-200-2",
+            conversation_id=conversation,
+        ),
+    )
+    assert again is not None and again.id == logged.id
+    assert (again.sender.contact_id, again.conversation_id) == (None, None)
+
+    taken = await answered_in(
+        uow,
+        channel_id=place.channel_id,
+        source_id=place.id,
+        external_message_id="tg-200-2",
+        conversation_id=conversation,
+        sender=Sender.contact(ravi.id, display_name="Ravi M."),
+    )
+    assert taken is not None and taken.id == logged.id
+    # Named as the line had them: what the group saw them called.
+    assert (taken.sender.contact_id, taken.sender.display_name) == (ravi.id, "Ravi")
+    assert taken.conversation_id == conversation
+    seated = await MemberRepository(db_session).of_principal(
+        place.channel_id, Principal.contact(ravi.id)
+    )
+    assert seated is not None
+
+    kept = await answered_in(
+        uow,
+        channel_id=place.channel_id,
+        source_id=place.id,
+        external_message_id="tg-200-2",
+        conversation_id=await _a_conversation(pod),
+        sender=Sender.contact(ravi.id),
+    )
+    assert kept is not None and kept.conversation_id == conversation
+    assert (
+        await answered_in(
+            uow,
+            channel_id=place.channel_id,
+            source_id=place.id,
+            external_message_id="tg-200-never",
+            conversation_id=conversation,
+            sender=Sender.contact(ravi.id),
+        )
+        is None
+    )
+    await db_session.commit()
+    row = await _line(logged.id)
+    assert (row.sender_contact_id, row.conversation_id) == (ravi.id, conversation)
