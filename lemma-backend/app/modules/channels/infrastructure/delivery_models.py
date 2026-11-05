@@ -220,9 +220,9 @@ class ChannelDeliveryAttemptModel(Base):
 class ChannelPushPendingModel(Base):
     """The lines of one channel waiting to be pushed to one member.
 
-    One row per member and channel. A line they hear is folded in (from
-    ``from_seq``, ``lines`` of them, led by ``lead_seq`` -- the newest that
-    names or asks them, else the newest); ``next_attempt_at`` is
+    One row per member and channel. A line they hear is folded in
+    (``from_seq`` .. ``to_seq``, ``lines`` of them, led by ``lead_seq`` -- the
+    newest that names or asks them, else the newest); ``next_attempt_at`` is
     when they go as one push. Once pushed the row stays empty, with
     ``pushed_at``, until the window after it has passed: a line in that
     window waits for its end rather than going alone.
@@ -232,7 +232,8 @@ class ChannelPushPendingModel(Base):
     __table_args__ = (
         CheckConstraint(
             "(lines = 0) = (from_seq IS NULL) AND (from_seq IS NULL) = "
-            "(lead_seq IS NULL) AND (lead_seq IS NULL) = (next_attempt_at IS NULL)",
+            "(to_seq IS NULL) AND (to_seq IS NULL) = (lead_seq IS NULL) AND "
+            "(lead_seq IS NULL) = (next_attempt_at IS NULL)",
             name="ck_channel_push_pending_window",
         ),
         ForeignKeyConstraint(
@@ -254,8 +255,8 @@ class ChannelPushPendingModel(Base):
     )
     pod_id: Mapped[UUID] = mapped_column(nullable=False)
     from_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    #: The newest line folded in. Nothing reads it; it is still written, for
-    #: code running against a schema before 0072, whose check holds it.
+    #: The newest line folded in. Nothing reads it; it is still written,
+    #: because the window check holds it until the contract migration.
     to_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lead_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lines: Mapped[int] = mapped_column(

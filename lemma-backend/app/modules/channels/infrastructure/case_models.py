@@ -119,9 +119,9 @@ class ChannelCaseModel(UUIDAuditBase):
     )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     #: The channel's newest line when it opened. Nothing reads it; it is still
-    #: written, for code running against a schema before 0072, where it is
-    #: NOT NULL.
-    opened_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: written, because the column is NOT NULL until the contract migration
+    #: that drops it.
+    opened_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="open", server_default=text("'open'")
     )
