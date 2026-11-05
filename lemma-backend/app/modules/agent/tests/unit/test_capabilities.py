@@ -289,7 +289,8 @@ def test_the_memory_contract_is_written_down_exactly_once():
 def test_the_memory_contract_is_appended_only_when_memory_is_enabled():
     def has_memory(capabilities: list[object]) -> bool:
         return any(
-            type(c) is Instructions and c.get_instructions() == load_memory_prompt()
+            type(c) is Instructions
+            and c.get_instructions() == load_memory_prompt(timing=False)
             for c in capabilities
         )
 
@@ -769,50 +770,13 @@ async def test_run_context_and_deferral_in_real_run():
     # First request: just before the person's message, which stays last.
     assert user_texts(turns[0])[-2:] == [context, "hello"]
 
-    # Later request: once, at the tail -- after the tool result, not left in
-    # the middle of a transcript the next run will replay without it.
+    # Later request: once, where the first request had it -- nothing already
+    # sent moves, so the request starts with the whole of the one before.
     assert len(turns) == 2
-    assert user_texts(turns[1]).count(context) == 1
-    tail = turns[1][-1].parts
-    assert isinstance(tail[-1], UserPromptPart) and tail[-1].content == context
-    assert user_texts(turns[1])[0] == "hello"
+    assert user_texts(turns[1]) == [context, "hello"]
 
     # Prompt-cache session affinity is applied to the request settings.
     assert captured["settings"].get("openai_user") == str(conversation_id)
-
-
-@pytest.mark.anyio
-async def test_on_anthropic_the_context_part_marks_the_prefix_before_it():
-    """The breakpoint goes in front of the part, which moves every step: one
-    after it would cache a prefix no later request starts with."""
-    from pydantic_ai.messages import CachePoint, ModelMessage, ModelRequest
-
-    history: list[ModelMessage] = [
-        ModelRequest(parts=[UserPromptPart(content="earlier question")]),
-        ModelResponse(parts=[TextPart("earlier answer")]),
-    ]
-    seen: list[list[object]] = []
-
-    def model_fn(messages, info: AgentInfo) -> ModelResponse:
-        del info
-        seen.append(list(messages))
-        return ModelResponse(parts=[TextPart("done")])
-
-    context = "<run_context>\nx\n</run_context>"
-    agent = Agent(
-        FunctionModel(model_fn),
-        capabilities=[RunContextCapability(context, mark_cache_boundary=True)],
-    )
-    await agent.run("hello", message_history=history, deps=object())
-
-    part = next(
-        part
-        for message in seen[0]
-        for part in getattr(message, "parts", [])
-        if isinstance(part, UserPromptPart) and isinstance(part.content, list)
-    )
-    assert isinstance(part.content[0], CachePoint)
-    assert part.content[1] == context
 
 
 _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
@@ -828,7 +792,12 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "display_resource",
     "request_approval",
     "ask_user",
+    # Always there, open question or not: see `tool_catalog._seen_and_placed`.
+    "answer_question",
     "write_todos",
+    # Delegation is one visible tool: behind search it went unused, and a
+    # reveal rewrote the cached tool array (subagents.md).
+    "delegate",
     # The pod's own data and files. Visible on purpose, and it is the one entry
     # here that costs real prefix budget: ten schemas in every pod-default
     # prompt. Deferred, they went almost unused — most conversations that
@@ -863,7 +832,7 @@ async def test_pod_default_visible_toolset_is_slim():
 
     assert visible == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
     assert any(isinstance(c, ToolSearch) for c in capabilities)
-    # Sub-agents stay deferred: delegating is a deliberate step.
+    # `delegate` is in view; the rest of the sub-agent controls stay deferred.
     assert {"spawn_subagent", "interact_subagent", "query_subagents"} <= deferred
     assert not any(name.startswith("pod_") for name in deferred)
     # Asking for a login is the deliberate step past `web_fetch`.
@@ -871,7 +840,7 @@ async def test_pod_default_visible_toolset_is_slim():
     # The hint names what is deferred -- with a line each -- and nothing else.
     [hint] = _hint(capabilities)
     assert "spawn_subagent" in hint
-    assert "Start a pod agent as a linked child conversation" in hint
+    assert "Deprecated: use `delegate`" in hint
     assert {"say", "listen", "list_voices"} <= deferred
     assert "Speaking and transcribing" in hint
     assert "pod_tables" not in hint

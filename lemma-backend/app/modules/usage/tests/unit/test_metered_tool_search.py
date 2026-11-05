@@ -170,3 +170,35 @@ def test_only_the_optional_tool_search_is_left_to_the_local_fallback() -> None:
     # A named strategy has no local equivalent: it stays, and stays unpriceable.
     assert _with_local_tool_search(ModelRequestParameters(native_tools=[named])) is None
     assert _with_local_tool_search(ModelRequestParameters()) is None
+
+
+class LimitedFromTheFirstRequestOnly(Accounting):
+    """A limit that reports itself on the run's first request and not after."""
+
+    def __init__(self) -> None:
+        super().__init__(limited=True)
+
+    async def begin(
+        self,
+        request_id: UUID,
+        now: datetime,
+        *,
+        priceable: bool = True,
+        in_flight: bool = False,
+    ) -> bool:
+        limited = await super().begin(
+            request_id, now, priceable=priceable, in_flight=in_flight
+        )
+        self.limited = False
+        return limited
+
+
+async def test_once_a_run_searches_locally_it_keeps_searching_locally(
+    profile: dict[str, object],
+) -> None:
+    """Chosen once per run: switching back to the native search would rewrite
+    the tool array, the front of every later request's cached prefix."""
+    sent = await _run(profile, LimitedFromTheFirstRequestOnly())
+
+    assert len(sent) == 2
+    assert [_native_kinds(parameters) for parameters in sent] == [[], []]

@@ -159,6 +159,8 @@ class PodAskDelivery:
                         content=content,
                         agent_name=None,
                         message_metadata=metadata,
+                        # Continues the run it answers.
+                        kind=None,
                     )
             finally:
                 reset_current_context(token)

@@ -19,6 +19,7 @@ from app.modules.agent.application.turns.admit import AdmitMessage
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID_REQUEST_KEY
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.value_objects import AgentRunStartResult
 from app.modules.agent.infrastructure import repositories
 from app.modules.agent.services.conversation_access import (
@@ -73,8 +74,12 @@ class SendMessage:
         require_execute_grant: bool = True,
         typed_in_lemma: bool = False,
         client_message_id: str | None = None,
+        kind: RunKind = RunKind.CHAT,
     ) -> AgentRunStartResult:
         """Store a message and start, or join, the run that answers it.
+
+        ``kind`` is who a run it starts is for: each entry point says
+        (``domain/run_kind``); a person in Lemma is the default.
 
         ``typed_in_lemma`` is only ever the composer's to say: typed into a
         group's conversation the message is marked as written in Lemma
@@ -106,6 +111,7 @@ class SendMessage:
             require_execute_grant=require_execute_grant,
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
+            kind=kind,
         )
         if not typed_in_lemma and conversation_id is not None:
             return await start()
@@ -130,6 +136,7 @@ class SendMessage:
         require_execute_grant: bool,
         typed_in_lemma: bool,
         client_message_id: str | None,
+        kind: RunKind,
     ) -> AgentRunStartResult:
         conversation = await self._get_or_create_conversation(
             conversation_id=conversation_id,
@@ -168,6 +175,7 @@ class SendMessage:
             message_metadata=message_metadata,
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
+            kind=kind,
         )
 
     async def _get_or_create_conversation(

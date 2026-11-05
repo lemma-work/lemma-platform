@@ -9,6 +9,8 @@ action through ``request_approval``.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from collections.abc import Mapping
 from typing import Any
 
@@ -333,7 +335,11 @@ SPECS = (
             replay=_record_write_replay,
         ),
     ),
-    tool(pod_query, ToolGroup.POD, _read("Query tables with SQL", view="table")),
+    tool(
+        pod_query,
+        ToolGroup.POD,
+        replace(_read("Query tables with SQL", view="table"), core=True),
+    ),
     tool(pod_list_files, ToolGroup.POD, _read("List files")),
     tool(pod_read_file, ToolGroup.POD, _read("Read a file")),
     # Can overwrite an existing file; writing the same content twice leaves the

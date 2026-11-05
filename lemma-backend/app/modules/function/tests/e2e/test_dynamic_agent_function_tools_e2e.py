@@ -203,7 +203,8 @@ async def test_dynamic_tools_surface_a_failing_function_and_a_schema_carrying_ag
     graceful tool failure, not a crashed run (`run.status != COMPLETED`). And
     an `agent_*` tool for a child agent that declares its own `input_schema`/
     `output_schema` takes flat schema kwargs rather than the single-string
-    fallback, and returns the child's structured dict output as-is.
+    fallback, and returns the child's structured dict output under ``output``,
+    beside the status that says it is an answer rather than a question.
     """
     del worker, configure_workspace_api_url
     runtime = await _create_runtime_profile(
@@ -348,4 +349,6 @@ async def {failing_function_name}(
 
     schema_result = returns["dynamic-agent-schema"]
     assert isinstance(schema_result, dict)
-    assert "value" in schema_result
+    assert schema_result["status"] == "COMPLETED", schema_result
+    assert isinstance(schema_result["output"], dict)
+    assert "value" in schema_result["output"]

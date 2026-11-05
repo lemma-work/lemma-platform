@@ -34,6 +34,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts.contacts import (
     forget_contact_conversations,
 )
+from app.modules.agent.contracts.model_history import forget_model_history
 from app.modules.agent_surfaces.contracts.contacts import forget_contact_senders
 from app.modules.channels.contracts.contacts import forget_contacts_in_channels
 from app.modules.contacts.contracts.visitor_sessions import (
@@ -102,6 +103,8 @@ async def forget_contact(
         # Channels first: their locks are taken before the lines under them,
         # as every writer to a channel takes them.
         await forget_contacts_in_channels(uow, pod_id=pod_id, contact_ids=everyone)
+        # What any run of the pod was sent of them, as it was sent.
+        await forget_model_history(uow, pod_id=pod_id)
         conversations = 0
         ended: list[UUID] = []
         for one in everyone:
