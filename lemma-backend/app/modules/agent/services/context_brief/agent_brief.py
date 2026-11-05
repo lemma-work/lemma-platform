@@ -15,7 +15,8 @@ changes when somebody edits the pod.
 Connection discipline: each DB read runs in its own short UoW that is released
 immediately, and storage I/O (the file walk) is isolated in its own UoW so it
 never extends a span. The whole rendered brief is cached per
-(agent, pod, user, is_default) for ``agent_context_brief_cache_ttl_seconds``, so
+(agent, pod, user, is_default, the pod's inventory token) for
+``agent_context_brief_cache_ttl_seconds``, so
 a user's repeated runs against the same agent skip the build (and the DB)
 entirely -- across conversations, not just within one. The memory section has
 its own entry and its own TTL, for the reason above.
@@ -33,6 +34,7 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.core.infrastructure.db.pod_inventory import pod_inventory_generation
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -94,7 +96,12 @@ _MAX_MEMBERS = 25
 # takes from the conversation is whether this is the pod default assistant, which
 # selects between those two branches -- so that boolean belongs in the key and
 # the conversation id does not.
-_BriefKey = tuple[UUID, UUID, UUID, bool]
+#
+# Keyed by the pod's inventory token too (`core/infrastructure/db/pod_inventory`):
+# a committed change to anything the brief lists replaces it, so the next run
+# builds afresh instead of reading the pod as it was until the TTL ran out. An
+# unknown token (Redis down) reads and writes nothing.
+_BriefKey = tuple[UUID, UUID, UUID, bool, str | None]
 _brief_cache: RedisJsonCache | None = None
 
 logger = get_logger(__name__)
@@ -153,8 +160,13 @@ def _cache_suffix(key: _BriefKey) -> str:
     return ":".join(str(part) for part in key)
 
 
+def _cache_for(key: _BriefKey) -> RedisJsonCache | None:
+    """The cache, unless the pod's inventory token is unknown."""
+    return None if key[-1] is None else _get_brief_cache()
+
+
 async def _get_cached_brief(key: _BriefKey) -> str | None:
-    cache = _get_brief_cache()
+    cache = _cache_for(key)
     if cache is None:
         return None
     try:
@@ -168,7 +180,7 @@ async def _get_cached_brief(key: _BriefKey) -> str | None:
 
 
 async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
-    cache = _get_brief_cache()
+    cache = _cache_for(key)
     if cache is None:
         return
     try:
@@ -248,7 +260,13 @@ class AgentContextBriefBuilder:
         # thing the conversation contributes, so it is resolved into the key.
         is_default = agent.kind is AgentKind.POD_DEFAULT
         with run_phase("context_brief") as span:
-            key: _BriefKey = (agent.id, pod_id, user_id, is_default)
+            key: _BriefKey = (
+                agent.id,
+                pod_id,
+                user_id,
+                is_default,
+                await pod_inventory_generation(pod_id),
+            )
             cached = _decoded(await _get_cached_brief(key))
             span.set_attribute("lemma.cache_hit", cached is not None)
             if cached is None:

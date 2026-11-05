@@ -63,7 +63,9 @@ def _tool_summaries(specs: Sequence[ToolSpec]) -> list[tuple[str, str]]:
     ]
 
 
-def deferred_tools_hint(groups: Sequence[Sequence[ToolSpec]]) -> str | None:
+def deferred_tools_hint(
+    groups: Sequence[Sequence[ToolSpec]], *, by_entry: bool = False
+) -> str | None:
     """Build the instruction block listing the deferred tool groups, or None.
 
     Names alone told the model a tool existed but not when to reach for it —
@@ -85,10 +87,16 @@ def deferred_tools_hint(groups: Sequence[Sequence[ToolSpec]]) -> str | None:
         sections.append("\n".join(lines))
     if not sections:
         return None
+    how = (
+        "Find one with `search_tools`, which returns its parameters, then run "
+        "it with `call_tool`, passing its name and arguments"
+        if by_entry
+        else "Search for one by what you need it to do and it becomes callable "
+        "like any other tool"
+    )
     return (
         "# Tools available on demand\n\n"
-        "To keep this prompt small, the tools below are not loaded yet. Search "
-        "for one by what you need it to do and it becomes callable like any "
-        "other tool; the descriptions below are enough to decide which to "
-        "reach for.\n\n" + "\n\n".join(sections)
+        f"To keep this prompt small, the tools below are not loaded yet. {how}; "
+        "the descriptions below are enough to decide which to reach for.\n\n"
+        + "\n\n".join(sections)
     )

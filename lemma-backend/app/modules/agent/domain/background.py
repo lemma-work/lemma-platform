@@ -52,6 +52,9 @@ class BackgroundCall:
     plain_model_settings: JsonObject | None = None
     #: Called with the refusal's status code before that second ask.
     on_plain_retry: Callable[[int], None] | None = None
+    #: Where the provider should route it to find its prefix cached:
+    #: ``<pod_id>:<purpose>``, like an agent request's.
+    affinity_key: str | None = None
     #: The tools the call may use, and what they run against.
     tools: Sequence[ToolSpec] = ()
     deps: ToolContext | None = None

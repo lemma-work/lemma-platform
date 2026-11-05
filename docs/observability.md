@@ -180,11 +180,15 @@ What each label means, and what bounds it:
   `interrupted`: the worker went away mid-run (a deploy, a lost lease) and
   another worker resumes it, which counts it again when it does end. Read
   `interrupted` as a deploy signal, not a failure.
-- `kind` -- what started the run, from `run_origin`: `chat` (a person in the
-  app), `surface` (a channel such as Slack or WhatsApp), `schedule`,
-  `workflow` (an AGENT step), `trigger`, `subagent` (another agent called it)
-  or `pod_ask`. A function that starts an agent does so through one of these,
-  so there is no separate `function` kind.
+- `kind` -- who the run was for, its `RunKind`, stored on the run by
+  whatever started it: `chat` (a person in the app), `surface` (a channel
+  such as Slack or WhatsApp), `channel` (a line in Lemma's own channels),
+  `contact` (somebody outside the pod), `schedule`, `workflow` (an AGENT
+  step), `subagent` (another agent delegated it), `pod_ask` or `call` (a
+  voice call's coordinator). A person writing into a schedule's conversation
+  starts a `chat` run. A resume, wake, retry or follow-up takes the kind of
+  the run it continues. A function that starts an agent does so through one of
+  these, so there is no separate `function` kind.
 - `model` -- the model name the run's runtime resolved to. Bounded by the
   configured model catalog; cleaned to `[A-Za-z0-9_.:/-]` and 96 characters so
   a hand-typed custom model cannot carry anything odd. `unknown` when the run

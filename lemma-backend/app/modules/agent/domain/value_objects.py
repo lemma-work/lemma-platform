@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.pause_opening import PauseOpening
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.state_kinds import (
     AgentRunApprovalDecision as AgentRunApprovalDecision,
     FINAL_ANSWER_KINDS as FINAL_ANSWER_KINDS,
@@ -149,6 +150,8 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
+    #: The finished run's kind, read in the statement that moved it.
+    kind: RunKind = RunKind.CHAT
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
@@ -341,6 +344,9 @@ class AgentEventType(str, Enum):
     # can distinguish "busy, retry" from "the provider crashed" and surface a
     # more actionable message.
     REJECTED = "REJECTED"
+    # A step for the run log (``domain/run_log``): what the model was sent
+    # and answered, serialized. Persisted, never shown.
+    RUN_STEP = "RUN_STEP"
 
     @classmethod
     def _missing_(cls, value: object) -> "AgentEventType | None":

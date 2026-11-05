@@ -371,6 +371,7 @@ class RunFinalizer:
             ),
             source_type=run.usage_source,
             source_id=str(run.agent_run_id),
+            parent_agent_run_id=run.parent_agent_run_id,
         )
         await self.usage_recorder.record(
             ctx=context,

@@ -19,6 +19,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.services.run_signals import STEER, signal_run
 from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
 from app.modules.agent.services.turn_staging import (
     AgentTurnStart,
@@ -27,7 +28,9 @@ from app.modules.agent.services.turn_staging import (
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.pauses import PERSON_KINDS
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.private_notes import (
     requested_private_note,
@@ -55,6 +58,7 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.infrastructure.live import publish_conversation_event
 from app.modules.agent.domain.live_events import input_added_payload, message_payload
+from app.modules.agent.services.run_admission import admit_turn
 from app.modules.agent.services.runtime_availability import (
     TurnRuntimeCheck,
     ensure_turn_runtime_available,
@@ -65,8 +69,18 @@ from app.modules.agent.services.surface_context import (
     SurfaceKindReader,
     surface_kind,
 )
-from app.modules.agent.services.usage_preflight import assert_turn_allowed
 from app.modules.usage.contracts.execution import UsageService, build_usage_service
+
+
+def _tell_the_run_in_flight(
+    uow: SqlAlchemyUnitOfWork,
+    conversation: Conversation,
+    run_id: UUID,
+    held: HeldTurn | None,
+) -> None:
+    """A message queued into the run in flight: it claims it when told to."""
+    if held is None and conversation.pod_id is not None:
+        signal_run(uow.session, pod_id=conversation.pod_id, run_id=run_id, op=STEER)
 
 
 def _queued_unless(started_new_run: bool, state: MessageState) -> MessageState:
@@ -154,6 +168,7 @@ class AdmitMessage:
         supersede_pauses: bool = True,
         stage_turn: bool = True,
         commit: bool = True,
+        kind: RunKind | None = RunKind.CHAT,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it. Commits.
 
@@ -172,6 +187,10 @@ class AdmitMessage:
         ``stage_turn=False`` writes the run without the work that executes it,
         for a caller that stages it later with ``stage_agent_turn`` (the
         template a Lemma is started from has to be applied first).
+
+        ``kind`` is who a run it starts is for, as the entry point says; None
+        for a delivery that continues the conversation's last run (a
+        delegated result, replies), whose kind it takes.
         """
         message_state = admitted_state(
             message_metadata,
@@ -220,6 +239,7 @@ class AdmitMessage:
                 superseded_returns = await self.supersede.supersede(
                     conversation=conversation,
                     user_id=user_id,
+                    reply=content,
                 )
             held = await _pause_holding_the_turn(
                 self.pauses,
@@ -234,6 +254,8 @@ class AdmitMessage:
                 user_id=user_id,
                 state=run_state_for(
                     message_state, message_source=message_source(message_metadata)
+                ).model_copy(
+                    update={"kind": await self._new_run_kind(conversation, kind)}
                 ),
             )
         answering_run_id = active_run.id if active_run is not None else None
@@ -253,14 +275,14 @@ class AdmitMessage:
             ),
         )
 
+        if not started_new_run:
+            _tell_the_run_in_flight(self.uow, conversation, answering_run_id, held)
         if started_new_run:
             # The turn commits with the run and its message, or not at all.
+            assert active_run is not None
             await self._stage_unless_held(
                 turn_for(
-                    conversation,
-                    run_id=answering_run_id,
-                    user_id=user_id,
-                    agent_name=agent_name,
+                    conversation, active_run, user_id=user_id, agent_name=agent_name
                 ),
                 held=not stage_turn,
             )
@@ -303,6 +325,17 @@ class AdmitMessage:
         if not held:
             await stage_agent_turn(self.uow, turn)
 
+    async def _new_run_kind(
+        self, conversation: Conversation, kind: RunKind | None
+    ) -> RunKind:
+        """The kind of a run this message starts: the entry point's, or for a
+        delivery the kind of the run it continues."""
+        if kind is None:
+            kind = await self.runs.latest_kind(conversation.id) or RunKind.CHAT
+        return kind.for_audience(
+            answers_outsiders=Audience.of(conversation).answers_outsiders
+        )
+
     async def _create_run(
         self,
         conversation: Conversation,
@@ -312,17 +345,13 @@ class AdmitMessage:
         state: RunState,
     ) -> AgentRun:
         selected_agent_runtime = await turn_runtime(self.uow, conversation, agent)
-        await self.runtime_check(
+        await admit_turn(
             self.uow,
-            selected_agent_runtime,
-            organization_id=conversation.organization_id,
-            user_id=user_id,
-        )
-        await assert_turn_allowed(
-            self.usage_service,
             conversation,
+            selected_agent_runtime,
             user_id=user_id,
-            agent_runtime=selected_agent_runtime,
+            usage_service=self.usage_service,
+            runtime_check=self.runtime_check,
         )
         return await self.runs.create_agent_run(
             conversation_id=conversation.id,

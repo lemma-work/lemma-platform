@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from app.modules.agent.domain.run_budget import RunSpend
+from app.modules.agent.domain.run_log import RunLogReplay
 from app.modules.agent.domain.run_notices import RunNotices
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.tools import ToolSpec
@@ -54,6 +55,9 @@ class HarnessOptions:
     #: budget as the settings give it.
     context_window: int = 0
     should_stop: Callable[[], Awaitable[bool]] | None = None
+    #: Whether to claim what the person sent to the run now: signalled to it,
+    #: or overdue (``services/run_signals``). None claims before every node.
+    steer_due: Callable[[], bool] | None = None
     # What this run may spend before it pauses to ask whether to carry on. None
     # leaves it uncapped, which is what every caller did before budgets existed
     # and what a test that is not about budgets still wants.
@@ -70,4 +74,11 @@ class HarnessOptions:
     #: tool call; a run on the work runtime stops when it says no. None for a
     #: run nothing leases (a test, the API's own).
     lease_alive: Callable[[], bool] | None = None
+    #: The run's place in its conversation, 1 for the first: what each model
+    #: request's prompt-cache report is read against. None when unknown.
+    run_index: int | None = None
+    #: The conversation's run log and what to take in from outside it. None
+    #: rebuilds the history from ``messages`` alone, as a test or a caller
+    #: with no database does.
+    run_log: RunLogReplay | None = None
     extra: JsonObject = field(default_factory=dict)

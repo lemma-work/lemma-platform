@@ -1,4 +1,4 @@
-"""Migration ``0070_outcome_weeks`` creates the week rows and the sweep's index
+"""Migration ``0071_outcome_weeks`` creates the week rows and the sweep's index
 exactly as the models declare them. The e2e suites build their schema from the
 models; a deploy runs the migration. A column, constraint or index in one and
 not the other is a difference every test passes over."""
@@ -20,12 +20,12 @@ _MIGRATION = (
     Path(__file__).resolve().parents[5]
     / "migrations"
     / "versions"
-    / "2026-10-26_outcome_weeks_0070.py"
+    / "2026-10-26_outcome_weeks_0071.py"
 )
 
 
 def _migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("outcome_weeks_0070", _MIGRATION)
+    spec = importlib.util.spec_from_file_location("outcome_weeks_0071", _MIGRATION)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

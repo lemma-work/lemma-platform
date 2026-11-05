@@ -34,6 +34,9 @@ MEASURED_POD = "(config -> 'outcome' ->> 'measure') IS NOT NULL AND NOT is_delet
 
 class Pod(UUIDAuditBase):
     __tablename__ = "pods"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "id"
 
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -101,6 +104,9 @@ class Pod(UUIDAuditBase):
 
 class PodMember(UUIDAuditBase):
     __tablename__ = "pod_members"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "pod_id"
 
     pod_id: Mapped[UUID] = mapped_column(
         ForeignKey("pods.id", ondelete="CASCADE"),
