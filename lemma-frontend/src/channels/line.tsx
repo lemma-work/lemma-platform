@@ -175,7 +175,7 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
     const sentOut = (line.delivered ?? []).filter((one) => one.status === "SENT");
     const places = [
         /* Said there in the first place: written on Slack, mirrored here. */
-        ...(line.sourceId ? [sourceLabel(line.sourceId, channel.places) ?? "the place it was said"] : []),
+        ...(line.sourceId ? [sourceLabel(line.sourceId, channel.places) ?? "the chat it came from"] : []),
         ...sentOut.map((one) => sourceLabel(one.sourceId, channel.places) ?? (one.platform ? platformName(one.platform) : "outside")),
     ];
     const outside = places.length ? sayList([...new Set(places)]) : null;
@@ -249,7 +249,7 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                                 <button type="button" className="cline__act" onClick={() => setSharing(false)}>Keep private</button>
                             </>
                         ) : (
-                            <button type="button" className="cline__act" onClick={() => { share.reset(); setSharing(true); }}>Share with channel</button>
+                            <button type="button" className="cline__act" onClick={() => { share.reset(); setSharing(true); }}>Share with the chat</button>
                         )}
                     </div>
                 )}

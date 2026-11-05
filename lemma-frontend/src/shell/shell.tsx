@@ -1675,7 +1675,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     ever spelled out. `LinkIcon` because
                                     `channels.tsx` already draws a surface it
                                     has no logo for with exactly that. */}
-                                <summary aria-label="Channels" title="Channels">
+                                <summary aria-label={"Where " + (pod.teammate?.name || pod.name) + " answers"} title={"Where " + (pod.teammate?.name || pod.name) + " answers"}>
                                     <LinkIcon size={17} aria-hidden="true" />
                                 </summary>
                                 <div className="head__channel-popover"><Surfaces pod={pod} expanded /></div>

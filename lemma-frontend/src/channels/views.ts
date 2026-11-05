@@ -69,7 +69,7 @@ export function needsPerson(channel: Pick<Channel, "kind" | "assignee" | "status
 /** What an empty view says. */
 export function emptyView(view: ChannelView): string {
     switch (view) {
-        case "all": return "No channels yet.";
+        case "all": return "No chats yet.";
         case "archived": return "Nothing is archived.";
         case "unassigned": return "Every contact who is waiting has somebody on it.";
         case "mine": return "No contacts are assigned to you.";

@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
@@ -18,7 +18,7 @@ async def tell_previous_owner(
     pod_id: UUID,
     previous_owner: UUID,
     actor_id: UUID,
-    group: SurfaceGroup,
+    group: Source,
     what_changed: str,
 ) -> None:
     """A note in the own channel of the member whose group somebody else

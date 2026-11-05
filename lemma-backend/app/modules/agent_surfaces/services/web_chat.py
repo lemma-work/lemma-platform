@@ -45,6 +45,10 @@ from app.modules.agent_surfaces.services.outside_cap import (
     held_for_a_person,
     organization_capped,
 )
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeatsInDatabase,
+    find_or_open,
+)
 from app.modules.agent_surfaces.services.contact_keepers import answers
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.visitor_access import Visitor
@@ -351,38 +355,42 @@ class WebChat:
             await agent_conversations.authorize_surface_conversation(
                 uow, pod_id=widget.pod_id, agent_name=agent_name, user_id=owner
             )
-            await agent_channels.lock_person_in_channel(
-                uow,
+
+            async def theirs(found: UUID) -> UUID:
+                return found
+
+            async def opening() -> UUID:
+                if kept is not None:
+                    await agent_channels.place_in_channel(
+                        uow, conversation_id=kept, channel_id=place.channel_id
+                    )
+                    return kept
+                conversation = await agent_conversations.open_surface_conversation(
+                    uow,
+                    pod_id=widget.pod_id,
+                    agent_name=agent_name,
+                    user_id=owner,
+                    title=f"{widget.name}: {name or 'visitor'}"[:255],
+                    contact_id=contact_id,
+                    channel_id=place.channel_id,
+                    require_execute_grant=False,
+                    started_on="web_widget",
+                )
+                await ConversationSurfaces(uow).record_web_visitor(
+                    conversation.id, widget_id=widget.id, session_id=session.id
+                )
+                return conversation.id
+
+            return await find_or_open(
+                ChannelSeatsInDatabase(uow),
                 channel_id=place.channel_id,
                 pod_id=widget.pod_id,
                 agent_id=widget.agent_id,
-                person_id=contact_id,
-            )
-            found = await self._contacts_conversation(
-                uow, widget, place, owner=owner, contact_id=contact_id
-            )
-            if found is not None:
-                return found
-            if kept is not None:
-                await agent_channels.place_in_channel(
-                    uow, conversation_id=kept, channel_id=place.channel_id
-                )
-                return kept
-            conversation = await agent_conversations.open_surface_conversation(
-                uow,
-                pod_id=widget.pod_id,
-                agent_name=agent_name,
                 user_id=owner,
-                title=f"{widget.name}: {name or 'visitor'}"[:255],
                 contact_id=contact_id,
-                channel_id=place.channel_id,
-                require_execute_grant=False,
-                started_on="web_widget",
+                found=theirs,
+                opening=opening,
             )
-            await ConversationSurfaces(uow).record_web_visitor(
-                conversation.id, widget_id=widget.id, session_id=session.id
-            )
-            return conversation.id
         finally:
             reset_current_context(context_token)
 

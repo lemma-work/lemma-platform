@@ -320,9 +320,9 @@ async def test_a_group_message_reads_the_groups_own_surfaces(
 ) -> None:
     """A group the pod adopted is answered by its surface, not by the crowd's."""
     from app.modules.agent_surfaces.composition import build_surface_ingress
-    from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-        SurfaceGroupRepository,
-    )
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent_surfaces.domain.groups import group_place
+    from app.modules.channels.contracts.places import adopt_place
 
     monkeypatch.setattr(surface_settings, "telegram_bot_token", "123:shared")
     sessions = shared_bot
@@ -338,10 +338,10 @@ async def test_a_group_message_reads_the_groups_own_surfaces(
         mine_id = mine.id
         surface = mine.to_entity_or_none()
         assert surface is not None
-        await SurfaceGroupRepository(session).ensure(
+        await adopt_place(
+            SqlAlchemyUnitOfWork(session),
             pod_id=UUID(test_pod["id"]),
-            surface=surface,
-            external_channel_id=str(chat_id),
+            place=group_place(surface, chat=str(chat_id), title=None),
         )
         await session.commit()
 

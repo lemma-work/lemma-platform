@@ -25,7 +25,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent_surfaces.tests.e2e.group_timeline import timeline
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -33,9 +33,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.channels.contracts.places import place_heard_on
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
 from app.modules.agent_surfaces.services.whatsapp_groups import WhatsAppGroupOpener
 from app.modules.agent_surfaces.tests.e2e.helpers import (
@@ -133,7 +131,7 @@ def _ingress(payload: dict) -> SurfacePlatformWebhookIngress:
 
 async def _open_group(
     *, surface_id: UUID, owner: UUID, message_store
-) -> tuple[WhatsAppGroupOpener, SurfaceGroup]:
+) -> tuple[WhatsAppGroupOpener, Source]:
     factory = SessionUnitOfWorkFactory(async_session_maker)
     opener = WhatsAppGroupOpener(factory, wait_seconds=0)
     opened = await opener.open(
@@ -148,8 +146,8 @@ async def _open_group(
             adapters=SurfacePlatformAdapterRegistry(),
         )
     async with factory() as uow:
-        group = await SurfaceGroupRepository(uow.session).get(
-            surface_id=surface_id, external_channel_id=GROUP
+        group = await place_heard_on(
+            uow, surface_id=surface_id, external_channel_id=GROUP
         )
     assert group is not None
     return opener, group

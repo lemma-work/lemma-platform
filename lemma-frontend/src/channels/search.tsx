@@ -30,7 +30,7 @@ export function SearchResults({ pod, query }: { pod: Pod; query: string }) {
     const hits = (found.data?.pages ?? []).flatMap((page) => page.items);
     if (settled.length < 2) return <p className="channels__quiet">Type at least two letters to search what was said.</p>;
     return (
-        <section className="channels__section" aria-label={"Lines matching " + settled}>
+        <section className="channels__section" aria-label={"Messages matching " + settled}>
             {found.isPending ? (
                 <p className="all__empty" role="status">Searching…</p>
             ) : found.isError ? (
@@ -39,7 +39,7 @@ export function SearchResults({ pod, query }: { pod: Pod; query: string }) {
                 <p className="channels__quiet" role="status">Nothing said matches “{settled}”.</p>
             ) : (
                 <>
-                    <p className="sr-only" role="status">{hits.length === 1 ? "1 line found" : hits.length + (found.hasNextPage ? " or more" : "") + " lines found"}</p>
+                    <p className="sr-only" role="status">{hits.length === 1 ? "1 message found" : hits.length + (found.hasNextPage ? " or more" : "") + " messages found"}</p>
                     <ul className="crows chsearch">
                         {hits.map((hit) => {
                             const where = channelTitle({ kind: hit.channel.kind, title: hit.channel.title, person: hit.channel.person, sources: [] }, pod.name);

@@ -5,8 +5,10 @@ person's last one. Past that, a message to a member goes as an approved
 template asking them to reply (``member_reach``), and the message itself is
 held here -- in ``surface_conversation_state``, so it outlives any one worker
 -- until they do. Their reply reopens the window: the transaction that writes it
-turns what was held into ``surface_deliveries`` rows, which the destination
-pump sends before anything else is said.
+posts what was held as the agent's lines at the place they wrote, each with its
+delivery there (``channel_deliveries``). That is the queue the answer to their
+reply goes by too, in the order lines were written, so what waited arrives
+first: their reply's answer is a later line, and waits behind them.
 
 Held for a week. A message nobody came back for in that time is dropped when
 they finally do, rather than delivered as if it were news.
@@ -26,7 +28,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.domain.deliveries import DeliveryContent
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
     ConversationSurfaces,
 )
@@ -34,9 +36,8 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
-from app.modules.agent_surfaces.services.surface_deliveries import (
-    stage_conversation_message,
-)
+from app.modules.agent_surfaces.services.run_reply_lines import agent_sender
+from app.modules.channels.contracts import NewLine, post, source_by_id
 
 logger = get_logger(__name__)
 
@@ -140,21 +141,24 @@ async def stage_held_replies(
     uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
-    pod_id: UUID | None,
+    source_id: UUID | None,
     platform: SurfacePlatform | str,
     now: datetime | None = None,
 ) -> int:
-    """Write what was held for the person who just wrote as deliveries.
+    """Post what was held for the person who just wrote, at ``source_id`` --
+    the place they wrote -- as the agent's lines, each delivered there.
 
     In the transaction that writes their message, so the held messages are on
     record -- and cleared from the conversation -- exactly when the message
-    that reopened the window is, and the destination pump sends them at once
-    -- before the run answering that message has finished. Keyed by the set's version, so a
-    retried ingest writes them once. The read is locked, so a hold racing this
+    that reopened the window is, and are lines before the run answering that
+    message has even started: its answer goes to the same place behind them.
+    Each line's client id is the set's version and its place in it, so a
+    retried ingest posts them once. The read is locked, so a hold racing this
     waits and stays held for the next reply rather than being cleared unsent.
 
     Only on a platform with a reply window: nothing is held anywhere else, and
-    every inbound message would otherwise pay a read to find that out.
+    every inbound message would otherwise pay a read to find that out. With no
+    place to say them at, nothing is cleared: the next reply posts them.
     """
     capabilities = get_platform_capabilities(
         platform.value if isinstance(platform, SurfacePlatform) else str(platform)
@@ -164,20 +168,31 @@ async def stage_held_replies(
     held = await _held(uow, conversation_id, for_update=True)
     if held is None:
         return 0
+    source = await source_by_id(uow, source_id) if source_id is not None else None
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    if source is None or conversation is None:
+        return 0
+    sender = await agent_sender(uow, conversation)
     fresh_since = (now or datetime.now(UTC)) - HOLD_FOR
     token = held.claim_token()
     staged = 0
     for index, reply in enumerate(held.replies):
         if reply.held_at < fresh_since:
             continue
-        await stage_conversation_message(
+        line = await post(
             uow,
-            idempotency_key=f"held:{conversation_id}:{token}:{index}",
-            conversation_id=conversation_id,
-            pod_id=pod_id,
-            content=DeliveryContent(text=reply.message, plain=True, purpose="held"),
+            channel_id=source.channel_id,
+            line=NewLine(
+                sender=sender,
+                text=reply.message,
+                target_source_id=source.id,
+                client_message_id=f"held:{conversation_id}:{token}:{index}",
+                conversation_id=conversation_id,
+            ),
+            deliver_to=[source.id],
         )
-        staged += 1
+        if line is not None:
+            staged += 1
     await ConversationSurfaces(uow).clear_held_replies(
         conversation_id, matching=held.identity()
     )

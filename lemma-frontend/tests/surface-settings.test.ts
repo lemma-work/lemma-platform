@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { AgentSurfaceResponse } from "lemma-sdk";
-import { isOwnBot, surfaceDraft, surfacePatch, surfaceStatus } from "../src/data/surface-settings.ts";
+import { isOwnBot, sayReachedOtherWays, surfaceDraft, surfacePatch, surfaceStatus } from "../src/data/surface-settings.ts";
 import { readConnectable } from "../src/data/connectable.ts";
 import { fields, payload, problems } from "../src/connect/schema.ts";
 
@@ -107,4 +107,12 @@ test("only the space's own bot answers contacts", () => {
     assert.equal(isOwnBot({ ...surface, platform: "WHATSAPP", pod_connector: "whatsapp-support" } as AgentSurfaceResponse), true,
         "a surface on one of the pod's shared connectors answers as the space's own account");
     assert.equal(isOwnBot({ ...surface, platform: "TELEGRAM", credential_mode: "CUSTOM" } as AgentSurfaceResponse), true);
+});
+
+test("the reach sheet counts only the ways in that answer", () => {
+    const way = (id: string, active: boolean, status?: string) => ({ id, platform: "WHATSAPP", name: id, mine: true, agentName: "pod_default", handle: "+15550100", active, status });
+    assert.equal(sayReachedOtherWays("Pod", []), "Pod can only be reached here, in Lemma.");
+    assert.equal(sayReachedOtherWays("Pod", [way("off", false, "INACTIVE")]), "Pod can only be reached here, in Lemma.");
+    assert.equal(sayReachedOtherWays("Pod", [way("on", true), way("setup", false, "NEEDS_SETUP")]), "Pod can also be reached one other way.");
+    assert.equal(sayReachedOtherWays("Pod", [way("a", true), way("b", true)]), "Pod can also be reached 2 other ways.");
 });
