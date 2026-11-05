@@ -101,6 +101,44 @@ async def test_a_contacts_case_is_one_row_that_closes_and_opens_again(
     assert by_hand.id == case.id and by_hand.closed_at is None
 
 
+async def test_a_case_closed_before_it_was_kept_opens_asking_for_nobody(
+    pod: Pod, db_session: AsyncSession
+):
+    """A case closed the old way kept its call for a person and its
+    acknowledgement; opened again by the contact's next line, it holds
+    neither, and nobody holding it, it is not waiting on a person."""
+    source, contact_id = await contact_place(db_session, pod)
+    await db_session.execute(
+        text(
+            "UPDATE channel_cases SET status = 'closed', closed_at = now(),"
+            " attention_at = now(), attention_reason = 'Refund?',"
+            " acknowledged_at = now() WHERE channel_id = :channel"
+        ),
+        {"channel": source.channel_id},
+    )
+    await db_session.commit()
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    await post(
+        uow,
+        channel_id=source.channel_id,
+        line=NewLine(
+            sender=Sender.contact(contact_id), text="Back again", source_id=source.id
+        ),
+    )
+    await db_session.commit()
+
+    [case] = await _cases(db_session, source.channel_id)
+    assert (case.status, case.closed_at) == ("open", None)
+    assert (case.attention_at, case.attention_reason) == (None, None)
+    assert case.acknowledged_at is None
+    waiting = await pod.client(pod.editor).get(pod.base, params={"needs_person": True})
+    assert waiting.status_code == 200, waiting.text
+    assert str(source.channel_id) not in {
+        each["id"] for each in waiting.json()["items"]
+    }
+
+
 async def test_only_a_contacts_channel_has_a_case(pod: Pod, db_session: AsyncSession):
     made = await group(pod)
     uow = SqlAlchemyUnitOfWork(db_session)

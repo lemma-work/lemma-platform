@@ -270,7 +270,12 @@ class CaseRepository:
     ) -> tuple[ChannelCaseModel, bool] | None:
         """The channel's case, open: opened again if it was closed (``True``),
         made if the channel had none; ``None`` for a channel that is not a
-        contact's."""
+        contact's.
+
+        Opened again, it starts a new wait: no call for a person, nothing told
+        the contact yet. ``_close`` clears both, but a case closed before it
+        did -- when the next line opened a new case instead -- still holds
+        them."""
         head = await self._head(channel_id)
         if head is None:
             return None
@@ -284,6 +289,9 @@ class CaseRepository:
             return case, False
         case.status = _OPEN
         case.closed_at = None
+        case.attention_at = None
+        case.attention_reason = None
+        case.acknowledged_at = None
         return case, True
 
     def _new(
