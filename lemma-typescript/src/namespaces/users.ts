@@ -1,5 +1,6 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { UserProfileRequest } from "../openapi_client/models/UserProfileRequest.js";
+import type { AccountDeletionRequest } from "../openapi_client/models/AccountDeletionRequest.js";
 import type { FirstWorkspaceRequest } from "../openapi_client/models/FirstWorkspaceRequest.js";
 import { UsersService } from "../openapi_client/services/UsersService.js";
 
@@ -31,5 +32,13 @@ export class UsersNamespace {
 
   upsertProfile(payload: UserProfileRequest) {
     return this.client.request(() => UsersService.userProfileUpsert(payload));
+  }
+
+  /** Delete the signed-in person's account for good. `confirm_email` is the
+   *  account's own address, typed by the person. Every session ends, this one
+   *  included; refusals (409 `ACCOUNT_DELETION_SOLE_OWNER`, a billing code,
+   *  400 `ACCOUNT_DELETION_CONFIRMATION_MISMATCH`) change nothing. */
+  deleteAccount(payload: AccountDeletionRequest) {
+    return this.client.request(() => UsersService.userCurrentDelete(payload));
   }
 }

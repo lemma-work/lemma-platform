@@ -55,6 +55,10 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # confirmed in their own signed-in Lemma session, which is half the proof.
     # Driven by the app's people and profile screens, not by software.
     "telegram_identity_link.",
+    # A person deleting their own account: done in the app or on the website's
+    # deletion page, after reading what it does, never by software acting for
+    # them -- workload tokens are refused on the route anyway.
+    "user.current.delete",
     # Membership/governance surface not yet exposed in CLI/SDK facades
     "org.invitation.",
     "org.member.",
