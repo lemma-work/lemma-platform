@@ -15,7 +15,6 @@ import {
     workRows,
     inSidebar,
     isFramePath,
-    lineTitle,
     repeatedTitles,
     sidebarSections,
     QUIET_AFTER_MS,
@@ -37,6 +36,7 @@ import {
     type View,
 } from "../src/outcomes/model.ts";
 import type { ConversationRef } from "../src/data/types.ts";
+import { chatTitle } from "../src/channels/chat-list.ts";
 import type { Channel } from "../src/channels/model.ts";
 import type { AskedRow } from "../src/thread/waiting-on-you.ts";
 import type { WaitingRow } from "../src/workflow/waiting-inbox.tsx";
@@ -616,10 +616,10 @@ test("the sidebar puts the busiest outcome first and folds the ones gone quiet",
     assert.ok(QUIET_AFTER_MS > 0);
 });
 
-test("a private line is named for what it is, and repeated names get told apart", () => {
-    assert.equal(lineTitle("Email"), "Your chat on Email");
-    assert.equal(lineTitle("WhatsApp and Email"), "Your chat on WhatsApp and Email");
-    assert.equal(lineTitle("Notices"), "Notices");
+test("a person's own chat is named for what it is, and repeated names get told apart", () => {
+    assert.equal(chatTitle(channel("mine", "DIRECT", { sources: [{ platform: "RESEND", title: null }] }), "Support"), "Your chat on Email");
+    assert.equal(chatTitle(channel("mine", "DIRECT", { sources: [{ platform: "WHATSAPP", title: null }, { platform: "RESEND", title: null }] }), "Support"), "Your chat on WhatsApp and Email");
+    assert.equal(chatTitle(channel("mine", "DIRECT"), "Support"), "Notices");
     const repeated = repeatedTitles([
         { key: "a", title: "LLM Lab tutor" },
         { key: "b", title: "Casual greeting" },
