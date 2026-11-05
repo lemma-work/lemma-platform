@@ -32,7 +32,7 @@ channel: they are private workspaces, not shared places.
 | --- | --- |
 | `external_accounts` | An account a pod's bot speaks through -- a Slack team's or Teams tenant's bot, a Telegram bot, an inbox, a WhatsApp number, a web widget -- keyed per pod by platform, `workspace_key` and `bot_key` (`agent_surfaces`' `account_of`: a Slack or Teams account names the workspace *and* the bot, so two agents' apps in one workspace are two accounts; a WhatsApp number is keyed by its phone-number id, a Telegram bot by its id). `bot_key` is NULL until the bot's id is known; when the surface that reached the account learns it, that account is given it in place, so its places, channels and history stay one. A place belongs to an account rather than a surface, so a reinstalled bot -- the same app, so the same bot id, or the same WhatsApp number -- keeps its places; `surface_id` is the installation that reaches it now |
 | `channels` | One place per pod: `kind`, `visibility` (`PUBLIC` or `PRIVATE`; only a group may be public), a `title` and `topic`, whose it is (`member_user_id` for `DIRECT`, `contact_id` for `CONTACT`, each unique per pod), when it was archived. A contact's channel says whether its agents answer (`agents_answer`) and how long a member who stepped in holds the contact (`hand_back_after_hours`), and names its current case (`current_case_id`). The timeline's head: `last_seq`, `last_line_id`, `last_line_at`, and how many of its lines are thread replies (`replies`) |
-| `channel_cases` | A contact's channel's episodes of being answered, one open at a time (`uq_channel_cases_open`) and the open one always the channel's current case; only a contact's channel has any (the key to the channel carries its `kind`). When it opened (`opened_at`), where it stands (`status`: `open`, `waiting_on_contact`, `closed`, with `closed_at`), who answers by hand (`assignee_user_id`, `assigned_at`, `assignee_last_line_at`), a call for a person (`attention_at`, `attention_reason`) and the acknowledgement of this wait (`acknowledged_at`). Nothing reads its history, so none is kept: `opened_seq`, `first_response_at`, `first_response_by_user_id` and `closed_by_user_id` are left from before (`opened_seq` is still written while an older schema needs it) |
+| `channel_cases` | A contact's channel's case: one row, made with the channel and kept (`channels.current_case_id`), opened again rather than replaced; only a contact's channel has one (the key to the channel carries its `kind`). Earlier cases of a channel made before a case was kept are rows its `current_case_id` does not name, and nothing reads them. When it was made (`opened_at`), where it stands (`status`: `open`, `waiting_on_contact`, `closed`, with `closed_at`), who answers by hand (`assignee_user_id`, `assigned_at`, `assignee_last_line_at`), a call for a person (`attention_at`, `attention_reason`) and the acknowledgement of this wait (`acknowledged_at`). Nothing reads its history, so none is kept: `opened_seq`, `first_response_at`, `first_response_by_user_id` and `closed_by_user_id` are left from before (`opened_seq` is still written while an older schema needs it) |
 | `channel_case_events` | No longer written: it held every change to a case, and nothing read it |
 | `channel_members` | Who is in a channel -- a member, a contact or an agent -- with their `role`, how a person hears of it outside the app (`notify`, `notify_via`, `muted_until`) and, for an agent, when it answers (`answers`). A person's seat keeps when they last spoke there and the name they spoke under (`last_spoke_at`, `last_name`): who has spoken in a group is read from the seats, never the lines. Every seat says why it was taken (`seated_by`, below) |
 | `channel_read_state` | How far each member has read each channel's timeline, in the channel's pod: `last_read_seq`, and how many of the lines up to it are thread replies (`read_replies`), so unread is exact and counted by number (below). Apart from the seat: a member reads a public group they never joined, and somebody named where they have no read number is given one here, at the channel's head before the line naming them |
@@ -232,19 +232,23 @@ out after the commit (`channels.pushes`, below), outside the lock. A line
 heard on a platform is written last in the inbound's transaction, after the
 turn it starts, so the lock is held from the append to the commit.
 
-A contact's channel is made with its first case. A member writing to the
-contact is assigned if nobody is, is the case's first response if nobody has
-written yet, and the case waits on the contact; the contact writing opens it
-again. A line after the case closed opens the next one, still held by the
-member who answered the last (the hand-back window lets them go). Setting the
-status or an assignee on a closed case by hand reopens that case, and being
-assigned seats the assignee in the channel. A contact held by a member asks
+A contact's channel is made with its case and keeps that one row: a case is
+where things stand now, not an episode, and nothing is kept of how it got
+there. A member writing to the contact is assigned if nobody is, and the case
+waits on the contact; the contact writing opens it again. Closing sets its
+status and ends its wait (its call for a person and its acknowledgement);
+anything that moves it after -- a line either way, a status or an assignee set
+by hand, a run asking for a person -- opens the same row again, still held by
+the member who answered it (the hand-back window lets them go). Being
+assigned seats the assignee in the channel: a channel's unread lines count
+only for those in it. A contact held by a member asks
 for a reply (`attention`) whenever the contact writes, until the assignee
 writes back; a hand-back clears it. A post writes
-its case in at most one statement per case table, and a new case's id through
-the post's own write to the channel row. Every other case writer takes the
-channel's row lock before the case's, as a post does, so two never open two
-cases and none waits on another the other way round. A change readers see is
+its case in at most one statement per case table, and the id of a case made
+for a channel that had none through the post's own write to the channel row.
+Every other case writer takes the
+channel's row lock before the case's, as a post does, so none waits on another
+the other way round. A change readers see is
 announced as the channel's (`channel.updated`). A group has no case: a
 contact's run calling for a person there (`contracts.call_for_person`) flags
 nothing in it, and the member who looks after them is told as anywhere else.
@@ -546,12 +550,12 @@ merged one up to just before the first line they had not read in either.
 Sources, seats and the conversations working in it move (where the person
 already has a live conversation with that agent there, that one keeps the
 seat and the other leaves the channel), a client id both used is renamed on
-the moved line, the merged channel's cases join the survivor's, agents answer
-only if both let them, and the newer last line shows. Where both had an open
-case the survivor's goes on, taking the more recently assigned member and a
-call for a person either made, and the merged one is closed into it;
-otherwise the open one, or the more recently opened, is current
-(`infrastructure/contact_channels.py`, `infrastructure/cases.py`). It also subscribes to `PodMemberAdded` (their own
+the moved line, the merged channel's case is taken into the survivor's, agents
+answer only if both let them, and the newer last line shows. The survivor
+keeps its one case, taking the more recently assigned member and -- where the
+merged case was open -- its being open, its call for a person if the
+survivor's made none, and its acknowledgement; the merged case goes with its
+channel (`infrastructure/contact_channels.py`, `infrastructure/cases.py`). It also subscribes to `PodMemberAdded` (their own
 channel is made, or brought back from the archive) and `PodMemberRemoved`
 (they are taken out of its channels, unassigned, their questions cancelled
 -- each line touched, each close announced -- and their own channel archived), and

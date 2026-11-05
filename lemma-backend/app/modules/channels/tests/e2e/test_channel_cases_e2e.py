@@ -1,11 +1,10 @@
-"""E2E for a contact's cases: one episode of the pod answering them at a time.
+"""E2E for a contact's case: the pod answering them, as it stands now.
 
-A contact's channel is made with its first case; a member writing steps in;
-closing ends it, and the contact writing again opens the next, still held by
-the member who answered; a member reopening a closed case by hand takes that
-case up again. Only a contact's channel has cases -- the database holds it to
-that -- and a fold keeps both channels' cases, merging two open ones by a
-fixed rule.
+A contact's channel is made with its case and keeps it; a member writing
+steps in; closing ends its wait, and the contact writing again -- or a member
+setting it by hand -- opens the same row, still held by the member who
+answered. Only a contact's channel has a case -- the database holds it to
+that -- and a fold takes the merged channel's case into the survivor's.
 """
 
 from __future__ import annotations
@@ -48,28 +47,32 @@ async def _cases(session: AsyncSession, channel_id: UUID) -> list[ChannelCaseMod
     )
 
 
-async def test_a_contacts_case_runs_from_open_to_closed_and_the_next_opens(
+async def test_a_contacts_case_is_one_row_that_closes_and_opens_again(
     pod: Pod, db_session: AsyncSession
 ):
     source, contact_id = await contact_place(db_session, pod)
     channel = f"{pod.base}/{source.channel_id}"
     editor = pod.client(pod.editor)
-    [first] = await _cases(db_session, source.channel_id)
-    assert (first.status, first.assignee_user_id) == ("open", None)
+    [case] = await _cases(db_session, source.channel_id)
+    assert (case.status, case.assignee_user_id) == ("open", None)
 
     await say(pod, source.channel_id, "On it", as_user=pod.editor)
     shown = (await editor.get(channel)).json()
     assert shown["status"] == "waiting_on_contact"
     assert shown["assignee"]["id"] == pod.editor["id"]
+    uow = SqlAlchemyUnitOfWork(db_session)
+    await call_for_person(uow, channel_id=source.channel_id, reason="Refund?")
+    await db_session.commit()
 
     closed = await editor.patch(channel, json={"status": "closed"})
     assert closed.status_code == 200, closed.text
     assert closed.json()["status"] == "closed"
-    [first] = await _cases(db_session, source.channel_id)
-    assert first.closed_at is not None
+    # Closed, its wait is over: it asks for nobody.
+    assert closed.json()["attention"] is None
+    [closed_case] = await _cases(db_session, source.channel_id)
+    assert closed_case.id == case.id and closed_case.closed_at is not None
 
-    # The contact writes again: a new case, still the editor's to answer.
-    uow = SqlAlchemyUnitOfWork(db_session)
+    # The contact writes again: the same case opens, still the editor's.
     again = await post(
         uow,
         channel_id=source.channel_id,
@@ -84,18 +87,18 @@ async def test_a_contacts_case_runs_from_open_to_closed_and_the_next_opens(
     shown = (await editor.get(channel)).json()
     assert shown["status"] == "open"
     assert shown["assignee"]["id"] == pod.editor["id"]
-    first, second = await _cases(db_session, source.channel_id)
-    assert first.closed_at is not None and second.closed_at is None
+    assert shown["case_id"] == str(case.id)
+    [opened] = await _cases(db_session, source.channel_id)
+    assert opened.id == case.id and opened.closed_at is None
     channel_row = await db_session.get(ChannelModel, source.channel_id)
-    assert channel_row is not None and channel_row.current_case_id == second.id
+    assert channel_row is not None and channel_row.current_case_id == case.id
 
-    # Reopened by hand, a closed case is taken up again: no third case.
+    # Set by hand after closing, it is the same case again.
     await editor.patch(channel, json={"status": "closed"})
     reopened = await editor.patch(channel, json={"status": "waiting_on_contact"})
     assert reopened.json()["status"] == "waiting_on_contact"
-    cases = await _cases(db_session, source.channel_id)
-    assert [case.id for case in cases] == [first.id, second.id]
-    assert cases[1].closed_at is None
+    [by_hand] = await _cases(db_session, source.channel_id)
+    assert by_hand.id == case.id and by_hand.closed_at is None
 
 
 async def test_only_a_contacts_channel_has_a_case(pod: Pod, db_session: AsyncSession):
@@ -128,12 +131,12 @@ async def test_only_a_contacts_channel_has_a_case(pod: Pod, db_session: AsyncSes
             await a_case_for(str(source.channel_id))
 
 
-async def test_a_fold_keeps_both_channels_cases_and_merges_two_open_ones(
+async def test_a_fold_takes_the_merged_case_into_the_survivors_one(
     scenario, db_session: AsyncSession
 ):
-    """The survivor's open case goes on with the merged one's assignee (the
-    more recently assigned) and its own call for a person; the merged case is
-    closed into it and kept."""
+    """The survivor keeps its one case, with the merged one's assignee (the
+    more recently assigned) and its own call for a person; the merged case
+    goes with its channel."""
     await scenario.create_org_with_pod(name_prefix="Channel fold cases")
     pod_id = UUID(scenario.pod_id)
     owner = UUID(scenario.owner_user["id"])
@@ -151,19 +154,55 @@ async def test_a_fold_keeps_both_channels_cases_and_merges_two_open_ones(
     await _merge(db_session, merged=merged, into=survivor)
     await db_session.commit()
     [ours] = await _cases(db_session, kept.channel_id)
+    ours_id = ours.id
     [theirs] = await _cases(db_session, folded.channel_id)
+    theirs_id = theirs.id
 
     await _fold(uow, pod_id, merged=merged, survivor=survivor)
     await db_session.commit()
 
-    cases = {case.id: case for case in await _cases(db_session, kept.channel_id)}
-    assert set(cases) == {ours.id, theirs.id}
+    [current] = await _cases(db_session, kept.channel_id)
+    assert current.id == ours_id
     head = await db_session.get(ChannelModel, kept.channel_id)
-    assert head is not None and head.current_case_id == ours.id
-    current, closed = cases[ours.id], cases[theirs.id]
-    assert current.closed_at is None and closed.closed_at is not None
+    assert head is not None and head.current_case_id == ours_id
+    assert current.closed_at is None
     assert current.assignee_user_id == owner
     assert current.attention_reason == "Refund?"
+    assert await db_session.get(ChannelCaseModel, theirs_id) is None
+
+
+async def test_a_fold_into_a_channel_without_a_case_moves_the_merged_one(
+    scenario, db_session: AsyncSession
+):
+    await scenario.create_org_with_pod(name_prefix="Channel fold no case")
+    pod_id = UUID(scenario.pod_id)
+    owner = UUID(scenario.owner_user["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    kept = await _contact(uow, pod_id, "5554001")
+    folded = await _contact(uow, pod_id, "5554002")
+    survivor = await _contact_of(db_session, kept)
+    merged = await _contact_of(db_session, folded)
+    await post(
+        uow,
+        channel_id=folded.channel_id,
+        line=NewLine(sender=Sender.member(owner), text="Let me check"),
+    )
+    await db_session.execute(
+        text("DELETE FROM channel_cases WHERE channel_id = :kept"),
+        {"kept": kept.channel_id},
+    )
+    await _merge(db_session, merged=merged, into=survivor)
+    await db_session.commit()
+    [theirs] = await _cases(db_session, folded.channel_id)
+    theirs_id = theirs.id
+
+    await _fold(uow, pod_id, merged=merged, survivor=survivor)
+    await db_session.commit()
+
+    [current] = await _cases(db_session, kept.channel_id)
+    assert current.id == theirs_id and current.assignee_user_id == owner
+    head = await db_session.get(ChannelModel, kept.channel_id)
+    assert head is not None and head.current_case_id == theirs_id
 
 
 # -- contacts waiting on a person, in a pod of thousands ---------------------------
