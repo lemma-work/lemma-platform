@@ -144,8 +144,16 @@ class TelegramManagerService:
         surface_config: SurfaceConfig,
         is_enabled: bool,
         pod_name: str,
+        manager_username: str | None,
     ) -> TelegramManagedBotSetup:
-        if not self.configured:
+        """Claim this surface for a setup, or resume the caller's own.
+
+        ``manager_username`` is what `manager_username()` answered, the bot the
+        setup will be linked to. Without one there is nobody to send the person
+        to, so nothing is claimed: a claim refused only afterwards would hold
+        the surface against everyone else in the pod until it expired.
+        """
+        if not self.configured or not manager_username:
             raise TelegramManagerNotConfiguredError()
 
         existing = await self._store.get_by_target(pod_id, surface_name)

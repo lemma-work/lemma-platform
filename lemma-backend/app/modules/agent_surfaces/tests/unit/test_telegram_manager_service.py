@@ -208,6 +208,7 @@ async def _start(
         surface_config=SurfaceConfig(),
         is_enabled=True,
         pod_name="Customer Success",
+        manager_username="lemma_manager_bot",
     )
 
 
@@ -287,23 +288,46 @@ async def test_a_finished_setup_is_shown_when_no_username_can_be_found():
     setup = await _start(service)
 
     with pytest.raises(TelegramManagerNotConfiguredError):
-        await _response(service, setup)
+        await _response(service, setup, manager_username=None)
 
     setup.status = TelegramManagedBotSetupStatus.COMPLETE
     setup.bot_username = "acme_support_bot"
     setup.pod_connector_slug = "telegram-acme-support"
     setup.surface_id = uuid4()
-    live = await _response(service, setup)
+    live = await _response(service, setup, manager_username=None)
     assert live.status == "COMPLETE"
     assert live.launch_url == ""
     assert live.bot_launch_url == "https://t.me/acme_support_bot?start=lemma"
 
     setup.status = TelegramManagedBotSetupStatus.FAILED
     setup.error = "Telegram did not return the managed bot token"
-    failed = await _response(service, setup)
+    failed = await _response(service, setup, manager_username=None)
     assert failed.status == "FAILED"
     assert failed.launch_url == ""
     assert failed.error == "Telegram did not return the managed bot token"
+
+
+@pytest.mark.asyncio
+async def test_a_start_with_no_username_is_refused_before_it_claims_the_surface():
+    """A claim made and then refused would hold the pod's surface against
+    everyone else until it expired, so a start with no manager username to link
+    to claims nothing."""
+    store = _Store()
+    service = _service(store)
+
+    with pytest.raises(TelegramManagerNotConfiguredError):
+        await service.start_setup(
+            user_id=uuid4(),
+            organization_id=uuid4(),
+            pod_id=uuid4(),
+            surface_name="telegram-support",
+            agent_id=None,
+            surface_config=SurfaceConfig(),
+            is_enabled=True,
+            pod_name="Customer Success",
+            manager_username=None,
+        )
+    assert store.by_id == {}
 
 
 @pytest.mark.asyncio
@@ -437,7 +461,7 @@ async def test_a_bot_made_with_no_username_finishes_without_a_link():
         return_value=("telegram-surface-bot", uuid4())
     )
     service._configure_managed_bot = AsyncMock()
-    sent: list[dict] = []
+    sent: list[dict[str, object]] = []
 
     async def _call(method, payload):
         if method == "getManagedBotToken":
@@ -460,7 +484,7 @@ async def test_a_bot_made_with_no_username_finishes_without_a_link():
     saved = await store.get(setup.setup_id)
     assert saved is not None
     assert saved.status is TelegramManagedBotSetupStatus.COMPLETE
-    assert any("ready to use" in (message.get("text") or "") for message in sent)
+    assert any("ready to use" in str(message.get("text") or "") for message in sent)
     assert not any("inline_keyboard" in str(message) for message in sent)
 
 
@@ -851,6 +875,7 @@ async def test_configure_managed_bot_sets_selected_app_as_web_app(monkeypatch):
         surface_config=SurfaceConfig(telegram=SurfaceTelegramConfig(app_name=app_name)),
         is_enabled=True,
         pod_name="Customer Success",
+        manager_username="lemma_manager_bot",
     )
     child = SimpleNamespace(call=AsyncMock(), call_multipart=AsyncMock())
     monkeypatch.setattr(

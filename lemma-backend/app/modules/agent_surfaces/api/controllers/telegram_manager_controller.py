@@ -46,18 +46,20 @@ router = APIRouter(
 _FINISHED_STATUSES = frozenset({"COMPLETE", "FAILED"})
 
 
-async def _response(service, setup) -> TelegramManagedBotSetupResponse:
+async def _response(
+    service, setup, *, manager_username: str | None
+) -> TelegramManagedBotSetupResponse:
     """One setup, as the sheet reads it.
 
-    The manager bot's username is resolved once: it is both what the link points
-    at and what the sheet names, and two answers there would send somebody to a
+    ``manager_username`` is what `TelegramManagerService.manager_username`
+    answered, resolved once by the caller: it is both what the link points at
+    and what the sheet names, and two answers there would send somebody to a
     bot the page did not name.
 
     Only a setup the person is still finishing in Telegram needs that link. A
     finished one is answered without it when no username can be found, so the
     person waiting sees their bot go live, or why it did not, rather than a 503.
     """
-    manager_username = await service.manager_username()
     launch_url = (
         ""
         if not manager_username and setup.status.value in _FINISHED_STATUSES
@@ -133,11 +135,16 @@ async def start_telegram_managed_bot_setup(
         app_name=request.config.telegram.app_name,
         ctx=ctx,
     )
-    # Every read above is done, and `start_setup` is Redis only -- its store
-    # (`TelegramManagedBotSetupStore`) speaks to Redis and nothing else. So the
-    # pooled connection goes back before the setup allocation, which retries up
-    # to five times against Redis to find a free setup id.
+    # Every read above is done, and what follows is Telegram and Redis only --
+    # `start_setup`'s store (`TelegramManagedBotSetupStore`) speaks to Redis and
+    # nothing else. So the pooled connection goes back before the username
+    # lookup and the setup allocation, which retries up to five times against
+    # Redis to find a free setup id.
     async with connection_released(uow.session):
+        # Asked before the setup is claimed, and handed to `start_setup`, which
+        # refuses without one rather than claim this surface for a setup that
+        # has no bot to send anybody to.
+        manager_username = await service.manager_username()
         setup = await service.start_setup(
             user_id=user.id,
             organization_id=organization_id,
@@ -147,8 +154,9 @@ async def start_telegram_managed_bot_setup(
             surface_config=surface_config,
             is_enabled=request.is_enabled,
             pod_name=pod_name,
+            manager_username=manager_username,
         )
-    return await _response(service, setup)
+    return await _response(service, setup, manager_username=manager_username)
 
 
 @router.get(
@@ -167,4 +175,6 @@ async def get_telegram_managed_bot_setup(
         user_id=user.id,
         pod_id=pod_id,
     )
-    return await _response(service, setup)
+    return await _response(
+        service, setup, manager_username=await service.manager_username()
+    )
