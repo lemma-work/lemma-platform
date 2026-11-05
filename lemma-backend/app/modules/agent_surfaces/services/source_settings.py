@@ -15,20 +15,23 @@ from pydantic import BaseModel
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.agent_surfaces.domain.groups import as_group
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.channels.contracts import Source, source_by_id
+from app.modules.channels.contracts.places import (
+    change_place,
+    set_place_owner,
+    shared_places_of_pod,
+)
 
 
 class SourceState(BaseModel):
-    group: SurfaceGroup
+    group: Source
     surface_name: str
     agent_id: UUID | None = None
     owner_name: str | None = None
@@ -51,12 +54,11 @@ class SourceState(BaseModel):
 class SourceSettings:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
-        self.groups = SurfaceGroupRepository(uow.session)
         self.people = SqlAlchemySurfaceRoutingResolutionAdapter(uow)
 
     async def of(self, *, pod_id: UUID, source_id: UUID) -> SourceState | None:
         """A group source of this pod, with what its settings depend on."""
-        group = await self.groups.get_by_id(source_id)
+        group = as_group(await source_by_id(self.uow, source_id))
         if group is None or group.pod_id != pod_id:
             return None
         surface = await self.surface(group.surface_id)
@@ -80,11 +82,7 @@ class SourceSettings:
         self, *, pod_id: UUID, surface: AgentSurfaceEntity
     ) -> list[SourceState]:
         """Every group one of the pod's bots is in, most recently changed first."""
-        groups = [
-            group
-            for group in await self.groups.list_for_pod(pod_id)
-            if group.surface_id == surface.id
-        ]
+        groups = await shared_places_of_pod(self.uow, pod_id, surface_id=surface.id)
         owners = {group.owner_user_id for group in groups if group.owner_user_id}
         in_pod = (
             await self.people.pod_members_among(pod_id, owners) if owners else set()
@@ -119,8 +117,8 @@ class SourceSettings:
     ) -> None:
         """Take a group over, switch its outsiders, or both; each only if given."""
         if new_owner is not None:
-            await self.groups.set_owner(source_id, new_owner)
+            await set_place_owner(self.uow, source_id, new_owner)
         if answers_outsiders is not None:
-            await self.groups.set_answers_outsiders(
-                source_id, answers_outsiders=answers_outsiders
+            await change_place(
+                self.uow, source_id, {"answers_outsiders": answers_outsiders}
             )

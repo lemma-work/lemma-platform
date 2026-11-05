@@ -15,32 +15,32 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
-from app.modules.agent_surfaces.services.group_log import group_source
+from app.modules.agent_surfaces.domain.groups import as_group
 from app.modules.channels.contracts import (
     ChannelMessage,
     NewLine,
     Principal,
     Reader,
     Sender,
+    Source,
     background,
     post,
+    source_by_id,
 )
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
 
 
-async def group_by_id(db_session: AsyncSession, group_id: UUID | str) -> SurfaceGroup:
-    group = await SurfaceGroupRepository(db_session).get_by_id(UUID(str(group_id)))
+async def group_by_id(db_session: AsyncSession, group_id: UUID | str) -> Source:
+    group = as_group(
+        await source_by_id(SqlAlchemyUnitOfWork(db_session), UUID(str(group_id)))
+    )
     assert group is not None, "the group was never made"
     return group
 
 
 async def say(
     db_session: AsyncSession,
-    group: SurfaceGroup,
+    group: Source,
     text: str,
     *,
     sender: Sender,
@@ -49,7 +49,7 @@ async def say(
     """``sender`` said ``text`` in the group, heard where the bot hears it --
     as the platform's message ``external_message_id``, where it matters."""
     uow = SqlAlchemyUnitOfWork(db_session)
-    source = await group_source(uow, group)
+    source = group
     said = await post(
         uow,
         channel_id=source.channel_id,
@@ -70,7 +70,7 @@ def bot_for(principal: Principal, *, agent_id: UUID) -> Sender:
 
 
 async def a_stranger(
-    db_session: AsyncSession, group: SurfaceGroup, *, telegram_id: str, name: str
+    db_session: AsyncSession, group: Source, *, telegram_id: str, name: str
 ) -> Principal:
     """Somebody outside the pod, as a contact of its own -- the way the log
     makes one the first time they speak."""
@@ -86,11 +86,11 @@ async def a_stranger(
 
 
 async def timeline(
-    db_session: AsyncSession, group: SurfaceGroup, *, limit: int = 50
+    db_session: AsyncSession, group: Source, *, limit: int = 50
 ) -> list[ChannelMessage]:
     """Everything said in the group, oldest first, as a member reads it."""
     uow = SqlAlchemyUnitOfWork(db_session)
-    source = await group_source(uow, group)
+    source = group
     return await background(
         uow, channel_id=source.channel_id, reader=Reader.member(), limit=limit
     )

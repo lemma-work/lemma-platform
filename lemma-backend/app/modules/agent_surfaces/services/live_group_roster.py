@@ -184,8 +184,9 @@ def marked_for_member_run(
     """A platform's history as a member's run is shown it: every line, each
     marked by whether somebody outside the pod wrote it.
 
-    The same rule ``group_background`` applies to the pod's own log, for the
-    platforms whose history is read live (Slack). The mark is the pod's answer
+    The mark the pod's own log gets as a run reads it back
+    (``channels.contracts.backgrounds``), for the platforms whose history is
+    read live (Slack). The mark is the pod's answer
     about who holds access (``live_members``), not the platform's: Slack marks
     only another company's lines, and a colleague here with no Lemma account
     reads exactly like a member. The asker's own lines and an app's are no
