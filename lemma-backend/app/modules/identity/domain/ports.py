@@ -28,6 +28,10 @@ class UserRepositoryPort(Protocol):
 
     async def update(self, entity: UserEntity) -> UserEntity: ...
 
+    async def get_for_update(self, id: UUID) -> Optional[UserEntity]:
+        """The user, with their row locked until the transaction ends."""
+        ...
+
     async def save_erased(
         self, entity: UserEntity, *, previous_email: str
     ) -> UserEntity:

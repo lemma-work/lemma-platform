@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, status
 
 from app.core.api.dependencies import UoWDep
+from app.core.api.schemas import ErrorResponse
 from app.core.app_pin import app_request_of
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.identity.api.dependencies import (
@@ -124,6 +125,28 @@ async def upsert_profile(
         "the way."
     ),
     response_model=AccountDeletionResponse,
+    responses={
+        400: {
+            "model": ErrorResponse,
+            "description": "ACCOUNT_DELETION_CONFIRMATION_MISMATCH: the typed "
+            "address is not this account's. Nothing changed.",
+        },
+        403: {
+            "model": ErrorResponse,
+            "description": "ACCOUNT_INACTIVE: the account was already deleted, "
+            "or switched off.",
+        },
+        409: {
+            "model": ErrorResponse,
+            "description": "ACCOUNT_DELETION_SOLE_OWNER (details.organizations "
+            "names them), or the billing provider's code. Nothing changed.",
+        },
+        503: {
+            "model": ErrorResponse,
+            "description": "ACCOUNT_DELETION_UNAVAILABLE: this deployment bills "
+            "and has no billing guard. Nothing changed.",
+        },
+    },
 )
 async def delete_current_user(
     request: Request,

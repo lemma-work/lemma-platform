@@ -20841,7 +20841,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `ACCOUNT_DELETION_CONFIRMATION_MISMATCH: the typed address is not this account's. Nothing changed.`,
+          403: `ACCOUNT_INACTIVE: the account was already deleted, or switched off.`,
+          409: `ACCOUNT_DELETION_SOLE_OWNER (details.organizations names them), or the billing provider's code. Nothing changed.`,
+          422: `Validation Error`,
+          503: `ACCOUNT_DELETION_UNAVAILABLE: this deployment bills and has no billing guard. Nothing changed.`
         }
       });
     }

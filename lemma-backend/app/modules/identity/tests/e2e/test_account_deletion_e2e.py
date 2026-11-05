@@ -14,6 +14,7 @@ Through the real API, SuperTokens and the work runtime:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator, Sequence
 from uuid import UUID, uuid4
 
@@ -130,6 +131,34 @@ async def test_someone_alone_in_their_workspace_takes_it_with_their_account(
     fresh = await async_client.get("/users/me", headers=auth_headers(again))
     assert fresh.status_code == 200, fresh.text
     assert fresh.json()["email"] == person["email"]
+
+
+async def test_two_deletions_of_one_account_at_once_delete_it_once(
+    async_client: AsyncClient, signup_user, db_session: AsyncSession
+):
+    """A double tap, or two devices: the second waits for the first, then finds
+    the account gone -- never a half-deletion or a 500."""
+    person = await signup_user()
+    org_id, pod_id = await _workspace_of(async_client, person)
+
+    first, second = await asyncio.gather(
+        _delete(async_client, person["email"], auth_headers(person)),
+        _delete(async_client, person["email"], auth_headers(person)),
+    )
+
+    # Either the second was let in before the first answered, waited for the
+    # account's lock and found a tombstone (200), or it arrived after and was
+    # refused as deleted (403). Exactly one of them did the deleting.
+    statuses = sorted([first.status_code, second.status_code])
+    assert statuses in ([200, 200], [200, 403]), (first.text, second.text)
+    assert [
+        r.json()["organizations_deleted"]
+        for r in (first, second)
+        if r.status_code == 200
+    ].count(1) == 1
+    assert (await _row(db_session, User, person["id"])).is_deleted is True
+    assert (await _row(db_session, Pod, pod_id)).is_deleted is True
+    assert await _member_ids(db_session, org_id) == set()
 
 
 async def test_a_member_who_deletes_their_account_leaves_their_words_with_the_team(

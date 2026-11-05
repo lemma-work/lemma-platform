@@ -103,7 +103,11 @@ class AccountDeletionService:
     async def delete_account(
         self, user_id: UUID, *, confirm_email: str
     ) -> AccountDeletionOutcome:
-        user = await self.user_repository.get(user_id)
+        # Locked, so two deletions of one account -- a double tap, a second
+        # device -- take turns: the second waits for the first to commit and
+        # then reads the tombstone below, instead of both passing the check
+        # and the second working from memberships that have already gone.
+        user = await self.user_repository.get_for_update(user_id)
         if user is None:
             raise UserNotFoundError()
         # Repeating a deletion that already happened is its own answer. Not

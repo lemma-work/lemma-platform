@@ -41,7 +41,7 @@ class Users:
         self.forgotten_emails: list[str] = []
         self.events: list[object] = []
 
-    async def get(self, id: UUID) -> UserEntity | None:
+    async def get_for_update(self, id: UUID) -> UserEntity | None:
         found = self.rows.get(id)
         return found.model_copy() if found else None
 
