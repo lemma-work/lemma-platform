@@ -54,8 +54,8 @@ class DeliveryReasonCode(StrEnum):
     UNREACHABLE = "UNREACHABLE"
     #: A push to a member who had the app open, and read it there.
     IN_APP = "IN_APP"
-    #: A push held by the member's hourly budget: its lines go in their next
-    #: push of the channel (``channel_push_pending``).
+    #: A push held while the member had the app open: its lines go in their
+    #: next push of the channel (``channel_push_pending``), if still unread.
     FOLDED = "FOLDED"
     # -- FAILED: tried again after a backoff --------------------------------------
     #: The platform could not take it just now, or our side could not get it

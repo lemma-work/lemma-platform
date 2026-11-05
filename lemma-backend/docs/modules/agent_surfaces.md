@@ -162,16 +162,17 @@ waiting out its backoff; settling one announces the next.
 A **push** to a member stands for every line of one channel they heard since
 their last push from it (channels coalesces them, one push per member per
 channel window): it carries the line it leads with and says how many more
-wait in Lemma. It is sent under its delivery's key, charged to the member's
-hourly push budget once per delivery (not per try), and never sent on a
+wait in Lemma. It is sent under its delivery's key, and never sent on a
 second app after a send that may already be on the first. One that names the
 member or asks them something (`Delivery.urgent`) is never held. Any other is
 `SKIPPED` (`IN_APP`) once the member has read past it in the channel; while
 they had the app open in the last `push_sends.PRESENT_FOR_SECONDS` it is held
 (`FOLDED`) until its newest line is that old, and pushed then if still unread
--- the app open somewhere in the pod is not this channel read. Held by the
-budget, `SKIPPED` (`FOLDED`): its lines go back into the member's window and
-with their next push from that channel, no sooner than `push_sends.HOLD_FOR`. A plain
+-- the app open somewhere in the pod is not this channel read. Held, it is
+`SKIPPED` (`FOLDED`) and its lines go back into the member's window, with
+whatever comes meanwhile, as one push. There is no ceiling on pushes beyond
+the window: a busy channel is one push a window however many lines it hears,
+and what calls a member goes at once. A plain
 line in a group is not emailed unless the member chose email for it: email is
 for their own channel, a contact's, and what names them or asks them
 something.

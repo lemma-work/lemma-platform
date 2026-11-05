@@ -275,10 +275,9 @@ sends to places -- shown to everybody who may read the line -- and
 `…/deliveries` lists every send of a line, a push only to its recipient.
 Sending is `agent_surfaces`' (`services/channel_deliveries.py`): what does not
 call a member is skipped once they have read it in the channel, held a few
-minutes while they have the app open (and pushed then if still unread), and a
-push the member's hourly budget holds back into their window
-(`delivery_folded`, `FOLDED`), so it goes with their next push from that
-channel.
+minutes while they have the app open -- back into their window
+(`delivery_folded`, `FOLDED`), to go with their next push from that channel
+if still unread.
 
 Agents answer a member's line written in Lemma -- carried to a mirrored
 group's place or not -- when it names them, when they answer every line in
