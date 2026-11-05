@@ -41,15 +41,28 @@ router = APIRouter(
 )
 
 
+#: Statuses the sheet shows as an outcome -- the bot is live, or the reason it
+#: is not -- and never with the link to the manager bot.
+_FINISHED_STATUSES = frozenset({"COMPLETE", "FAILED"})
+
+
 async def _response(service, setup) -> TelegramManagedBotSetupResponse:
     """One setup, as the sheet reads it.
 
     The manager bot's username is resolved once: it is both what the link points
     at and what the sheet names, and two answers there would send somebody to a
     bot the page did not name.
+
+    Only a setup the person is still finishing in Telegram needs that link. A
+    finished one is answered without it when no username can be found, so the
+    person waiting sees their bot go live, or why it did not, rather than a 503.
     """
     manager_username = await service.manager_username()
-    launch_url = service.launch_url(setup, manager_username=manager_username)
+    launch_url = (
+        ""
+        if not manager_username and setup.status.value in _FINISHED_STATUSES
+        else service.launch_url(setup, manager_username=manager_username)
+    )
     return TelegramManagedBotSetupResponse(
         setup_id=setup.setup_id,
         status=setup.status.value,

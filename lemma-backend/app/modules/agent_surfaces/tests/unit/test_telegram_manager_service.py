@@ -267,6 +267,46 @@ async def test_no_link_is_published_when_no_username_can_be_found():
 
 
 @pytest.mark.asyncio
+async def test_a_finished_setup_is_shown_when_no_username_can_be_found():
+    """The link is for finishing the setup in Telegram. Once it is live, or has
+    failed, the sheet shows that outcome without one: a 503 there would tell the
+    person who just made a bot that the check failed, and hide why a failed
+    setup failed."""
+    from app.modules.agent_surfaces.api.controllers.telegram_manager_controller import (  # noqa: E501
+        _response,
+    )
+
+    service = TelegramManagerService(
+        uow_factory=lambda: None,  # type: ignore[arg-type]
+        store=_Store(),  # type: ignore[arg-type]
+        manager_token="manager-token",
+        manager_username=None,
+        api_base_url="http://telegram.test/bot",
+        bot_username_lookup=_telegram_cannot_be_asked,
+    )
+    setup = await _start(service)
+
+    with pytest.raises(TelegramManagerNotConfiguredError):
+        await _response(service, setup)
+
+    setup.status = TelegramManagedBotSetupStatus.COMPLETE
+    setup.bot_username = "acme_support_bot"
+    setup.pod_connector_slug = "telegram-acme-support"
+    setup.surface_id = uuid4()
+    live = await _response(service, setup)
+    assert live.status == "COMPLETE"
+    assert live.launch_url == ""
+    assert live.bot_launch_url == "https://t.me/acme_support_bot?start=lemma"
+
+    setup.status = TelegramManagedBotSetupStatus.FAILED
+    setup.error = "Telegram did not return the managed bot token"
+    failed = await _response(service, setup)
+    assert failed.status == "FAILED"
+    assert failed.launch_url == ""
+    assert failed.error == "Telegram did not return the managed bot token"
+
+
+@pytest.mark.asyncio
 async def test_start_setup_resumes_same_users_active_target():
     store = _Store()
     service = _service(store)
