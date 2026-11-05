@@ -93,16 +93,12 @@ export type { BulkUpdateRecordsRequest } from './models/BulkUpdateRecordsRequest
 export { BundleSourceKind } from './models/BundleSourceKind.js';
 export type { CallConfigResponse } from './models/CallConfigResponse.js';
 export type { CallResponse } from './models/CallResponse.js';
-export type { CaseEventResponse } from './models/CaseEventResponse.js';
-export type { CaseResponse } from './models/CaseResponse.js';
 export type { ChannelAnswerRequest } from './models/ChannelAnswerRequest.js';
-export type { ChannelCasesResponse } from './models/ChannelCasesResponse.js';
 export type { ChannelCreateRequest } from './models/ChannelCreateRequest.js';
 export type { ChannelDetailResponse } from './models/ChannelDetailResponse.js';
 export type { ChannelEditRequest } from './models/ChannelEditRequest.js';
 export { ChannelKind } from './models/ChannelKind.js';
 export type { ChannelListResponse } from './models/ChannelListResponse.js';
-export type { ChannelMemberListResponse } from './models/ChannelMemberListResponse.js';
 export type { ChannelMemberResponse } from './models/ChannelMemberResponse.js';
 export { ChannelMessageResponse } from './models/ChannelMessageResponse.js';
 export type { ChannelMessagesResponse } from './models/ChannelMessagesResponse.js';

@@ -35,7 +35,14 @@ from app.modules.agent.services.run_phase_spans import run_phase
 
 logger = get_logger(__name__)
 
+#: What a call to a tool its run was not offered gets back, by whom the run
+#: answers (``ToolPolicy.offered_to``). The catalog never offers one; this is
+#: for a caller that built its own list.
 WITHHELD_MESSAGE = "That tool is not available when answering someone outside the pod."
+MEMBERS_WITHHELD_MESSAGE = (
+    "That tool is only for answering someone outside the pod: answer the person "
+    "here yourself."
+)
 
 _SPAN_NAME_SAFE = re.compile(r"[^a-z0-9_]+")
 # Longest error text put on a span; the exporter truncates at 256 anyway.
@@ -104,11 +111,15 @@ class ToolRuntime:
         tool_call_id: str | None = None,
     ) -> object:
         """Run one validated call; a raising tool body never ends the run."""
-        if run_audience(ctx).answers_outsiders and not spec.policy.outsider_allowed:
+        outsiders = run_audience(ctx).answers_outsiders
+        if not spec.policy.offered(answers_outsiders=outsiders):
             logger.warning(
                 "agent.outsider_tool_gate.withheld.degraded", tool_name=spec.name
             )
-            return {"success": False, "error": WITHHELD_MESSAGE}
+            return {
+                "success": False,
+                "error": WITHHELD_MESSAGE if outsiders else MEMBERS_WITHHELD_MESSAGE,
+            }
         call_ctx = ctx.model_copy(update={"tool_call_id": tool_call_id, "tools": self})
         started = time.monotonic()
         # Captured before ours becomes current: on the in-process path this is
@@ -189,4 +200,9 @@ def _mark_failure(span: Span, payload: object) -> None:
     span.set_status(Status(StatusCode.ERROR, description or None))
 
 
-__all__ = ["ToolRuntime", "UnknownToolError", "WITHHELD_MESSAGE"]
+__all__ = [
+    "MEMBERS_WITHHELD_MESSAGE",
+    "ToolRuntime",
+    "UnknownToolError",
+    "WITHHELD_MESSAGE",
+]

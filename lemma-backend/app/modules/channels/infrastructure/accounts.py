@@ -127,18 +127,6 @@ class AccountRepository:
         row = await self.session.get(ExternalAccountModel, account_id)
         return account_entity(row) if row else None
 
-    async def surfaces_of(
-        self, account_ids: Collection[UUID]
-    ) -> dict[UUID, UUID | None]:
-        if not account_ids:
-            return {}
-        rows = await self.session.execute(
-            select(ExternalAccountModel.id, ExternalAccountModel.surface_id).where(
-                ExternalAccountModel.id.in_(sorted(account_ids))
-            )
-        )
-        return {row[0]: row[1] for row in rows}
-
     async def surface_heard_from(self, surface_id: UUID) -> bool:
         """Whether anybody has written to this surface's bot at any place."""
         source = ChannelSourceModel

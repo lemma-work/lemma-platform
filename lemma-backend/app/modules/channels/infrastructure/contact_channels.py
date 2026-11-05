@@ -336,7 +336,8 @@ class ContactChannels:
     ) -> None:
         """In one channel, what was asked of and said about the contact is
         the member's: their questions, and their mentions -- one per line, so a
-        line that already names the member drops the contact's."""
+        line that already names the member drops the contact's. Nothing asks
+        a contact or names one any more; these are the rows from before."""
         question, mention = ChannelQuestionModel, ChannelMentionModel
         for column, becomes in (
             (
