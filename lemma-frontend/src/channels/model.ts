@@ -539,24 +539,6 @@ export function previewOf(channel: Pick<Channel, "lastLine" | "topic">, me: stri
     return personName(last.sender, me) + ": " + (text || "…");
 }
 
-/** The three ways a list is cut: the reader's own, the groups, and -- for
- *  an editor -- the contacts. A section with nothing in it is left out. */
-export interface Section {
-    key: "direct" | "groups" | "contacts";
-    label: string;
-    channels: Channel[];
-}
-
-export function sectionsOf(channels: readonly Channel[], maySeeContacts: boolean): Section[] {
-    const of = (kind: ChannelKind) => channels.filter((channel) => channel.kind === kind);
-    const sections: Section[] = [
-        { key: "direct", label: "Your channel", channels: of("DIRECT") },
-        { key: "groups", label: "Groups", channels: of("GROUP") },
-    ];
-    if (maySeeContacts) sections.push({ key: "contacts", label: "Contacts", channels: of("CONTACT") });
-    return sections.filter((section) => section.channels.length > 0);
-}
-
 /** What is new in a channel, for a row's accessible name. */
 export function sayUnread(unread: Unread): string | null {
     const parts: string[] = [];

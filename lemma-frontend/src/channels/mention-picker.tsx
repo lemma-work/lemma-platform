@@ -97,7 +97,7 @@ export function useMentionPicker({ people, text, setText, box, onPicked }: {
                     onMouseDown={(event) => { event.preventDefault(); pick(who); }}
                 >
                     <span>{who.name}</span>
-                    <small>{who.kind === "AGENT" ? (who.inChannel === false ? "Agent — answers this once" : "Agent in this channel") : who.kind === "CONTACT" ? "Contact" : "Member"}</small>
+                    <small>{who.kind === "AGENT" ? (who.inChannel === false ? "Agent — answers this once" : "Agent in this chat") : who.kind === "CONTACT" ? "Contact" : "Member"}</small>
                 </li>
             ))}
         </ul>

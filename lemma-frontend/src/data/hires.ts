@@ -128,7 +128,7 @@ export const HIRES: Hire[] = [
         ],
         skills: [
             { id: "MEMORY", label: "Memory", blurb: "Knows what was promised three weeks ago" },
-            { id: "MESSAGING", label: "Reaches people", blurb: "Sends the nudge to the person, not the channel" },
+            { id: "MESSAGING", label: "Reaches people", blurb: "Sends the nudge to the person, not the group" },
             { id: "TODO", label: "Keeps a plan", blurb: "One row per promise, and it closes them" },
             { id: "USER_INTERACTION", label: "Asks first", blurb: "Drafts, then waits for your yes" },
         ],
@@ -177,7 +177,7 @@ export const HIRES: Hire[] = [
         role: "Handles incoming questions and flags what needs you",
         seed: "arch/reception/13",
         brings: [
-            "Connected channels for incoming questions",
+            "Answers wherever questions come in",
             "Guidance on what to answer and when to ask",
             "A record of replies for your team to review",
         ],
@@ -190,7 +190,7 @@ export const HIRES: Hire[] = [
             "Anything you are not sure about, hand straight to me.",
         ],
         skills: [
-            { id: "MESSAGING", label: "Reaches people", blurb: "Answers on the channel the question came in on" },
+            { id: "MESSAGING", label: "Reaches people", blurb: "Answers where the question was asked" },
             { id: "USER_INTERACTION", label: "Asks first", blurb: "Hands over anything it should not decide" },
             { id: "MEMORY", label: "Memory", blurb: "Recognises somebody who wrote last week" },
         ],
@@ -245,10 +245,10 @@ export const HIRES: Hire[] = [
         ],
         about:
             "Keeps a launch honest. Tracks what is done, what is blocked and who owes what, " +
-            "and asks the person directly rather than broadcasting into a channel.",
+            "and asks the person directly rather than broadcasting to a group.",
         openers: [
             "Here is the plan. Put an owner against every line.",
-            "Chase whoever is late directly, not in the channel.",
+            "Chase whoever is late directly, not in the group.",
             "Where are we? One paragraph, no list.",
         ],
         skills: [

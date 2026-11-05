@@ -254,14 +254,14 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                             {waitsOnTheSite(handles[handleAt] ?? handles[0])
                                 ? "It waits in their chat on your website, and they read it when they come back."
                                 : "Email any time; WhatsApp only within a day of their last message there."}
-                            {" "}It goes in their channel, where you can see whether it went.
+                            {" "}It goes in their chat, where you can see whether it went.
                         </small>
                         <div className="csheet__actions">
                             <button type="submit" className="pill-button" disabled={followUp.isPending || !message.trim()}>
                                 {followUp.isPending ? "Sending…" : "Send"}
                             </button>
                             {said && <p role="status">{said}</p>}
-                            {sentTo && <button type="button" className="linkish" onClick={() => { onClose(); goTo(channelHref(pod.id, sentTo)); }}>Open their channel</button>}
+                            {sentTo && <button type="button" className="linkish" onClick={() => { onClose(); goTo(channelHref(pod.id, sentTo)); }}>Open their chat</button>}
                         </div>
                     </form>
                 ) : (
@@ -312,10 +312,10 @@ function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; on
     return (
         <div className="csheet__actions">
             <button type="button" className="ghost-pill" disabled={state === "finding"} onClick={() => void open()}>
-                {state === "finding" ? "Finding it…" : "Open their channel"}
+                {state === "finding" ? "Finding it…" : "Open their chat"}
             </button>
-            {state === "none" && <p role="status">They have no channel yet: it starts when they first write.</p>}
-            {state === "failed" && <p role="alert">Couldn’t find their channel. Try again.</p>}
+            {state === "none" && <p role="status">They have no chat yet: it starts when they first write.</p>}
+            {state === "failed" && <p role="alert">Couldn’t find their chat. Try again.</p>}
         </div>
     );
 }
