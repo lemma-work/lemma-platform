@@ -16,7 +16,7 @@ from uuid import UUID
 SURFACE_INGEST: Final = "surface.ingest"
 #: Sends one ``surface_deliveries`` row to its platform.
 SURFACE_REPLY: Final = "surface.reply"
-#: Posts a finished run's answer as a line with a delivery (an ``AgentRunFinished`` subscriber).
+#: Drains run answers queued before ``agent.channel_reply`` said every run's; subscribed by nothing.
 SURFACE_REPLY_FOR_RUN: Final = "surface.reply_for_run"
 #: Sends one channel delivery: a line to a place, or a push to a member.
 SURFACE_CHANNEL_DELIVERY: Final = "surface.channel_delivery"
@@ -48,10 +48,6 @@ ONBOARDING_CLEANUP_PERIODIC: Final = "surfaces.onboarding_cleanup"
 
 def ingest_key(inbound_message_id: UUID) -> str:
     return f"ingest:{inbound_message_id}"
-
-
-def run_reply_key(run_id: UUID) -> str:
-    return f"run-reply:{run_id}"
 
 
 def channel_delivery_key(delivery_id: UUID) -> str:
@@ -100,7 +96,6 @@ __all__ = [
     "channel_delivery_key",
     "channel_delivery_target_key",
     "receiver_key",
-    "run_reply_key",
     "slack_manager_key",
     "slack_manager_message_key",
     "slack_teammate_hello_key",

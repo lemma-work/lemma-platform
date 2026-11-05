@@ -44,6 +44,9 @@ class MessageState(BaseModel):
     private_note_in_dm: bool = False
     #: Typed in Lemma into a platform's conversation, and which kind.
     written_in: WrittenIn | None = None
+    #: The channel source a surface heard it at; a run asked somewhere else
+    #: leaves it for a turn of its own (``domain/run_places``).
+    asked_at_source: UUID | None = None
     #: What an assistant message is to its run's answer; ``None`` when nobody
     #: has said, or it is not the agent's to say.
     answer: AnswerKind | None = None

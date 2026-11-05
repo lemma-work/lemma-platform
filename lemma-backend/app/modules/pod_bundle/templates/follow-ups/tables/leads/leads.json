@@ -1,0 +1,51 @@
+{
+  "name": "leads",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {
+    "description": "One row per lead: when they came in, when someone followed up, and whose they are."
+  },
+  "columns": [
+    {
+      "name": "id",
+      "type": "UUID",
+      "required": true,
+      "auto": true
+    },
+    {
+      "name": "name",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "company",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "link",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "came_in_at",
+      "type": "DATETIME",
+      "required": true
+    },
+    {
+      "name": "followed_up_at",
+      "type": "DATETIME",
+      "required": false
+    },
+    {
+      "name": "followed_up_in_time",
+      "type": "BOOLEAN",
+      "required": false
+    },
+    {
+      "name": "owner",
+      "type": "TEXT",
+      "required": false
+    }
+  ]
+}

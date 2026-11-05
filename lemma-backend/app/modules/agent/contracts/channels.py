@@ -216,9 +216,11 @@ async def start_surface_turn(
     content: str,
     agent_name: str | None = None,
     message_metadata: dict[str, object] | None = None,
+    asked_at: UUID | None = None,
 ) -> UUID | None:
     """Record an inbound message and start the run that answers it; ``None``
-    when the message joined a run already going."""
+    when the message joined a run already going. ``asked_at`` is the place it
+    was heard at (``domain/run_places``)."""
     result = await SendMessage.build(uow).send(
         conversation_id=conversation_id,
         user_id=user_id,
@@ -228,6 +230,7 @@ async def start_surface_turn(
         message_metadata=message_metadata,
         # A contact's, when the thread answers people outside the pod.
         kind=RunKind.SURFACE,
+        asked_at=asked_at,
     )
     return result.agent_run_id if result.started_new_run else None
 

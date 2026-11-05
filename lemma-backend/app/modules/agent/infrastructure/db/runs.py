@@ -25,6 +25,7 @@ from app.modules.agent.domain.entities import (
     MessageRole,
 )
 from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.run_places import ASKED_IN_PLACE_KEY, place_source
 from app.modules.agent.domain.run_state import RunFailure, RunState
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
@@ -317,6 +318,29 @@ class Runs(UnitOfWorkRepository):
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+    async def run_asked_at(self, agent_run_id: UUID) -> UUID | None:
+        """The channel source this run was asked at, if any
+        (``domain/run_places``); one key of one row."""
+        return place_source(
+            await self.session.scalar(
+                select(AgentRunModel.run_metadata[ASKED_IN_PLACE_KEY].astext).where(
+                    AgentRunModel.id == agent_run_id
+                )
+            )
+        )
+
+    async def latest_run_asked_at(self, conversation_id: UUID) -> UUID | None:
+        """The channel source the conversation's latest run was asked at, if
+        any (``domain/run_places``); one key of one row."""
+        return place_source(
+            await self.session.scalar(
+                select(AgentRunModel.run_metadata[ASKED_IN_PLACE_KEY].astext)
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+                .limit(1)
+            )
+        )
 
     async def run_is_replay_safe(self, agent_run_id: UUID) -> bool:
         """Whether a run replays a user turn and holds nothing a replay would repeat.

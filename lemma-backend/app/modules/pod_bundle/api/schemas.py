@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.pod_bundle.domain.connector_plan import (
     ConnectorChoice,
     ConnectorPlan,
 )
 from app.modules.pod_bundle.domain.state import (
+    TEMPLATE_NAME_PATTERN,
     BundleSourceKind,
     ExportState,
     ExportStatus,
@@ -194,7 +195,7 @@ class ImportPlanResponse(BaseModel):
 
 
 class ImportStartRequest(BaseModel):
-    """Body for starting a URL-based import."""
+    """Body for starting an import."""
 
     # Unknown fields are refused; the deprecated `account_id` is accepted, and
     # its response says it was ignored, so a stale client is told rather than
@@ -202,7 +203,11 @@ class ImportStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: BundleSourceKind = Field(
-        ..., description="URL (a lemma signed download URL) or GITHUB (a public repo)."
+        ...,
+        description=(
+            "URL (a lemma signed download URL), GITHUB (a public repo), or "
+            "TEMPLATE (a template that ships with Lemma, by name)."
+        ),
     )
     url: str | None = Field(
         default=None,
@@ -224,6 +229,34 @@ class ImportStartRequest(BaseModel):
             "pod's `github` connector, as you."
         ),
     )
+    template: str | None = Field(
+        default=None,
+        pattern=TEMPLATE_NAME_PATTERN,
+        description=(
+            "For TEMPLATE: the template's name, e.g. 'support'. Required with "
+            "TEMPLATE and refused with any other kind."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _source_fields_match_kind(self) -> "ImportStartRequest":
+        """A template is named, never located, so the fields that locate a
+        bundle are refused beside it rather than ignored."""
+        if self.kind is not BundleSourceKind.TEMPLATE:
+            if self.template is not None:
+                raise ValueError("template is only accepted with kind=TEMPLATE.")
+            return self
+        if not self.template:
+            raise ValueError("template is required with kind=TEMPLATE.")
+        if any(
+            value is not None
+            for value in (self.url, self.owner, self.repo, self.ref, self.account_id)
+        ):
+            raise ValueError(
+                "kind=TEMPLATE takes only template; url, owner, repo, ref and "
+                "account_id locate other kinds of bundle."
+            )
+        return self
 
 
 class UploadResponse(BaseModel):

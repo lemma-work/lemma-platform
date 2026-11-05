@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 5 |
 | `manual` | 24 |
-| `planned` | 28 |
+| `planned` | 33 |
 | `withdrawn` | 0 |
-| **total** | **233** |
+| **total** | **238** |
 
 Scenario tests declaring a promise: 454.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 259 | 403 |
+| OpenAPI operations | 259 | 409 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -129,6 +129,10 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_repeated_deletion_still_reports_success`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-POD-060` An empty place says what belongs there and offers a way to start | `manual` | — |
+| `PS-POD-070` A person starts a pod that owns something, in one step | `planned` | — |
+| `PS-POD-071` Everyone in a pod sees the same number, week by week | `planned` | — |
+| `PS-POD-072` Only someone who can read every row a measure counts may set it | `planned` | — |
+| `PS-POD-073` A pod's agent knows what the pod owns and can set its measure | `planned` | — |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
 
@@ -302,6 +306,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
 | `PS-SURF-023` A person reachable from several pods is reached by the right one | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
+| `PS-SURF-024` A person writing from two places is answered in each | `planned` | — |
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_what_names_a_person_arrives_in_their_inbox`, `test_a_line_for_one_person_is_in_their_own_channel`, `test_an_outsider_sees_no_inbox`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_what_is_new`, `test_read_state_is_personal` |
 | `PS-SURF-032` A person can answer from their inbox | `covered` | `test_a_question_is_answered_from_the_inbox`, `test_an_answered_question_refuses_a_second_answer` |

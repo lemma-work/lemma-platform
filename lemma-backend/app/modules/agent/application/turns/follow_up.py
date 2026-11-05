@@ -1,11 +1,13 @@
 """The follow-up turn: answering what nobody read while a run was going.
 
-A follow-up answers what was said while the run ran. Some of that may be private
-notes, and a run answers one kind: a note's answer stays in Lemma, and anything
-else goes to the platform (``domain/private_notes``). So a follow-up takes the
-kind of the oldest message waiting and leaves the other kind for the next one --
-recording where it waits (``queued_leftovers_behind``), because it is queued
-behind a run that has already finished, and nothing else would look there again.
+A follow-up answers what was said while the run ran. A run answers one scope
+(``domain/run_places``): a note's answer stays in Lemma and anything else goes
+to the platform (``domain/private_notes``), and it goes to one place -- what was
+said on WhatsApp while a run answered an email waited for that run, and is
+answered on WhatsApp. So a follow-up takes the scope of the oldest message
+waiting and leaves every other scope for the next one -- recording where it
+waits (``queued_leftovers_behind``), because it is queued behind a run that has
+already finished, and nothing else would look there again.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.run_places import AnswerScope
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -74,17 +77,17 @@ async def _next_queue(
     sources: list[UUID],
     *,
     after_sequence: int | None = None,
-) -> tuple[UUID, bool] | None:
-    """The run whose queue to answer, and whether its oldest message is a note.
+) -> tuple[UUID, AnswerScope] | None:
+    """The run whose queue to answer, and the scope of its oldest message.
 
     ``after_sequence`` keeps to what was said after that point (after Stop).
     """
     for source in sources:
-        notes = await repository.earliest_queued_is_note(
+        scope = await repository.earliest_queued_scope(
             source, after_sequence=after_sequence
         )
-        if notes is not None:
-            return source, notes
+        if scope is not None:
+            return source, scope
     return None
 
 
@@ -93,7 +96,7 @@ async def _still_waiting(
     sources: list[UUID],
     *,
     answering: UUID,
-    notes: bool,
+    scope: AnswerScope,
     after_sequence: int | None = None,
 ) -> list[UUID]:
     """The sources that will still hold unanswered messages once this one is claimed."""
@@ -101,7 +104,7 @@ async def _still_waiting(
     for source in sources:
         left = await repository.count_queued_user_messages(
             source,
-            notes=(not notes) if source == answering else None,
+            beside=scope if source == answering else None,
             after_sequence=after_sequence,
         )
         if left:
@@ -199,7 +202,7 @@ class StartQueuedFollowUp:
         )
         if queue is None:
             return None
-        answering, notes = queue
+        answering, scope = queue
 
         await self.conversations.lock_conversation(conversation.id)
         if await self.runs.get_active_agent_run_for_update(conversation.id):
@@ -219,7 +222,7 @@ class StartQueuedFollowUp:
             self.queued_messages,
             sources,
             answering=answering,
-            notes=notes,
+            scope=scope,
             after_sequence=stopped_after,
         )
         agent_runtime = (
@@ -246,8 +249,9 @@ class StartQueuedFollowUp:
                     completed_run.state.kind if completed_run else RunKind.CHAT
                 ).continuing(by_a_person=True),
                 queued_behind_run_id=answering,
-                # One kind per run: a note's answer stays in Lemma.
-                private_note=notes,
+                # One scope per run: a note's answer stays in Lemma, and an
+                # answer goes to the place its messages were said.
+                **scope.privacy().model_dump(),
                 queued_leftovers_behind=leftovers,
             ),
         )
@@ -258,7 +262,7 @@ class StartQueuedFollowUp:
         claimed = await self.queued_messages.claim_queued_user_messages(
             answering,
             into_run_id=followup_run.id,
-            notes=notes,
+            scope=scope,
             after_sequence=stopped_after,
         )
         # Resolved from the conversation, as it is for every run nobody named

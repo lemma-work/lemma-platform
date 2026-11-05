@@ -1,0 +1,32 @@
+{
+  "format_version": 3,
+  "name": "Follow-ups",
+  "description": "Makes sure every lead hears from you within two days.",
+  "lemma": {
+    "position": 2,
+    "face": "loop",
+    "place": "HubSpot",
+    "brings": [
+      "A table of every lead and when they were followed up",
+      "Drafts for quiet leads, every weekday",
+      "The week's number in Pages, every Friday"
+    ],
+    "plan": {
+      "how": [
+        "Every lead is a row in leads, with when it came in and whose it is",
+        "A lead quiet for 36 hours gets a drafted follow-up for its owner to approve"
+      ],
+      "never": [
+        "Send a follow-up its owner has not approved"
+      ]
+    }
+  },
+  "outcome": {
+    "sentence": "Every lead gets a follow-up within two days.",
+    "kind": "week",
+    "target": 95,
+    "unit": "%",
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE followed_up_in_time) / nullif(count(*), 0), 1) FROM leads WHERE came_in_at >= date_trunc('week', now())"
+  },
+  "variables": {}
+}
