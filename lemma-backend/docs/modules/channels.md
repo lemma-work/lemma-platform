@@ -539,13 +539,16 @@ and `ChannelQuestionClosed`.
 
 The module subscribes to `ContactMerged`: the merged contact's channel folds
 into the survivor's -- whoever survives now, when that contact was merged on
-since -- with both channel rows locked in id order. Both channels' lines are
-numbered again together, in the order they were said (each channel's own
-order kept; at one instant the survivor's first), so the survivor's timeline
-reads in order (`infrastructure/fold_lines.py`); what hangs from a line --
+since -- with both channel rows locked in id order. The merged channel's
+lines go after the survivor's, in their own order, and the survivor's keep
+their numbers (`infrastructure/fold_append.py`); what hangs from a line --
 its question, mentions, thread, answers, deliveries -- follows it by its
-foreign keys, and each member who had read either channel has read the
-merged one up to just before the first line they had not read in either.
+foreign keys. Each member's read mark lands where nothing they had read is
+unread again and nothing they had not is read: with unread lines in the
+survivor they stay where they were; having read it to the end, they read on
+into the moved lines as far as they had read the merged channel -- all of
+them if it was never theirs (no seat and no read row there), none if they
+were seated there and never read it.
 Sources, seats and the conversations working in it move (where the person
 already has a live conversation with that agent there, that one keeps the
 seat and the other leaves the channel), a client id both used is renamed on
