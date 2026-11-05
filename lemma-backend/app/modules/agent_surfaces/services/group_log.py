@@ -81,6 +81,7 @@ from app.modules.channels.contracts import (
     speakers_in,
 )
 from app.modules.channels.contracts.lines import thread_root_at
+from app.modules.channels.contracts.placement import THREADED
 from app.modules.channels.contracts.places import places_hearing
 from app.modules.contacts.contracts import (
     IdentityStrength,
@@ -158,7 +159,7 @@ class GroupLog:
             external_channel_id=parsed.external_channel_id,
             surface_ids=[surface.id for surface in surfaces],
         )
-        threaded = parsed.platform in WORKSPACE_PLATFORMS
+        threaded = parsed.platform in THREADED
         for group in known:
             # A Slack or Teams thread is a thread here too.
             root = (

@@ -554,10 +554,13 @@ by its link.
 > arrive from somewhere else while the agent is still answering the first. The
 > agent used to take it into the answer it was writing and send that one answer
 > wherever the person had written last: what was asked by email was answered on
-> WhatsApp, and the WhatsApp message was never answered. Proven today by the
-> module suite (`test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said`);
-> the scenario lanes drive one platform per person, so no scenario test can
-> reach it yet.
+> WhatsApp, and the WhatsApp message was never answered. Each thread of a group
+> in Lemma is such a place too. Proven today by the module suites
+> (`test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said`,
+> `test_an_answer_whose_place_went_mid_run_stays_on_the_timeline`,
+> `test_two_lines_in_a_group_are_answered_each_by_its_own_answer`); the
+> scenario lanes drive one platform per person, so no scenario test can reach
+> it yet.
 
 - When a person writes to the agent from a second place while it is answering
   them at the first, the system shall answer the second message at the second
@@ -568,6 +571,13 @@ by its link.
   working at the place that message was asked, and nowhere else.
 - If a message arrives from another place while the agent is answering, then
   the system shall not fold it into the answer it is writing.
+- When a person writes in another thread of a group in Lemma while the agent
+  is answering a thread there, the system shall answer it in its own thread
+  once that answer is done; a reply in the same thread is part of the answer
+  being written.
+- If the place a question was asked at is removed while the agent is answering
+  it, then the system shall keep the answer on the person's timeline in Lemma,
+  and shall not send it to any other place they wrote from.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.surface.send`
 
