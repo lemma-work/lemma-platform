@@ -383,8 +383,11 @@ impl Daemon {
     /// processes rebuilds the environment first and surfaces its own error, so a
     /// vault the user dismissed costs a log line rather than the daemon.
     fn handle_client(self: &Arc<Self>, stream: LocalSocketStream) -> io::Result<()> {
-        let (receive, mut send) = stream.split();
-        let mut reader = BufReader::new(receive);
+        // Read here and written by the thread below, through one `Arc`:
+        // `&Stream` is `Read` and `Write`, which is all `split` ever did. As
+        // with its halves, the socket closes when the last reference goes.
+        let stream = Arc::new(stream);
+        let mut reader = BufReader::new(&*stream);
         let Some(raw_hello) = read_bounded_line(&mut reader)? else {
             return Ok(());
         };
@@ -396,7 +399,7 @@ impl Daemon {
         })?;
         if !authenticate(&hello, &self.token) {
             let denied = error_event("unauthorized", "invalid local control capability", None);
-            writeln!(send, "{denied}")?;
+            writeln!(&*stream, "{denied}")?;
             return Ok(());
         }
         let desktop_client = hello.get("client").and_then(Value::as_str) == Some("desktop");
@@ -413,7 +416,9 @@ impl Daemon {
             .expect("subscriber lock poisoned")
             .insert(subscriber_id, sender.clone());
 
+        let writer = Arc::clone(&stream);
         thread::spawn(move || {
+            let mut send = &*writer;
             for message in receiver {
                 if writeln!(send, "{message}").is_err() {
                     break;
