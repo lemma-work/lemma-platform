@@ -73,7 +73,10 @@ class VerifiedSurfaceIdentityRepository:
         is not.
 
         One its owner also proved from a signed-in session stands on that
-        proof: it loses the number it no longer has, and stays.
+        proof: it loses the number it no longer has, and stays. One that goes
+        takes the number and its route with it: revoked is nobody's, as in
+        ``revoke_session_proved``, and ``ck_surface_identity_route_is_live``
+        refuses a revoked row that keeps a route.
         """
         still_bound = (
             VerifiedSurfaceIdentity.verified_phone == current_phone
@@ -93,7 +96,12 @@ class VerifiedSurfaceIdentityRepository:
         await self.session.execute(
             update(VerifiedSurfaceIdentity)
             .where(*stale, VerifiedSurfaceIdentity.session_proved_at.is_(None))
-            .values(revoked_at=datetime.now(timezone.utc))
+            .values(
+                revoked_at=datetime.now(timezone.utc),
+                verified_phone=None,
+                installation_surface_id=None,
+                pod_id=None,
+            )
         )
 
     async def prove_by_session(
