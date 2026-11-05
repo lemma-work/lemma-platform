@@ -40,9 +40,13 @@ from pydantic import SecretStr
 import websockets
 from fastapi import status
 
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+    exec_command_internal,
+)
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e.runtime import browser_stream_settings_overridden
 
@@ -174,7 +178,7 @@ async def _workspace(authenticated_client, fixed_test_org, fixed_test_user):
         },
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(response.json()["id"]),
@@ -198,7 +202,7 @@ async def _workspace(authenticated_client, fixed_test_org, fixed_test_user):
     return ctx
 
 
-async def _run(ctx: BaseAgentContext, cmd: str, comment: str, timeout: int = 60):
+async def _run(ctx: ToolContext, cmd: str, comment: str, timeout: int = 60):
     result = await exec_command_internal(
         ctx, ExecCommandRequest(cmd=cmd, timeout_seconds=timeout, comment=comment)
     )
@@ -206,7 +210,7 @@ async def _run(ctx: BaseAgentContext, cmd: str, comment: str, timeout: int = 60)
     return result
 
 
-async def _open_a_scrolling_page(ctx: BaseAgentContext) -> None:
+async def _open_a_scrolling_page(ctx: ToolContext) -> None:
     """Something that keeps changing, so frames keep coming."""
     await _run(
         ctx,

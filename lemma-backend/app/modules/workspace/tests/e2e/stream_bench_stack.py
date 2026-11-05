@@ -41,9 +41,13 @@ import pytest
 from pydantic import SecretStr
 from fastapi import status
 
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+    exec_command_internal,
+)
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workspace.api.controllers import browser_view_stream
 from app.modules.workspace.config import workspace_settings
@@ -126,7 +130,7 @@ def _netem_image() -> None:
     )
 
 
-async def _run(ctx: BaseAgentContext, cmd: str, comment: str, timeout: int = 60):
+async def _run(ctx: ToolContext, cmd: str, comment: str, timeout: int = 60):
     result = await exec_command_internal(
         ctx, ExecCommandRequest(cmd=cmd, timeout_seconds=timeout, comment=comment)
     )
@@ -134,7 +138,7 @@ async def _run(ctx: BaseAgentContext, cmd: str, comment: str, timeout: int = 60)
     return result
 
 
-async def _copy_in(ctx: BaseAgentContext, name: str) -> None:
+async def _copy_in(ctx: ToolContext, name: str) -> None:
     payload = base64.b64encode((BENCH_SOURCES / name).read_bytes()).decode()
     await _run(
         ctx,
@@ -222,7 +226,7 @@ async def test_stream_bench_stack(
         )
         assert response.status_code == status.HTTP_201_CREATED, response.text
         pod = response.json()
-        ctx = BaseAgentContext(
+        ctx = ToolContext(
             user_id=UUID(fixed_test_user["id"]),
             org_id=UUID(fixed_test_org["id"]),
             pod_id=UUID(pod["id"]),
