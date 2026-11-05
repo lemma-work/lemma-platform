@@ -8,11 +8,14 @@ ambiguity ``WORKSPACE_RECREATED_NOTICE`` exists to prevent elsewhere.
 
 Two rules shape what this does and does not do:
 
-- **Clone only when there is nothing there.** An existing checkout is never
-  fetched, pulled, reset, or cleaned. One sandbox per user means two
-  conversations can share a checkout, and it may hold uncommitted work from
-  either of them; silently moving a working tree under an agent is worse than
-  leaving it a commit behind.
+- **Clone when there is nothing there; otherwise only fetch.** An existing
+  checkout is never pulled, reset, switched, or cleaned. One sandbox per user
+  means two conversations can share a checkout, and it may hold uncommitted
+  work from either of them; silently moving a working tree under an agent is
+  worse than leaving it a commit behind. A fetch moves none of that -- only the
+  remote-tracking refs -- so a conversation opened on a checkout another one
+  made days ago still sees where `origin` is now, and decides for itself what
+  to do about it.
 - **Say when it failed.** A clone that fails (repo gone, account without access)
   returns a notice the caller shows the agent once, rather than leaving it to
   infer something from an empty directory.
@@ -52,19 +55,21 @@ _FAILED_TTL_SECONDS = 5 * 60
 _CLONE_TIMEOUT_SECONDS = 300
 
 
-def _clone_command(*, url: str, path: str, ref: str | None) -> str:
+def _checkout_command(*, url: str, path: str, ref: str | None) -> str:
     branch = f"--branch {shlex.quote(ref)} " if ref else ""
     # The `[ -e ... ]` guard is what makes this idempotent and safe to run at the
-    # head of any command: an existing checkout short-circuits to true and git is
-    # never invoked at all.
+    # head of any command: an existing checkout is never cloned over. Its fetch
+    # failing (offline, a ref lock another conversation holds) leaves the
+    # checkout exactly as usable as before, so it is not a failure to report.
     return (
-        f"[ -e {shlex.quote(path + '/.git')} ] || "
-        f"git clone {branch}{shlex.quote(url)} {shlex.quote(path)}"
+        f"if [ -e {shlex.quote(path + '/.git')} ]; then "
+        f"git -C {shlex.quote(path)} fetch --quiet origin || true; "
+        f"else git clone {branch}{shlex.quote(url)} {shlex.quote(path)}; fi"
     )
 
 
 async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | None:
-    """Clone the conversation's repo if its directory is still empty.
+    """Clone the conversation's repo if its directory is empty, else fetch it.
 
     Returns a notice to show the agent once, or None when there is nothing to
     say -- which is the case both when the checkout is already there and when
@@ -88,7 +93,7 @@ async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | 
 
     url = f"https://github.com/{repo.owner}/{repo.repo}.git"
     result = await workspace_session.exec_command(
-        cmd=_clone_command(url=url, path=repo.cwd, ref=repo.ref),
+        cmd=_checkout_command(url=url, path=repo.cwd, ref=repo.ref),
         timeout=_CLONE_TIMEOUT_SECONDS,
     )
     if result.get("exit_code") == 0:

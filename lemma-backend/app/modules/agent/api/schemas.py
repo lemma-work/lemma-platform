@@ -32,6 +32,11 @@ from app.modules.agent.domain.entities import (
     Message,
 )
 from app.modules.agent.domain.pending_interactions import PendingInteractionKind
+from app.modules.agent.domain.project_repo import (
+    ProjectRepo,
+    RepositoryChoice,
+    parse_repository_name,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunApprovalDecision,
@@ -383,6 +388,60 @@ class CreateConversationRequest(BaseModel):
     parent_id: UUID | None = None
     type: ConversationType = ConversationType.CHAT
     metadata: JsonObject | None = None
+    repository: str | None = Field(
+        default=None,
+        max_length=140,
+        description=(
+            "A GitHub repository to work in, as 'owner/name': one the "
+            "organization's GitHub installation covers for you, as listed by "
+            "the conversation repositories endpoint. The conversation's "
+            "workspace_cwd is then that repository's checkout, cloned or "
+            "fetched before the agent's first command. Every conversation of "
+            "yours in the same repository works in that one checkout, "
+            "uncommitted changes included."
+        ),
+    )
+
+    @field_validator("repository")
+    @classmethod
+    def _owner_slash_name(cls, value: str | None) -> str | None:
+        if value is not None and parse_repository_name(value) is None:
+            raise ValueError("repository must be 'owner/name'")
+        return value
+
+    def project_repo(self) -> ProjectRepo | None:
+        return parse_repository_name(self.repository) if self.repository else None
+
+
+class ConversationRepositoryResponse(BaseModel):
+    """A GitHub repository a conversation can be opened in."""
+
+    full_name: str = Field(description="'owner/name', the value create takes.")
+    owner: str
+    name: str
+    private: bool = False
+    default_branch: str | None = None
+    workspace_cwd: str = Field(
+        description=(
+            "The checkout a conversation opened in it works in. Shared by every "
+            "conversation of yours in this repository."
+        )
+    )
+
+    @classmethod
+    def of(cls, choice: RepositoryChoice) -> ConversationRepositoryResponse:
+        return cls(
+            full_name=choice.repo.full_name,
+            owner=choice.repo.owner,
+            name=choice.repo.repo,
+            private=choice.private,
+            default_branch=choice.default_branch,
+            workspace_cwd=choice.repo.cwd,
+        )
+
+
+class ConversationRepositoryListResponse(BaseModel):
+    items: list[ConversationRepositoryResponse]
 
 
 class UpdateConversationRequest(BaseModel):

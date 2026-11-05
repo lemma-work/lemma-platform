@@ -797,6 +797,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.github_installation.claim_rejected.denied': EventSpec('warning', frozenset({'status_code'})),
     'connectors.github_installation.lookup_failed.degraded': EventSpec('warning', frozenset()),
     'connectors.github_installation.not_administered.denied': EventSpec('info', frozenset()),
+    'connectors.github_installation.repository_lookup_failed.degraded': EventSpec('warning', frozenset({'status_code'})),
     'connectors.github_installation.verify_failed.degraded': EventSpec('warning', frozenset({'status_code'})),
     'connectors.github_presenter.fell_back_to_user_token': EventSpec('info', frozenset({'connector_id'})),
     'connectors.github_reconciler.cache_unavailable.degraded': EventSpec('warning', frozenset()),

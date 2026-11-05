@@ -5,6 +5,7 @@
 import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
+import type { ConversationRepositoryListResponse } from '../models/ConversationRepositoryListResponse.js';
 import type { ConversationResponse } from '../models/ConversationResponse.js';
 import type { ConversationStatus } from '../models/ConversationStatus.js';
 import type { ConversationType } from '../models/ConversationType.js';
@@ -71,7 +72,7 @@ export class AgentConversationsService {
     }
     /**
      * Create Pod Agent Conversation
-     * Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default pod assistant. Workflow and sub-agent executions also use conversations as their external execution handle.
+     * Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default pod assistant. Workflow and sub-agent executions also use conversations as their external execution handle. Name a repository to work in a checkout of it: it is refused unless the organization's GitHub installation covers it for you.
      * @param podId
      * @param requestBody
      * @returns ConversationResponse Successful Response
@@ -117,6 +118,27 @@ export class AgentConversationsService {
             query: {
                 'page_token': pageToken,
                 'limit': limit,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Repositories A Conversation Can Open In
+     * The GitHub repositories you can open a conversation in: those the organization's GitHub installation covers and your account can see, through this pod's 'github' connector. Refused with the connector's own code when that connector cannot give your sandbox a checkout. An installation covering a very large organization is listed in part.
+     * @param podId
+     * @returns ConversationRepositoryListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationRepositoryList(
+        podId: string,
+    ): CancelablePromise<ConversationRepositoryListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/conversations/repositories',
+            path: {
+                'pod_id': podId,
             },
             errors: {
                 422: `Validation Error`,

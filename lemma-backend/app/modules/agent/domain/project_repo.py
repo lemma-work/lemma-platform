@@ -51,6 +51,15 @@ class ProjectRepo:
         return value
 
 
+@dataclass(frozen=True, slots=True)
+class RepositoryChoice:
+    """A repository a person could open a conversation in, as a picker lists it."""
+
+    repo: ProjectRepo
+    private: bool = False
+    default_branch: str | None = None
+
+
 def parse_project_repo(value: object) -> ProjectRepo | None:
     """Read a repo out of untrusted JSON, or ``None`` if it isn't one.
 
@@ -73,3 +82,15 @@ def parse_project_repo(value: object) -> ProjectRepo | None:
     raw_ref = str(value.get("ref") or "").strip()
     ref = raw_ref if _REF_PATTERN.match(raw_ref) else None
     return ProjectRepo(owner=owner, repo=repo, ref=ref)
+
+
+def parse_repository_name(value: str) -> ProjectRepo | None:
+    """``owner/name`` as a person picks it, or ``None`` if it isn't one.
+
+    Held to the same rules as ``parse_project_repo``: a third segment, a
+    ``..`` or an option-shaped name is not a repository, whoever typed it.
+    """
+    owner, separator, repo = value.strip().partition("/")
+    if not separator:
+        return None
+    return parse_project_repo({"owner": owner, "repo": repo})

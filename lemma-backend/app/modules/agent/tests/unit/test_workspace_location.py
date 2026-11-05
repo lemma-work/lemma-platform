@@ -18,6 +18,7 @@ from app.modules.agent.domain.workspace_location import (
     resolve_workspace_location,
 )
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.project_repo import parse_repository_name
 from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     workspace_runtime_context,
 )
@@ -271,6 +272,21 @@ def test_parse_project_repo_normalizes_a_pasted_repo_name():
     assert repo == ProjectRepo(owner="acme", repo="web", ref="main")
     assert repo.full_name == "acme/web"
     assert repo.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["acme", "acme/web/extra", "../etc/passwd", "acme/..", "-acme/web", "/web", ""],
+)
+def test_a_picked_repository_name_is_held_to_the_same_rules(value):
+    """`owner/name` from a request reaches the same path and clone URL."""
+    assert parse_repository_name(value) is None
+
+
+def test_a_picked_repository_name_is_an_owner_and_a_repo():
+    assert parse_repository_name(" acme/web.git ") == ProjectRepo(
+        owner="acme", repo="web"
+    )
 
 
 def test_parse_project_repo_drops_a_ref_git_would_read_as_a_flag():

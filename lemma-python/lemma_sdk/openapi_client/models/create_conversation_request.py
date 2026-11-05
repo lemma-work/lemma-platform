@@ -29,6 +29,10 @@ class CreateConversationRequest:
         instructions (None | str | Unset):
         metadata (CreateConversationRequestMetadataType0 | None | Unset):
         parent_id (None | Unset | UUID):
+        repository (None | str | Unset): A GitHub repository to work in, as 'owner/name': one the organization's GitHub
+            installation covers for you, as listed by the conversation repositories endpoint. The conversation's
+            workspace_cwd is then that repository's checkout, cloned or fetched before the agent's first command. Every
+            conversation of yours in the same repository works in that one checkout, uncommitted changes included.
         title (None | str | Unset):
         type_ (ConversationType | Unset): User-visible conversation behavior.
     """
@@ -38,6 +42,7 @@ class CreateConversationRequest:
     instructions: None | str | Unset = UNSET
     metadata: CreateConversationRequestMetadataType0 | None | Unset = UNSET
     parent_id: None | Unset | UUID = UNSET
+    repository: None | str | Unset = UNSET
     title: None | str | Unset = UNSET
     type_: ConversationType | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -84,6 +89,12 @@ class CreateConversationRequest:
         else:
             parent_id = self.parent_id
 
+        repository: None | str | Unset
+        if isinstance(self.repository, Unset):
+            repository = UNSET
+        else:
+            repository = self.repository
+
         title: None | str | Unset
         if isinstance(self.title, Unset):
             title = UNSET
@@ -107,6 +118,8 @@ class CreateConversationRequest:
             field_dict["metadata"] = metadata
         if parent_id is not UNSET:
             field_dict["parent_id"] = parent_id
+        if repository is not UNSET:
+            field_dict["repository"] = repository
         if title is not UNSET:
             field_dict["title"] = title
         if type_ is not UNSET:
@@ -194,6 +207,15 @@ class CreateConversationRequest:
 
         parent_id = _parse_parent_id(d.pop("parent_id", UNSET))
 
+        def _parse_repository(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        repository = _parse_repository(d.pop("repository", UNSET))
+
         def _parse_title(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -216,6 +238,7 @@ class CreateConversationRequest:
             instructions=instructions,
             metadata=metadata,
             parent_id=parent_id,
+            repository=repository,
             title=title,
             type_=type_,
         )

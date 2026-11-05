@@ -14,6 +14,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_credential,
     github_credential_bridge as bridge,
 )
 from app.modules.agent.infrastructure.tools.workspace_cli import github_loan
@@ -287,4 +288,4 @@ def test_the_bridge_and_the_loan_name_the_same_marker_files_and_connector():
         sandbox_borrowers.SANDBOX_STALE_SESSION_MINUTES
     )
     assert bridge._GH_HOSTS_NAME == github_loan.GH_HOSTS_NAME
-    assert bridge._POD_CONNECTOR_SLUG == github_loan.POD_CONNECTOR_SLUG
+    assert github_credential._POD_CONNECTOR_SLUG == github_loan.POD_CONNECTOR_SLUG

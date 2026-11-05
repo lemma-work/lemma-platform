@@ -89,7 +89,7 @@ object, and none inherits from another.
 
 | Use case | Does |
 | --- | --- |
-| `conversations/start.StartConversation` | Open a conversation: its agent and the right to run it (`authorize_opening` checks that alone), its kind, where it works, the server-only facts |
+| `conversations/start.StartConversation` | Open a conversation: its agent and the right to run it (`authorize_opening` checks that alone), its kind, where it works -- a GitHub repository the person names is checked through the `ProjectRepositories` port first -- and the server-only facts |
 | `conversations/update.UpdateConversation` | Change title, instructions, runtime, client tags, archived |
 | `conversations/read.ConversationReads` | The query side: list, get, messages, runs, the pending-interactions inbox, and the oldest open pause of each kind |
 | `turns/send_message.SendMessage` | Find or open the conversation, authorize the sender, then admit the message (`typed_in_lemma` only from Lemma's composer) |
@@ -123,7 +123,7 @@ and in `domain/` (`turn_admission`, `interaction_reply`).
 
 | Layer | What is there |
 | --- | --- |
-| `domain/` | Pure: entities and value types, the run's resolved runtime (`resolved_runtime`) and the pure steps of runtime resolution (`runtime_choice`), history assembly (`runtime_history`), a provider PATCH (`runtime_provider_patch`), the live frames (`live_events`), a background call's terms (`background`), prompt assembly (the `prompt/` package), and the ports (`ports.py`: `Harness`, `ModelProvider`, `LiveEvents`) |
+| `domain/` | Pure: entities and value types, the run's resolved runtime (`resolved_runtime`) and the pure steps of runtime resolution (`runtime_choice`), history assembly (`runtime_history`), a provider PATCH (`runtime_provider_patch`), the live frames (`live_events`), a background call's terms (`background`), prompt assembly (the `prompt/` package), and the ports (`ports.py`: `Harness`, `ModelProvider`, `LiveEvents`, `ProjectRepositories`) |
 | `application/` | The use cases above; each opens and commits its own unit of work |
 | `services/` | Shared steps that never commit on their own. The "one of each": `runtime_resolution.resolve_runtime(request, purpose=...)` is the one chain every model choice goes through (a turn, a title, the memory pass, the vision delegate, compaction); `background_model.BackgroundModel` resolves, builds, meters and runs every non-turn model call through the `ModelProvider` port; `run_session.RunSession` loads what a run works against once (conversation, agent, run, history, runtime, grants) and builds the tools' context for the runner, the resume path, the Agent Host MCP call (`agent_host/relayed_session`, with the runtime and grants cached per lease by grant generation) and the pod MCP server (`pod_tool_context`); the run's briefs are the `context_brief/` package |
 | `infrastructure/` | Repositories (`db/`), model construction and vendor quirks (`providers/`, the only place besides the harness that imports pydantic-ai or a vendor SDK), the in-process harness on pydantic-ai (`harness/lemma/`), the harness registry (`harness/registry.py`), the live publisher (`live.py`) and the MCP wire format (`mcp.py`, `mcp_content.py`) |
@@ -138,7 +138,7 @@ adapter is consolidated.
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
-| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
+| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
@@ -181,7 +181,28 @@ already holds is stored under a new one, its return following it
 (`RunMessageWriter._unique_call_id`).
 
 Subagents are child conversations with inherited workspace context and reduced
-toolsets. Widgets are tool outputs stored in conversation context and served
+toolsets.
+
+### A conversation in a GitHub repository
+
+Create takes `repository` (`owner/name`). It is checked as the person opening
+the conversation, through the pod's `github` connector -- the account, and the
+sandbox rule for a shared one, that the clone will use
+(`tools/workspace_cli/github_credential`) -- and then against that account's
+installation: its owner must own the repository, and a selected-repositories
+installation must list it (`connectors.contracts.github.installation_repository`).
+Each refusal keeps its own code; GitHub not answering is a 503, never a pass.
+The repository is stored as GitHub spells it, which sets the conversation's
+directory to its checkout, `/workspace/repos/{owner}/{repo}`
+(`domain/workspace_location`). Before the agent's first shell or Python call
+the sandbox clones it there with the person's token, or fetches it if it is
+already there (`tools/workspace_cli/github_project`).
+
+One sandbox per person means one checkout per repository: every conversation
+of theirs in it works in the same tree, uncommitted changes included. That is
+accepted, and said rather than hidden -- in the API's field description, in
+`workspace_cwd`, and in the agent's prompt, which tells it to check
+`git status` and work on a branch of its own. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
 
 ## Prompt context

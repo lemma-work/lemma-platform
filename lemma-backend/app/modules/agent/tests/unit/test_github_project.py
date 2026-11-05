@@ -94,7 +94,8 @@ async def test_clone_never_runs_over_an_existing_checkout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The guard is in the command itself, so a fresh session cannot clobber a
-    working tree another conversation is using."""
+    working tree another conversation is using: an existing checkout is only
+    fetched, which moves remote-tracking refs and nothing else."""
 
     redis = _FakeRedis()
     monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
@@ -103,13 +104,14 @@ async def test_clone_never_runs_over_an_existing_checkout(
     await github_project.ensure_project_checkout(_context(_REPO), session)
 
     command = session.commands[0]
-    assert command.startswith(
-        f"[ -e {WORKSPACE_ROOT}/repos/acme/web/.git ] || git clone "
+    path = f"{WORKSPACE_ROOT}/repos/acme/web"
+    existing, _, fresh = command.partition("; else ")
+    assert existing == (
+        f"if [ -e {path}/.git ]; then git -C {path} fetch --quiet origin || true"
     )
-    assert "https://github.com/acme/web.git" in command
-    assert command.endswith(f"{WORKSPACE_ROOT}/repos/acme/web")
+    assert fresh == f"git clone https://github.com/acme/web.git {path}; fi"
     # Nothing that could move or discard work in an existing tree.
-    for destructive in ("pull", "fetch", "reset", "checkout", "clean"):
+    for destructive in ("pull", "reset", "checkout", "switch", "clean", "merge"):
         assert destructive not in command
 
 
