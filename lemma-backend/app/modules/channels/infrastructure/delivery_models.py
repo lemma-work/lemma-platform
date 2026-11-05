@@ -255,7 +255,7 @@ class ChannelPushPendingModel(Base):
     pod_id: Mapped[UUID] = mapped_column(nullable=False)
     from_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     #: The newest line folded in. Nothing reads it; it is still written, for
-    #: code running against a schema before 0070, whose check holds it.
+    #: code running against a schema before 0071, whose check holds it.
     to_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lead_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lines: Mapped[int] = mapped_column(

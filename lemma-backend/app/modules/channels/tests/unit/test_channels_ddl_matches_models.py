@@ -25,7 +25,7 @@ _MIGRATION = _VERSIONS / "2026-10-17_channels_0058.py"
 _ADDED_LATER = (_VERSIONS / "2026-10-21_answers_shared_0061.py",)
 #: The migrations after 0058 that change one of its tables' statements: each
 #: names them as ``CHANGED``, ``(table, text in 0058, what it becomes)``.
-_CHANGED_LATER = (_VERSIONS / "2026-11-05_channels_unwritten_0069.py",)
+_CHANGED_LATER = (_VERSIONS / "2026-11-05_channels_unwritten_0071.py",)
 
 
 def _load(path: Path):

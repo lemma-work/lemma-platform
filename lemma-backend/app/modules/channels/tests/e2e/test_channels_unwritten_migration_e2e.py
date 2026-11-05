@@ -1,4 +1,4 @@
-"""Migration 0069 stops requiring two channel columns nothing reads, and its
+"""Migration 0071 stops requiring two channel columns nothing reads, and its
 downgrade fills them back in; upgrading again works.
 
 Upgraded, a case may have no ``opened_seq`` and a waiting push window no
@@ -27,8 +27,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0068_channel_table_grants"
-REVISION = "0069_channels_unwritten"
+BEFORE = "0070_asked_at_source"
+REVISION = "0071_channels_unwritten"
 
 
 def _migrate(database_url: str, direction: str, revision: str) -> None:

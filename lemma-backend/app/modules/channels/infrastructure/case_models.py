@@ -119,7 +119,7 @@ class ChannelCaseModel(UUIDAuditBase):
     )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     #: The channel's newest line when it opened. Nothing reads it; it is still
-    #: written, for code running against a schema before 0070, where it is
+    #: written, for code running against a schema before 0071, where it is
     #: NOT NULL.
     opened_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[str] = mapped_column(

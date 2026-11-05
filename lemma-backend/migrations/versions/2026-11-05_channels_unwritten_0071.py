@@ -20,14 +20,14 @@ as its ``lead_seq`` -- and puts the old constraints back.
 text of migration 0058's statement for it, and what this migration makes it --
 pinned to the models by ``channels/tests/unit/test_channels_ddl_matches_models``.
 
-Revision ID: 0069_channels_unwritten
-Revises: 0068_channel_table_grants
+Revision ID: 0071_channels_unwritten
+Revises: 0070_asked_at_source
 """
 
 from alembic import op
 
-revision = "0069_channels_unwritten"
-down_revision = "0068_channel_table_grants"
+revision = "0071_channels_unwritten"
+down_revision = "0070_asked_at_source"
 branch_labels = None
 depends_on = None
 
