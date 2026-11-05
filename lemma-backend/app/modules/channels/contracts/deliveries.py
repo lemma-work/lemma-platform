@@ -10,9 +10,9 @@ sent twice: one whose sender died mid-send is settled by
 
 A push to a member stands for every line of one channel they heard since
 their last push from it (``Delivery.from_seq`` .. ``seq``, ``lines`` of
-them); ``Delivery.urgent`` when one names or asks them. One the hourly budget
-holds is ``delivery_folded``: its lines go with the member's next push from
-that channel.
+them); ``Delivery.urgent`` when one names or asks them. One held while the
+member has the app open is ``delivery_folded``: its lines go with the member's
+next push from that channel.
 """
 
 from __future__ import annotations
@@ -151,9 +151,10 @@ async def delivery_folded(
     reason: str,
     hold_for: timedelta,
 ) -> None:
-    """A push the member's hourly budget held: ``SKIPPED`` (``FOLDED``), and
-    its lines go with their next push from the channel -- no sooner than
-    ``hold_for``, unless a line naming or asking them comes first."""
+    """A push held while the member had the app open: ``SKIPPED``
+    (``FOLDED``), and its lines go with their next push from the channel -- no
+    sooner than ``hold_for``, unless a line naming or asking them comes
+    first."""
     settled = await DeliveryRepository(uow.session).skipped(
         delivery.id, code=DeliveryReasonCode.FOLDED, reason=reason, platform=None
     )

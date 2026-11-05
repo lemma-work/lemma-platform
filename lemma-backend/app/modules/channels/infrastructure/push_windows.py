@@ -85,8 +85,8 @@ class PushWindows:
         not_before: timedelta = timedelta(0),
     ) -> list[Folded]:
         """Fold lines into each member's window; when each is now due.
-        ``not_before``: none of these goes sooner (a push the hourly budget
-        held, folded back), unless one is urgent."""
+        ``not_before``: none of these goes sooner (a push held while the
+        member had the app open, folded back), unless one is urgent."""
         if not folds:
             return []
         at = func.now() + not_before
@@ -199,8 +199,8 @@ class PushWindows:
         self, *, channel_id: UUID, pod_id: UUID, windows: Sequence[Window]
     ) -> list[Delivery]:
         """One delivery per window, on the line it leads with. A line whose
-        push the budget held (``FOLDED``) is planned again; one already
-        pushed to them is not pushed twice."""
+        push was held while the app was open (``FOLDED``) is planned again;
+        one already pushed to them is not pushed twice."""
         if not windows:
             return []
         m = ChannelMessageModel
