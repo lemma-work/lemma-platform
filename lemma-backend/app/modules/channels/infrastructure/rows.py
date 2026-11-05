@@ -209,8 +209,8 @@ def _asked_by(row: ChannelQuestionModel) -> Asker | None:
 
 
 def question_entity(row: ChannelQuestionModel) -> Question:
-    awaits = principal_of(row.awaits_user_id, row.awaits_contact_id)
-    assert awaits is not None  # a CHECK holds it to exactly one
+    # Only a member is asked (``QuestionRepository.ask``).
+    assert row.awaits_user_id is not None
     return Question(
         message_id=row.message_id,
         channel_id=row.channel_id,
@@ -220,11 +220,11 @@ def question_entity(row: ChannelQuestionModel) -> Question:
         kind=QuestionKind(row.kind),
         state=QuestionState(row.state),
         question=row.question,
-        awaits=awaits,
+        awaits=Principal.member(row.awaits_user_id),
         asker=QuestionAsker(row.asker),
         asked_by=_asked_by(row),
         answer=row.answer,
-        answered_by=principal_of(row.answered_by_user_id, row.answered_by_contact_id),
+        answered_by=principal_of(row.answered_by_user_id, None),
         answered_at=row.answered_at,
         expires_at=row.expires_at,
         created_at=row.created_at,

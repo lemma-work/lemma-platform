@@ -156,7 +156,6 @@ async def _apply(
             text=said.text,
             parts=said.parts,
             mentions=said.mentions,
-            mentioned_agents=said.agents,
         )
     if done is not None:
         # A run that was shown this line read it as it said then.
