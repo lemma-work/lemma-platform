@@ -14,15 +14,17 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentToolset, ConversationOrigin
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
-from app.modules.agent.services import agent_context_brief as brief_mod
-from app.modules.agent.services import agent_memory_brief as memory_mod
+from app.modules.agent.services.context_brief import agent_brief as brief_mod
+from app.modules.agent.services.context_brief import memory as memory_mod
 from app.modules.agent.infrastructure.context_brief_repository import UserProfile
 from app.modules.pod.contracts.members import PodProfile
 from app.modules.schedule.contracts.pod_summaries import PodScheduleSummary
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
-from app.modules.agent.services.brief_lines import user_lines as _user_lines
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
+from app.modules.agent.services.context_brief.lines import user_lines as _user_lines
 
 
 class _FakeBriefCache:
@@ -250,6 +252,7 @@ def _conversation(is_pod_assistant: bool):
         user_id=None,
         type=None,
         metadata={},
+        origin=ConversationOrigin.CHAT,
     )
 
 
@@ -484,12 +487,16 @@ class TestEveryCapSaysWhatItLeftOut:
     """
 
     def test_nothing_is_said_when_nothing_was_dropped(self) -> None:
-        from app.modules.agent.services.brief_lines import more_note as _more_note
+        from app.modules.agent.services.context_brief.lines import (
+            more_note as _more_note,
+        )
 
         assert _more_note(shown=3, total=3, noun="tables") == []
 
     def test_the_count_left_out_is_named(self) -> None:
-        from app.modules.agent.services.brief_lines import more_note as _more_note
+        from app.modules.agent.services.context_brief.lines import (
+            more_note as _more_note,
+        )
 
         (line,) = _more_note(shown=50, total=137, noun="tables")
 
@@ -498,7 +505,9 @@ class TestEveryCapSaysWhatItLeftOut:
     def test_an_unknown_total_is_not_treated_as_nothing_more(self) -> None:
         """A repository that does not count returns None. That is 'unknown',
         and it must not crash prompt assembly either."""
-        from app.modules.agent.services.brief_lines import more_note as _more_note
+        from app.modules.agent.services.context_brief.lines import (
+            more_note as _more_note,
+        )
 
         assert _more_note(shown=5, total=None, noun="agents") == []
 
@@ -507,7 +516,7 @@ class TestEveryCapSaysWhatItLeftOut:
         then told is required, or reports to the user as not existing."""
         from types import SimpleNamespace
 
-        from app.modules.agent.services.brief_lines import (
+        from app.modules.agent.services.context_brief.lines import (
             MAX_COLUMNS as _MAX_COLUMNS,
             table_line as _table_line,
         )
@@ -532,7 +541,9 @@ class TestEveryCapSaysWhatItLeftOut:
     def test_a_narrow_table_gets_no_note(self) -> None:
         from types import SimpleNamespace
 
-        from app.modules.agent.services.brief_lines import table_line as _table_line
+        from app.modules.agent.services.context_brief.lines import (
+            table_line as _table_line,
+        )
         from app.modules.datastore.domain.datastore_entities import (
             ColumnSchema,
             DatastoreDataType,
@@ -547,7 +558,7 @@ class TestEveryCapSaysWhatItLeftOut:
         assert "more columns" not in _table_line(table)
 
     def test_extra_top_level_files_are_declared(self) -> None:
-        from app.modules.agent.services.brief_lines import (
+        from app.modules.agent.services.context_brief.lines import (
             MAX_RESOURCES as _MAX_RESOURCES,
             top_level_file_entries as _top_level_file_entries,
         )

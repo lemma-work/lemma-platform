@@ -11,13 +11,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.modules.agent.contracts.interaction_replies import (
+from app.modules.agent.contracts.channel_words import (
     ask_user_request_dict,
     interpret_reply_to_pending,
     reply_plainly_answers_pending,
 )
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
-from app.modules.agent.services.interaction_reply import (
+from app.modules.agent.domain.interaction_reply import (
     _APPROVE_ONCE_REPLIES,
     _APPROVE_SESSION_REPLIES,
     _DENY_REPLIES,

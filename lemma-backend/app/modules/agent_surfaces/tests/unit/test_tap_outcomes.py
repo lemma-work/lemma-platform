@@ -15,10 +15,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import (
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channels import (
     AgentRunApprovalDecision,
     ApprovalResolution,
 )

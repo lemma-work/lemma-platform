@@ -70,7 +70,7 @@ SELF_AUTHENTICATED: tuple[str, ...] = (
     "/agent-runtime/pods",
     # Retired: the conversation MCP mount protocol-2 hosts called. It answers
     # only 410, and a 401 would read to the old bridge as retryable. Goes with
-    # `agent_host_legacy_controller`.
+    # `agent_host/controllers/legacy`.
     "/agent-runtime/conversations",
     # Outside MCP clients. The pod endpoint checks its own bearer token and
     # answers 401 with the challenge that starts a client's sign-in; the rest is

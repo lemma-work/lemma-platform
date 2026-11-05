@@ -15,13 +15,19 @@ from uuid import uuid4, uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host import api as agent_host_api
+from app.modules.agent.agent_host.domain.permissions import (
     AGENT_HOST_PERMISSION_KEY,
-    agent_host_permission_request,
     permission_approval_tool_args,
     permission_approval_tool_call_id,
+    permission_request,
 )
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.state_kinds import PauseStatus
+from app.modules.agent.tests.unit.repository_fakes import (
+    pause_for_call,
+    wire_repositories,
+)
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -32,13 +38,14 @@ from app.modules.agent.services import approval_reconciliation
 from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
 )
-from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.application.pauses.reconcile import ReconcileDecision
+from app.modules.agent.application.pauses.resolve import ResolvePause
+from app.modules.agent.application.pauses.resume import ResumeRun
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
-from app.modules.agent.services.conversation_approvals import (
-    ApprovalCoordinator,
-)
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.run_state import RunState
 
 _PAYLOAD = {
     "request_id": "call-9",
@@ -60,10 +67,7 @@ _PAYLOAD = {
 
 
 def _request(payload: dict = _PAYLOAD):
-    args = permission_approval_tool_args(payload, request_id="call-9")
-    parsed = agent_host_permission_request(args)
-    assert parsed is not None
-    return parsed
+    return permission_request(payload, request_id="call-9")
 
 
 class TestApprovalShape:
@@ -97,8 +101,10 @@ class TestApprovalShape:
             "kind": "allowalways",
             "name": "Always allow",
         } in marker["options"]
-        # Still read back the same way.
-        assert agent_host_permission_request(args) is not None
+        # The same request the pause carries.
+        assert marker == _request().model_dump(
+            mode="json", include={"request_id", "input", "options"}
+        )
 
     def test_a_request_without_input_carries_an_empty_one(self) -> None:
         payload = {key: value for key, value in _PAYLOAD.items() if key != "input"}
@@ -112,10 +118,6 @@ class TestApprovalShape:
         tool_call_id address two different calls."""
         assert permission_approval_tool_call_id("call-9") != "call-9"
         assert "call-9" in permission_approval_tool_call_id("call-9")
-
-    def test_an_ordinary_request_approval_is_not_mistaken_for_one(self) -> None:
-        assert agent_host_permission_request({"tool_name": "exec_command"}) is None
-        assert agent_host_permission_request({AGENT_HOST_PERMISSION_KEY: {}}) is None
 
 
 class TestDecisionMapping:
@@ -395,12 +397,9 @@ def _patch_agent_host(
     error: Exception | None = None,
 ) -> None:
     """Stub the Agent Host infrastructure the dispatch imports lazily."""
-    channels = types.ModuleType("app.modules.agent.infrastructure.agent_host.channels")
 
     async def poke_host(host_id) -> None:
         poked.append(host_id)
-
-    channels.poke_host = poke_host
 
     class _Repository:
         def __init__(self, uow) -> None:
@@ -414,11 +413,6 @@ def _patch_agent_host(
             enqueued.setdefault("uow", self.uow)
             return command
 
-    dispatch = types.ModuleType(
-        "app.modules.agent.infrastructure.agent_host.dispatch_repository"
-    )
-    dispatch.AgentHostDispatchRepository = _Repository
-
     class _Runs:
         """A run Lemma never ended for a parked window: it has no mark."""
 
@@ -426,41 +420,54 @@ def _patch_agent_host(
             del uow
 
         async def get_agent_run(self, agent_run_id):
-            return SimpleNamespace(id=agent_run_id, metadata={})
+            return SimpleNamespace(id=agent_run_id, metadata={}, state=RunState())
 
-    repositories = types.ModuleType("app.modules.agent.infrastructure.repositories")
-    repositories.ConversationRepository = _Runs
-    monkeypatch.setitem(sys.modules, channels.__name__, channels)
-    monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
+    repositories = types.ModuleType("app.modules.agent.infrastructure.db.runs")
+    repositories.Runs = _Runs
+    monkeypatch.setattr(agent_host_api, "poke_host", poke_host, raising=False)
+    monkeypatch.setattr(
+        agent_host_api, "AgentHostDispatchRepository", _Repository, raising=False
+    )
     monkeypatch.setitem(sys.modules, repositories.__name__, repositories)
 
 
-class _ConversationRepository:
-    """Just enough repository for one approval resolution."""
+class _Repositories:
+    """Just enough of every repository for one approval resolution.
+
+    One object standing in for each of them (``wire_repositories``), so a test can read
+    what was decided and appended in one place.
+    """
 
     def __init__(self, call: Message) -> None:
         self.call = call
-        self.decision: tuple | None = None
+        self.pause = None
         self.appended: list[Message] = []
         self.created_runs = 0
-        self.execution_claims = 0
 
-    async def claim_approval_execution(self, **_kwargs):
-        """One claim per approval, like the real conditional UPDATE."""
-        self.execution_claims += 1
-        return self.execution_claims == 1
+    @property
+    def decision(self):
+        return self.pause.decision if self.pause is not None else None
 
-    async def get_approval_decision(self, **_kwargs):
-        return self.decision
+    async def get(self, **_kwargs):
+        if self.pause is None:
+            self.pause = pause_for_call(self.call)
+        self.pause.returned = await self.tool_return() is not None
+        return self.pause
 
-    async def record_approval_decision(self, *, decision, response, **_kwargs):
-        self.decision = (decision, response)
+    async def save(self, pause):
+        """Fenced on the status it was read with, like the real UPDATE."""
+        if pause.read_as is not PauseStatus.PENDING:
+            return False
+        pause.saved()
         return True
 
-    async def get_tool_call(self, **_kwargs):
-        return self.call
+    async def pending(self, *_args, **_kwargs):
+        return [self.pause] if self.pause is not None and self.pause.is_open else []
 
-    async def get_tool_return(self, **_kwargs):
+    async def tool_call_id_of_message(self, **_kwargs):
+        return None
+
+    async def tool_return(self, **_kwargs):
         return next(
             (m for m in self.appended if m.kind == MessageKind.TOOL_RETURN), None
         )
@@ -494,9 +501,6 @@ class _ConversationRepository:
         self.created_runs += 1
         return SimpleNamespace(id=uuid7())
 
-    async def list_resolved_approval_ids(self, **_kwargs):
-        return set()
-
     async def list_messages(self, **_kwargs):
         return [], None
 
@@ -518,20 +522,25 @@ class TestResolutionRouting:
             tool_call_id=permission_approval_tool_call_id("call-9"),
             tool_args=args,
         )
-        repository = _ConversationRepository(call)
+        repository = _Repositories(call)
         # The host's wake-up is queued on the unit of work, so the fake has to
         # accept it. What reaches the host -- the command, written in the
         # caller's transaction -- is recorded by the stub below; that the
         # wake-up waits for the commit is asserted in `TestDispatch`.
         uow = _AfterCommitUow()
-        # The real coordinator, not a stand-in and not a half-built service:
-        # what these tests check is its routing, so anything less would certify
-        # the test's own wiring instead.
-        service = ApprovalCoordinator(
-            uow,
+        # The real use cases, not stand-ins and not a half-built service:
+        # what these tests check is their routing, so anything less would
+        # certify the test's own wiring instead.
+        service = wire_repositories(
+            ResolvePause(
+                uow,
+                reconcile=ReconcileDecision(
+                    uow,
+                    resume_returns=ResumeToolReturnBuilder(uow, None),
+                    resume=ResumeRun(uow, agent_repository=None),
+                ),
+            ),
             repository,
-            ResumeToolReturnBuilder(uow, None),
-            PauseResume(uow, repository, None),
         )
 
         async def _enqueue(uow, *, request, agent_run_id, decision):
@@ -565,7 +574,7 @@ class TestResolutionRouting:
             user_id=uuid4(),
         )
 
-        resolution = await service.resolve_user_approval_internal(
+        resolution = await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,
@@ -593,7 +602,7 @@ class TestResolutionRouting:
         )
 
         with pytest.raises(ApprovalNotOwnedError):
-            await service.resolve_user_approval_internal(
+            await service.resolve(
                 conversation=conversation,
                 approval_id=repository.call.tool_call_id,
                 user_id=uuid4(),
@@ -619,7 +628,7 @@ class TestResolutionRouting:
             user_id=uuid4(),
         )
 
-        await service.resolve_user_approval_internal(
+        await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,
@@ -647,7 +656,7 @@ class TestResolutionRouting:
             user_id=uuid4(),
         )
 
-        resolution = await service.resolve_user_approval_internal(
+        resolution = await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,
@@ -732,7 +741,7 @@ class TestAParkedInteractionDoesNotResume:
         # An ordinary request_approval — no ACP marker, so only the run's own
         # state can tell this apart from an in-process pause.
         repository.call.tool_args = {"tool_name": "exec_command", "args": {}}
-        repository.call.metadata = {"parked_in_run": True}
+        repository.call.state = MessageState(parked_in_run_id=run_id)
         repository.paused_run = SimpleNamespace(
             id=run_id, status=AgentRunStatus.RUNNING
         )
@@ -744,7 +753,7 @@ class TestAParkedInteractionDoesNotResume:
             user_id=uuid4(),
         )
 
-        await service.resolve_user_approval_internal(
+        await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,

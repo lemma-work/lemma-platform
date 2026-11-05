@@ -31,10 +31,10 @@ from app.core.authorization.scope import context_scope
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.services.mcp_content import tool_call_result
-from app.modules.agent.tools.authority import tool_authorization_context
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
+from app.modules.agent.infrastructure.mcp.content import tool_call_result
+from app.modules.agent.infrastructure.tools.authority import tool_authorization_context
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.payload_limits import bounded_tool_payload
 from app.modules.mcp_access.contracts import McpPrincipal, Scope
 from app.modules.workflow.contracts.person_runs import (
     PersonWorkflowRun,
@@ -462,7 +462,7 @@ async def _assistant_context(
     own assistant, in no conversation."""
     return await tool_authorization_context(
         uow,
-        BaseAgentContext(
+        ToolContext(
             user_id=principal.user_id,
             pod_id=principal.pod_id,
             conversation_id=_NO_CONVERSATION,

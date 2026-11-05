@@ -138,7 +138,7 @@ PROCESS_LIFETIME_OWNERS = (
     "app/core/infrastructure/db/manager.py",
     "app/modules/datastore/infrastructure/session.py",
     "app/modules/function/application/function_runtime_http_client.py",
-    "app/modules/agent/services/runtime_model_factory.py",
+    "app/modules/agent/infrastructure/providers/model_factory.py",
 )
 
 MEMOIZING_DECORATORS = {"lru_cache", "cache", "cached", "cached_property"}

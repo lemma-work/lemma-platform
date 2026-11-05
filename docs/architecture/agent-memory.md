@@ -106,7 +106,7 @@ decides which runs these are, once, when the run's context is built.
 
 **The memory pass** runs once such a run completes. `stage_run_followups`
 writes an `agent.memory` work item in the transaction that finished the run.
-The pass ([`memory_pass.py`](../../lemma-backend/app/modules/agent/services/memory_pass.py))
+The pass ([`memory_pass.py`](../../lemma-backend/app/modules/agent/application/background/memory_pass.py))
 reads that turn: what the person said, what the agent did and answered, and the
 reply before it. Some of what a turn answers is stored on other runs: a manual
 retry's original message stays on the run that failed, and the person's answer

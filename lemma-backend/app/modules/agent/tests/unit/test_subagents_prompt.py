@@ -10,15 +10,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.modules.agent.capabilities.assembler import _instructions_for
+from app.modules.agent.domain.tools import ToolGroup
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.prompts import (
+from app.modules.agent.domain.prompt.templates import (
     build_agent_instructions,
     load_agent_host_runtime_prompt,
     load_subagents_prompt,
+    toolset_instructions,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
 
 _FRAGMENT_HEADING = "# Sub-agents"
 
@@ -58,10 +58,10 @@ def test_a_run_that_cannot_delegate_is_not_told_about_it():
 def test_the_in_process_run_gets_the_same_text_once():
     """In process the fragment rides on the toolset's capability, deferred or
     not, so the system prompt itself must not carry a second copy."""
-    guidance = _instructions_for(subagents_toolset)
+    guidance = toolset_instructions(ToolGroup.SUBAGENTS)
 
     assert guidance is not None, "the in-process path lost the fragment"
-    assert guidance[1]() == load_subagents_prompt()
+    assert guidance == load_subagents_prompt()
     assert _FRAGMENT_HEADING not in _prompt(
         [AgentToolset.SUBAGENTS], include_toolset_prompts=False
     )

@@ -24,9 +24,7 @@ import pytest
 from app.modules.test_support.channel_lines_double import RecordingChannelLines
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -58,9 +56,8 @@ from app.modules.test_support.surface_routing_double import routing_surfaces_dou
 #: doubles below are installed. On the contract rather than on the surface
 #: modules that call it: the operations belong to another module, and the real
 #: ones reach a database.
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 _AGENT_DIRECTORY = "app.modules.agent.contracts.agents"
-_METADATA_RECORDS = "app.modules.agent.contracts.conversation_metadata_records"
 
 
 async def _the_tap_stands(_uow, **kwargs) -> agent_conversations.ApprovalResolution:
@@ -91,8 +88,6 @@ def conversation_operations(monkeypatch):
         "resolve_pending_interaction": AsyncMock(side_effect=_the_tap_stands),
         "retry_failed_run": AsyncMock(),
         "surface_agent_identity": AsyncMock(return_value=None),
-        "conversation_metadata_value": AsyncMock(return_value=None),
-        "set_conversation_metadata_value": AsyncMock(),
         # Nobody typed into Lemma: the ordinary answer for an egress target
         # resolved for a channel. The real one reads the conversation's latest
         # run, which these doubles have no rows for.
@@ -100,13 +95,6 @@ def conversation_operations(monkeypatch):
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
-    records = {
-        "conversation_metadata_record": AsyncMock(return_value=None),
-        "forget_conversation_metadata_record": AsyncMock(),
-        "due_conversation_metadata_records": AsyncMock(return_value=[]),
-    }
-    for name, double in records.items():
-        monkeypatch.setattr(f"{_METADATA_RECORDS}.{name}", double)
     monkeypatch.setattr(
         f"{_AGENT_DIRECTORY}.agent_name_for_id", AsyncMock(return_value="Surface Agent")
     )

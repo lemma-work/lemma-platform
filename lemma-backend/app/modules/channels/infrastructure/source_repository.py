@@ -354,19 +354,11 @@ class SourceRepository:
 
     # -- what was heard ---------------------------------------------------------
 
-    async def heard(self, source_id: UUID, delivery_ref: Mapping[str, object]) -> None:
-        """The account heard this place just now; this is how to answer it."""
-        at = now()
-        await self.session.execute(
-            update(ChannelSourceModel)
-            .where(ChannelSourceModel.id == source_id)
-            .values(delivery_ref=dict(delivery_ref), last_inbound_at=at, updated_at=at)
-        )
-
     async def addressed(
         self, source_id: UUID, delivery_ref: Mapping[str, object]
     ) -> None:
-        """How to write to this place, learnt from writing to it first."""
+        """How to write to this place, learnt from what was heard there or from
+        writing to it first."""
         await self.session.execute(
             update(ChannelSourceModel)
             .where(ChannelSourceModel.id == source_id)

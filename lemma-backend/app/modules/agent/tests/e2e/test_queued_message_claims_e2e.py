@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+from app.modules.agent.agent_host.harness.dispatch import (
     CarriedChanged,
     claim_exactly,
 )
@@ -23,9 +23,8 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.queued_message_queries import (
-    QueuedMessageRepository,
-)
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = [pytest.mark.e2e]
 
@@ -59,7 +58,7 @@ async def _seed(db_session, scenario) -> tuple[UUID, UUID, list[MessageModel]]:
             role="user",
             kind="TEXT",
             text=text,
-            message_metadata={"during_active_run": index > 0},
+            queue_state=QueueState.QUEUED if index > 0 else QueueState.NONE,
             created_at=_BASE + timedelta(seconds=index),
         )
         for index, text in enumerate(
@@ -86,7 +85,7 @@ async def test_a_message_withdrawn_while_the_prompt_was_built_rolls_the_admissio
     conversation_id, run_id, rows = await _seed(db_session, scenario)
     kept, withdrawn = rows[1].id, rows[2].id
     uow = SqlAlchemyUnitOfWork(db_session)
-    queued = QueuedMessageRepository(uow)
+    queued = QueuedMessages(uow)
     assert await queued.withdraw_queued_user_message(
         conversation_id=conversation_id, message_id=withdrawn
     )
@@ -118,7 +117,7 @@ async def test_a_claim_that_matches_the_prompt_holds_until_admission_commits(
     await uow.commit()
 
     # Claimed, so on its way: no longer the person's to take back.
-    queued = QueuedMessageRepository(uow)
+    queued = QueuedMessages(uow)
     for row in rows[1:]:
         assert not await queued.withdraw_queued_user_message(
             conversation_id=conversation_id, message_id=row.id
@@ -139,7 +138,7 @@ async def _seed_mixed(db_session, scenario, *, private_run: bool):
         conversation_id=conversation.id,
         status="RUNNING",
         agent_runtime={"profile_id": "system:lemma"},
-        run_metadata={"private_note": True} if private_run else {"source": "x"},
+        private_note=private_run,
         started_at=_BASE,
         created_at=_BASE,
     )
@@ -153,16 +152,14 @@ async def _seed_mixed(db_session, scenario, *, private_run: bool):
             role="user",
             kind="TEXT",
             text=text,
-            message_metadata=metadata,
+            queue_state=QueueState.QUEUED,
+            private_note=private_note,
             created_at=_BASE + timedelta(seconds=index),
         )
-        for index, (text, metadata) in enumerate(
+        for index, (text, private_note) in enumerate(
             [
-                (
-                    "Don't promise Friday.",
-                    {"during_active_run": True, "private_note": True},
-                ),
-                ("@lemmabot and the PO number?", {"during_active_run": True}),
+                ("Don't promise Friday.", True),
+                ("@lemmabot and the PO number?", False),
             ],
             start=1,
         )
@@ -177,19 +174,19 @@ async def test_a_running_answer_takes_in_only_messages_of_its_own_kind(
     db_session, scenario, private_run
 ):
     """A note never shapes an answer the group gets, nor the other way round."""
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 
     await scenario.create_org_with_pod(name_prefix="Queued kinds")
     run_id, note, platform = await _seed_mixed(
         db_session, scenario, private_run=private_run
     )
-    repository = ConversationRepository(SqlAlchemyUnitOfWork(db_session))
+    queued_messages = QueuedMessages(SqlAlchemyUnitOfWork(db_session))
 
-    steered = await repository.claim_queued_user_messages(run_id, as_run=True)
+    steered = await queued_messages.claim_queued_user_messages(run_id, as_run=True)
     await db_session.commit()
 
     assert [message.id for message in steered] == [note if private_run else platform]
     # The other one waits for a follow-up of its own kind, and the oldest
     # message waiting decides that kind.
-    assert await repository.count_queued_user_messages(run_id) == 1
-    assert await repository.earliest_queued_is_note(run_id) is (not private_run)
+    assert await queued_messages.count_queued_user_messages(run_id) == 1
+    assert await queued_messages.earliest_queued_is_note(run_id) is (not private_run)

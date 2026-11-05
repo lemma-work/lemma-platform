@@ -10,12 +10,11 @@ from __future__ import annotations
 from app.modules.agent.contracts import (
     AgentEvent,
     AgentEventType,
-    Conversation,
     MessageDraft,
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.contracts.progress_tools import progress_comment_for_tool_call
+from app.modules.agent.contracts.channel_words import progress_comment_for_tool_call
 from app.modules.agent_surfaces.domain.display_redaction import redact_secrets_in_text
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
@@ -29,9 +28,9 @@ from app.modules.agent_surfaces.platforms.rendering import (
 _MAX_PROGRESS_TEXT_LENGTH = 120
 
 
-def _surface_platform(conversation: Conversation) -> str | None:
-    metadata = conversation.metadata or {}
-    platform = metadata.get("surface_platform") if isinstance(metadata, dict) else None
+def surface_platform_of(ctx: object) -> str | None:
+    """The platform a run talks over, as its context names it; None for none."""
+    platform = getattr(ctx, "surface_platform", None)
     return str(platform).upper() if platform else None
 
 
@@ -108,8 +107,7 @@ def _is_final_answer_event(event: AgentEvent) -> bool:
     data = event.data
     if not isinstance(data, MessageDraft):
         return False
-    metadata = data.metadata or {}
-    return metadata.get("is_final_answer") is True
+    return data.state.is_final_answer
 
 
 def _is_agent_host_permission_event(event: AgentEvent) -> bool:

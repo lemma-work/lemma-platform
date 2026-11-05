@@ -5,37 +5,30 @@ import json
 from uuid import uuid4
 
 import pytest
+
+from app.modules.agent.domain.state_kinds import PauseKind
 from pydantic import BaseModel
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.agent_host.mcp import ConversationMCPService
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import ToolGroup, tool
+from app.modules.agent.domain.toolsets import AgentGrantSummary
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 
 class _SurfaceToolRequest(BaseModel):
     path: str
 
 
-async def _no_grant_summary(self, *, pod_id, agent_id):
-    del self, pod_id, agent_id
-    return AgentGrantSummary()
-
-
 @pytest.mark.asyncio
 async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
     async def telegram_send_file(
-        ctx: RunContext[BaseAgentContext],
-        request: _SurfaceToolRequest,
+        ctx: ToolContext, request: _SurfaceToolRequest
     ) -> dict[str, str]:
         """Send a file to the current Telegram chat."""
-        return {
-            "conversation_id": str(ctx.deps.conversation_id),
-            "path": request.path,
-        }
+        return {"conversation_id": str(ctx.conversation_id), "path": request.path}
 
     user_id = uuid4()
     pod_id = uuid4()
@@ -51,13 +44,8 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
         user_id=user_id,
         pod_id=pod_id,
         title="Telegram chat",
-        metadata={
-            "surface_platform": "TELEGRAM",
-            "external_channel_id": "12345",
-            "external_thread_id": "12345",
-        },
     )
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -69,17 +57,16 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx, None
+        return agent, conversation, ctx, AgentGrantSummary()
 
-    async def fake_build_toolsets(self, *, conversation):
-        del self, conversation
-        return [FunctionToolset[BaseAgentContext](tools=[telegram_send_file])]
+    async def fake_build_tools(self, **place):
+        del self, place
+        return [tool(telegram_send_file, ToolGroup.SURFACE)]
 
     async def fake_callable_toolsets(self, *, agent, allow_subagents=True, grants=None):
         # Unit test: must not touch the real database. The production
         # implementation runs a SQL query whenever the agent has an id (always
-        # true, ids are auto-generated), which made this test depend on a live
-        # Postgres and on loop-bound engine state shared across the session.
+        # true, ids are auto-generated).
         del self, agent, allow_subagents, grants
         return []
 
@@ -88,23 +75,15 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
         "_load_agent_context",
         fake_load_agent_context,
     )
-    # Toolset selection derives POD/CONNECTORS from grants, so the assembler
-    # reads them before building any tool. Same reason as the stub above:
-    # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.load_grant_summary",
-        _no_grant_summary,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.build_toolsets",
+        "app.modules.agent.infrastructure.tools.callables."
+        "AgentCallableToolFactory.build_specs",
         fake_callable_toolsets,
     )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory."
-        "SurfacePlatformToolFactory.build_toolsets",
-        fake_build_toolsets,
+        "SurfacePlatformToolFactory.build_tools",
+        fake_build_tools,
     )
 
     service = ConversationMCPService()
@@ -138,7 +117,7 @@ async def test_conversation_mcp_exposes_todo_tools_when_agent_has_todo(monkeypat
     conversation = Conversation(
         id=conversation_id, user_id=user_id, pod_id=pod_id, title="Planning"
     )
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -147,7 +126,7 @@ async def test_conversation_mcp_exposes_todo_tools_when_agent_has_todo(monkeypat
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx, None
+        return agent, conversation, ctx, AgentGrantSummary()
 
     async def fake_callable_toolsets(self, *, agent, allow_subagents=True, grants=None):
         del self, agent, allow_subagents, grants
@@ -156,17 +135,9 @@ async def test_conversation_mcp_exposes_todo_tools_when_agent_has_todo(monkeypat
     monkeypatch.setattr(
         ConversationMCPService, "_load_agent_context", fake_load_agent_context
     )
-    # Toolset selection derives POD/CONNECTORS from grants, so the assembler
-    # reads them before building any tool. Same reason as the stub above:
-    # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.load_grant_summary",
-        _no_grant_summary,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.build_toolsets",
+        "app.modules.agent.infrastructure.tools.callables."
+        "AgentCallableToolFactory.build_specs",
         fake_callable_toolsets,
     )
 
@@ -207,7 +178,7 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
     )
     # supports_pause_signal is False, as it is for every Agent Host run: this is
     # the branch that cannot raise its way out of a turn.
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -216,7 +187,7 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx, None
+        return agent, conversation, ctx, AgentGrantSummary()
 
     async def fake_record(uow_factory, **kwargs):
         del uow_factory
@@ -231,20 +202,12 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
         ConversationMCPService, "_load_agent_context", fake_load_agent_context
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.conversation_mcp_service.record_pausing_tool_call",
+        "app.modules.agent.agent_host.mcp.record_pausing_tool_call",
         fake_record,
     )
-    # Toolset selection derives POD/CONNECTORS from grants, so the assembler
-    # reads them before building any tool. Same reason as the stub above:
-    # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.load_grant_summary",
-        _no_grant_summary,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.build_toolsets",
+        "app.modules.agent.infrastructure.tools.callables."
+        "AgentCallableToolFactory.build_specs",
         fake_callable_toolsets,
     )
 
@@ -275,6 +238,7 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
     # Recorded before the tool ran, against the run that made the call, with the
     # arguments the card is rendered from.
     assert recorded[0]["tool_name"] == "ask_user"
+    assert recorded[0]["pauses"] is PauseKind.QUESTION
     assert recorded[0]["agent_run_id"] == agent_run_id
     asked = recorded[0]["arguments"]["questions"][0]
     assert asked["question"] == "Which one?"
@@ -296,13 +260,11 @@ async def test_an_ordinary_tool_is_not_put_on_the_record_first(monkeypatch):
     conversation = Conversation(
         id=conversation_id, user_id=user_id, pod_id=pod_id, title="t"
     )
-    ctx = BaseAgentContext(
-        user_id=user_id, pod_id=pod_id, conversation_id=conversation_id
-    )
+    ctx = ToolContext(user_id=user_id, pod_id=pod_id, conversation_id=conversation_id)
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
-        return agent, conversation, ctx, None
+        return agent, conversation, ctx, AgentGrantSummary()
 
     async def fake_record(uow_factory, **kwargs):
         del uow_factory
@@ -317,20 +279,12 @@ async def test_an_ordinary_tool_is_not_put_on_the_record_first(monkeypatch):
         ConversationMCPService, "_load_agent_context", fake_load_agent_context
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.conversation_mcp_service.record_pausing_tool_call",
+        "app.modules.agent.agent_host.mcp.record_pausing_tool_call",
         fake_record,
     )
-    # Toolset selection derives POD/CONNECTORS from grants, so the assembler
-    # reads them before building any tool. Same reason as the stub above:
-    # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.load_grant_summary",
-        _no_grant_summary,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
-        "AgentCallableToolFactory.build_toolsets",
+        "app.modules.agent.infrastructure.tools.callables."
+        "AgentCallableToolFactory.build_specs",
         fake_callable_toolsets,
     )
 
@@ -350,7 +304,7 @@ class _ConversationAlreadyLoaded(ConversationMCPService):
     the real path an Agent Host run's `tools/list` takes.
     """
 
-    def __init__(self, conversation: Conversation, ctx: BaseAgentContext) -> None:
+    def __init__(self, conversation: Conversation, ctx: ToolContext) -> None:
         super().__init__()
         self._conversation = conversation
         self._ctx = ctx
@@ -368,16 +322,18 @@ _SUBAGENT_TOOLS = {
 }
 
 
-async def _agent_host_tool_names(*, metadata: dict[str, object]) -> set[str]:
+async def _agent_host_tool_names(
+    *, origin: ConversationOrigin = ConversationOrigin.CHAT
+) -> set[str]:
     user_id, pod_id, conversation_id = uuid4(), uuid4(), uuid4()
     conversation = Conversation(
         id=conversation_id,
         user_id=user_id,
         pod_id=pod_id,
         title="Delegation",
-        metadata=metadata,
+        origin=origin,
     )
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -393,14 +349,14 @@ async def _agent_host_tool_names(*, metadata: dict[str, object]) -> set[str]:
 
 
 async def test_an_agent_host_run_is_offered_the_subagent_tools_under_their_mcp_names():
-    names = await _agent_host_tool_names(metadata={})
+    names = await _agent_host_tool_names()
 
     assert _SUBAGENT_TOOLS <= names
 
 
 async def test_a_sub_agent_on_agent_host_is_not_offered_the_subagent_tools():
     """The depth rule: a child cannot spawn, or wait inside its parent's turn."""
-    names = await _agent_host_tool_names(metadata={"is_sub_agent": True})
+    names = await _agent_host_tool_names(origin=ConversationOrigin.SUBAGENT)
 
     assert not _SUBAGENT_TOOLS & names
     # Still a working run, not an empty tool list.

@@ -258,7 +258,7 @@ async def test_telegram_voice_message_transcribed_at_ingress(
 
     monkeypatch.setattr(TelegramSurfaceAdapter, "download_attachment", _fake_download)
 
-    import app.modules.agent.tools.speech.provider as speech_provider
+    import app.modules.agent.infrastructure.tools.speech.provider as speech_provider
 
     class _Result:
         text = "book a meeting with the design team tomorrow"

@@ -50,9 +50,7 @@ from app.modules.agent.events.work_kinds import (
     AGENT_WAIT_RESOLVE_CHILD,
     child_wait_key,
 )
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.runtime_owned_uow import RuntimeOwnedUnitOfWork
 from app.modules.agent.services.wait_timers import WaitTimer
 from app.modules.agent.services.wait_wake_service import (
@@ -106,7 +104,7 @@ async def resolve_child_wait(ctx: FastContext, payload: ChildRunFinished) -> Non
 
 
 async def on_wait_dead(ctx: DeadContext) -> None:
-    """A wake that keeps failing ends the wait FAILED instead of retrying forever.
+    """A wake that keeps failing abandons the wait instead of retrying forever.
 
     The conversation is left WAITING rather than resumed: no tool return could
     be built, so there is nothing truthful to hand the model. The error log is
@@ -116,11 +114,11 @@ async def on_wait_dead(ctx: DeadContext) -> None:
         payload = WaitTimer.model_validate(ctx.item.payload)
     except ValueError:
         return
-    waits = AgentConversationWaitRepository(ctx.uow)
-    claimed = await waits.claim(payload.wait_id)
+    waits = Pauses(ctx.uow)
+    claimed = await waits.by_id(payload.wait_id, lock=True)
     if claimed is None or not claimed.abandon(f"wake failed: {ctx.reason}"):
         return
-    await waits.update(claimed)
+    await waits.save(claimed)
     logger.error(
         "agent.wait.abandoned",
         conversation_id=str(claimed.conversation_id),

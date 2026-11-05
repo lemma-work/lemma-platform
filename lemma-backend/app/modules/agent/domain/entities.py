@@ -14,15 +14,18 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.conversation_metadata import (
-    MANUAL_RETRY_SOURCE,
-    source_of,
-)
+from app.modules.agent.domain.calls import CallMark
 from app.modules.agent.domain.errors import AgentValidationError
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.pod_ask_record import PodAsk
+from app.modules.agent.domain.project_repo import ProjectRepo
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.todos import Todo
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
     AgentToolset,
+    ConversationOrigin,
     ConversationStatus,
     ConversationType,
     JsonObject,
@@ -104,6 +107,8 @@ class Message(CreatedEntity):
     tool_args: JsonValue | None = None
     tool_result: JsonValue | None = None
     metadata: JsonObject | None = None
+    #: What the server records about it beyond its body (``domain/message_state``).
+    state: MessageState = MessageState()
 
     @classmethod
     def create(
@@ -120,6 +125,7 @@ class Message(CreatedEntity):
         tool_args: JsonValue | None = None,
         tool_result: JsonValue | None = None,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "Message":
         return cls(
             conversation_id=conversation_id,
@@ -133,6 +139,7 @@ class Message(CreatedEntity):
             tool_args=tool_args,
             tool_result=tool_result,
             metadata=metadata,
+            state=state or MessageState(),
         )
 
     @classmethod
@@ -156,6 +163,7 @@ class Message(CreatedEntity):
             tool_args=draft.tool_args,
             tool_result=draft.tool_result,
             metadata=draft.metadata,
+            state=draft.state,
         )
 
 
@@ -186,7 +194,35 @@ class Conversation(Entity):
     type: ConversationType = ConversationType.CHAT
     status: ConversationStatus | None = None
     output: JsonValue | None = None
+    #: Client tags (``domain/conversations``).
     metadata: JsonObject | None = None
+    #: What it is for. Set once, by the code that opens it.
+    origin: ConversationOrigin = ConversationOrigin.CHAT
+    #: The workflow run it is a step of.
+    workflow_run_id: UUID | None = None
+    #: A schedule's: what fires it -- ``TIME``, ``DATASTORE`` or ``WEBHOOK``.
+    schedule_type: str | None = None
+    #: A sub-agent's: the parent's run that spawned it.
+    parent_run_id: UUID | None = None
+    #: A sub-agent's: what it was spawned to do, so one parent run spawning the
+    #: same task twice gets the same child (``domain/subagent_spawn``).
+    spawn_key: str | None = None
+    #: A sub-agent's: its result is delivered to its parent.
+    reports_to_parent: bool = False
+    #: It has delegated -- a sub-agent spawned, another pod asked -- and is
+    #: owed, or owes, a result when a run of it finishes.
+    delegations_out: bool = False
+    #: The ask another pod opened it with (``domain/pod_asks``).
+    ask: PodAsk | None = None
+    #: The live call it belongs to (``domain/calls``).
+    call: CallMark | None = None
+    #: Where it works (``domain/workspace_location``).
+    cwd: str | None = None
+    workspace_id: str | None = None
+    workspace_name: str | None = None
+    repo: ProjectRepo | None = None
+    #: The agent's task list.
+    todos: list[Todo] = Field(default_factory=list)
     is_archived: bool = False
     #: None only before the row is written.
     last_activity_at: datetime | None = None
@@ -257,7 +293,11 @@ class AgentRun(Entity):
     finished_at: datetime | None = None
     error: str | None = None
     output_data: JsonValue | None = None
+    #: The Agent Host's execution record and final answer, until they move
+    #: with it; nothing else.
     metadata: JsonObject | None = None
+    #: Why it started, whom it answers for, what it continues, how it ended.
+    state: RunState = RunState()
     messages: list[Message] = Field(default_factory=list)
     #: How many messages the run actually has, which is not always how many are
     #: loaded. Runtime history loads older runs down to their first and last
@@ -286,7 +326,7 @@ class AgentRun(Entity):
     def replays_a_retried_turn(self) -> bool:
         """Whether this run was started by a retry, and so replays a person's
         turn that belongs to the run it retried rather than to itself."""
-        return source_of(self.metadata) == MANUAL_RETRY_SOURCE
+        return self.state.replays_a_retried_turn
 
     @property
     def is_safely_retryable(self) -> bool:
@@ -319,7 +359,7 @@ class RuntimeHistoryWindow:
     window: the runner needs it either way, and refusing it would turn a missing
     notice into a failed run.
 
-    See ``infrastructure/runtime_history_window`` for the statements.
+    See ``infrastructure/db/history_reads`` for the statements.
     """
 
     #: The newest runs, oldest-first -- the order every trim downstream assumes.

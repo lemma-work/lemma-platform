@@ -19,8 +19,7 @@ import json
 import re
 from dataclasses import dataclass
 
-#: The planning tool from ``app.modules.agent.capabilities.todo``.
-TODO_TOOL_NAME = "write_todos"
+from app.modules.agent.domain.tools import TODO_TOOL_NAME
 
 #: Argument names a tool call may put its human-readable status line under, in
 #: the order they are preferred.

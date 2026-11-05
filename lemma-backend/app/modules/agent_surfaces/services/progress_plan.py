@@ -34,7 +34,7 @@ from app.modules.agent.contracts import (
     MessageDraft,
     MessageKind,
 )
-from app.modules.agent.contracts.progress_tools import todo_plan_from_tool_return
+from app.modules.agent.contracts.channel_words import todo_plan_from_tool_return
 from app.modules.agent_surfaces.domain.display_redaction import redact_secrets_in_text
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 
@@ -83,7 +83,7 @@ def plan_from_event(event: AgentEvent) -> SurfacePlan | None:
     """Read the current plan out of a ``write_todos`` tool return.
 
     Reading the tool's schema is the agent's job
-    (`agent.contracts.progress_tools`); this only draws what it finds. The
+    (`agent.contracts.channel_words`); this only draws what it finds. The
     *return* is what carries the plan rather than the call arguments, because
     the tool merges a single check-off line into the stored list before
     answering -- rendering the arguments would show a one-item plan every time

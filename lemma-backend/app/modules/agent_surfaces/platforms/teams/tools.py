@@ -3,10 +3,7 @@ from __future__ import annotations
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
-
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts.tools import ToolContext, ToolGroup, ToolSpec, tool
 from app.modules.agent_surfaces.platforms.teams.models import (
     TeamsGetRecentMessagesParams,
     TeamsGetRecentMessagesResult,
@@ -15,14 +12,14 @@ from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformServ
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 
 
-def build_teams_surface_toolset(
+def teams_surface_tools(
     *,
     credentials: SurfaceCredentials,
-) -> FunctionToolset[ConversationContext]:
+) -> tuple[ToolSpec, ...]:
     service = TeamsPlatformService(credentials=credentials)
 
     async def teams_get_recent_channel_messages(
-        ctx: RunContext[ConversationContext],
+        ctx: ToolContext,
         request: TeamsGetRecentMessagesParams,
     ) -> TeamsGetRecentMessagesResult:
         """Get recent messages from the current Teams channel or thread, including shared files."""
@@ -35,8 +32,4 @@ def build_teams_surface_toolset(
             ),
         )
 
-    return FunctionToolset[ConversationContext](
-        tools=[
-            teams_get_recent_channel_messages,
-        ]
-    )
+    return (tool(teams_get_recent_channel_messages, ToolGroup.SURFACE),)

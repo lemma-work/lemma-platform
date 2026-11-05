@@ -4,15 +4,19 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+from app.modules.agent.infrastructure.harness.lemma.run_options import (
+    final_answer_output,
+)
 import pytest
 
-import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
+import app.modules.agent.infrastructure.tools.user_interaction.tools as user_interaction_adapter
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.run_context_prompt import task_list_section
-from app.modules.agent.tools.toolset_selection import (
+from app.modules.agent.domain.prompt.templates import build_agent_instructions
+from app.modules.agent.domain.prompt.run_context import task_list_section
+from app.modules.agent.domain.toolsets import (
     AgentGrantSummary,
     resolve_toolset_names,
 )
@@ -25,48 +29,50 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses.history import build_history_processors
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.history import (
+    build_history_processors,
+)
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 from app.modules.agent.domain.workspace_location import ProjectRepo
 from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     ELISION_BLOCK_RUNS,
     FULL_HISTORY_AGENT_RUN_COUNT,
     select_runtime_history,
 )
-from app.modules.agent.tools.callable_tool_factory import (
+from app.modules.agent.infrastructure.tools.callables import (
     AgentCallableToolFactory,
-    inline_schema,
-    normalize_json_schema,
     _schema_preview,
 )
-from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
-from app.modules.agent.tools.pod import pod_toolset
-from app.modules.agent.tools.skills import skills_toolset
-from app.modules.agent.tools.registry import (
-    POD_DEFAULT_AGENT_TOOLSETS,
-    resolve_agent_toolsets,
+from app.modules.agent.infrastructure.providers.tool_schemas import (
+    inline_schema,
+    normalize_json_schema,
 )
-from app.modules.agent.tools.user_interaction import user_interaction_toolset
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.final_answer.tools import FinalAgentResult
+from app.modules.agent.domain.toolsets import POD_DEFAULT_AGENT_TOOLSETS
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
+    RequestApprovalArguments,
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,
     validate_display_payload,
 )
-from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
-from app.modules.agent.tools.tool_assembler import RunToolAssembler
-from app.modules.agent.tools.tool_errors import AgentInputRequired
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.domain.tools import AgentInputRequired
+from app.modules.agent.infrastructure.tools.user_interaction.tools import (
     ask_user,
     display_resource,
     request_approval,
 )
-from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
-from app.modules.agent.tools.workspace_cli import workspace_cli_toolset
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import ToolGroup
+from app.modules.agent.infrastructure.tools.user_interaction import (
+    tools as user_interaction_tools,
+)
+from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
 from app.modules.function.domain.entities import FunctionEntity, FunctionType
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.modules.agent.domain.todos import Todo
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 
 def _agent_run_with_messages(run_index: int, message_count: int = 5) -> AgentRun:
@@ -106,20 +112,24 @@ def _messages_by_run(messages: list[Message]) -> dict[UUID, list[Message]]:
     return grouped
 
 
-def test_toolset_resolver_returns_exactly_the_selected_toolsets():
-    # No implicit defaults: the resolver returns exactly what it is given,
-    # deduplicated and order-preserving.
-    toolsets = resolve_agent_toolsets(
-        [
-            AgentToolset.SPEECH,
-            AgentToolset.WORKSPACE_CLI,
-            AgentToolset.SPEECH,
-        ]
+async def _groups(
+    agent: Agent, conversation: Conversation, *, uow_factory: object = None
+) -> set[ToolGroup]:
+    """The groups of tools a run gets, through the real catalog."""
+    ctx = ToolContext(
+        user_id=conversation.user_id,
+        pod_id=conversation.pod_id,
+        conversation_id=conversation.id,
     )
-
-    assert len(toolsets) == 2
-    assert toolsets[0] is not toolsets[1]
-    assert all(item.__class__.__name__.endswith("Toolset") for item in toolsets)
+    specs = await specs_for(
+        agent=agent,
+        conversation=conversation,
+        ctx=ctx,
+        surface=ToolSurface.IN_PROCESS,
+        uow_factory=uow_factory,  # type: ignore[arg-type]
+        grants=AgentGrantSummary(),
+    )
+    return {spec.toolset for spec in specs}
 
 
 @pytest.mark.asyncio
@@ -132,7 +142,6 @@ async def test_default_pod_agent_gets_fixed_default_toolsets():
     seam that substitutes the constant, so this asserts against what comes back
     from it rather than against the row.
     """
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     pod_id = uuid4()
     conversation = Conversation(
         pod_id=pod_id,
@@ -154,20 +163,17 @@ async def test_default_pod_agent_gets_fixed_default_toolsets():
         user_id=conversation.user_id,
         agent_repository=SimpleNamespace(get=AsyncMock(return_value=stored)),
     )
-    toolsets = await runner.tool_assembler.assemble(
-        agent=agent,
-        conversation=conversation,
-    )
+    toolsets = await _groups(agent, conversation)
 
     # The pod default assistant gets the fixed batteries-included set:
     # workspace CLI, pod, user-interaction, skills, and web search.
     assert agent.toolsets == list(POD_DEFAULT_AGENT_TOOLSETS)
-    assert user_interaction_toolset in toolsets
-    assert pod_toolset in toolsets
-    assert workspace_cli_toolset in toolsets
-    assert web_search_toolset in toolsets
+    assert ToolGroup.USER_INTERACTION in toolsets
+    assert ToolGroup.POD in toolsets
+    assert ToolGroup.WORKSPACE_CLI in toolsets
+    assert ToolGroup.WEB_SEARCH in toolsets
     # The pod default assistant can orchestrate sub-agents by default.
-    assert subagents_toolset in toolsets
+    assert ToolGroup.SUBAGENTS in toolsets
 
 
 @pytest.mark.asyncio
@@ -178,7 +184,6 @@ async def test_a_user_created_agent_gets_no_declarable_toolset_it_did_not_choose
     the *declarable* set is ever implied — an agent that was not given a sandbox
     shell or the ability to spawn sub-agents does not quietly acquire one.
     """
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -192,16 +197,13 @@ async def test_a_user_created_agent_gets_no_declarable_toolset_it_did_not_choose
         agent_id=agent.id,
     )
 
-    toolsets = await runner.tool_assembler.assemble(
-        agent=agent,
-        conversation=conversation,
-    )
+    toolsets = await _groups(agent, conversation)
 
-    assert web_search_toolset in toolsets
-    assert workspace_cli_toolset not in toolsets
-    assert subagents_toolset not in toolsets
+    assert ToolGroup.WEB_SEARCH in toolsets
+    assert ToolGroup.WORKSPACE_CLI not in toolsets
+    assert ToolGroup.SUBAGENTS not in toolsets
     # POD is derived from a grant, and this agent holds none.
-    assert pod_toolset not in toolsets
+    assert ToolGroup.POD not in toolsets
 
 
 @pytest.mark.asyncio
@@ -212,7 +214,6 @@ async def test_every_agent_can_reach_a_person_whatever_it_was_given():
     than a switch: withholding it never made an agent safer, it only removed the
     place a person could intervene.
     """
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -224,25 +225,23 @@ async def test_every_agent_can_reach_a_person_whatever_it_was_given():
         pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
     )
 
-    toolsets = await runner.tool_assembler.assemble(
-        agent=agent, conversation=conversation
-    )
+    toolsets = await _groups(agent, conversation)
 
-    assert user_interaction_toolset in toolsets
+    assert ToolGroup.USER_INTERACTION in toolsets
 
 
 @pytest.mark.asyncio
 async def test_todo_reaches_an_agent_that_never_declared_it(monkeypatch):
-    # RunToolAssembler feeds BOTH the in-process harness and the remote MCP path,
+    # The tool catalog feeds BOTH the in-process harness and the remote MCP path,
     # and a task list is conversation-scoped scratch with no access implication —
     # so it is universal rather than a switch. The prompt still says nothing when
     # the conversation has never planned anything.
-    from app.modules.agent.tools import callable_tool_factory as ctf
+    from app.modules.agent.infrastructure.tools import callables as ctf
 
     async def _no_dynamic(self, *, agent, allow_subagents, grants=None):  # noqa: ANN001
         return []
 
-    monkeypatch.setattr(ctf.AgentCallableToolFactory, "build_toolsets", _no_dynamic)
+    monkeypatch.setattr(ctf.AgentCallableToolFactory, "build_specs", _no_dynamic)
 
     # Toolset selection now reads the agent's grants (POD and CONNECTORS are
     # derived from them), so the assembler opens a unit of work even when the
@@ -253,10 +252,8 @@ async def test_todo_reaches_an_agent_that_never_declared_it(monkeypatch):
 
     monkeypatch.setattr(ctf.AgentCallableToolFactory, "load_grant_summary", _no_grants)
 
-    runner = AgentRunnerService(uow_factory=lambda: None, harness_registry=object())
-
-    def _has_todo(toolsets) -> bool:
-        return any(getattr(t, "id", None) == "lemma_todo" for t in toolsets)
+    def _has_todo(groups) -> bool:
+        return ToolGroup.TODO in groups
 
     without_todo = Agent(
         pod_id=uuid4(),
@@ -270,9 +267,7 @@ async def test_todo_reaches_an_agent_that_never_declared_it(monkeypatch):
         user_id=without_todo.user_id,
         agent_id=without_todo.id,
     )
-    assert _has_todo(
-        await runner.tool_assembler.assemble(agent=without_todo, conversation=conv)
-    )
+    assert _has_todo(await _groups(without_todo, conv, uow_factory=lambda: None))
 
     with_todo = Agent(
         pod_id=uuid4(),
@@ -286,15 +281,13 @@ async def test_todo_reaches_an_agent_that_never_declared_it(monkeypatch):
         user_id=with_todo.user_id,
         agent_id=with_todo.id,
     )
-    assert _has_todo(
-        await runner.tool_assembler.assemble(agent=with_todo, conversation=conv2)
-    )
+    assert _has_todo(await _groups(with_todo, conv2, uow_factory=lambda: None))
 
 
 @pytest.mark.asyncio
 async def test_display_resource_handles_file_path():
     response = await display_resource(
-        None,  # type: ignore[arg-type]
+        None,
         DisplayResourceRequest(type=DisplayResourceType.FILE, path="/me/report.pdf"),
     )
 
@@ -305,10 +298,8 @@ async def test_display_resource_handles_file_path():
 def _surface_ctx(platform: str | None):
     return SimpleNamespace(
         tool_call_id="tc-1",
-        deps=SimpleNamespace(
-            surface_platform=platform,
-            conversation_id=uuid4(),
-        ),
+        surface_platform=platform,
+        conversation_id=uuid4(),
     )
 
 
@@ -332,13 +323,13 @@ async def test_display_resource_delivers_to_chat_surface(monkeypatch):
     ctx = _surface_ctx("SLACK")
 
     response = await display_resource(
-        ctx,  # type: ignore[arg-type]
+        ctx,
         DisplayResourceRequest(type=DisplayResourceType.TABLE, name="deals"),
     )
 
     assert response.success is True
     assert len(calls) == 1
-    assert calls[0]["conversation_id"] == ctx.deps.conversation_id
+    assert calls[0]["conversation_id"] == ctx.conversation_id
     assert calls[0]["tool_call_id"] == "tc-1"
     assert calls[0]["request"].type == DisplayResourceType.TABLE
 
@@ -351,7 +342,7 @@ async def test_display_resource_email_surface_not_delivered_by_tool(monkeypatch)
     ctx = _surface_ctx("GMAIL")
 
     response = await display_resource(
-        ctx,  # type: ignore[arg-type]
+        ctx,
         DisplayResourceRequest(type=DisplayResourceType.FILE, path="/me/report.pdf"),
     )
 
@@ -363,12 +354,10 @@ async def test_display_resource_email_surface_not_delivered_by_tool(monkeypatch)
 async def test_display_resource_no_surface_does_not_deliver(monkeypatch):
     # Web/app/subagent runs carry no surface_platform → pure return, no send.
     calls = _patch_surface_delivery(monkeypatch)
-    ctx = SimpleNamespace(
-        tool_call_id="tc-1", deps=SimpleNamespace(conversation_id=uuid4())
-    )
+    ctx = SimpleNamespace(tool_call_id="tc-1", conversation_id=uuid4())
 
     response = await display_resource(
-        ctx,  # type: ignore[arg-type]
+        ctx,
         DisplayResourceRequest(type=DisplayResourceType.TABLE, name="deals"),
     )
 
@@ -414,13 +403,11 @@ async def test_display_resource_returns_browser_access_url(
 
     pod_id = uuid4()
     agent_id = uuid4()
-    ctx = SimpleNamespace(
-        deps=SimpleNamespace(user_id=user_id, pod_id=pod_id, workload_id=agent_id)
-    )
+    ctx = SimpleNamespace(user_id=user_id, pod_id=pod_id, workload_id=agent_id)
 
     response = await display_resource(
-        ctx,  # type: ignore[arg-type]
-        DisplayResourceRequest(type="browser"),  # type: ignore[arg-type]
+        ctx,
+        DisplayResourceRequest(type="browser"),
     )
 
     assert response.success is True
@@ -468,7 +455,7 @@ def test_widget_data_goes_with_a_widget_page_and_stays_one_record():
 def test_display_resource_validates_widget_form_and_table_payloads():
     # Enum coercion + field-level coercions still happen at construction time and
     # never raise.
-    browser = DisplayResourceRequest(type="browser")  # type: ignore[arg-type]
+    browser = DisplayResourceRequest(type="browser")
     assert browser.type == DisplayResourceType.BROWSER
 
     # Semantic payload checks moved OUT of a raising pydantic validator into a
@@ -559,7 +546,7 @@ def test_display_resource_validates_widget_form_and_table_payloads():
     assert all_agents.name is None
     assert validate_display_payload(all_agents) is None
 
-    lowercase_agent_type = DisplayResourceRequest(type="agent")  # type: ignore[arg-type]
+    lowercase_agent_type = DisplayResourceRequest(type="agent")
     assert lowercase_agent_type.type == DisplayResourceType.AGENT
 
     assert "path is only valid" in _payload_error(
@@ -619,8 +606,7 @@ def test_display_resource_rejects_the_agents_own_sandbox_paths():
 async def test_display_resource_invalid_payload_returns_success_false():
     """An invalid payload comes back as a uniform success:false/error result."""
     ctx = SimpleNamespace(
-        deps=SimpleNamespace(surface_platform=None, conversation_id=uuid4()),
-        tool_call_id="tc",
+        surface_platform=None, conversation_id=uuid4(), tool_call_id="tc"
     )
     response = await display_resource(
         ctx, DisplayResourceRequest(type=DisplayResourceType.WIDGET, name="chart")
@@ -632,8 +618,7 @@ async def test_display_resource_invalid_payload_returns_success_false():
 @pytest.mark.asyncio
 async def test_display_resource_rejects_nonportable_widget_html():
     ctx = SimpleNamespace(
-        deps=SimpleNamespace(surface_platform=None, conversation_id=uuid4()),
-        tool_call_id="tc",
+        surface_platform=None, conversation_id=uuid4(), tool_call_id="tc"
     )
     response = await display_resource(
         ctx,
@@ -650,8 +635,7 @@ async def test_display_resource_rejects_nonportable_widget_html():
 @pytest.mark.asyncio
 async def test_display_resource_rejects_css_outside_style_tag():
     ctx = SimpleNamespace(
-        deps=SimpleNamespace(surface_platform=None, conversation_id=uuid4()),
-        tool_call_id="tc",
+        surface_platform=None, conversation_id=uuid4(), tool_call_id="tc"
     )
     response = await display_resource(
         ctx,
@@ -670,13 +654,12 @@ async def test_display_resource_rejects_css_outside_style_tag():
 
 def _approval_ctx(approval_id: str, *, supports_pause_signal: bool = True):
     return SimpleNamespace(
-        deps=SimpleNamespace(
-            conversation_id=uuid4(),
-            user_id=uuid4(),
-            agent_run_id=uuid4(),
-            supports_pause_signal=supports_pause_signal,
-        ),
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        agent_run_id=uuid4(),
+        supports_pause_signal=supports_pause_signal,
         tool_call_id=approval_id,
+        tools=object(),
     )
 
 
@@ -692,11 +675,13 @@ async def test_request_approval_pauses_the_run():
 
     with pytest.raises(AgentInputRequired) as excinfo:
         await request_approval(
-            ctx,  # type: ignore[arg-type]
-            tool_name="exec_command",
-            args={"cmd": "lemma records delete orders --id 42"},
-            title="Delete order 42?",
-            reason="Cleaning up a duplicate order.",
+            ctx,
+            RequestApprovalArguments(
+                tool_name="exec_command",
+                args={"cmd": "lemma records delete orders --id 42"},
+                title="Delete order 42?",
+                reason="Cleaning up a duplicate order.",
+            ),
         )
     assert excinfo.value.tool_call_id == approval_id
     assert excinfo.value.kind == "request_approval"
@@ -707,14 +692,14 @@ async def test_request_approval_auto_executes_on_exact_session_match(monkeypatch
     """A request_approval call identical to one already approved for session
     runs immediately with no pause, executing the wrapped tool as the user."""
     from app.core.authorization import session_approvals
-    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+    from app.modules.agent.infrastructure.tools.approval import executor
 
     async def fake_has_session_approval(**kwargs):
         return True
 
     captured: dict[str, object] = {}
 
-    async def fake_execute_as_user(self, *, deps, tool_name, args):
+    async def fake_run_approved(tools, uow_factory, *, deps, tool_name, args):
         captured["tool_name"] = tool_name
         captured["args"] = args
         return {"stdout": "hi", "success": True}
@@ -722,16 +707,16 @@ async def test_request_approval_auto_executes_on_exact_session_match(monkeypatch
     monkeypatch.setattr(
         session_approvals, "has_session_approval", fake_has_session_approval
     )
-    monkeypatch.setattr(ApprovalExecutor, "execute_as_user", fake_execute_as_user)
+    monkeypatch.setattr(executor, "run_approved", fake_run_approved)
 
     ctx = _approval_ctx("approval-repeat")
-    ctx.deps.workload_id = uuid4()
+    ctx.workload_id = uuid4()
 
     result = await request_approval(
-        ctx,  # type: ignore[arg-type]
-        tool_name="exec_command",
-        args={"cmd": "ls"},
-        title="List files?",
+        ctx,
+        RequestApprovalArguments(
+            tool_name="exec_command", args={"cmd": "ls"}, title="List files?"
+        ),
     )
 
     assert result.success is True
@@ -755,13 +740,13 @@ async def test_request_approval_falls_through_to_pause_without_exact_match(monke
     )
 
     ctx = _approval_ctx("approval-fresh")
-    ctx.deps.workload_id = uuid4()
+    ctx.workload_id = uuid4()
     with pytest.raises(AgentInputRequired):
         await request_approval(
-            ctx,  # type: ignore[arg-type]
-            tool_name="exec_command",
-            args={"cmd": "ls"},
-            title="List files?",
+            ctx,
+            RequestApprovalArguments(
+                tool_name="exec_command", args={"cmd": "ls"}, title="List files?"
+            ),
         )
 
 
@@ -770,27 +755,27 @@ async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
     """If the auto-executed tool itself fails, that's reported back — never a
     silent success and never a fall-through to re-pausing."""
     from app.core.authorization import session_approvals
-    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+    from app.modules.agent.infrastructure.tools.approval import executor
 
     async def fake_has_session_approval(**kwargs):
         return True
 
-    async def fake_execute_as_user(self, *, deps, tool_name, args):
+    async def fake_run_approved(tools, uow_factory, *, deps, tool_name, args):
         raise RuntimeError("workspace unreachable")
 
     monkeypatch.setattr(
         session_approvals, "has_session_approval", fake_has_session_approval
     )
-    monkeypatch.setattr(ApprovalExecutor, "execute_as_user", fake_execute_as_user)
+    monkeypatch.setattr(executor, "run_approved", fake_run_approved)
 
     ctx = _approval_ctx("approval-repeat-fails")
-    ctx.deps.workload_id = uuid4()
+    ctx.workload_id = uuid4()
 
     result = await request_approval(
-        ctx,  # type: ignore[arg-type]
-        tool_name="exec_command",
-        args={"cmd": "ls"},
-        title="List files?",
+        ctx,
+        RequestApprovalArguments(
+            tool_name="exec_command", args={"cmd": "ls"}, title="List files?"
+        ),
     )
 
     assert result.success is False
@@ -813,7 +798,7 @@ async def test_interaction_tools_park_instead_of_refusing_on_a_remote_harness():
     buttons on Slack/Teams/Telegram all collapsed into a paragraph.
     """
     ask = await ask_user(
-        _ask_ctx(supports_pause_signal=False),  # type: ignore[arg-type]
+        _ask_ctx(supports_pause_signal=False),
         _one_question(),
     )
     assert ask.success is True
@@ -824,10 +809,10 @@ async def test_interaction_tools_park_instead_of_refusing_on_a_remote_harness():
     assert ask.parked_tool_call_id == "question-call"
 
     approval = await request_approval(
-        _approval_ctx("approval-remote", supports_pause_signal=False),  # type: ignore[arg-type]
-        tool_name="exec_command",
-        args={"cmd": "ls"},
-        title="List files?",
+        _approval_ctx("approval-remote", supports_pause_signal=False),
+        RequestApprovalArguments(
+            tool_name="exec_command", args={"cmd": "ls"}, title="List files?"
+        ),
     )
     assert approval.success is True
     assert approval.interaction_fallback is False
@@ -838,26 +823,24 @@ async def test_interaction_tools_park_instead_of_refusing_on_a_remote_harness():
 async def test_request_approval_rejects_bad_input_without_pausing():
     """Invalid input returns success:false WITHOUT raising the pause signal."""
     ctx = SimpleNamespace(
-        deps=SimpleNamespace(conversation_id=uuid4(), agent_run_id=uuid4()),
-        tool_call_id="approval-self",
+        conversation_id=uuid4(), agent_run_id=uuid4(), tool_call_id="approval-self"
     )
     self_approval = await request_approval(
-        ctx,  # type: ignore[arg-type]
-        tool_name="request_approval",
-        args={},
-        title="Recursive?",
+        ctx,
+        RequestApprovalArguments(
+            tool_name="request_approval", args={}, title="Recursive?"
+        ),
     )
     assert self_approval.success is False
     assert "cannot approve itself" in (self_approval.error or "")
 
     no_run = await request_approval(
-        SimpleNamespace(  # type: ignore[arg-type]
-            deps=SimpleNamespace(conversation_id=uuid4(), agent_run_id=None),
-            tool_call_id="approval-x",
+        SimpleNamespace(
+            conversation_id=uuid4(), agent_run_id=None, tool_call_id="approval-x"
         ),
-        tool_name="exec_command",
-        args={"cmd": "ls"},
-        title="List?",
+        RequestApprovalArguments(
+            tool_name="exec_command", args={"cmd": "ls"}, title="List?"
+        ),
     )
     assert no_run.success is False
     assert "active agent run" in (no_run.error or "")
@@ -866,9 +849,8 @@ async def test_request_approval_rejects_bad_input_without_pausing():
 def test_user_interaction_toolset_includes_ask_user():
     # ask_user ships inside the user_interaction toolset, so it reaches the pod
     # default assistant (which has USER_INTERACTION) and any agent that selected it.
-    assert "ask_user" in user_interaction_toolset.tools
-    assert "display_resource" in user_interaction_toolset.tools
-    assert "request_approval" in user_interaction_toolset.tools
+    names = {spec.name for spec in user_interaction_tools.SPECS}
+    assert {"ask_user", "display_resource", "request_approval"} <= names
 
 
 @pytest.mark.asyncio
@@ -880,26 +862,20 @@ async def test_user_interaction_implicitly_adds_skills_at_run_time():
         instruction="Show useful widgets.",
         toolsets=[AgentToolset.USER_INTERACTION],
     )
-    toolsets = await RunToolAssembler(object()).assemble(
-        agent=agent,
-        conversation=Conversation(
-            pod_id=agent.pod_id,
-            user_id=agent.user_id,
-            agent_id=agent.id,
-        ),
+    toolsets = await _groups(
+        agent,
+        Conversation(pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id),
     )
-    assert user_interaction_toolset in toolsets
-    assert skills_toolset in toolsets
+    assert ToolGroup.USER_INTERACTION in toolsets
+    assert ToolGroup.SKILLS in toolsets
 
 
 def _ask_ctx(*, supports_pause_signal: bool = True):
     return SimpleNamespace(
-        deps=SimpleNamespace(
-            conversation_id=uuid4(),
-            user_id=uuid4(),
-            agent_run_id=uuid4(),
-            supports_pause_signal=supports_pause_signal,
-        ),
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        agent_run_id=uuid4(),
+        supports_pause_signal=supports_pause_signal,
         tool_call_id="question-call",
     )
 
@@ -922,7 +898,7 @@ async def test_ask_user_pauses_the_run():
     """ask_user raises the pause signal; answers are replayed on resume."""
     response_or_raise = pytest.raises(AgentInputRequired)
     with response_or_raise as excinfo:
-        await ask_user(_ask_ctx(), _one_question())  # type: ignore[arg-type]
+        await ask_user(_ask_ctx(), _one_question())
     assert excinfo.value.tool_call_id == "question-call"
     assert excinfo.value.kind == "ask_user"
 
@@ -930,13 +906,11 @@ async def test_ask_user_pauses_the_run():
 @pytest.mark.asyncio
 async def test_ask_user_rejects_bad_input_without_pausing():
     """Invalid input returns success:false WITHOUT ever raising the pause signal."""
-    no_questions = await ask_user(  # type: ignore[arg-type]
-        _ask_ctx(), AskUserRequest(questions=[])
-    )
+    no_questions = await ask_user(_ask_ctx(), AskUserRequest(questions=[]))
     assert no_questions.success is False
     assert "at least one question" in (no_questions.error or "")
 
-    one_option = await ask_user(  # type: ignore[arg-type]
+    one_option = await ask_user(
         _ask_ctx(),
         _one_question(options=[{"label": "Only", "description": "the sole choice"}]),
     )
@@ -1031,7 +1005,7 @@ def test_workspace_agent_prompt_states_working_directory():
 def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
     """A plan written in turn one has to still be visible in turn five.
 
-    The list lives in conversation metadata; the only place a later run could
+    The list lives on the conversation row; the only place a later run could
     have seen it was the `write_todos` tool return, an old message that history
     trimming eventually drops. An agent that cannot see its own checklist cannot
     check anything off it -- which is how a plan gets written once and never
@@ -1041,12 +1015,10 @@ def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={
-            "todos": [
-                {"content": "Fetch the Q3 report", "done": True},
-                {"content": "Summarize findings", "done": False},
-            ]
-        },
+        todos=[
+            Todo(content="Fetch the Q3 report", done=True),
+            Todo(content="Summarize findings", done=False),
+        ],
     )
 
     section = task_list_section(conversation, toolsets=[AgentToolset.TODO])
@@ -1067,7 +1039,7 @@ def test_a_named_agent_that_never_declared_todo_is_still_shown_its_list():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+        todos=[Todo(content="Fetch the Q3 report")],
     )
     agent = Agent(
         pod_id=conversation.pod_id,
@@ -1091,7 +1063,7 @@ def test_the_task_list_is_never_in_the_system_prompt():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+        todos=[Todo(content="Fetch the Q3 report")],
     )
     agent = Agent(
         pod_id=conversation.pod_id,
@@ -1124,7 +1096,7 @@ def test_an_agent_without_the_todo_toolset_is_never_shown_a_task_list():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+        todos=[Todo(content="Fetch the Q3 report")],
     )
 
     assert task_list_section(conversation, toolsets=[AgentToolset.WORKSPACE_CLI]) == ""
@@ -1136,7 +1108,7 @@ def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Ship it", "done": True}]},
+        todos=[Todo(content="Ship it", done=True)],
     )
 
     section = task_list_section(conversation, toolsets=[AgentToolset.TODO])
@@ -1358,7 +1330,7 @@ def test_callable_function_tool_uses_function_name_prefix():
     )
 
     assert tool.name == "function_normalize_contact"
-    assert tool.tool_def.name == "function_normalize_contact"
+    assert tool.name == "function_normalize_contact"
 
 
 @pytest.mark.asyncio
@@ -1455,17 +1427,13 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
 
     user_id = uuid4()
     ctx = SimpleNamespace(
-        deps=SimpleNamespace(
-            user_id=user_id,
-            workload_type="agent",
-            workload_id=parent_agent.id,
-            agent_name=parent_agent.name,
-        )
+        user_id=user_id,
+        workload_type="agent",
+        workload_id=parent_agent.id,
+        agent_name=parent_agent.name,
     )
-    validated = tool.function_schema.validator.validate_python(
-        {"apps": ["gmail", "slack"], "query": "x"}
-    )
-    result = await tool.function_schema.call(validated, ctx)
+    validated = tool.parse({"apps": ["gmail", "slack"], "query": "x"})
+    result = await tool.run(ctx, validated)
 
     assert result == {"ok": True}
     assert captured["input_data"] == {"apps": ["gmail", "slack"], "query": "x"}
@@ -1507,7 +1475,7 @@ def test_callable_agent_tool_uses_agent_name_prefix():
     )
 
     assert tool.name == "agent_child_agent"
-    assert tool.tool_def.name == "agent_child_agent"
+    assert tool.name == "agent_child_agent"
 
 
 def _agent_pair(*, input_schema=None, output_schema=None):
@@ -1557,7 +1525,7 @@ def _agent_tool(child, parent):
 
 def test_agent_tool_single_string_input_when_no_input_schema():
     child, parent = _agent_pair()
-    schema = _agent_tool(child, parent).function_schema.json_schema
+    schema = _agent_tool(child, parent).json_schema
     assert set(schema["properties"]) == {"input"}
     assert schema["properties"]["input"]["type"] == "string"
     assert schema["required"] == ["input"]
@@ -1568,7 +1536,7 @@ def test_agent_tool_structured_input_when_input_schema_set():
     child, parent = _agent_pair(
         input_schema={"type": "object", "properties": {"topic": {"type": "string"}}}
     )
-    schema = _agent_tool(child, parent).function_schema.json_schema
+    schema = _agent_tool(child, parent).json_schema
     assert "topic" in schema["properties"]
     assert "input" not in schema["properties"]
 
@@ -1585,9 +1553,9 @@ async def test_agent_tool_returns_string_when_no_output_schema(monkeypatch):
     )
     child, parent = _agent_pair()
     tool = _agent_tool(child, parent)
-    ctx = SimpleNamespace(deps=SimpleNamespace(agent_name="parent_agent"))
-    validated = tool.function_schema.validator.validate_python({"input": "do it"})
-    result = await tool.function_schema.call(validated, ctx)
+    ctx = SimpleNamespace(agent_name="parent_agent")
+    validated = tool.parse({"input": "do it"})
+    result = await tool.run(ctx, validated)
     assert result == "the answer"
     assert captured["input_data"] == {"input": "do it"}
 
@@ -1600,9 +1568,9 @@ async def test_agent_tool_no_output_schema_failed_returns_error_string(monkeypat
     )
     child, parent = _agent_pair()
     tool = _agent_tool(child, parent)
-    ctx = SimpleNamespace(deps=SimpleNamespace(agent_name="parent_agent"))
-    validated = tool.function_schema.validator.validate_python({"input": "x"})
-    result = await tool.function_schema.call(validated, ctx)
+    ctx = SimpleNamespace(agent_name="parent_agent")
+    validated = tool.parse({"input": "x"})
+    result = await tool.run(ctx, validated)
     assert result == "boom"
 
 
@@ -1616,9 +1584,9 @@ async def test_agent_tool_returns_dict_when_output_schema_set(monkeypatch):
         output_schema={"type": "object", "properties": {"k": {"type": "string"}}}
     )
     tool = _agent_tool(child, parent)
-    ctx = SimpleNamespace(deps=SimpleNamespace(agent_name="parent_agent"))
-    validated = tool.function_schema.validator.validate_python({})
-    result = await tool.function_schema.call(validated, ctx)
+    ctx = SimpleNamespace(agent_name="parent_agent")
+    validated = tool.parse({})
+    result = await tool.run(ctx, validated)
     assert result == {"k": "v"}
 
 
@@ -1632,19 +1600,18 @@ async def test_agent_tool_timeout_returns_handle_dict_even_no_output_schema(
     )
     child, parent = _agent_pair()
     tool = _agent_tool(child, parent)
-    ctx = SimpleNamespace(deps=SimpleNamespace(agent_name="parent_agent"))
-    validated = tool.function_schema.validator.validate_python({"input": "x"})
-    result = await tool.function_schema.call(validated, ctx)
+    ctx = SimpleNamespace(agent_name="parent_agent")
+    validated = tool.parse({"input": "x"})
+    result = await tool.run(ctx, validated)
     assert isinstance(result, dict)
     assert "conversation_id" in result and "run_id" in result
 
 
 @pytest.mark.asyncio
 async def test_sub_agent_conversation_excludes_subagents_toolset():
-    # Depth=1: a run that IS a spawned sub-agent (metadata is_sub_agent=True) must
-    # not get the sub-agent control toolset. The source of truth is the metadata
-    # flag, not parent_id.
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+    # Depth=1: a run that IS a spawned sub-agent (origin SUBAGENT) must not get
+    # the sub-agent control toolset. The source of truth is the origin, not
+    # parent_id.
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -1658,22 +1625,21 @@ async def test_sub_agent_conversation_excludes_subagents_toolset():
         user_id=agent.user_id,
         agent_id=agent.id,
         parent_id=uuid4(),
-        metadata={"is_sub_agent": True},
+        origin=ConversationOrigin.SUBAGENT,
     )
 
-    top_ts = await runner.tool_assembler.assemble(agent=agent, conversation=top)
-    sub_ts = await runner.tool_assembler.assemble(agent=agent, conversation=sub_agent)
+    top_ts = await _groups(agent, top)
+    sub_ts = await _groups(agent, sub_agent)
 
-    assert subagents_toolset in top_ts
-    assert subagents_toolset not in sub_ts
-    assert web_search_toolset in sub_ts  # non-spawn tools survive
+    assert ToolGroup.SUBAGENTS in top_ts
+    assert ToolGroup.SUBAGENTS not in sub_ts
+    assert ToolGroup.WEB_SEARCH in sub_ts  # non-spawn tools survive
 
 
 @pytest.mark.asyncio
 async def test_project_child_conversation_keeps_subagents_toolset():
     # A conversation pinned under a PROJECT has a parent_id but is NOT a sub-agent,
     # so it keeps its full spawning ability (parent_id alone must not gate).
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -1686,23 +1652,20 @@ async def test_project_child_conversation_keeps_subagents_toolset():
         user_id=agent.user_id,
         agent_id=agent.id,
         parent_id=uuid4(),  # pinned under a project, but not spawned as a sub-agent
-        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/foo"},
+        cwd=f"{WORKSPACE_ROOT}/projects/foo",
     )
 
-    child_ts = await runner.tool_assembler.assemble(
-        agent=agent, conversation=project_child
-    )
+    child_ts = await _groups(agent, project_child)
 
-    assert subagents_toolset in child_ts
+    assert ToolGroup.SUBAGENTS in child_ts
 
 
-def _conversation_service_with_repo(repo):
-    from app.modules.agent.services.conversation_service import ConversationService
+def _start_conversation_with_repo(repo):
+    from app.modules.agent.application.conversations.start import StartConversation
 
-    return ConversationService(
-        uow=None,
-        conversation_repository=repo,
-        agent_repository=None,
+    return wire_repositories(
+        StartConversation(None, agent_repository=None),
+        repo,
     )
 
 
@@ -1715,21 +1678,22 @@ async def test_child_conversation_inherits_parent_cwd_and_workspace():
         id=parent_id,
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/alpha", "workspace_id": "ws-1"},
+        cwd=f"{WORKSPACE_ROOT}/projects/alpha",
+        workspace_id="ws-1",
     )
 
     class _Repo:
         async def get_conversation(self, conversation_id, *args, **kwargs):
             return parent if conversation_id == parent_id else None
 
-    service = _conversation_service_with_repo(_Repo())
+    service = _start_conversation_with_repo(_Repo())
     child = Conversation(
         pod_id=parent.pod_id, user_id=parent.user_id, parent_id=parent_id
     )
     await service._apply_inherited_cwd(child, parent=parent)
 
-    assert child.metadata["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
-    assert child.metadata["workspace_id"] == "ws-1"
+    assert child.cwd == f"{WORKSPACE_ROOT}/projects/alpha"
+    assert child.workspace_id == "ws-1"
 
 
 @pytest.mark.asyncio
@@ -1738,39 +1702,40 @@ async def test_root_conversation_gets_own_cwd():
         async def get_conversation(self, *args, **kwargs):
             return None
 
-    service = _conversation_service_with_repo(_Repo())
+    service = _start_conversation_with_repo(_Repo())
     convo = Conversation(pod_id=uuid4(), user_id=uuid4())
     await service._apply_inherited_cwd(convo, parent=None)
 
-    # A root gets its own pretty c/{date}/{slug} cwd stamped into metadata.
+    # A root gets its own pretty c/{date}/{slug} cwd stamped on its row.
     date = convo.created_at.date().isoformat()
-    cwd = convo.metadata["cwd"]
+    cwd = convo.cwd
+    assert cwd is not None
     assert cwd.startswith(f"{WORKSPACE_ROOT}/c/{date}/")
     # <root>/c/{date}/{slug}: one segment past the root, whatever the root is.
     assert cwd.count("/") == WORKSPACE_ROOT.count("/") + 3
 
 
 @pytest.mark.asyncio
-async def test_explicit_cwd_in_metadata_is_not_overridden():
+async def test_an_explicit_cwd_is_not_overridden():
     class _Repo:
         async def get_conversation(self, *args, **kwargs):  # pragma: no cover
             raise AssertionError("the parent is handed over, never re-read")
 
-    service = _conversation_service_with_repo(_Repo())
+    service = _start_conversation_with_repo(_Repo())
     parent = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/parents"},
+        cwd=f"{WORKSPACE_ROOT}/projects/parents",
     )
     convo = Conversation(
         pod_id=parent.pod_id,
         user_id=parent.user_id,
         parent_id=parent.id,
-        metadata={"cwd": f"{WORKSPACE_ROOT}/custom"},
+        cwd=f"{WORKSPACE_ROOT}/custom",
     )
     await service._apply_inherited_cwd(convo, parent=parent)
 
-    assert convo.metadata["cwd"] == f"{WORKSPACE_ROOT}/custom"
+    assert convo.cwd == f"{WORKSPACE_ROOT}/custom"
 
 
 def test_runner_uses_final_answer_tool_for_structured_output_agents():
@@ -1786,7 +1751,6 @@ def test_runner_uses_final_answer_tool_for_structured_output_agents():
         },
     )
 
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     conversation = Conversation(
         pod_id=agent.pod_id,
         user_id=agent.user_id,
@@ -1794,9 +1758,7 @@ def test_runner_uses_final_answer_tool_for_structured_output_agents():
         type=ConversationType.TASK,
     )
 
-    assert runner._resolve_output_type(agent, conversation).output.__name__ == (
-        "final_answer"
-    )
+    assert final_answer_output(agent, conversation).output.__name__ == ("final_answer")
 
 
 def test_final_answer_tool_output_becomes_normal_assistant_message():
@@ -1813,7 +1775,7 @@ def test_final_answer_tool_output_becomes_normal_assistant_message():
     assert message.role == MessageRole.ASSISTANT
     assert message.kind == MessageKind.TEXT
     assert message.text == "Done brother"
-    assert message.metadata["is_final_answer"] is True
+    assert message.state.is_final_answer
     assert message.metadata["structured_output"]["score"] == 1
 
 
@@ -2344,7 +2306,7 @@ def test_pausing_tool_call_without_matching_return_is_dropped_from_history():
     """A left-unresolved ask_user/request_approval call must not reach the
     model as a dangling ToolCallPart — pydantic-ai requires every tool call to
     have a matching return in the same request. Without a synthesized return
-    (see ConversationService._supersede_stale_pending_interactions), the
+    (see SupersedeStalePauses), the
     harness intentionally drops the orphaned call rather than sending an
     invalid request; this test locks in that fallback behavior."""
     conversation_id = uuid4()
@@ -2499,7 +2461,7 @@ async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
     )
 
     with pytest.raises(AgentInputRequired) as excinfo:
-        await ask_user(_ask_ctx(), request)  # type: ignore[arg-type]
+        await ask_user(_ask_ctx(), request)
 
     assert excinfo.value.kind == "ask_user"
     assert request.questions[0].options[0].icon == "🔐"
@@ -2523,22 +2485,22 @@ async def test_an_agent_host_run_is_served_the_question_tool():
         pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
     )
 
-    async def tool_names(**flags: bool) -> set[str]:
-        toolsets = await RunToolAssembler(object()).assemble(
-            agent=agent, conversation=conversation, **flags
+    async def tool_names(surface: ToolSurface) -> set[str]:
+        specs = await specs_for(
+            agent=agent,
+            conversation=conversation,
+            ctx=ToolContext(
+                user_id=agent.user_id,
+                pod_id=agent.pod_id,
+                conversation_id=conversation.id,
+            ),
+            surface=surface,
+            uow_factory=None,  # type: ignore[arg-type]
         )
-        names: set[str] = set()
-        for toolset in toolsets:
-            tools = getattr(toolset, "tools", None)
-            if tools is None and hasattr(toolset, "wrapped"):
-                tools = getattr(toolset.wrapped, "tools", None)
-            names.update(tools or {})
-        return names
+        return {spec.name for spec in specs}
 
-    remote = await tool_names(include_question_tools=True)
-    assert "answer_question" in remote
-    in_process = await tool_names()
-    assert "answer_question" not in in_process
+    assert "answer_question" in await tool_names(ToolSurface.AGENT_HOST)
+    assert "answer_question" not in await tool_names(ToolSurface.IN_PROCESS)
 
 
 @pytest.mark.asyncio
@@ -2555,14 +2517,18 @@ async def test_the_runner_decides_by_harness_which_runs_get_the_question_tool():
     )
 
     async def has_answer(harness_kind: HarnessKind) -> bool:
-        toolsets = await RunToolAssembler(object()).assemble(
-            agent=agent, conversation=conversation, harness_kind=harness_kind
+        specs = await specs_for(
+            agent=agent,
+            conversation=conversation,
+            ctx=ToolContext(
+                user_id=agent.user_id,
+                pod_id=agent.pod_id,
+                conversation_id=conversation.id,
+            ),
+            surface=ToolSurface.for_harness(harness_kind),
+            uow_factory=None,  # type: ignore[arg-type]
         )
-        return any(
-            "answer_question"
-            in (getattr(getattr(t, "wrapped", t), "tools", None) or {})
-            for t in toolsets
-        )
+        return "answer_question" in {spec.name for spec in specs}
 
     assert await has_answer(HarnessKind.LEMMA) is False
     remote = [kind for kind in HarnessKind if kind != HarnessKind.LEMMA]

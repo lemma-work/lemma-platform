@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.api.controllers import tool_controller
-from app.modules.agent.tools.feedback.models import (
+from app.modules.agent.api.tool_feedback import (
     FeedbackCategory,
     ReportFeedbackRequest,
 )
@@ -15,15 +15,11 @@ from app.core.web_search.web_search import WebSearchRequest, WebSearchResponse
 
 @pytest.mark.asyncio
 async def test_agent_web_search_controller_delegates_to_internal(monkeypatch):
-    async def fake_web_search_internal(
-        _deps, request: WebSearchRequest
-    ) -> WebSearchResponse:
+    async def fake_search_web(request: WebSearchRequest) -> WebSearchResponse:
         assert request.query == "pydantic ai"
         return WebSearchResponse(success=True, results=[], message="ok")
 
-    monkeypatch.setattr(
-        tool_controller, "web_search_internal", fake_web_search_internal
-    )
+    monkeypatch.setattr(tool_controller, "search_web", fake_search_web)
 
     response = await tool_controller.web_search(
         data=WebSearchRequest(query="pydantic ai", max_results=3),

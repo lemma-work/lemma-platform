@@ -13,8 +13,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
-from app.modules.agent.services import agent_memory_brief as memory_mod
-from app.modules.agent.services.agent_memory_brief import (
+from app.modules.agent.services.context_brief import memory as memory_mod
+from app.modules.agent.services.context_brief.memory import (
     AgentMemoryBriefBuilder,
     invalidate_memory_brief,
     truncate_index,
@@ -109,7 +109,7 @@ async def test_which_index_holds_what_is_said_once(agents_md):
     """The section is re-read on every model request of a run; the memory
     contract is cached with the system prompt. Guidance said in both was paid
     for twice, once of them on every step."""
-    from app.modules.agent.domain.prompts import load_memory_prompt
+    from app.modules.agent.domain.prompt.templates import load_memory_prompt
 
     section = " ".join((await _build(_agent())).split())
     contract = " ".join(load_memory_prompt().split())
