@@ -7,7 +7,11 @@ from uuid import UUID
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.ports import ProjectRepositories
-from app.modules.agent.domain.project_repo import ProjectRepo, RepositoryChoice
+from app.modules.agent.domain.project_repo import (
+    ProjectRepo,
+    RepositoryChoice,
+    RepositoryChoices,
+)
 
 
 class FakeProjectRepositories(ProjectRepositories):
@@ -43,7 +47,11 @@ class FakeProjectRepositories(ProjectRepositories):
             status_code=422,
         )
 
-    async def reachable(self, *, pod_id: UUID, user_id: UUID) -> list[RepositoryChoice]:
+    async def reachable(self, *, pod_id: UUID, user_id: UUID) -> RepositoryChoices:
         if self.refusal is not None:
             raise self.refusal
-        return [RepositoryChoice(repo=repo, private=True) for repo in self.covered]
+        return RepositoryChoices(
+            choices=tuple(
+                RepositoryChoice(repo=repo, private=True) for repo in self.covered
+            )
+        )

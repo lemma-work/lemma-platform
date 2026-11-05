@@ -170,6 +170,7 @@ async def test_the_picker_lists_what_opening_accepts(
     )
 
     assert listed.status_code == 200, listed.text
+    assert listed.json()["complete"] is True
     assert listed.json()["items"] == [
         {
             "full_name": "acme/web",

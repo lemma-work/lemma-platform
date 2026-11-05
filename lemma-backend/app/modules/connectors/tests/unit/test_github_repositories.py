@@ -15,10 +15,12 @@ from app.modules.connectors.domain.github_installation_errors import (
     GithubInstallationUnreachableError,
     GithubRepositoryNotFoundError,
     GithubRepositoryNotInstalledError,
+    GithubRepositoryUncheckedError,
     GithubUnavailableError,
 )
 from app.modules.connectors.services.auth.github_repositories import (
     InstallationRepository,
+    RepositoryListing,
     installation_repositories,
     installation_repository,
 )
@@ -114,10 +116,30 @@ async def test_the_repository_comes_back_as_github_spells_it():
     assert found.full_name == "acme/web"
 
 
+def _public_web() -> httpx.Response:
+    return httpx.Response(200, json=_repo("acme", "web", private=False))
+
+
 @pytest.mark.asyncio
-async def test_a_selected_installation_covers_a_repository_it_lists():
+async def test_a_private_repository_the_token_reads_is_covered_without_a_walk():
+    """An App's user token reads a private repository only where the App is
+    installed, and the owner already names this installation."""
+    github = _GitHub(installations=[_installation(selection="selected")])
+
+    found = await _covered(github)
+
+    assert found.private is True
+    assert f"/user/installations/{_INSTALLATION}/repositories" not in github.paths
+
+
+@pytest.mark.asyncio
+async def test_a_selected_installation_covers_a_public_repository_it_lists():
     listed = [_repo("acme", f"other-{n}") for n in range(100)] + [_repo("acme", "web")]
-    github = _GitHub(installations=[_installation(selection="selected")], listed=listed)
+    github = _GitHub(
+        repo=_public_web(),
+        installations=[_installation(selection="selected")],
+        listed=listed,
+    )
 
     found = await _covered(github)
 
@@ -125,8 +147,42 @@ async def test_a_selected_installation_covers_a_repository_it_lists():
 
 
 @pytest.mark.asyncio
+async def test_a_public_repository_deep_in_a_large_selection_is_still_found():
+    """Past what a picker lists: a yes or no is walked further than a listing."""
+    listed = [_repo("acme", f"other-{n}") for n in range(2000)] + [_repo("acme", "web")]
+    github = _GitHub(
+        repo=_public_web(),
+        installations=[_installation(selection="selected")],
+        listed=listed,
+    )
+
+    found = await _covered(github)
+
+    assert found.full_name == "acme/web"
+
+
+@pytest.mark.asyncio
+async def test_a_selection_too_large_to_walk_is_unchecked_not_refused():
+    """Running out of pages is not GitHub saying no, so the remedy "add it to
+    the installation" is not what the person is told."""
+    listed = [_repo("acme", f"other-{n}") for n in range(10_000)]
+    github = _GitHub(
+        repo=_public_web(),
+        installations=[_installation(selection="selected")],
+        listed=listed,
+    )
+
+    with pytest.raises(GithubRepositoryUncheckedError) as refused:
+        await _covered(github)
+
+    assert refused.value.status_code == 422
+    assert refused.value.details == {"repository": "acme/web", "installed_on": "acme"}
+
+
+@pytest.mark.asyncio
 async def test_a_selected_installation_refuses_a_repository_it_does_not_list():
     github = _GitHub(
+        repo=_public_web(),
         installations=[_installation(selection="selected")],
         listed=[_repo("acme", "docs")],
     )
@@ -218,12 +274,30 @@ async def test_listing_pages_through_the_installation_and_stops_at_its_bound():
     github = _GitHub(listed=listed)
 
     async with github.client() as client:
-        found = await installation_repositories(_TOKEN, _INSTALLATION, client=client)
+        listing = await installation_repositories(_TOKEN, _INSTALLATION, client=client)
 
-    # Five pages of a hundred, then it stops rather than walking all of them.
-    assert len(found) == 500
-    assert found[0] == InstallationRepository(
+    # Five pages of a hundred, then it stops rather than walking all of them,
+    # and says it did.
+    assert len(listing.repositories) == 500
+    assert listing.complete is False
+    assert listing.repositories[0] == InstallationRepository(
         owner="acme", name="repo-0", private=True, default_branch="main"
+    )
+
+
+@pytest.mark.asyncio
+async def test_listing_a_small_installation_is_complete():
+    github = _GitHub(listed=[_repo("acme", "web"), _repo("acme", "docs")])
+
+    async with github.client() as client:
+        listing = await installation_repositories(_TOKEN, _INSTALLATION, client=client)
+
+    assert listing == RepositoryListing(
+        repositories=(
+            InstallationRepository("acme", "web", True, "main"),
+            InstallationRepository("acme", "docs", True, "main"),
+        ),
+        complete=True,
     )
 
 

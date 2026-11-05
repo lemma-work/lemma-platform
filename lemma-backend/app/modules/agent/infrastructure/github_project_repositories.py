@@ -34,6 +34,7 @@ from app.modules.agent.domain.errors import ProjectRepositoryUnavailableError
 from app.modules.agent.domain.project_repo import (
     ProjectRepo,
     RepositoryChoice,
+    RepositoryChoices,
     parse_project_repo,
 )
 from app.modules.agent.infrastructure.tools.workspace_cli.github_credential import (
@@ -117,13 +118,13 @@ class GithubProjectRepositories:
             raise GithubUnavailableError()
         return checked
 
-    async def reachable(self, *, pod_id: UUID, user_id: UUID) -> list[RepositoryChoice]:
+    async def reachable(self, *, pod_id: UUID, user_id: UUID) -> RepositoryChoices:
         reach = await self._reach(pod_id=pod_id, user_id=user_id)
-        found = await installation_repositories(
+        listing = await installation_repositories(
             reach.access_token, reach.installation_id, client=self._client
         )
         choices: list[RepositoryChoice] = []
-        for repository in found:
+        for repository in listing.repositories:
             repo = _project_repo(repository)
             if repo is not None:
                 choices.append(
@@ -133,7 +134,7 @@ class GithubProjectRepositories:
                         default_branch=repository.default_branch,
                     )
                 )
-        return choices
+        return RepositoryChoices(choices=tuple(choices), complete=listing.complete)
 
     async def _reach(self, *, pod_id: UUID, user_id: UUID) -> _Reach:
         """The token and installation the sandbox would clone with, or why not."""

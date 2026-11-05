@@ -26,6 +26,7 @@ from app.modules.connectors.domain.github_installation_errors import (
     GithubInstallationUnreachableError,
     GithubRepositoryNotFoundError,
     GithubRepositoryNotInstalledError,
+    GithubRepositoryUncheckedError,
     GithubUnavailableError,
 )
 from app.modules.connectors.services.auth.github_installation import (
@@ -55,11 +56,24 @@ class InstallationRepository:
         return f"{self.owner}/{self.name}"
 
 
-#: Pages of an installation's repositories read before giving up. A
-#: selected-repositories installation fits on the first; one covering every
-#: repository of a large organization is where this bites, and a picker shows
-#: the first few hundred rather than walking thousands on a page load.
-_MAX_REPOSITORY_PAGES = 5
+@dataclass(frozen=True, slots=True)
+class RepositoryListing:
+    """An installation's repositories, as far as they were read."""
+
+    repositories: tuple[InstallationRepository, ...]
+    #: False when GitHub had more than the walk was allowed to read.
+    complete: bool = True
+
+
+#: Pages a picker reads. A selected-repositories installation fits on the
+#: first; one covering every repository of a large organization is where this
+#: bites, and a picker shows the first few hundred rather than walking
+#: thousands on a page load -- saying so with ``complete``.
+_MAX_LISTING_PAGES = 5
+#: Pages read to decide one public repository on a selection. A yes or no has
+#: to be right, so this walks far past what a picker shows; running out is said
+#: as its own refusal rather than read as "not installed".
+_MAX_COVERAGE_PAGES = 100
 
 
 @asynccontextmanager
@@ -102,12 +116,21 @@ def _refused(response: httpx.Response) -> bool:
 
 
 async def _repository_pages(
-    client: httpx.AsyncClient, access_token: str, installation_id: str
-) -> AsyncIterator[list[InstallationRepository]]:
+    client: httpx.AsyncClient,
+    access_token: str,
+    installation_id: str,
+    *,
+    max_pages: int,
+) -> AsyncIterator[tuple[list[InstallationRepository], bool]]:
+    """Each page of the installation's repositories, and whether it was full.
+
+    A full last page means the walk stopped at ``max_pages`` with more
+    possibly behind it.
+    """
     url = (
         f"{_USER_INSTALLATIONS_URL}/{quote(str(installation_id), safe='')}/repositories"
     )
-    for page in range(1, _MAX_REPOSITORY_PAGES + 1):
+    for page in range(1, max_pages + 1):
         response = await client.get(
             url,
             headers=_headers(access_token),
@@ -119,8 +142,9 @@ async def _repository_pages(
         payload = response.json()
         found = payload.get("repositories") if isinstance(payload, dict) else None
         items = found if isinstance(found, list) else []
-        yield [repository for repository in map(_repository, items) if repository]
-        if len(items) < _PER_PAGE:
+        full = len(items) >= _PER_PAGE
+        yield [repository for repository in map(_repository, items) if repository], full
+        if not full:
             return
 
 
@@ -155,21 +179,22 @@ async def installation_repositories(
     installation_id: str,
     *,
     client: httpx.AsyncClient | None = None,
-) -> tuple[InstallationRepository, ...]:
+) -> RepositoryListing:
     """The repositories this token's person reaches through one installation.
 
     Asked as the person, not as the App: GitHub answers with the repositories
     the installation covers *and* the person can see, which is exactly what
-    their sandbox can clone.
+    their sandbox can clone. At most a picker's worth; ``complete`` says
+    whether that was all of them.
     """
+    repositories: list[InstallationRepository] = []
+    last_full = False
     async with _asking_github(), _http(client) as http:
-        return tuple(
-            [
-                repository
-                async for page in _repository_pages(http, access_token, installation_id)
-                for repository in page
-            ]
-        )
+        async for page, last_full in _repository_pages(
+            http, access_token, installation_id, max_pages=_MAX_LISTING_PAGES
+        ):
+            repositories.extend(page)
+    return RepositoryListing(repositories=tuple(repositories), complete=not last_full)
 
 
 async def installation_repository(
@@ -187,9 +212,10 @@ async def installation_repository(
     included -- and any public repository at all, so "the token can read it"
     would accept repositories this organization never installed the app on.
     An installation lives on exactly one GitHub account, so the repository's
-    owner has to be that account; one installed on *all* of that account's
-    repositories then covers it, and one installed on a selection has to list
-    it.
+    owner has to be that account. Then any of three things proves it covered:
+    the installation is on *all* that account's repositories; the repository
+    is private, which an App's user token can read only where the App is
+    installed; or the installation's selection lists it.
 
     Returned with GitHub's own spelling: a renamed repository answers under
     its new name, and ``Acme/Web`` comes back as ``acme/web``, so two
@@ -222,10 +248,17 @@ async def installation_repository(
         )
         if (choice.account_login or "").lower() != repository.owner.lower():
             raise not_installed
-        if choice.covers_every_repository:
+        if choice.covers_every_repository or repository.private:
             return repository
         wanted = repository.full_name.lower()
-        async for page in _repository_pages(http, access_token, installation_id):
+        last_full = False
+        async for page, last_full in _repository_pages(
+            http, access_token, installation_id, max_pages=_MAX_COVERAGE_PAGES
+        ):
             if any(covered.full_name.lower() == wanted for covered in page):
                 return repository
+        if last_full:
+            raise GithubRepositoryUncheckedError(
+                repository.full_name, installed_on=choice.account_login
+            )
         raise not_installed

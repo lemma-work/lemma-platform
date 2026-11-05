@@ -15,6 +15,7 @@ from app.modules.connectors.domain.github_installation_errors import (
     GithubInstallationUnreachableError,
     GithubRepositoryNotFoundError,
     GithubRepositoryNotInstalledError,
+    GithubRepositoryUncheckedError,
     GithubUnavailableError,
 )
 from app.modules.connectors.services.auth.github_installation import (
@@ -25,6 +26,7 @@ from app.modules.connectors.services.auth.github_installation import (
 )
 from app.modules.connectors.services.auth.github_repositories import (
     InstallationRepository,
+    RepositoryListing,
     installation_repositories,
     installation_repository,
 )
@@ -50,9 +52,11 @@ __all__ = [
     "GithubInstallationUnreachableError",
     "GithubRepositoryNotFoundError",
     "GithubRepositoryNotInstalledError",
+    "GithubRepositoryUncheckedError",
     "GithubUnavailableError",
     "InstallState",
     "InstallationRepository",
+    "RepositoryListing",
     "connector_settings",
     "github_install_url",
     "install_state_for",

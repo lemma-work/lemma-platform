@@ -6418,6 +6418,12 @@
       },
       "ConversationRepositoryListResponse": {
         "properties": {
+          "complete": {
+            "default": true,
+            "description": "False when the installation covers more repositories than are listed. Create still accepts the ones not shown.",
+            "title": "Complete",
+            "type": "boolean"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/ConversationRepositoryResponse"
@@ -39587,7 +39593,7 @@
     },
     "/pods/{pod_id}/conversations/repositories": {
       "get": {
-        "description": "The GitHub repositories you can open a conversation in: those the organization's GitHub installation covers and your account can see, through this pod's 'github' connector. Refused with the connector's own code when that connector cannot give your sandbox a checkout. An installation covering a very large organization is listed in part.",
+        "description": "The GitHub repositories you can open a conversation in: those the organization's GitHub installation covers and your account can see, through this pod's 'github' connector. Refused with the connector's own code when that connector cannot give your sandbox a checkout. An installation covering a very large organization is listed in part, with complete=false.",
         "operationId": "agent.conversation.repository.list",
         "parameters": [
           {

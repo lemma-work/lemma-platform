@@ -60,6 +60,18 @@ class RepositoryChoice:
     default_branch: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RepositoryChoices:
+    """What a picker offers: the repositories, and whether that is all of them.
+
+    A large installation is listed in part, and opening one that was not shown
+    is still accepted.
+    """
+
+    choices: tuple[RepositoryChoice, ...]
+    complete: bool = True
+
+
 def parse_project_repo(value: object) -> ProjectRepo | None:
     """Read a repo out of untrusted JSON, or ``None`` if it isn't one.
 

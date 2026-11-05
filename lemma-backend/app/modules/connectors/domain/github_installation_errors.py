@@ -172,6 +172,30 @@ class GithubRepositoryNotInstalledError(ConnectorDomainError):
         )
 
 
+class GithubRepositoryUncheckedError(ConnectorDomainError):
+    """A public repository not found before an installation's selection ran out.
+
+    Not "not installed": the walk stopped before GitHub's list did, so the
+    answer is unknown, and adding the repository to the installation -- the
+    remedy that refusal names -- may already be done. An installation on every
+    repository of the account is decided without the walk.
+    """
+
+    def __init__(self, full_name: str, *, installed_on: str | None) -> None:
+        account = installed_on or full_name.partition("/")[0]
+        super().__init__(
+            message=(
+                f"'{full_name}' could not be confirmed: this organization's "
+                "GitHub installation is on more selected repositories than one "
+                "check reads. Installing the app on every repository of "
+                f"'{account}' lets it be checked."
+            ),
+            code="GITHUB_REPOSITORY_UNCHECKED",
+            status_code=422,
+            details={"repository": full_name, "installed_on": installed_on},
+        )
+
+
 class GithubUnavailableError(ConnectorDomainError):
     """GitHub did not give an answer, so nothing was decided.
 

@@ -181,10 +181,11 @@ async def test_the_picker_lists_the_repositories_with_their_checkouts():
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(_listed)) as client:
-        choices = await _repositories(credential, client).reachable(
+        listing = await _repositories(credential, client).reachable(
             pod_id=_POD, user_id=_PERSON
         )
 
-    assert [(choice.repo, choice.private) for choice in choices] == [
+    assert [(choice.repo, choice.private) for choice in listing.choices] == [
         (ProjectRepo(owner="acme", repo="web"), True)
     ]
+    assert listing.complete is True

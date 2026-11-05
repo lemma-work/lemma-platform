@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
@@ -41,6 +42,9 @@ from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.workspace_cli.github_credential_bridge import (
     ensure_github_credentials,
 )
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 logger = get_logger(__name__)
 
@@ -53,22 +57,25 @@ _PRESENT_TTL_SECONDS = 45 * 60
 # right account and carrying on works without waiting out a long TTL.
 _FAILED_TTL_SECONDS = 5 * 60
 _CLONE_TIMEOUT_SECONDS = 300
+# The checkout's own exit status when only its fetch failed (sysexits'
+# EX_TEMPFAIL), told apart from a clone that failed, which git reports as 128.
+_FETCH_FAILED_EXIT = 75
 
 
 def _checkout_command(*, url: str, path: str, ref: str | None) -> str:
     branch = f"--branch {shlex.quote(ref)} " if ref else ""
     # The `[ -e ... ]` guard is what makes this idempotent and safe to run at the
-    # head of any command: an existing checkout is never cloned over. Its fetch
-    # failing (offline, a ref lock another conversation holds) leaves the
-    # checkout exactly as usable as before, so it is not a failure to report.
+    # head of any command: an existing checkout is never cloned over.
     return (
         f"if [ -e {shlex.quote(path + '/.git')} ]; then "
-        f"git -C {shlex.quote(path)} fetch --quiet origin || true; "
+        f"git -C {shlex.quote(path)} fetch --quiet origin || exit {_FETCH_FAILED_EXIT}; "
         f"else git clone {branch}{shlex.quote(url)} {shlex.quote(path)}; fi"
     )
 
 
-async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | None:
+async def ensure_project_checkout(
+    ctx: ToolContext, workspace_session, *, redis: "Redis | None" = None
+) -> str | None:
     """Clone the conversation's repo if its directory is empty, else fetch it.
 
     Returns a notice to show the agent once, or None when there is nothing to
@@ -78,6 +85,9 @@ async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | 
     Exceptions are deliberately not swallowed here. The caller decides whether a
     failed checkout should still let the underlying command run (it should), and
     that decision needs the failure to reach it.
+
+    ``redis`` is the marker store, an argument so a test can read what was
+    marked without replacing anything in this module.
     """
     repo = ctx.workspace_repo
     if repo is None:
@@ -86,7 +96,8 @@ async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | 
     if not session_id:
         return None
 
-    redis = get_redis(url=settings.redis_url)
+    if redis is None:
+        redis = get_redis(url=settings.redis_url)
     marker_key = f"{_MARKER_KEY_PREFIX}:{session_id}:{repo.full_name}"
     if await redis.exists(marker_key):
         return None
@@ -96,9 +107,22 @@ async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | 
         cmd=_checkout_command(url=url, path=repo.cwd, ref=repo.ref),
         timeout=_CLONE_TIMEOUT_SECONDS,
     )
+    # git's own stderr is the most useful thing anyone can say here -- it already
+    # distinguishes a missing repo from an access failure from a bad ref.
+    detail = str(result.get("stderr") or "").strip()
     if result.get("exit_code") == 0:
         await redis.set(marker_key, "present", ex=_PRESENT_TTL_SECONDS)
         return None
+    if result.get("exit_code") == _FETCH_FAILED_EXIT:
+        # The checkout is there and as usable as before, so it is marked present
+        # and said once: an agent comparing against `origin/*` needs to know it
+        # may be comparing against an old one.
+        await redis.set(marker_key, "present", ex=_PRESENT_TTL_SECONDS)
+        return (
+            f"[workspace notice] {repo.full_name} is checked out in {repo.cwd}, "
+            "but fetching it failed, so `origin/*` may be behind GitHub. "
+            f"{detail}".strip()
+        )
 
     await redis.set(marker_key, "failed", ex=_FAILED_TTL_SECONDS)
     logger.warning(
@@ -106,9 +130,6 @@ async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | 
         repo=repo.full_name,
         exit_code=result.get("exit_code"),
     )
-    # git's own stderr is the most useful thing anyone can say here -- it already
-    # distinguishes a missing repo from an access failure from a bad ref.
-    detail = str(result.get("stderr") or "").strip()
     return (
         f"[workspace notice] {repo.full_name} could not be cloned into "
         f"{repo.cwd}, so this directory is empty for a reason. "

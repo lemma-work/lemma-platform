@@ -190,14 +190,19 @@ Create takes `repository` (`owner/name`). It is checked as the person opening
 the conversation, through the pod's `github` connector -- the account, and the
 sandbox rule for a shared one, that the clone will use
 (`tools/workspace_cli/github_credential`) -- and then against that account's
-installation: its owner must own the repository, and a selected-repositories
-installation must list it (`connectors.contracts.github.installation_repository`).
-Each refusal keeps its own code; GitHub not answering is a 503, never a pass.
+installation: it must be on the repository's owner, and then cover every
+repository there, or the repository is private (an App's user token reads one
+only where the App is installed), or the installation's selection lists it
+(`connectors.contracts.github.installation_repository`). Each refusal keeps its
+own code; GitHub not answering is a 503, never a pass, and a selection too long
+to walk is `GITHUB_REPOSITORY_UNCHECKED`, not "not installed". The listing
+shows at most a picker's worth and says `complete: false` past it.
 The repository is stored as GitHub spells it, which sets the conversation's
 directory to its checkout, `/workspace/repos/{owner}/{repo}`
 (`domain/workspace_location`). Before the agent's first shell or Python call
 the sandbox clones it there with the person's token, or fetches it if it is
-already there (`tools/workspace_cli/github_project`).
+already there (`tools/workspace_cli/github_project`); a fetch that fails leaves
+the checkout as it was and tells the agent once that `origin/*` may be behind.
 
 One sandbox per person means one checkout per repository: every conversation
 of theirs in it works in the same tree, uncommitted changes included. That is

@@ -23,7 +23,6 @@ from app.modules.agent.api.dependencies import (
 )
 from app.modules.agent.api.schemas import (
     ConversationRepositoryListResponse,
-    ConversationRepositoryResponse,
     ConversationResponse,
     CreateConversationRequest,
 )
@@ -90,7 +89,8 @@ async def create_conversation(
         "organization's GitHub installation covers and your account can see, "
         "through this pod's 'github' connector. Refused with the connector's "
         "own code when that connector cannot give your sandbox a checkout. "
-        "An installation covering a very large organization is listed in part."
+        "An installation covering a very large organization is listed in "
+        "part, with complete=false."
     ),
 )
 async def list_conversation_repositories(
@@ -102,7 +102,5 @@ async def list_conversation_repositories(
     # Membership was read on this request's connection; GitHub is asked without
     # holding it.
     async with connection_released(uow.session):
-        choices = await repositories.reachable(pod_id=pod_id, user_id=user.id)
-    return ConversationRepositoryListResponse(
-        items=[ConversationRepositoryResponse.of(choice) for choice in choices]
-    )
+        listing = await repositories.reachable(pod_id=pod_id, user_id=user.id)
+    return ConversationRepositoryListResponse.of(listing)

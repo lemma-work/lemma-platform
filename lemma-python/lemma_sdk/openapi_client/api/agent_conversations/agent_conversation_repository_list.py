@@ -68,7 +68,7 @@ def sync_detailed(
      The GitHub repositories you can open a conversation in: those the organization's GitHub installation
     covers and your account can see, through this pod's 'github' connector. Refused with the connector's
     own code when that connector cannot give your sandbox a checkout. An installation covering a very
-    large organization is listed in part.
+    large organization is listed in part, with complete=false.
 
     Args:
         pod_id (UUID):
@@ -102,7 +102,7 @@ def sync(
      The GitHub repositories you can open a conversation in: those the organization's GitHub installation
     covers and your account can see, through this pod's 'github' connector. Refused with the connector's
     own code when that connector cannot give your sandbox a checkout. An installation covering a very
-    large organization is listed in part.
+    large organization is listed in part, with complete=false.
 
     Args:
         pod_id (UUID):
@@ -131,7 +131,7 @@ async def asyncio_detailed(
      The GitHub repositories you can open a conversation in: those the organization's GitHub installation
     covers and your account can see, through this pod's 'github' connector. Refused with the connector's
     own code when that connector cannot give your sandbox a checkout. An installation covering a very
-    large organization is listed in part.
+    large organization is listed in part, with complete=false.
 
     Args:
         pod_id (UUID):
@@ -163,7 +163,7 @@ async def asyncio(
      The GitHub repositories you can open a conversation in: those the organization's GitHub installation
     covers and your account can see, through this pod's 'github' connector. Refused with the connector's
     own code when that connector cannot give your sandbox a checkout. An installation covering a very
-    large organization is listed in part.
+    large organization is listed in part, with complete=false.
 
     Args:
         pod_id (UUID):

@@ -35,6 +35,7 @@ from app.modules.agent.domain.pending_interactions import PendingInteractionKind
 from app.modules.agent.domain.project_repo import (
     ProjectRepo,
     RepositoryChoice,
+    RepositoryChoices,
     parse_repository_name,
 )
 from app.modules.agent.domain.value_objects import (
@@ -442,6 +443,20 @@ class ConversationRepositoryResponse(BaseModel):
 
 class ConversationRepositoryListResponse(BaseModel):
     items: list[ConversationRepositoryResponse]
+    complete: bool = Field(
+        default=True,
+        description=(
+            "False when the installation covers more repositories than are "
+            "listed. Create still accepts the ones not shown."
+        ),
+    )
+
+    @classmethod
+    def of(cls, listing: RepositoryChoices) -> ConversationRepositoryListResponse:
+        return cls(
+            items=[ConversationRepositoryResponse.of(c) for c in listing.choices],
+            complete=listing.complete,
+        )
 
 
 class UpdateConversationRequest(BaseModel):

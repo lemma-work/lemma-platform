@@ -107,7 +107,7 @@ async def test_clone_never_runs_over_an_existing_checkout(
     path = f"{WORKSPACE_ROOT}/repos/acme/web"
     existing, _, fresh = command.partition("; else ")
     assert existing == (
-        f"if [ -e {path}/.git ]; then git -C {path} fetch --quiet origin || true"
+        f"if [ -e {path}/.git ]; then git -C {path} fetch --quiet origin || exit 75"
     )
     assert fresh == f"git clone https://github.com/acme/web.git {path}; fi"
     # Nothing that could move or discard work in an existing tree.
@@ -153,6 +153,34 @@ async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
         await github_project.ensure_project_checkout(_context(_REPO), session) is None
     )
     assert len(session.commands) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_says_origin_may_be_stale_once() -> None:
+    """The checkout is still there and usable, so it is not a failed clone; the
+    agent is told once that `origin/*` may be behind."""
+    redis = _FakeRedis()
+    session = _FakeSession(
+        exit_code=75,
+        stderr="fatal: unable to access 'https://github.com/acme/web.git/'",
+    )
+
+    notice = await github_project.ensure_project_checkout(
+        _context(_REPO), session, redis=redis
+    )
+
+    assert notice is not None
+    assert "is checked out in" in notice
+    assert "`origin/*` may be behind GitHub" in notice
+    assert "unable to access" in notice
+    assert "could not be cloned" not in notice
+    assert redis.values[_MARKER_KEY] == "present"
+    assert (
+        await github_project.ensure_project_checkout(
+            _context(_REPO), session, redis=redis
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ from app.modules.agent.domain.entities import (
     Message,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.project_repo import ProjectRepo, RepositoryChoice
+from app.modules.agent.domain.project_repo import ProjectRepo, RepositoryChoices
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -129,8 +129,6 @@ class ProjectRepositories(Protocol):
         """``repo`` as GitHub names it, or raise the refusal that says why not."""
         ...
 
-    async def reachable(
-        self, *, pod_id: UUID, user_id: UUID
-    ) -> Sequence[RepositoryChoice]:
-        """Every repository ``checked`` would accept, as far as GitHub lists."""
+    async def reachable(self, *, pod_id: UUID, user_id: UUID) -> RepositoryChoices:
+        """Repositories ``checked`` would accept, as many as a picker shows."""
         ...

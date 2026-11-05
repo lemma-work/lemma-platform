@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..types import UNSET, Unset
+
 if TYPE_CHECKING:
     from ..models.conversation_repository_response import ConversationRepositoryResponse
 
@@ -18,9 +20,12 @@ class ConversationRepositoryListResponse:
     """
     Attributes:
         items (list[ConversationRepositoryResponse]):
+        complete (bool | Unset): False when the installation covers more repositories than are listed. Create still
+            accepts the ones not shown. Default: True.
     """
 
     items: list[ConversationRepositoryResponse]
+    complete: bool | Unset = True
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -29,6 +34,8 @@ class ConversationRepositoryListResponse:
             items_item = items_item_data.to_dict()
             items.append(items_item)
 
+        complete = self.complete
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -36,6 +43,8 @@ class ConversationRepositoryListResponse:
                 "items": items,
             }
         )
+        if complete is not UNSET:
+            field_dict["complete"] = complete
 
         return field_dict
 
@@ -53,8 +62,11 @@ class ConversationRepositoryListResponse:
 
             items.append(items_item)
 
+        complete = d.pop("complete", UNSET)
+
         conversation_repository_list_response = cls(
             items=items,
+            complete=complete,
         )
 
         conversation_repository_list_response.additional_properties = d
