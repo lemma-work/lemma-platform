@@ -1,5 +1,7 @@
 """Identity module domain and application errors."""
 
+from uuid import UUID
+
 from app.core.domain.errors import DomainError
 
 
@@ -142,3 +144,72 @@ class SignupNotAllowedError(IdentityDomainError):
             else _SIGNUP_CLOSED_MESSAGE
         )
         super().__init__(message, code=code, status_code=403)
+
+
+class AccountDeletionConfirmationError(IdentityDomainError):
+    """The address typed back is not this account's.
+
+    Deleting an account cannot be undone, so the request carries the account's
+    own email address as proof the person meant this account and read what it
+    does. A mismatch is refused before anything is read about the account.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Type this account's email address exactly to confirm deleting it.",
+            code="ACCOUNT_DELETION_CONFIRMATION_MISMATCH",
+            status_code=400,
+        )
+
+
+class AccountDeletionSoleOwnerError(IdentityConflictError):
+    """The person is the only owner of organizations other people are still in.
+
+    Deleting the account would leave each with no owner, and nobody can make
+    one: every path that grants ownership needs an owner to walk it. So the
+    person is asked to hand ownership on first, and told where.
+    """
+
+    def __init__(self, organizations: list[tuple[UUID, str]]) -> None:
+        names = [name for _, name in organizations]
+        listed = (
+            names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        )
+        super().__init__(
+            f"Make someone else an owner of {listed} first. "
+            "Other people still work there, and it cannot be left without an owner.",
+            code="ACCOUNT_DELETION_SOLE_OWNER",
+        )
+        self.details = {
+            "organizations": [
+                {"id": str(organization_id), "name": name}
+                for organization_id, name in organizations
+            ]
+        }
+
+
+class AccountDeletionBlockedByBillingError(IdentityConflictError):
+    """Something the person pays for has to end before the account can.
+
+    The code and message are the billing provider's, passed through, so what
+    the person reads names the actual subscription and what to do about it.
+    """
+
+    def __init__(self, *, code: str, message: str) -> None:
+        super().__init__(message, code=code)
+
+
+class AccountDeletionUnavailableError(IdentityDomainError):
+    """This deployment bills, and cannot yet say whether deleting is safe.
+
+    Raised when plans are configured but no billing guard is: deleting anyway
+    could leave a subscription charging an account that no longer exists.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Account deletion cannot check this account's subscription right "
+            "now. Contact support and we will delete it for you.",
+            code="ACCOUNT_DELETION_UNAVAILABLE",
+            status_code=503,
+        )

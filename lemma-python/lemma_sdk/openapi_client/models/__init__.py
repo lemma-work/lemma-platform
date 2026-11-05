@@ -15,6 +15,8 @@ _NAME_TO_MODULE = {
     'AccountCreateSchemaPreferencesType0': 'account_create_schema_preferences_type_0',
     'AccountCredentialsUpdateSchema': 'account_credentials_update_schema',
     'AccountCredentialsUpdateSchemaCredentials': 'account_credentials_update_schema_credentials',
+    'AccountDeletionRequest': 'account_deletion_request',
+    'AccountDeletionResponse': 'account_deletion_response',
     'AccountInstallationsSchema': 'account_installations_schema',
     'AccountListResponseSchema': 'account_list_response_schema',
     'AccountOption': 'account_option',
@@ -821,6 +823,8 @@ if TYPE_CHECKING:
     from .account_create_schema_preferences_type_0 import AccountCreateSchemaPreferencesType0
     from .account_credentials_update_schema import AccountCredentialsUpdateSchema
     from .account_credentials_update_schema_credentials import AccountCredentialsUpdateSchemaCredentials
+    from .account_deletion_request import AccountDeletionRequest
+    from .account_deletion_response import AccountDeletionResponse
     from .account_installations_schema import AccountInstallationsSchema
     from .account_list_response_schema import AccountListResponseSchema
     from .account_option import AccountOption
@@ -1640,6 +1644,8 @@ __all__ = [
     'AccountCreateSchemaPreferencesType0',
     'AccountCredentialsUpdateSchema',
     'AccountCredentialsUpdateSchemaCredentials',
+    'AccountDeletionRequest',
+    'AccountDeletionResponse',
     'AccountInstallationsSchema',
     'AccountListResponseSchema',
     'AccountOption',

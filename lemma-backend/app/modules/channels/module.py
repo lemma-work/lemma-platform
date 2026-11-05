@@ -21,6 +21,7 @@ def _routers():
 def _register_work() -> None:
     # Every process: a merge of two contacts (API, a web visitor proving an
     # email) writes this through `ContactMerged`.
+    import app.modules.channels.events.account_deleted_work  # noqa: F401
     import app.modules.channels.events.change_log_work  # noqa: F401
     import app.modules.channels.events.contact_became_member_work  # noqa: F401
     import app.modules.channels.events.contact_merged_work  # noqa: F401

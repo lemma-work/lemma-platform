@@ -15,6 +15,11 @@ from app.modules.identity.infrastructure.organization_repositories import (
 )
 from app.modules.identity.infrastructure.user_cache import get_user_cache
 from app.modules.identity.infrastructure.user_repositories import UserRepository
+from app.core.plan_limits import build_plan_limits
+from app.modules.identity.contracts.account_deletion import (
+    build_account_deletion_guard,
+)
+from app.modules.identity.services.account_deletion import AccountDeletionService
 from app.modules.identity.services.organization_service import OrganizationService
 from app.modules.identity.services.user_service import UserService
 
@@ -42,7 +47,20 @@ def get_organization_service(
     )
 
 
+def get_account_deletion_service(uow: UoWDep) -> AccountDeletionService:
+    return AccountDeletionService(
+        user_repository=UserRepository(uow),
+        organization_repository=OrganizationRepository(uow),
+        pod_membership_port=SqlAlchemyPodMembershipAdapter(uow),
+        billing_guard=build_account_deletion_guard(uow),
+        deployment_bills=build_plan_limits(uow) is not None,
+    )
+
+
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
+AccountDeletionServiceDep = Annotated[
+    AccountDeletionService, Depends(get_account_deletion_service)
+]
 OrganizationServiceDep = Annotated[
     OrganizationService, Depends(get_organization_service)
 ]

@@ -58,6 +58,9 @@ OVERRIDES: dict[str, dict[str, Any]] = {
     # A POST that stores nothing: asking a decision changes no resource, so no
     # cached query is stale afterwards.
     "decision.make": {"invalidates": []},
+    # A delete that answers with what it did: which organizations went with
+    # the account and which it left.
+    "user.current.delete": {"result": "entity"},
 }
 
 
