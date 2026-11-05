@@ -18,6 +18,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import SurfaceConfig
@@ -46,6 +47,8 @@ from app.modules.agent_surfaces.services.telegram_manager_updates import (
 )
 
 TELEGRAM_MANAGER_ALLOWED_UPDATES = ["message", "managed_bot"]
+
+logger = get_logger(__name__)
 
 __all__ = [
     "TELEGRAM_MANAGER_ALLOWED_UPDATES",
@@ -116,9 +119,19 @@ class TelegramManagerService:
         says which bot this is, so Telegram is asked first; the configured
         username is what is left for a deployment Telegram cannot be asked
         about.
+
+        Without a token there is no manager bot, so no username either: a
+        configured one alone would link to a bot this deployment cannot run.
         """
+        if not self.configured:
+            return None
         resolved = await self._bot_username_lookup(self._credentials())
-        return resolved or self._configured_username or None
+        username = resolved or self._configured_username or None
+        if username is None:
+            # Telegram could not be asked and nothing is configured to fall back
+            # on. The person is told the setup is not configured; this says why.
+            logger.warning("agent_surfaces.telegram_manager.username_unresolved")
+        return username
 
     async def start_setup(
         self,
@@ -189,7 +202,7 @@ class TelegramManagerService:
         somewhere else. No username means there is no bot to send anybody to,
         which is said here rather than published as a link to nowhere.
         """
-        if not manager_username:
+        if not self.configured or not manager_username:
             raise TelegramManagerNotConfiguredError()
         return f"https://t.me/{manager_username}?start=surface_{setup.setup_id}"
 
@@ -224,12 +237,20 @@ class TelegramManagerService:
             bot_token=bot_token,
         )
 
-    async def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str:
-        if not setup.bot_username:
-            return self.launch_url(
-                setup, manager_username=await self.manager_username()
-            )
-        return f"https://t.me/{setup.bot_username}?start=lemma"
+    async def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str | None:
+        """Where "Open your bot" sends somebody once their bot is made.
+
+        The bot's own page when Telegram named it; otherwise this setup's link to
+        the manager bot. None when that has no username either: the setup is
+        already done, so a missing link leaves the button off rather than
+        failing the update that finished it.
+        """
+        if setup.bot_username:
+            return f"https://t.me/{setup.bot_username}?start=lemma"
+        manager_username = await self.manager_username()
+        if not manager_username:
+            return None
+        return self.launch_url(setup, manager_username=manager_username)
 
     async def _configure_managed_bot(
         self,

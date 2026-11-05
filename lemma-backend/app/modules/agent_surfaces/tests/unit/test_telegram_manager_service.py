@@ -414,6 +414,79 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
 
 
 @pytest.mark.asyncio
+async def test_a_bot_made_with_no_username_finishes_without_a_link():
+    """Neither the new bot nor the manager has a username to link to. The setup
+    is already complete, so the person is told their bot is live and the
+    "Open your bot" button is left off, rather than the update failing after
+    the bot was made."""
+    store = _Store()
+    service = TelegramManagerService(
+        uow_factory=lambda: None,  # type: ignore[arg-type]
+        store=store,  # type: ignore[arg-type]
+        manager_token="manager-token",
+        manager_username=None,
+        api_base_url="http://telegram.test/bot",
+        bot_username_lookup=_telegram_cannot_be_asked,
+    )
+    setup = await _start(service)
+    setup.telegram_user_id = 77
+    setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
+    await store.save(setup)
+    await store.bind_telegram_user(setup_id=setup.setup_id, telegram_user_id=77)
+    service._persist_managed_bot = AsyncMock(
+        return_value=("telegram-surface-bot", uuid4())
+    )
+    service._configure_managed_bot = AsyncMock()
+    sent: list[dict] = []
+
+    async def _call(method, payload):
+        if method == "getManagedBotToken":
+            return {"ok": True, "result": "child-token"}
+        if method == "sendMessage":
+            sent.append(payload)
+        return {"ok": True, "result": True}
+
+    service._client.call = AsyncMock(side_effect=_call)
+    await service.handle_update(
+        {
+            "message": {
+                "chat": {"id": 99},
+                "from": {"id": 77},
+                "managed_bot_created": {"bot": {"id": 1234}},
+            }
+        }
+    )
+
+    saved = await store.get(setup.setup_id)
+    assert saved is not None
+    assert saved.status is TelegramManagedBotSetupStatus.COMPLETE
+    assert any("ready to use" in (message.get("text") or "") for message in sent)
+    assert not any("inline_keyboard" in str(message) for message in sent)
+
+
+@pytest.mark.asyncio
+async def test_no_token_publishes_no_link_even_with_a_configured_username():
+    """The token is what makes a manager bot. Without it a configured username
+    names a bot this deployment cannot run, so no link is minted from it."""
+    store = _Store()
+    setup = await _start(_service(store))
+    lookup = AsyncMock(return_value="the_real_manager_bot")
+    service = TelegramManagerService(
+        uow_factory=lambda: None,  # type: ignore[arg-type]
+        store=store,  # type: ignore[arg-type]
+        manager_token="",
+        manager_username="@lemma_manager_bot",
+        api_base_url="http://telegram.test/bot",
+        bot_username_lookup=lookup,
+    )
+
+    assert await service.manager_username() is None
+    lookup.assert_not_awaited()
+    with pytest.raises(TelegramManagerNotConfiguredError):
+        service.launch_url(setup, manager_username="lemma_manager_bot")
+
+
+@pytest.mark.asyncio
 async def test_second_setup_cannot_replace_active_telegram_user_binding():
     store = _Store()
     service = _service(store)

@@ -505,6 +505,10 @@ async def _send_success(
         f"{handle} is connected to Lemma and ready to use.",
         remove_keyboard=True,
     )
+    launch_url = await runtime.bot_launch_url(setup)
+    if launch_url is None:
+        # Nothing to link to; the message above already says the bot is live.
+        return
     await runtime._client.call(
         "sendMessage",
         {
@@ -515,7 +519,7 @@ async def _send_success(
                     [
                         {
                             "text": "Open your bot",
-                            "url": await runtime.bot_launch_url(setup),
+                            "url": launch_url,
                         }
                     ]
                 ]
