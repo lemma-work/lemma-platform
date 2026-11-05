@@ -1102,7 +1102,7 @@ async def test_a_web_conversation_that_pauses_is_not_asked_about_anywhere():
 
 
 async def test_the_observer_never_sends_the_answer_it_only_takes_display_down():
-    """The answer is the run's delivery row (``surface.reply_for_run``).
+    """The answer is the run's delivery row (``agent.channel_reply``).
 
     A run that streamed onto Slack and wrote its answer: the observer closes
     and removes the live stream, and sends nothing -- so a worker that dies

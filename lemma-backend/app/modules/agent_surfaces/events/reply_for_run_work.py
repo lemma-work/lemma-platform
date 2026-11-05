@@ -1,24 +1,14 @@
-"""``surface.reply_for_run``: a finished run's answer, as a line owed its place.
+"""``surface.reply_for_run``: draining what was queued before one answer path.
 
-Subscribed to the agent module's ``AgentRunFinished``, so the item is written
-in the transaction that finished the run: once a run has an outcome, the reply
-it owes is on record. It is the only way a run's answer reaches a surface: the
-run's observer only shows progress.
-
-The answer is posted as the agent's line at the place the run was asked --
-the one its run was stamped with, not wherever the person wrote last -- with
-a delivery to that place (``services/run_reply_lines``), which the channel
-delivery executor sends -- finishing a live stream in place, carrying the
-run's held files, offering a retry on a failure notice -- and records with
-the platform's id (``services/channel_deliveries``). A redelivered fact is
-the same line and the same delivery: one line, one send.
-
-An answer to something asked in the web chat is shown by the widget: its line
-is written and its delivery ``SENT`` at once, and no platform thread the same
-conversation also has is sent anything. Nor is one to something asked in
-Lemma itself: the agent module answers it there, in the same thread.
-
-FAST: a few rows read, one line written. No network in this module.
+A finished run's answer is said by one subscriber now, the agent module's
+``agent.channel_reply`` (``agent/services/run_answers``): at the place of the
+lines it answered, in Lemma or -- as the agent's line with a delivery there,
+posted through ``contracts.egress.post_answer_at_place`` -- on a platform.
+Nothing subscribes this kind any more. Its handler stays for one release, so
+an item written by a run that finished before the change is still carried;
+it hands the run to the same path, which is safe to run twice (the answer is
+the run's one line, and its delivery is unique per place). The release after
+removes the kind and this module.
 """
 
 from __future__ import annotations
@@ -32,26 +22,10 @@ from app.core.infrastructure.work import (
     WorkClass,
     WorkMode,
     WorkRegistry,
-    facts,
     registry as default_registry,
 )
-from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.contracts.channel_replies import run_reply_material
-from app.modules.agent_surfaces.events.work_kinds import (
-    SURFACE_REPLY_FOR_RUN,
-    run_reply_key,
-)
-from app.core.log.log import get_logger
-from app.modules.agent_surfaces.services.run_reply_lines import (
-    post_run_reply,
-    post_unplaced_reply,
-)
-from app.modules.channels.contracts.lines import last_heard_line
-from app.modules.channels.contracts.places import reply_address
-
-logger = get_logger(__name__)
-
-_REPLYING_STATUSES = frozenset({"COMPLETED", "FAILED"})
+from app.modules.agent.contracts.run_answers import post_run_answer
+from app.modules.agent_surfaces.events.work_kinds import SURFACE_REPLY_FOR_RUN
 
 
 class RunReplyPayload(BaseModel):
@@ -63,66 +37,15 @@ class RunReplyPayload(BaseModel):
     status: str
 
 
-def owes_a_reply(fact: AgentRunFinished) -> bool:
-    """A run that ended with an answer or a failure; not one that paused.
-
-    Whether the conversation is on a surface at all is read in the handler,
-    from the link -- one cheap item per finished run rather than a predicate
-    trusting a flag the finisher had to remember to set.
-    """
-    return fact.status in _REPLYING_STATUSES and fact.conversation_status != "WAITING"
-
-
-async def post_run_answer(ctx: FastContext, payload: RunReplyPayload) -> None:
-    """The run's answer, at the place it was asked.
-
-    A run asked on a platform answers there, whoever has written from
-    somewhere else since: their message waited for a turn of its own
-    (``agent.domain.run_places``). A run asked nowhere in particular answers
-    where the conversation was last written to.
-    """
-    material = await run_reply_material(ctx.uow, payload.run_id)
-    if material is None or material.private or material.asked_in_lemma:
-        return
-    if material.asked_at is None and await _answered_in_lemma(ctx, payload):
-        return
-    address = await reply_address(
-        ctx.uow, payload.conversation_id, at_source_id=material.asked_at
-    )
-    if address is None and material.asked_at is not None:
-        # The place it was asked went while it worked. Never somewhere else
-        # the person wrote -- that answered email on WhatsApp -- and never
-        # nowhere: the answer stays on the channel's timeline, sent to nobody.
-        logger.warning(
-            "agent_surfaces.reply_for_run.asked_place_gone.degraded",
-            run_id=str(payload.run_id),
-            conversation_id=str(payload.conversation_id),
-            source_id=str(material.asked_at),
-        )
-        await post_unplaced_reply(
-            ctx.uow,
-            run_id=payload.run_id,
-            conversation_id=payload.conversation_id,
-            material=material,
-        )
-        return
-    if address is None:
-        return
-    await post_run_reply(
+async def drain_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
+    """A run queued for its answer before ``agent.channel_reply`` said every
+    run's: only an answer or a failure was ever queued here."""
+    await post_run_answer(
         ctx.uow,
         run_id=payload.run_id,
         conversation_id=payload.conversation_id,
-        address=address,
-        material=material,
+        answered=payload.status == "COMPLETED",
     )
-
-
-async def _answered_in_lemma(ctx: FastContext, payload: RunReplyPayload) -> bool:
-    """Whether the run answers something asked in Lemma -- which the agent
-    module answers there, in the same thread (``agent.channel_reply``), and
-    which no platform is sent."""
-    heard = await last_heard_line(ctx.uow, payload.conversation_id)
-    return heard is not None and heard.source_id is None
 
 
 def register_reply_for_run_work(registry: WorkRegistry) -> None:
@@ -131,14 +54,7 @@ def register_reply_for_run_work(registry: WorkRegistry) -> None:
         cls=WorkClass.DELIVERY,
         mode=WorkMode.FAST,
         payload=RunReplyPayload,
-    )(post_run_answer)
+    )(drain_run_reply)
 
 
 register_reply_for_run_work(default_registry)
-facts.subscribe(
-    AgentRunFinished,
-    kind=SURFACE_REPLY_FOR_RUN,
-    cls=WorkClass.DELIVERY,
-    when=owes_a_reply,
-    dedup=lambda fact: run_reply_key(fact.run_id),
-)

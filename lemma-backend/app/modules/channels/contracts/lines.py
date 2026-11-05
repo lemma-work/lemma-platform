@@ -20,9 +20,9 @@ from app.modules.channels.domain.entities import (
     ChannelMessage,
     Source,
 )
-from app.modules.channels.infrastructure.line_answers import LineAnswers
+from app.modules.channels.infrastructure.rows import message_entity
 from app.modules.channels.infrastructure.line_search import LineSearch, SearchFilter
-from app.modules.channels.infrastructure.lines import LineRepository
+from app.modules.channels.infrastructure.lines import LineRepository, heard_row
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
@@ -33,8 +33,8 @@ MAX_CHANNELS = 100
 
 __all__ = [
     "channels_for",
-    "last_heard_line",
     "line_by_id",
+    "line_heard_at",
     "member_background",
     "page_lines",
     "said_outside",
@@ -76,12 +76,13 @@ async def line_by_id(
     return await LineRepository(uow.session).get(message_id)
 
 
-async def last_heard_line(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+async def line_heard_at(
+    uow: SqlAlchemyUnitOfWork, *, source_id: UUID, external_message_id: str
 ) -> ChannelMessage | None:
-    """The latest line a person said in this conversation -- in Lemma or on a
-    platform -- which is where its answer belongs."""
-    return await LineAnswers(uow.session).last_heard(conversation_id)
+    """The line a platform message is, at the place it was heard; None for a
+    message that is no line here."""
+    row = await heard_row(uow.session, source_id, external_message_id)
+    return message_entity(row) if row is not None else None
 
 
 async def thread_root_at(

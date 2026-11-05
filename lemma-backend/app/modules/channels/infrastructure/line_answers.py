@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, or_, select, tuple_, update
+from sqlalchemy import ColumnElement, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +19,7 @@ from app.modules.channels.infrastructure.answer_models import (
     AnswerState,
     ChannelLineAnswerModel,
 )
-from app.modules.channels.domain.entities import ChannelMessage, SenderKind
 from app.modules.channels.infrastructure.message_models import ChannelMessageModel
-from app.modules.channels.infrastructure.rows import message_entity
 
 #: The most lines one run is found answering. A burst of lines a person sent
 #: while the agent worked joins the one run; past this many it is no burst.
@@ -113,29 +111,6 @@ class LineAnswers:
             ChannelLineAnswerModel.conversation_id == conversation_id,
             ChannelLineAnswerModel.state == AnswerState.ANSWERING.value,
         )
-
-    async def last_heard(self, conversation_id: UUID) -> ChannelMessage | None:
-        """The latest line a person said to a conversation, wherever they said
-        it: heard on a platform in it (the line names the conversation), or
-        written in Lemma and taken up by it (a row here). One conversation is
-        a person's across every place of its channel, so either may be the
-        latest -- and its answer belongs where that one was said."""
-        message = ChannelMessageModel
-        taken_up = select(ChannelLineAnswerModel.message_id).where(
-            ChannelLineAnswerModel.conversation_id == conversation_id
-        )
-        row = await self.session.scalar(
-            select(message)
-            .where(
-                or_(
-                    message.conversation_id == conversation_id, message.id.in_(taken_up)
-                ),
-                message.sender_kind != SenderKind.AGENT.value,
-            )
-            .order_by(message.seq.desc())
-            .limit(1)
-        )
-        return message_entity(row) if row is not None else None
 
     async def latest_of(self, conversation_id: UUID) -> LineAnswer | None:
         """The line a conversation took up last."""

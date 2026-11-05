@@ -294,7 +294,8 @@ the first, where they asked; a run carrying on a paused one answers what the
 conversation still answers. In a group, the answer follows the line to
 its place, into its thread there; in a contact's channel it stays in Lemma
 (made with the member's access, it is not the contact's to read). A line heard
-on a platform is answered there, by `agent_surfaces`.
+on a platform gets its row when the turn that answers it takes it up
+(`agent_surfaces`), and is answered at its place by the same path.
 
 What a run is shown of the channel around a line is kept on its message as
 which lines (`contracts/backgrounds`: `BackgroundRefs`, line ids and numbers),
