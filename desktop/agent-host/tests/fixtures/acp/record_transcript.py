@@ -72,6 +72,19 @@ below in order and keep every message short.
    tool, and fetch https://agentclientprotocol.com if you have a fetch tool.
 4. Reply with the single word: done
 """,
+    # Calls that run long enough for an agent to report progress on them:
+    # Claude Code beats every 30 seconds while a tool runs, under ids that are
+    # not the call's.
+    "long": """You are being recorded to test a tool-call integration. Do each step
+below in order and keep every message short.
+
+1. Run this shell command with your own shell tool, in the foreground, and
+   wait for it to finish. Do not run it in the background or change it:
+   python3 -c "import time; time.sleep(35)"; echo slept
+2. Call the MCP tool lemma_exec_command from the lemma_tools server with
+   cmd set to: sleep 65
+3. Reply with the single word: done
+""",
 }
 
 

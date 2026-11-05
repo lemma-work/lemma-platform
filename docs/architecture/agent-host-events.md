@@ -95,6 +95,8 @@ releases it when:
 - an update arrives carrying no new arguments (the adapter's own "input
   written" signal);
 - a permission request for the call arrives (the input is final by then);
+- Claude Code reports progress on it, which it does only while the tool runs
+  (see [progress beats](#claude-code-claude-agent-acp));
 - the call closes; or
 - the turn ends.
 
@@ -104,14 +106,20 @@ the tool's name only in its *first* title and replaces it with a description
 afterwards.
 
 A call released because the turn ended arrives after the agent's closing words.
-Claude Code produces them during any long tool call: its SDK reports progress
-under ids of its own, `<call id>-heartbeat-<n>`, which the adapter forwards as
-updates to calls the host has never seen, with no input, so they never settle.
-The backend seals words that come before a call as narration, so such a turn
-reaches `terminal` with nothing marked as its answer. A run that completes
-without an answer therefore takes its last words as the answer unless a tool
-result came after them, and marks them so in the transaction that records the
-run's end (`RunEventPump._answer_from_last_words`).
+That happens when a turn ends before a call's input settles, for example
+because it was cancelled or the adapter died. The backend seals words that come
+before a call as narration, so such a turn reaches `terminal` with nothing
+marked as its answer. A run that completes without an answer therefore takes
+its last words as the answer unless a tool result came after them, and marks
+them so in the transaction that records the run's end
+(`RunEventPump._answer_from_last_words`).
+
+Not every update is about a call the adapter opened. Claude Code reports
+progress on a running tool under ids of its own, `<call id>-heartbeat-<n>`.
+The host used to open a call for each one, with no input, so it never settled,
+and every long tool call ended its turn with empty cards after the answer, each
+closed with a made-up failed return. The host now reads these as progress, never
+as calls: see [progress beats](#claude-code-claude-agent-acp) under Claude Code.
 
 ```json
 {
@@ -226,6 +234,24 @@ every update.
 
 A result's `rawOutput` is the Anthropic tool-result content: a string for
 `Bash`, a list of content blocks for MCP tools.
+
+**Progress beats are not calls.** The adapter forwards each of the SDK's
+`tool_progress` messages as a `tool_call_update` that carries only
+`status: "in_progress"`, the tool's name and
+`_meta.claudeCode.toolResponse.elapsedTimeSeconds`, under the message's own id
+(`case "tool_progress"` in its `acp-agent.js`). That id is often not a call's.
+Claude Code beats every 30 seconds while a tool runs, under
+`<call id>-heartbeat-<n>`, and a sub-agent waiting out an API retry beats under
+an id of its own. An update with no input, for an id the run has not seen, is a
+beat when the id has the heartbeat shape or when the update reports running
+time. A beat never opens a call:
+
+- a heartbeat of a call that is still held releases that call, because the tool
+  is running and its input is final;
+- every other beat is dropped, including one that arrives after its call's
+  result.
+
+An update that carries input is a call, whatever its id.
 
 ### Codex (`codex-acp`)
 
@@ -404,3 +430,8 @@ UPDATE_GOLDEN=1 cargo test -p lemma-agent-host --test normalize_golden
 
 Review the diff of `*.expected.json` as you would review code. That diff shows
 exactly what users will see change.
+
+The `long` prompt holds a shell call and a Lemma MCP call open for longer than
+Claude Code's heartbeat interval (`sleep N` makes the stand-in server wait), so
+its transcript records the [progress beats](#claude-code-claude-agent-acp) an
+adapter sends while a tool runs. It takes a couple of minutes to record.
