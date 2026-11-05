@@ -24,6 +24,11 @@ from app.modules.agent.infrastructure.models import (
     MessageModel,
 )
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.domain.run_places import (
+    ASKED_IN_PLACE_KEY,
+    IN_LEMMA,
+    AnswerScope,
+)
 from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = [pytest.mark.e2e]
@@ -189,4 +194,113 @@ async def test_a_running_answer_takes_in_only_messages_of_its_own_kind(
     # The other one waits for a follow-up of its own kind, and the oldest
     # message waiting decides that kind.
     assert await queued_messages.count_queued_user_messages(run_id) == 1
-    assert await queued_messages.earliest_queued_is_note(run_id) is (not private_run)
+    assert await queued_messages.earliest_queued_scope(run_id) == AnswerScope(
+        notes=not private_run, place=None
+    )
+
+
+_EMAIL, _WHATSAPP = uuid4(), uuid4()
+
+
+async def _seed_places(db_session, scenario, *, asked_at=None):
+    """A running turn asked at one place, with messages queued from four: the
+    email it was asked by, WhatsApp, Lemma's composer (no place), and one of
+    Lemma's own channels -- each place stored the way the server writes it."""
+    conversation = ConversationModel(
+        id=uuid4(),
+        user_id=UUID(scenario.owner_user["id"]),
+        pod_id=UUID(scenario.pod_id),
+        organization_id=UUID(scenario.org_id),
+    )
+    db_session.add(conversation)
+    run = AgentRunModel(
+        id=uuid4(),
+        conversation_id=conversation.id,
+        status="RUNNING",
+        agent_runtime={"profile_id": "system:lemma"},
+        run_metadata={ASKED_IN_PLACE_KEY: str(asked_at)} if asked_at else None,
+        started_at=_BASE,
+        created_at=_BASE,
+    )
+    db_session.add(run)
+    rows = [
+        MessageModel(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            agent_run_id=run.id,
+            sequence=index,
+            role="user",
+            kind="TEXT",
+            text=text,
+            queue_state=QueueState.QUEUED,
+            message_metadata=metadata,
+            created_at=_BASE + timedelta(seconds=index),
+        )
+        for index, (text, metadata) in enumerate(
+            [
+                ("And the second invoice?", {ASKED_IN_PLACE_KEY: str(_EMAIL)}),
+                ("Are you there?", {ASKED_IN_PLACE_KEY: str(_WHATSAPP)}),
+                ("Typed in Lemma.", None),
+                (
+                    "From a channel in Lemma.",
+                    {"source": "lemma_channel", ASKED_IN_PLACE_KEY: IN_LEMMA},
+                ),
+            ],
+            start=1,
+        )
+    ]
+    db_session.add_all(rows)
+    await db_session.commit()
+    return run.id, [row.id for row in rows]
+
+
+async def test_a_running_answer_takes_in_only_what_was_said_where_it_was_asked(
+    db_session, scenario
+):
+    """A run asked by email steers in the email that followed, and what was
+    typed in Lemma's composer, which was said nowhere in particular -- not the
+    WhatsApp message, nor the line from Lemma's own channels. Those wait for
+    turns of their own, answered where they were said."""
+    await scenario.create_org_with_pod(name_prefix="Queued places")
+    run_id, (email, whatsapp, composer, in_lemma) = await _seed_places(
+        db_session, scenario, asked_at=_EMAIL
+    )
+    queued_messages = QueuedMessages(SqlAlchemyUnitOfWork(db_session))
+
+    steered = await queued_messages.claim_queued_user_messages(run_id, as_run=True)
+    await db_session.commit()
+
+    assert [message.id for message in steered] == [email, composer]
+    assert await queued_messages.count_queued_user_messages(run_id) == 2
+    # The oldest waiting decides the follow-up's scope: WhatsApp, which takes
+    # only its own, leaving the line from Lemma for the next.
+    whatsapp_scope = AnswerScope(notes=False, place=str(_WHATSAPP))
+    assert await queued_messages.earliest_queued_scope(run_id) == whatsapp_scope
+    assert (
+        await queued_messages.count_queued_user_messages(run_id, beside=whatsapp_scope)
+        == 1
+    )
+    claimed = await queued_messages.claim_queued_user_messages(
+        run_id, scope=whatsapp_scope
+    )
+    assert [message.id for message in claimed] == [whatsapp]
+    assert await queued_messages.earliest_queued_scope(run_id) == AnswerScope(
+        notes=False, place=IN_LEMMA
+    )
+    assert in_lemma not in {message.id for message in [*steered, *claimed]}
+
+
+async def test_a_run_asked_nowhere_in_particular_takes_in_only_what_was_too(
+    db_session, scenario
+):
+    """Typed in Lemma's composer: the WhatsApp and email messages that came
+    meanwhile are each answered at their own place, not by this run."""
+    await scenario.create_org_with_pod(name_prefix="Queued nowhere")
+    run_id, (_email, _whatsapp, composer, _in_lemma) = await _seed_places(
+        db_session, scenario
+    )
+    queued_messages = QueuedMessages(SqlAlchemyUnitOfWork(db_session))
+
+    steered = await queued_messages.claim_queued_user_messages(run_id, as_run=True)
+
+    assert [message.id for message in steered] == [composer]

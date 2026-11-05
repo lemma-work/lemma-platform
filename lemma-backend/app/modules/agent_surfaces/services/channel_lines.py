@@ -132,7 +132,9 @@ def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
 class ChannelLines(Protocol):
     """Where a surface writes what it heard, as channel lines."""
 
-    async def heard(self, context: SurfaceChatContext, *, text: str) -> None: ...
+    async def heard(
+        self, context: SurfaceChatContext, *, text: str
+    ) -> ChannelMessage | None: ...
 
 
 class ChannelLinesInDatabase:
@@ -141,8 +143,10 @@ class ChannelLinesInDatabase:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
 
-    async def heard(self, context: SurfaceChatContext, *, text: str) -> None:
-        await note_heard(self.uow, context, text=text)
+    async def heard(
+        self, context: SurfaceChatContext, *, text: str
+    ) -> ChannelMessage | None:
+        return await note_heard(self.uow, context, text=text)
 
 
 #: The lines over one unit of work, for a writer that opens its own scopes.
@@ -151,8 +155,9 @@ type ChannelLinesFor = Callable[[SqlAlchemyUnitOfWork], ChannelLines]
 
 async def note_heard(
     uow: SqlAlchemyUnitOfWork, context: SurfaceChatContext, *, text: str
-) -> None:
-    """The message this run answers, as its sender's line in the channel.
+) -> ChannelMessage | None:
+    """The message this run answers, as its sender's line in the channel --
+    the line, or None where there is no place to write it.
 
     Written once. A group's message is a line from the moment it arrived
     (``group_log``): the turn only says which conversation answers it, and who
@@ -165,10 +170,10 @@ async def note_heard(
     the empty body it arrived with.
     """
     if context.source_id is None:
-        return
+        return None
     source = await source_by_id(uow, context.source_id)
     if source is None:
-        return
+        return None
     name = context.message_metadata.sender_display_name
     contact_id = context.audience.contact_id
     sender = (
@@ -177,10 +182,8 @@ async def note_heard(
         else Sender.member(context.message_user_id, display_name=name)
     )
     external_message_id = context.message_external_message_id
-    if (
-        source.kind is SourceKind.CHAT
-        and external_message_id is not None
-        and await answered_in(
+    if source.kind is SourceKind.CHAT and external_message_id is not None:
+        taken_up = await answered_in(
             uow,
             channel_id=source.channel_id,
             source_id=source.id,
@@ -188,9 +191,8 @@ async def note_heard(
             conversation_id=context.conversation_id,
             sender=sender,
         )
-        is not None
-    ):
-        return
+        if taken_up is not None:
+            return taken_up
     event = context.event
     said = await LineMarkup(uow).read(
         event,
@@ -199,7 +201,7 @@ async def note_heard(
         text=text,
         bot=Bot(surface_id=context.surface_id, name=context.agent_display_name),
     )
-    await post(
+    return await post(
         uow,
         channel_id=source.channel_id,
         line=NewLine(

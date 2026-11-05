@@ -474,6 +474,13 @@ _NAME_TO_MODULE = {
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
+    'OutcomeHistoryResponse': 'outcome_history_response',
+    'OutcomeInput': 'outcome_input',
+    'OutcomeKind': 'outcome_kind',
+    'OutcomeSetResponse': 'outcome_set_response',
+    'OutcomeStandingResponse': 'outcome_standing_response',
+    'OutcomeTemplateCard': 'outcome_template_card',
+    'OutcomeWeekResponse': 'outcome_week_response',
     'OutputChunkModel': 'output_chunk_model',
     'OutputChunkModelChannel': 'output_chunk_model_channel',
     'OutreachDelivery': 'outreach_delivery',
@@ -522,6 +529,7 @@ _NAME_TO_MODULE = {
     'PodMemberListResponse': 'pod_member_list_response',
     'PodMemberResponse': 'pod_member_response',
     'PodMemberUpdateRoleRequest': 'pod_member_update_role_request',
+    'PodOutcome': 'pod_outcome',
     'PodPermissionCatalogResponse': 'pod_permission_catalog_response',
     'PodPermissionResponse': 'pod_permission_response',
     'PodRecipe': 'pod_recipe',
@@ -653,8 +661,11 @@ _NAME_TO_MODULE = {
     'SourceSettingsResponse': 'source_settings_response',
     'SourceSummary': 'source_summary',
     'SourceUpdateRequest': 'source_update_request',
+    'StartLemmaRequest': 'start_lemma_request',
+    'StartLemmaResponse': 'start_lemma_response',
     'StartProcessRequest': 'start_process_request',
     'StartProcessRequestEnv': 'start_process_request_env',
+    'StartedPodResponse': 'started_pod_response',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -716,6 +727,8 @@ _NAME_TO_MODULE = {
     'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
+    'TemplateOutcome': 'template_outcome',
+    'TemplatePlan': 'template_plan',
     'TerminalSizeModel': 'terminal_size_model',
     'ThreadResponse': 'thread_response',
     'TriggerSkipListResponse': 'trigger_skip_list_response',
@@ -1282,6 +1295,13 @@ if TYPE_CHECKING:
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
+    from .outcome_history_response import OutcomeHistoryResponse
+    from .outcome_input import OutcomeInput
+    from .outcome_kind import OutcomeKind
+    from .outcome_set_response import OutcomeSetResponse
+    from .outcome_standing_response import OutcomeStandingResponse
+    from .outcome_template_card import OutcomeTemplateCard
+    from .outcome_week_response import OutcomeWeekResponse
     from .output_chunk_model import OutputChunkModel
     from .output_chunk_model_channel import OutputChunkModelChannel
     from .outreach_delivery import OutreachDelivery
@@ -1330,6 +1350,7 @@ if TYPE_CHECKING:
     from .pod_member_list_response import PodMemberListResponse
     from .pod_member_response import PodMemberResponse
     from .pod_member_update_role_request import PodMemberUpdateRoleRequest
+    from .pod_outcome import PodOutcome
     from .pod_permission_catalog_response import PodPermissionCatalogResponse
     from .pod_permission_response import PodPermissionResponse
     from .pod_recipe import PodRecipe
@@ -1461,8 +1482,11 @@ if TYPE_CHECKING:
     from .source_settings_response import SourceSettingsResponse
     from .source_summary import SourceSummary
     from .source_update_request import SourceUpdateRequest
+    from .start_lemma_request import StartLemmaRequest
+    from .start_lemma_response import StartLemmaResponse
     from .start_process_request import StartProcessRequest
     from .start_process_request_env import StartProcessRequestEnv
+    from .started_pod_response import StartedPodResponse
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1524,6 +1548,8 @@ if TYPE_CHECKING:
     from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
+    from .template_outcome import TemplateOutcome
+    from .template_plan import TemplatePlan
     from .terminal_size_model import TerminalSizeModel
     from .thread_response import ThreadResponse
     from .trigger_skip_list_response import TriggerSkipListResponse
@@ -2103,6 +2129,13 @@ __all__ = [
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
+    'OutcomeHistoryResponse',
+    'OutcomeInput',
+    'OutcomeKind',
+    'OutcomeSetResponse',
+    'OutcomeStandingResponse',
+    'OutcomeTemplateCard',
+    'OutcomeWeekResponse',
     'OutputChunkModel',
     'OutputChunkModelChannel',
     'OutreachDelivery',
@@ -2151,6 +2184,7 @@ __all__ = [
     'PodMemberListResponse',
     'PodMemberResponse',
     'PodMemberUpdateRoleRequest',
+    'PodOutcome',
     'PodPermissionCatalogResponse',
     'PodPermissionResponse',
     'PodRecipe',
@@ -2282,8 +2316,11 @@ __all__ = [
     'SourceSettingsResponse',
     'SourceSummary',
     'SourceUpdateRequest',
+    'StartLemmaRequest',
+    'StartLemmaResponse',
     'StartProcessRequest',
     'StartProcessRequestEnv',
+    'StartedPodResponse',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',
@@ -2345,6 +2382,8 @@ __all__ = [
     'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
+    'TemplateOutcome',
+    'TemplatePlan',
     'TerminalSizeModel',
     'ThreadResponse',
     'TriggerSkipListResponse',

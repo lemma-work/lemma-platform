@@ -36,14 +36,14 @@ Connected machines add `machine_connection_pairings` in their own section.
 `TABLES` and `CONNECTED_MACHINE_TABLES` are each table's DDL exactly as the models compile it, pinned to them
 by ``workspace/tests/unit/test_machine_ddl_matches_models``.
 
-Revision ID: 0071_machines
-Revises: 0070_agent_run_log
+Revision ID: 0072_machines
+Revises: 0071_outcome_weeks
 """
 
 from alembic import op
 
-revision = "0071_machines"
-down_revision = "0070_agent_run_log"
+revision = "0072_machines"
+down_revision = "0071_outcome_weeks"
 branch_labels = None
 depends_on = None
 

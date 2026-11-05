@@ -46,6 +46,7 @@ def _context():
         user_id=uuid4(),
         pod_id=uuid4(),
         agent_name=None,
+        source_id=None,
     )
 
 

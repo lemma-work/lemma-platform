@@ -1,0 +1,41 @@
+{
+  "name": "steps",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {
+    "description": "Every step to the launch: who owns it, when it is due, and whether it is done."
+  },
+  "columns": [
+    {
+      "name": "id",
+      "type": "UUID",
+      "required": true,
+      "auto": true
+    },
+    {
+      "name": "step",
+      "type": "TEXT",
+      "required": true
+    },
+    {
+      "name": "owner",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "due_on",
+      "type": "DATE",
+      "required": false
+    },
+    {
+      "name": "done",
+      "type": "BOOLEAN",
+      "required": false
+    },
+    {
+      "name": "notes",
+      "type": "TEXT",
+      "required": false
+    }
+  ]
+}

@@ -20,7 +20,7 @@ Resend address.
 | --- | --- |
 | API routers | Pod surface CRUD/setup/catalog/send, current-user defaults, public webhooks/verification |
 | Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
-| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribes `AgentRunFinished`; posts the answer as the agent's line with a delivery to its place), `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it; one at a time per place or member), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
+| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribed by nothing: drains answers queued before `agent.channel_reply` said every run's, then goes), `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it; one at a time per place or member), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
 | Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
 
 ## Main data model
@@ -662,6 +662,19 @@ is answered *for the pod*, in a group the pod has opened to them.
   either keeps its kind. `surface_send_message` from a note's run is refused.
   In a contact's conversation a note is the keeper's alone: no later turn of
   the contact's reads it.
+- **A run answers the place it was asked.** One conversation spans a member's
+  every place -- their email, their WhatsApp, Lemma -- so the run a message
+  starts is stamped with the place it was heard at (the `asked_in_place`
+  metadata key, from `BoundThread.source_id`; see the agent module's
+  `domain/run_places`). A
+  message from another place, sent while it works, is not steered into it: it
+  waits, and the follow-up turn that claims it is asked at its place. The
+  answer is posted at the run's place (`reply_address(..., at_source_id=)`),
+  and while the run works its typing, progress and cards go there too
+  (`SurfaceDelivery.resolve_egress_target` reads the latest run's place). A
+  run asked nowhere in particular -- typed into the conversation in Lemma --
+  answers where the conversation was last written to, as before. The second
+  place's answer waits for the first's.
 - **A turn its model cannot run is said, once, not retried.** A teammate on a
   member's own runtime runs only for them; anybody else's message to it is
   refused before a run exists (`RuntimeUnavailableError`,

@@ -1,0 +1,56 @@
+{
+  "name": "conversations",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {
+    "description": "One row per customer who wrote: when they wrote, when a person answered, and who has it."
+  },
+  "columns": [
+    {
+      "name": "id",
+      "type": "UUID",
+      "required": true,
+      "auto": true
+    },
+    {
+      "name": "customer",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "about",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "channel",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "link",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "opened_at",
+      "type": "DATETIME",
+      "required": true
+    },
+    {
+      "name": "answered_at",
+      "type": "DATETIME",
+      "required": false
+    },
+    {
+      "name": "answered_in_time",
+      "type": "BOOLEAN",
+      "required": false
+    },
+    {
+      "name": "with_person",
+      "type": "TEXT",
+      "required": false
+    }
+  ]
+}
