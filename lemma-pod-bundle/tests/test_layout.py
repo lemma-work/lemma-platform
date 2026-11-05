@@ -144,3 +144,83 @@ def test_a_bundle_is_written_as_format_4_only_when_it_declares_a_connector(tmp_p
     assert bundle_format_version(tmp_path) == 3
     (tmp_path / "connectors" / "crm").mkdir()
     assert bundle_format_version(tmp_path) == FORMAT_VERSION == 4
+
+
+@pytest.mark.parametrize(
+    ("ref_key", "sidecar_name", "sidecar_contents"),
+    [
+        ("$file", "secret.md", "sensitive local text"),
+        ("$json_file", "secret.json", '{"sensitive": true}'),
+    ],
+)
+def test_load_resource_payload_rejects_parent_directory_file_refs(
+    tmp_path: Path, ref_key: str, sidecar_name: str, sidecar_contents: str
+):
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    outside_file = tmp_path / sidecar_name
+    outside_file.write_text(sidecar_contents, encoding="utf-8")
+    (resource_dir / "helper.json").write_text(
+        json.dumps(
+            {"name": "helper", "instruction": {ref_key: f"../../{sidecar_name}"}}
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its resource directory"):
+        load_resource_payload(resource_dir, "helper")
+
+
+@pytest.mark.parametrize("ref_key", ["$file", "$json_file"])
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_load_resource_payload_rejects_absolute_file_refs(
+    tmp_path: Path, ref_key: str, target_exists: bool
+):
+    # `base_dir / "/abs/path"` is `/abs/path`: an absolute ref replaces the
+    # resource folder outright. A missing target is refused the same way, so
+    # the error can't be used to learn which files exist.
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    outside_file = tmp_path / "secret.json"
+    if target_exists:
+        outside_file.write_text('{"sensitive": true}', encoding="utf-8")
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {ref_key: str(outside_file)}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its resource directory"):
+        load_resource_payload(resource_dir, "helper")
+
+
+def test_load_resource_payload_missing_sidecar_inside_resource_still_fails(
+    tmp_path: Path,
+):
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {"$file": "instruction.md"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        load_resource_payload(resource_dir, "helper")
+
+
+def test_load_resource_payload_rejects_symlink_to_outside_resource(tmp_path: Path):
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    outside_file = tmp_path / "secret.md"
+    outside_file.write_text("sensitive local text", encoding="utf-8")
+    sidecar_link = resource_dir / "instruction.md"
+    try:
+        sidecar_link.symlink_to(outside_file)
+    except NotImplementedError, OSError:
+        pytest.skip("symlinks are not available on this platform")
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {"$file": "instruction.md"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its resource directory"):
+        load_resource_payload(resource_dir, "helper")

@@ -10,6 +10,8 @@ export type { OpenAPIConfig } from './core/OpenAPI.js';
 export type { Accepted } from './models/Accepted.js';
 export type { AccountCreateSchema } from './models/AccountCreateSchema.js';
 export type { AccountCredentialsUpdateSchema } from './models/AccountCredentialsUpdateSchema.js';
+export type { AccountDeletionRequest } from './models/AccountDeletionRequest.js';
+export type { AccountDeletionResponse } from './models/AccountDeletionResponse.js';
 export type { AccountInstallationsSchema } from './models/AccountInstallationsSchema.js';
 export type { AccountListResponseSchema } from './models/AccountListResponseSchema.js';
 export type { AccountOption } from './models/AccountOption.js';

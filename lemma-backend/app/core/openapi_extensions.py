@@ -63,6 +63,9 @@ OVERRIDES: dict[str, dict[str, Any]] = {
     "outcome.clear": {"invalidates": ["outcome", "pod"]},
     # Makes a pod and opens a conversation in it.
     "pod.start": {"invalidates": ["pod", "agent.conversation"]},
+    # A delete that answers with what it did: which organizations went with
+    # the account and which it left.
+    "user.current.delete": {"result": "entity"},
 }
 
 

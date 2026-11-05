@@ -4,11 +4,12 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import false, func, select, text, update
+from sqlalchemy import delete, false, func, select, text, update
 
 from app.core.domain.uow import IUnitOfWork
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+    PendingChatOnboarding,
     VerifiedSurfaceIdentity,
 )
 
@@ -73,7 +74,10 @@ class VerifiedSurfaceIdentityRepository:
         is not.
 
         One its owner also proved from a signed-in session stands on that
-        proof: it loses the number it no longer has, and stays.
+        proof: it loses the number it no longer has, and stays. One that goes
+        takes the number and its route with it: revoked is nobody's, as in
+        ``revoke_session_proved``, and ``ck_surface_identity_route_is_live``
+        refuses a revoked row that keeps a route.
         """
         still_bound = (
             VerifiedSurfaceIdentity.verified_phone == current_phone
@@ -93,7 +97,43 @@ class VerifiedSurfaceIdentityRepository:
         await self.session.execute(
             update(VerifiedSurfaceIdentity)
             .where(*stale, VerifiedSurfaceIdentity.session_proved_at.is_(None))
-            .values(revoked_at=datetime.now(timezone.utc))
+            .values(
+                revoked_at=datetime.now(timezone.utc),
+                verified_phone=None,
+                installation_surface_id=None,
+                pod_id=None,
+            )
+        )
+
+    async def revoke_all_for_user(self, user_id: UUID) -> None:
+        """Revoke every identity the person proved, and forget their pending
+        onboarding -- the account was deleted.
+
+        The number and the destination go with the proof: a revoked row may
+        not carry a route (``ck_surface_identity_route_is_live``), and a phone
+        number left on it would be the person's, kept after they asked to go.
+        """
+        await self.session.execute(
+            update(VerifiedSurfaceIdentity)
+            .where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+            .values(
+                revoked_at=datetime.now(timezone.utc),
+                installation_surface_id=None,
+                pod_id=None,
+            )
+        )
+        await self.session.execute(
+            update(VerifiedSurfaceIdentity)
+            .where(VerifiedSurfaceIdentity.user_id == user_id)
+            .values(verified_phone=None)
+        )
+        await self.session.execute(
+            delete(PendingChatOnboarding).where(
+                PendingChatOnboarding.user_id == user_id
+            )
         )
 
     async def prove_by_session(

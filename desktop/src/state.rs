@@ -205,9 +205,41 @@ pub(crate) struct Shell {
 }
 
 pub(crate) struct LocaldConnection {
-    pub(crate) reader: BufReader<RecvHalf>,
-    pub(crate) writer: SendHalf,
+    pub(crate) reader: BufReader<LocaldStream>,
+    pub(crate) writer: LocaldStream,
     pub(crate) hello: Value,
+}
+
+/// One end of the control socket, read by one thread and written by another.
+///
+/// `&Stream` is `Read` and `Write`, so a shared `Arc` serves both directions.
+/// That is all `Stream::split` ever did, and why interprocess deprecated it.
+/// As with its halves, dropping one end closes nothing: the socket closes
+/// with the last.
+pub(crate) struct LocaldStream(std::sync::Arc<LocalSocketStream>);
+
+impl LocaldStream {
+    /// A reading end and a writing end of `stream`.
+    pub(crate) fn pair(stream: LocalSocketStream) -> (Self, Self) {
+        let shared = std::sync::Arc::new(stream);
+        (Self(std::sync::Arc::clone(&shared)), Self(shared))
+    }
+}
+
+impl Read for LocaldStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        (&*self.0).read(buf)
+    }
+}
+
+impl Write for LocaldStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        (&*self.0).write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        (&*self.0).flush()
+    }
 }
 
 impl Shell {
