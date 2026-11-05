@@ -190,10 +190,15 @@ async def test_a_grant_is_not_a_promotion_for_the_person_driving_it(
     )
 
 
-@scenario("An agent can only reach the connectors it was granted")
-@proves("PS-CONN-033", "PS-AGENT-002")
-@covers("agent.create", "agent.conversation.create", "connector.operation.execute")
-async def test_an_agent_cannot_call_an_ungranted_connector(world, provider, run):
+@pytest.fixture
+async def pod_with_a_connector(world, provider, run):
+    """A pod declaring a connector Priya can use, and an agent with none of it.
+
+    The connector is real and works: Priya runs it herself before the agent is
+    asked anything, so an agent that reaches nothing below is held back by its
+    grant and not by a connector that was never usable. That is the difference
+    between this scenario and one that would pass with connectors switched off.
+    """
     needs(MODEL_IS_REAL)
     alice = await world.person("priya")
     organization = alice.organization
@@ -210,14 +215,39 @@ async def test_an_agent_cannot_call_an_ungranted_connector(world, provider, run)
         ),
     )
     pod = await alice.creates_a_pod(named=run.name("connectors"))
-    agent = await alice.creates_an_agent(in_pod=pod, toolsets=["CONNECTORS"])
-    provider.clear()
+    try:
+        connector = await alice.declares_pod_connector(
+            auth_config, in_pod=pod, slug="widgets"
+        )
+        await alice.runs_operation(
+            "list_widgets", through=connector, in_pod=pod, payload={}
+        )
+        assert provider.calls_to("/widgets"), "the connector does not work for Priya"
+        agent = await alice.creates_an_agent(in_pod=pod, toolsets=["CONNECTORS"])
+        provider.clear()
+        yield alice, pod, connector, agent
+    finally:
+        await alice.deletes_pod(pod)
+
+
+@scenario("An agent can only reach the connectors it was granted")
+@proves("PS-CONN-033", "PS-AGENT-002")
+@covers(
+    "agent.create",
+    "agent.conversation.create",
+    "pod.connector.create",
+    "pod.connector.operation.execute",
+)
+async def test_an_agent_cannot_call_an_ungranted_connector(
+    pod_with_a_connector, provider
+):
+    alice, pod, connector, agent = pod_with_a_connector
 
     conversation = await alice.starts_a_conversation(
         in_pod=pod,
         with_agent=agent["name"],
         saying=(
-            f"List the widgets from the {auth_config['name']} connector and "
+            f"List the widgets from the {connector['slug']} connector and "
             f"tell me what you find."
         ),
     )
@@ -230,9 +260,55 @@ async def test_an_agent_cannot_call_an_ungranted_connector(world, provider, run)
     # reply would pass just as well if the call went out and the answer was
     # merely *worded* as a refusal.
     assert not provider.received, (
-        "an agent with no connector grant reached the provider anyway: "
-        f"{[call.path for call in provider.received]}"
+        "an agent with no grant on the pod connector reached the provider "
+        f"anyway: {[call.path for call in provider.received]}"
     )
+
+
+@scenario("An agent granted a pod connector reaches it, as the person it acts for")
+@proves("PS-CONN-033")
+@covers(
+    "agent.permissions.replace",
+    "agent.conversation.create",
+    "pod.connector.operation.execute",
+)
+async def test_an_agent_granted_a_connector_reaches_it(pod_with_a_connector, provider):
+    """The other half, without which the refusal above proves nothing.
+
+    If an agent could not reach a pod connector even when granted one, the
+    scenario above would pass for that reason alone. Same pod, same connector,
+    same sentence; the one difference is a `connector.use` grant naming it.
+    """
+    alice, pod, connector, agent = pod_with_a_connector
+    await alice.replaces_agent_grants(
+        agent["name"],
+        grants=[
+            {
+                "resource_type": "connector",
+                "resource_name": connector["slug"],
+                "permission_ids": ["connector.use"],
+            }
+        ],
+        in_pod=pod,
+    )
+
+    conversation = await alice.starts_a_conversation(
+        in_pod=pod,
+        with_agent=agent["name"],
+        saying=(
+            f"List the widgets from the {connector['slug']} connector and "
+            f"tell me what you find."
+        ),
+    )
+    await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
+
+    calls = provider.calls_to("/widgets")
+    assert calls, (
+        "an agent granted the pod connector never reached the provider, so the "
+        "refusal scenario beside this one cannot tell a grant from a broken tool"
+    )
+    # PER_MEMBER: the agent acts for Priya, so it runs as Priya's own account.
+    assert "alice-provider-token" in calls[-1].authorization, calls[-1].authorization
 
 
 @scenario("Removing a person stops the agents working in their name")

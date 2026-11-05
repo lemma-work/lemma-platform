@@ -85,7 +85,7 @@ NEW_AGENT_DEFAULT_TOOLSETS: tuple[AgentToolset, ...] = (
 # USER_INTERACTION universal the implication was universal too -- so it is
 # stated here rather than derived from a toolset that is now always present.
 #
-# MESSAGING and WAIT are one capability in practice: `message_user` does not
+# MESSAGING and WAIT are one capability in practice: `channel_post` does not
 # block, so an agent given the first without the second can send and then has no
 # way to be around when the reply lands. Messaging is fenced to pod members by
 # `resolve_pod_recipient`, which joins through PodMember and returns None for

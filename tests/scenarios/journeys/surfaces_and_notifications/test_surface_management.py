@@ -180,7 +180,7 @@ async def test_deleting_a_surface_stops_it(connected):
         },
         headers={"X-Telegram-Bot-Api-Secret-Token": secret},
     )
-    assert delivered.status_code >= 400, (
+    assert delivered.status_code == 404, (
         f"a deleted surface still accepted a delivery ({delivered.status_code})"
     )
 
@@ -220,7 +220,8 @@ async def test_a_managed_bot_setup_says_what_is_missing(connected):
     else:
         # A deployment with no manager bot cannot run the guided setup, and has
         # to say so rather than leaving a half-made surface behind.
-        assert started.status_code >= 400, started.status_code
+        assert started.status_code == 503, started.status_code
+        assert "TELEGRAM_MANAGER_NOT_CONFIGURED" in started.text, started.text[:300]
         assert not any(s["name"] == "managed" for s in await alice.surfaces_in(pod)), (
             "a refused guided setup must leave no surface behind"
         )
@@ -238,8 +239,13 @@ async def test_the_manager_webhook_rejects_unsigned(world, connected):
         json={"update_id": 1, "message": {"text": "/start"}},
     )
 
-    assert response.status_code >= 400, (
-        f"an unsigned delivery to the manager bot was accepted ({response.status_code})"
+    if response.status_code == 503:
+        # 503 is "no manager bot here", which says nothing about signatures: a
+        # deployment without one has no secret to check a delivery against.
+        pytest.skip("this deployment has no Telegram manager bot to sign for")
+    assert response.status_code == 401, (
+        f"an unsigned delivery to the manager bot was not refused as "
+        f"unauthenticated ({response.status_code})"
     )
 
 

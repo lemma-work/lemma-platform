@@ -119,6 +119,18 @@ class AuthConfigEntity(Entity):
         return self.kind is not ConnectorKind.COMPOSIO
 
 
+#: ``auth_configs.metadata`` key: Lemma made this app itself (a Slack
+#: teammate's app, through the manifest flow), so its signing secret came from
+#: the provider to Lemma rather than from a person who chose it. Server-owned:
+#: no API input carries metadata, and replacing the install's config drops it.
+APP_MADE_BY_LEMMA = "app_made_by_lemma"
+
+
+def app_made_by_lemma(metadata: dict[str, object] | None) -> bool:
+    """Whether an install's metadata says Lemma made the app behind it."""
+    return bool((metadata or {}).get(APP_MADE_BY_LEMMA) is True)
+
+
 def reject_if_disabled(auth_config: AuthConfigEntity) -> None:
     """Refuse to use an install an admin has switched off.
 

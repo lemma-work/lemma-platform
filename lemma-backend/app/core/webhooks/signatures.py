@@ -229,6 +229,27 @@ def svix_signature_matches(
     return any(_matches_any(expected, candidate) for candidate in presented)
 
 
+def standard_webhook_signature(
+    secret: str, message_id: str, timestamp: int, raw_body: bytes
+) -> str:
+    """The `webhook-signature` header for a delivery Lemma sends: `v1,` and the
+    base64 HMAC that `svix_signature_matches` checks, over the exact body bytes.
+
+    Standard Webhooks is Svix's scheme under its open name; one implementation
+    signs and the other verifies, so the two cannot drift. Raises ValueError for
+    a secret that is not `whsec_` base64 -- the caller accepted it, and sending
+    unsigned would be worse than not sending.
+    """
+    key = svix_signing_key(secret)
+    if key is None:
+        raise ValueError("not a whsec_ signing secret")
+    signed = f"{message_id}.{timestamp}.".encode("utf-8") + raw_body
+    return (
+        "v1,"
+        + base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    )
+
+
 def shared_secret_matches(
     presented: str | None,
     secrets: Sequence[str | None],

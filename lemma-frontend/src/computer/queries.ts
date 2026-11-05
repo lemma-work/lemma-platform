@@ -221,7 +221,7 @@ export function useOpenBrowserTab() {
     const access = useBrowserAccess();
     const open = () => {
         /* Failure is already on `access`, which is what `failed` reads. */
-        void openExternalWhenReady(access.mutateAsync().then((grant) => grant.url)).catch(() => undefined);
+        void openExternalWhenReady(access.mutateAsync().then((grant) => grant.url), "the browser").catch(() => undefined);
     };
     return { open, busy: access.isPending, failed: access.isError };
 }

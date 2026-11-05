@@ -93,8 +93,16 @@ pub mod kind {
 /// The error code an op failure carries on the link. `detail.kind` says which.
 pub const OP_FAILED: &str = "OP_FAILED";
 
-/// The most bytes one frame's `data` carries, before base64.
+/// The most bytes one op moves: a `file.read` or `file.write` chunk, which
+/// crosses HTTP as a transfer rather than the link (`link::transfer`), and
+/// the most an exec-server reads or writes at once.
 pub const OP_MAX_DATA_BYTES: usize = 1024 * 1024;
+
+/// The most bytes an op still carries inline on the link, before base64:
+/// `process.read` output (Lemma asks for at most this with `max_bytes`),
+/// `process.input`, `secret.deliver`. Small enough that base64 and the frame
+/// stay far inside the 1 MiB message ceiling.
+pub const INLINE_DATA_BYTES: usize = 256 * 1024;
 
 /// Why an op failed, in the terms the provider maps.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -210,6 +218,11 @@ pub struct HostExecutionStatus {
     /// `macos`, `linux` or `windows`.
     pub platform: String,
     pub available: bool,
+    /// This host moves an op's file data over HTTP when the op names a
+    /// transfer (`link::transfer`). Lemma sends a host without it the data
+    /// inline instead, in chunks a frame can carry.
+    #[serde(default)]
+    pub transfers: bool,
 }
 
 impl HostExecutionStatus {
@@ -219,6 +232,7 @@ impl HostExecutionStatus {
             enabled,
             platform: platform().to_owned(),
             available: super::seatbelt::available(),
+            transfers: true,
         }
     }
 }

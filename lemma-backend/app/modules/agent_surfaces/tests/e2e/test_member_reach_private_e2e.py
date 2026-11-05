@@ -1,34 +1,39 @@
 """A message meant for one person goes somewhere private, never to a group.
 
-Reaching a member proactively reuses their latest thread on the surface, because
-a bot cannot open a chat cold. "Latest" used to mean latest of any kind -- so a
-member who had last mentioned the bot in a Telegram group had their private
-notifications posted into that group, in front of everyone in it. Groups being
-first-class makes that the common case rather than a corner, so the lookup is
-held to private threads, and a member with none is unreachable here (the
-notification then falls back to email or their inbox).
+Reaching a member proactively writes to their chat on the surface, because a
+bot cannot open one cold. A member who last mentioned the bot in a Telegram
+group must not have their private notifications posted into that group, in
+front of everyone in it -- so the lookup is of the person's private places
+only, and a member with none is unreachable here (the notification then falls
+back to email or their inbox).
 """
 
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.infrastructure.models.conversation import ConversationModel
-from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
+from app.modules.channels.contracts import (
+    AccountKey,
+    GroupHome,
+    MembersHome,
+    Place,
+    SourceKind,
+    source_for,
 )
+from app.modules.channels.contracts.places import person_places
+from app.modules.channels.infrastructure.models import ChannelSourceModel
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 MEMBER = "900100"
 
 
-async def _surface_and_conversations(sessions, *, pod, owner_id, count: int):
+async def _surface(sessions, pod) -> UUID:
     async with sessions() as session:
         surface = AgentSurface(
             pod_id=UUID(pod["id"]),
@@ -41,91 +46,76 @@ async def _surface_and_conversations(sessions, *, pod, owner_id, count: int):
             config={},
         )
         session.add(surface)
-        await session.flush()
-        conversations = [
-            ConversationModel(user_id=owner_id, pod_id=UUID(pod["id"]))
-            for _ in range(count)
-        ]
-        session.add_all(conversations)
-        await session.flush()
-        ids = (surface.id, [conversation.id for conversation in conversations])
         await session.commit()
-    return ids
+        return surface.id
 
 
-def _link(surface_id, conversation_id, *, kind: str, thread: str, at: datetime):
-    return AgentSurfaceConversationLink(
-        surface_id=surface_id,
-        conversation_id=conversation_id,
-        platform="TELEGRAM",
-        external_channel_id=thread,
-        external_thread_id=thread,
-        external_user_id=MEMBER,
-        conversation_kind=kind,
-        last_event={},
-        last_inbound_at=at,
-    )
+async def _heard(
+    sessions, pod, member: UUID, surface_id, *, private: bool, at: datetime
+) -> UUID:
+    """The member's private chat, or a group they spoke in, heard ``at``."""
+    async with sessions() as session:
+        source = await source_for(
+            SqlAlchemyUnitOfWork(session),
+            pod_id=UUID(pod["id"]),
+            place=Place(
+                surface_id=surface_id,
+                platform="TELEGRAM",
+                account=AccountKey(workspace=f"surface:{surface_id}"),
+                kind=SourceKind.PERSON if private else SourceKind.CHAT,
+                external_channel_id=None if private else f"-100{uuid4().int % 10**9}",
+                external_user_id=MEMBER if private else None,
+            ),
+            home=MembersHome(user_id=member) if private else GroupHome(title="Ops"),
+        )
+        await session.execute(
+            update(ChannelSourceModel)
+            .where(ChannelSourceModel.id == source.id)
+            .values(last_inbound_at=at)
+        )
+        await session.commit()
+        return source.id
 
 
-async def test_the_private_thread_is_chosen_over_a_fresher_group_one(
+async def _member_places(sessions, surface_id):
+    async with sessions() as session:
+        return await person_places(
+            SqlAlchemyUnitOfWork(session),
+            platform="TELEGRAM",
+            external_user_id=MEMBER,
+            surface_ids=[surface_id],
+        )
+
+
+async def test_the_private_chat_is_found_over_a_fresher_group(
     authenticated_client, db_session, test_pod, fixed_test_user
 ) -> None:
     sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    surface_id, (private, group) = await _surface_and_conversations(
-        sessions, pod=test_pod, owner_id=fixed_test_user["id"], count=2
-    )
+    surface_id = await _surface(sessions, test_pod)
     now = datetime.now(timezone.utc)
-    async with sessions() as session:
-        links = SurfaceConversationLinkRepository(SqlAlchemyUnitOfWork(session))
-        await links.create(
-            _link(
-                surface_id,
-                private,
-                kind="DM",
-                thread=MEMBER,
-                at=now - timedelta(days=2),
-            )
-        )
-        await links.create(
-            _link(surface_id, group, kind="CHANNEL", thread="-100123", at=now)
-        )
-        await session.commit()
+    member = UUID(str(fixed_test_user["id"]))
+    private = await _heard(
+        sessions, test_pod, member, surface_id, private=True, at=now - timedelta(days=2)
+    )
+    await _heard(sessions, test_pod, member, surface_id, private=False, at=now)
 
-    async with sessions() as session:
-        found = await SurfaceConversationLinkRepository(
-            SqlAlchemyUnitOfWork(session)
-        ).get_latest_by_surface_and_external_user(
-            surface_id=surface_id, external_user_id=MEMBER
-        )
+    places = await _member_places(sessions, surface_id)
 
-    assert found is not None
-    assert found.conversation_id == private
+    assert [place.id for place in places] == [private]
 
 
 async def test_a_member_who_only_spoke_in_a_group_is_not_reached_there(
     authenticated_client, db_session, test_pod, fixed_test_user
 ) -> None:
     sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
-    surface_id, (group,) = await _surface_and_conversations(
-        sessions, pod=test_pod, owner_id=fixed_test_user["id"], count=1
+    surface_id = await _surface(sessions, test_pod)
+    await _heard(
+        sessions,
+        test_pod,
+        UUID(str(fixed_test_user["id"])),
+        surface_id,
+        private=False,
+        at=datetime.now(timezone.utc),
     )
-    async with sessions() as session:
-        await SurfaceConversationLinkRepository(SqlAlchemyUnitOfWork(session)).create(
-            _link(
-                surface_id,
-                group,
-                kind="CHANNEL",
-                thread="-100123",
-                at=datetime.now(timezone.utc),
-            )
-        )
-        await session.commit()
 
-    async with sessions() as session:
-        found = await SurfaceConversationLinkRepository(
-            SqlAlchemyUnitOfWork(session)
-        ).get_latest_by_surface_and_external_user(
-            surface_id=surface_id, external_user_id=MEMBER
-        )
-
-    assert found is None
+    assert await _member_places(sessions, surface_id) == []

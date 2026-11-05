@@ -175,7 +175,7 @@ you probably have it.
 ### Write & transfer
 
 ```bash
-lemma files mkdir /knowledge
+lemma files mkdir /knowledge                                  # optional: upload and write create missing folders
 lemma files upload ./report.md /me/reports/report.md          # documents auto-index
 lemma files upload ./data.csv /scratch/data.csv --no-search   # skip indexing
 lemma files write /me/notes/draft.md "first line"             # create/overwrite (or pipe via stdin)
@@ -188,16 +188,18 @@ lemma files rm /scratch/data.csv
 
 Indexing lags briefly after upload — `stat` shows status (`COMPLETED` =
 searchable, `NOT_REQUIRED` = stored but not an indexed document,
-`PENDING`/`PROCESSING` = still working, `FAILED` = will be retried,
-`FAILED_PERMANENT` = out of retries or unprocessable, and never re-driven; only a
-fresh upload of the content re-opens it).
+`PENDING`/`PROCESSING` = still working, including a failed attempt waiting to
+be retried, `FAILED_PERMANENT` = out of retries or unprocessable, with the
+reason in `last_processing_error`; nothing re-drives it on its own. New bytes,
+or `lemma files retry <path>` once the cause is fixed, re-opens it;
+uploading the same bytes again does not).
 
 ### Link to a file — pick by who opens it
 
 ```bash
 lemma files url /reports/summary.pdf                           # app_url (in-app, signed-in member) + short-lived download url
 lemma files share /reports/summary.pdf --ttl 3h --max-hits 50  # public, no-login, expiring + hit-capped
-lemma files shares                                            # what you have handed out
+lemma files shares                                            # your live links (--all adds expired/revoked)
 lemma files unshare CwbaUB9gWY6l                              # kill one now
 ```
 
@@ -273,14 +275,22 @@ lemma workflows runs submit-form <run-id> --data '{"approved": true}'  # complet
 lemma workflows runs cancel <run-id>                            # cancel a running/waiting run
 
 lemma schedules list
-lemma schedules pause <id> ; lemma schedules resume <id>
+lemma schedules create --name daily-digest --agent POD_DEFAULT --cron "0 9 * * 1-5" \
+  --timezone Europe/Berlin --instruction "..."   # cron is UTC without --timezone
+lemma schedules pause <id> ; lemma schedules resume <id>   # resume resets the failure count
+lemma schedules delete <name> --yes
 ```
 
+The create reply's `next_fire_at` (UTC) and `next_fire_at_local` (in the
+schedule's zone) say when it fires — read them instead of creating a test
+schedule and waiting.
+
 **`WAITING` on a run means a person, and only a person.** A run parked on an
-agent conversation, an async function, or a timer stays `RUNNING` — so `RUNNING`
+agent conversation, an async function, a decision, a timer, or its turn under
+the workflow's concurrency limit stays `RUNNING` — so `RUNNING`
 is not proof that anything is executing, and `WAITING` is not the general
 "blocked" state. `runs get` settles it via `active_wait`: `wait_type` is `HUMAN`,
-`AGENT`, `FUNCTION`, or `TIME`, alongside `node_id`, assignee, external
+`AGENT`, `FUNCTION`, `DECISION`, `TIME`, or `QUEUED`, alongside `node_id`, assignee, external
 reference, and the form schema for human waits. If a form wait is assigned to you
 (`runs waiting` lists them), `runs submit-form --data` with the form's fields
 completes it and advances the run. This is how you participate in human-agent
@@ -299,26 +309,18 @@ The CLI does not distinguish the two — `conversations get` reports `status` an
 `conversations approvals <id>` lists an outstanding `ask_user`/approval, and an
 empty list on a `WAITING` conversation means it is asleep.
 
-A **notification** is the third thing, and unlike the other two it comes looking for
-you: an agent or a workflow has asked *you* for something. They arrive wherever you
-already talk to the pod — Slack, Telegram, WhatsApp, email — and always leave a copy
-in your Lemma inbox, so nothing is only on a channel that can fail.
+A **question waiting on you** is the third thing, and unlike the other two it comes
+looking for you: an agent or a workflow has asked *you* for something. It is a line in
+your own channel in Lemma -- in your inbox as waiting on you -- and is carried on to
+wherever you already talk to the pod: Slack, Telegram, WhatsApp, email. Each line shows
+where it was delivered, or why it was not (`SKIPPED` when nothing could carry it -- it
+is still in your channel).
 
-Each carries two independent states, and reading them as one is the usual mistake.
-`status` is about you: `OPEN` (still owed), `RESPONDED`, `ACKNOWLEDGED` (seen and
-dismissed, or sent as a pure FYI), `EXPIRED` (nobody answered in 72h),
-`CANCELLED`. `delivery_status` is about the channel: `PENDING`, `DELIVERED`,
-`UNDELIVERABLE` when no chat app or mailbox could carry it — usually because you
-have never messaged the pod's bot — or `FAILED` when a channel *was* chosen and
-the send raised. Only `FAILED` is a real delivery fault. `UNDELIVERABLE` is not:
-the notification exists and the inbox has it.
-
-Answer it in the app, or just reply on the surface it arrived on — the agent handling
+Answer it on the line, or just reply on the surface it arrived on -- the agent handling
 that thread records your answer either way, and the asker sees the same result. A
-notification with `responds_through_action` is a workflow form: it is answered by
-`runs submit-form`, which validates against the node's schema, not by free text.
-It resolves exactly once: a second answer, from another device or after an
-expiry swept it, is refused rather than overwriting the first.
+workflow's form is answered with its fields, validated against the node's schema. A
+question is answered exactly once: a second answer is refused rather than overwriting
+the first.
 
 ## Agents and chat
 
@@ -333,7 +335,7 @@ lemma conversations list --parent-id <conversation-id>              # what a sub
 lemma conversations messages <conversation-id>
 lemma conversations send <conversation-id> "Continue with the next batch"
 lemma conversations approvals <conversation-id>                     # gated tool calls / ask_user awaiting a decision
-lemma conversations approve <approval-id> -c <conversation-id>      # --deny to reject; --session for the whole run
+lemma conversations approve <approval-id> -c <conversation-id>      # --deny to reject; --session allows that kind of call for the rest of the conversation
 ```
 
 `lemma chat` takes an agent name, a message, or both, and tells them apart by
@@ -352,27 +354,96 @@ your own access, never added to it (see "Missing access has three shapes").
 ### An agent can come and find a person
 
 With the `MESSAGING` toolset an agent reaches a pod member who is **not** in the
-conversation — that is where the notifications above come from. It is not a
-paused wait: `message_user` returns immediately, the agent finishes its turn, and
-it is given a *fresh* turn in the same conversation once the last person answers,
-where `check_messages` reads the replies. Nothing sleeps and nothing polls.
+conversation, and reads the pod's channels. It is not a paused wait: `channel_post`
+returns immediately, the agent finishes its turn, and it is given a *fresh* turn in
+the same conversation once the last person answers, where
+`channel_read(asked_by_me=True)` shows what they said. Nothing sleeps and nothing
+polls.
 
 - `list_pod_members` — resolve a name to an id or exact email (a name will not
-  resolve on its own), and read `reachable_on`: the channels that can actually
+  resolve on its own), and read `reachable_on`: the platforms that can actually
   carry a message to that person right now.
-- `message_user` — `to`, a Markdown `message`, an optional `background_instruction`
-  (never shown to them; it tells the agent handling their reply what counts as an
-  answer), an optional `title`, and an optional `channel` — `email`, `slack`,
-  `teams`, `telegram`, `whatsapp`. Omit `channel` unless you have a reason: the
-  default reaches them where they last spoke. A named channel is honored or
-  refused, never quietly swapped, so check `reachable_on` first. Keep the returned
-  `notification_id`.
-- `check_messages` — status by notification id. `RESPONDED` is the only status
-  that means somebody answered; call it when a turn opens saying replies landed,
-  not in a loop.
+- `channel_post` — `text` (Markdown) and either `to` (a person: a line in their own
+  channel in Lemma, carried on to where they last spoke) or `channel_id` (a channel).
+  `wants_answer` makes it a question waiting on them in their inbox. An optional
+  `platform` — `email`, `slack`, `teams`, `telegram`, `whatsapp` — is honored or
+  refused, never quietly swapped, so check `reachable_on` first.
+- `channel_read` — a channel's latest lines, or with `asked_by_me` the questions this
+  conversation asked and their answers; call it when a turn opens saying they
+  answered, not in a loop. `channel_list` and `channel_search` find channels and lines.
 
 To answer the person you are *already* talking to, just reply — `ask_user` is for
-a question that must block this turn, and neither is `message_user`.
+a question that must block this turn, and neither is `channel_post`.
+
+## Channels — where the pod talks
+
+A **channel** is one shared timeline: your own channel with the pod (`DIRECT`), a
+contact's (`CONTACT`), or a group (`GROUP`) — made in Lemma, or mirrored from a
+WhatsApp, Telegram, Slack or Teams group or an email thread. Lines are numbered per
+channel (`seq`); pages take the previous page's `next_cursor`, and a channel's lines
+page by `--before-seq`.
+
+```bash
+lemma channels inbox                                     # what is new for you, mentions, questions waiting on you
+lemma channels list --joined                             # --kind DIRECT|CONTACT|GROUP, --assignee me, --status open
+lemma channels mine                                      # your own channel with the pod
+lemma channels messages list <channel-id>                # newest lines; --before-seq to page back
+lemma channels messages post <channel-id> "Shipped."     # --thread <line>, --members-only for a note never sent outside
+lemma channels messages answer <channel-id> <line-id> --choice Yes   # --text, or --decision for an approval
+lemma channels read <channel-id>                         # mark read up to the newest line
+lemma channels search "refund policy"                    # every word must match, in the channels you see
+lemma channels tell priya@acme.com "The Q3 report is in /reports."   # a line in their own channel
+lemma channels notify <channel-id> MENTIONS              # ALL | MENTIONS | NONE; --via slack, --mute-until
+lemma channels join <channel-id>                         # a public group or a contact's channel (`leave` to go)
+lemma channels create "Launch" --private --member <user-id> --agent <agent-id>:EVERY_LINE
+lemma channels update <channel-id> --assignee me         # a contact's channel: --status, --assignee none
+lemma channels deliveries list <channel-id> <line-id>    # where a line went outside, or why it did not
+```
+
+`tell` takes a pod member id, user id or email (`pod.channels.notify(to, text)` in the
+Python SDK); the person hears of it wherever they last talked to the pod. A private group
+is seen only by its members; a pod admin or editor can join one on request, and that is
+recorded. Who sees a contact's channel, and who may write in it, is the pod's
+`contact.read` / `contact.message`. The SDK mirrors the CLI: `pod.channels` in Python,
+`client.channels` in TypeScript.
+
+## Surfaces — the pod is already reachable
+
+A **surface** is one pod agent exposed where people already are: Slack, Teams,
+Telegram, WhatsApp, or **email**. They are plumbing the pod already has, not
+something to stand up from scratch — and *"set this pod up to send email"* sounds
+like it wants a mailbox, which is the mistake to avoid.
+
+**Every agent is minted an email surface when it is created**, the pod's own
+assistant included. Find and configure that surface instead of making one:
+
+```bash
+lemma surfaces list                       # what the pod answers on, with status
+lemma surfaces get resend-assistant       # surface_identity_email — the pod's own address
+lemma surfaces setup resend-assistant     # anything still outstanding (nothing, for email)
+lemma surfaces enable resend-assistant    # on; disable = off, delete = gone entirely
+```
+
+Names are derived, not chosen: a surface defaults to the lowercased platform
+(`slack`, `resend`), and an email surface is named for its agent —
+`resend-<agent>`, and `resend-assistant` for the pod's own. A pod may hold
+several surfaces of one platform (a mailbox per agent), so list before you name
+one. Only `ACTIVE` answers inbound, and `lemma surfaces setup <name>` says what
+is still missing.
+
+Two different things get called "sending email", and a request usually means one:
+
+- **As the pod** — `lemma surfaces upsert resend-assistant --data '{"config":
+  {"send_policy": {"allow_send": true}}}'` exposes that surface's own
+  `surface_send_message` tool, so its agent can send from the pod's address
+  mid-task. No account to connect and no address to create.
+- **As the person** — a **connector** account (Gmail, Outlook) sends as whoever
+  connected it (*Connectors*, below). A different identity, and never a stand-in
+  for the pod having an address of its own.
+
+`upsert` is also the edit path for a surface that exists: only the fields you
+pass change. Creating a surface, or moving one to another agent, is *structure* —
+the `lemma-builder` skill's job (`lemma-builder/references/surfaces.md`).
 
 ## Connectors
 
@@ -382,46 +453,70 @@ Two ways in, and which one you have depends on how the agent was granted:
   are *deferred*: they are not in your prompt prefix, so reach them with
   `search_tools` first, then `search_connector_operations` and
   `run_connector_operation`. Prefer this when you have it — no shell involved.
-  (`CONNECTORS` is not alone behind `search_tools`: `POD`, `SUBAGENTS`,
-  `MESSAGING`, `WAIT` and `BROWSER` are deferred the same way. Not seeing a
+  (`CONNECTORS` is not alone behind `search_tools`: `SUBAGENTS`, `MESSAGING`,
+  `WAIT`, `BROWSER` and `SPEECH` are deferred the same way; `POD` is not. Not seeing a
   tool in your prefix is not the same as not having it — go looking before
   concluding you cannot do something.)
 - **The CLI** (`lemma connectors …`, needs the `WORKSPACE_CLI` toolset) — same
   operations through a sandbox round trip. Use it when you are driving a shell
   anyway, or when you need the discovery views below.
 
-Either way the authorization is identical: a `connector:<name>:use` grant per
-app, executed through the invoking user's connected account. Having the toolset
-is not having access to any particular app.
+Either way the authorization is identical: a `connector:<slug>:use` grant per
+pod connector, and the call runs as the account that connector picks — the
+invoking person's own (per-member) or the one shared with the pod (shared).
+Having the toolset is not having access to any particular app.
 
-**Neither way creates a connector.** The `CONNECTORS` tools are execution-only —
-four of them, all for finding and running operations on installs that already
-exist. Reaching an app nobody has connected yet means the CLI, and it means
-asking a person for the credential at the end: the catalog has generic
-`openapi` / `mcp` / `sql` entries that become any API, MCP server or Postgres
-database you point them at. The `lemma-builder` skill's `connectors.md` has the
-commands, under *Custom connectors* and *An agent setting a connector up for
-itself*.
+**Nothing has to be set up before the first call.** Name the app and run the
+operation — one call:
+
+- a pod connector by its slug (`gmail`, `support-inbox`);
+- one of your person's own apps by its installation name — the first run adds
+  it to the pod as their own account, and a refused call adds nothing;
+- a catalog id (`gmail`, `notion`) nobody has connected yet — the answer is
+  `CONNECTION_REQUIRED` with a `connect_url`. Hand the person that link as it
+  is (it opens Lemma's own page for connecting it, installing the app for the
+  organization on the way when they may) and run the call again once they say
+  they are done. `connect_connector` gives the same link when the person asks
+  to connect something. Never describe menus instead: the link is the
+  instruction. `CONNECTOR_NOT_INSTALLED` means the person may not install it;
+  pass on who can, as the error says.
+
+So a first-time operation is one call (two if you search for the operation
+first) plus, if nothing is connected, one click for the person; a repeat is one
+call. Describe connectors as `list_connectors` reports them — `your_account`
+says whether the person has connected a per-member one — and never call one
+connected or working until a call through it has succeeded.
+
+Apps outside the catalog — any API, MCP server or Postgres database — are
+added with the CLI and a credential from a person: the catalog has generic
+`openapi` / `mcp` / `sql` entries for them. The `lemma-builder` skill's
+`connectors.md` has the commands, under *Custom connectors* and *An agent
+setting a connector up for itself*.
 
 ### As direct tools
 
-Once `search_tools` has surfaced them: leave `auth_config` unset and search by
-what you want to do — the search spans every installed connector and each hit
-names the `auth_config` to run it against, so you never have to guess which
-install does email:
+Once `search_tools` has surfaced them: leave `connector` unset and search by
+what you want to do — the search spans every pod connector you may use and each
+hit names the `connector` (its slug) to run it through, so you never have to
+guess which connector does email:
 
 ```text
 search_connector_operations {"query": "send an email"}
-  -> [{auth_config: "workspace-gmail", operation: "gmail_send_email", relevance_score: …}, …]
+  -> [{connector: "gmail", operation: "gmail_send_email", relevance_score: …}, …]
 
-run_connector_operation {"auth_config": "workspace-gmail",
+run_connector_operation {"connector": "gmail",
                          "operation": "gmail_send_email",
-                         "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "…"}}
+                         "payload": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "…"}}
 ```
+
+There is no account argument: the pod connector decides whose account the call
+runs as. A refusal comes back as data naming its remedy — `CONNECTION_REQUIRED`
+or `REAUTH_REQUIRED` with a `connect_url` to hand to the person,
+`CONNECTOR_NEEDS_ACCOUNT` when a shared connector has no shared account.
 
 Wrong arguments come back as `invalid_arguments` **with the operation's
 input_schema attached** — correct and retry, don't go fetch the schema
-separately. Pass `auth_config` on search only to narrow to one install;
+separately. Pass `connector` on search only to narrow to one connector;
 `describe_connector_operation` only when you want the full schema up front;
 `output_path` on run to land a file result in the pod.
 
@@ -431,8 +526,8 @@ Wherever an operation's schema takes a file — a Gmail attachment, a Drive or
 Slack upload, a multipart field — pass a **pod file**, never file bytes:
 
 ```text
-run_connector_operation {"auth_config": "workspace-gmail", "operation": "GMAIL_SEND_EMAIL",
-  "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Q3", "body": "Attached.",
+run_connector_operation {"connector": "gmail", "operation": "GMAIL_SEND_EMAIL",
+  "payload": {"recipient_email": "anukul@lemma.work", "subject": "Q3", "body": "Attached.",
                 "attachment": {"pod_path": "/me/reports/q3.pdf"}}}
 ```
 
@@ -449,7 +544,8 @@ building MIME for `messages_send`.
 ### From the CLI
 
 Third-party connector operations — **`run` does the whole thing in one call**:
-it resolves the connector, picks the operation, and executes. Still never guess a
+it picks the operation on one of the pod's connectors (or your own app, or a
+catalog id — see above) and executes. Still never guess a
 payload; let `--dry-run` hand you the schema.
 
 ```bash
@@ -464,12 +560,16 @@ lemma connectors run gmail GMAIL_SEND_EMAIL \
 `--attach FIELD=PATH` puts a pod file in a file argument (repeat it for a
 list). `@./local.pdf` uploads a local file to `/me/connector-uploads/` first.
 
-The first argument is the **connector id** you already know from the task
-(`gmail`, `slack`); it resolves to that connector's install. The second is an
-operation id, or plain English — the resolved id is printed so you can name it
-exactly next time. `--dry-run`, or simply omitting `--data` on an operation that
-needs input, prints the input schema instead of failing. `--account` accepts an
-account id or the connected email. `--metadata-only` strips large HTML body
+The first argument is the **pod connector's slug** (`lemma connectors pod-list`
+shows them), your own installation's name, or a catalog id; `--pod` runs it in
+another pod. The connector decides whose account it runs as — yours for a
+per-member connector, the shared one for a shared connector — so there is no
+account to pass. A refusal names its remedy: `CONNECTION_REQUIRED` /
+`REAUTH_REQUIRED` come with a `connect_url` to hand to the person. The second
+argument is an operation id, or plain English — the resolved id is printed so
+you can name it exactly next time. `--dry-run`, or simply omitting `--data` on
+an operation that needs input, prints the input schema instead of failing.
+`--metadata-only` strips large HTML body
 fields from the response — reach for it when listing mail or documents, where
 the bodies are most of the payload and none of the answer. An operation that
 CHANGES data and was inferred from text rather than named is refused without
@@ -478,37 +578,44 @@ CHANGES data and was inferred from text rather than named is refused without
 When you want the wider picture rather than one call:
 
 ```bash
-lemma connectors overview             # installed connectors: auth-config name, kind, connected accounts
+lemma connectors overview             # org-level: every installation (auth config), kind, connected accounts
 lemma connectors status               # installed apps + your connected accounts
 lemma connectors describe gmail       # per-connector usage guide, per kind
                                       # (kinds: composio, http, sql, mcp)
-lemma connectors operations search "send email"                    # searches EVERY installed connector
-lemma connectors operations search gmail "send email" --limit 5    # scoped; hits include their input schema
+lemma connectors pod-operations gmail "send email"   # one pod connector (or app, or catalog id)
+lemma connectors connect-requests create gmail        # a sign-in link for the person (installs it if they may)
 ```
 
-Workloads execute operations via the invoking user's connected account
-(delegated) — they never touch raw credentials. If no account is connected, create
-a connect request and hand the link to the user:
-`lemma connectors connect-requests create gmail --auth-config-id <id>`.
+Workloads execute operations through the pod's connectors — they never touch raw
+credentials. `lemma connectors pod-list` shows each one's slug, mode and status.
+If a member has no account for a per-member connector, the refusal carries a
+`connect_url`: hand it to them.
 
 ## Contacts and form responses
 
 People outside the pod — **contacts** (known by the channel they wrote from) and
 anonymous web visitors — reach it through its bots, its web chat and tables opened
-to outside rows. There is no `lemma` CLI command for them yet; use the Python SDK:
+to outside rows. Each contact has a `CONTACT` channel: answer them there with
+`lemma channels messages post`, and write first with
+`lemma channels outreach <contact-id> <handle> "text"`. For the rest, use the Python SDK:
 
 ```python
-pod = Lemma().pod()
-pod.contacts.list()                        # who has written; handles say who vouched
-pod.contacts.follow_up(contact_id, "Your order shipped.")   # refused outside WhatsApp's 24h window or after an unsubscribe
+pod = Pod.from_env()
+pod.contacts.list()                        # who has written; page with the response's next_cursor
+pod.contacts.outreach(contact_id, handle="sam@example.com", text="It's back in stock.")
+                                           # email any time; WhatsApp only within 24h of their last message; never after a STOP
 pod.contacts.export(contact_id)            # their words and the bot's answers
 pod.tables.list_public_rows()              # tables taking rows from outside, and from whom
 ```
 
+A refused handle posts nothing and says why. The line goes out as a delivery, so
+`lemma channels deliveries list` shows whether it was sent.
+
 **Form responses are rows** of the opened table: read them like any records. To set
 up a new form, use `lemma-form`; to change who may answer, `pod.tables.open_public_rows`
 / `close_public_rows` (needs the right to change the table). Deleting a contact
-(`pod.contacts.delete`) also deletes their conversations — confirm with the person first.
+(`pod.contacts.delete`, pod admins only) also deletes their rows, handles and
+conversations — confirm with the person first.
 
 ## Workspace execution notes
 
@@ -553,7 +660,8 @@ up a new form, use `lemma-form`; to change who may answer, `pod.tables.open_publ
 - **Fresh upload not in search.** Indexing lag — `files stat` for status, retry
   shortly. `NOT_REQUIRED` means it isn't an indexed document (spreadsheets,
   presentations, images and email are stored but never searchable);
-  `FAILED_PERMANENT` means retrying will not help.
+  `FAILED_PERMANENT` will not retry by itself — read `last_processing_error`,
+  fix the cause, then `lemma files retry <path>`.
 - **A query's numbers look too round.** Check `truncated` on the `query run`
   payload before believing `total` — 1,000 rows exactly is usually the row cap,
   not the answer.

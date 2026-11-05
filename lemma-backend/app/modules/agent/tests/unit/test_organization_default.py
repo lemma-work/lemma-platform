@@ -11,12 +11,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-import httpx
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.organization_default import (
     ORGANIZATION_DEFAULT_KEY,
     can_be_organization_default,
@@ -99,6 +100,7 @@ def _harness() -> AgentRuntimeProfile:
         protocol=RuntimeProfileProtocol.AGENT_HOST,
         name="A coding agent",
         model_catalog=[_entry("agent-model")],
+        config={"harness_snapshot_revision": "rev-1"},
     )
 
 
@@ -122,11 +124,13 @@ class TestWhoCanBeTheDefault:
     )
     def test_nothing_else_can(self, profile: AgentRuntimeProfile) -> None:
         assert not can_be_organization_default(profile)
-        with pytest.raises(ValueError, match="organization-wide model provider"):
+        with pytest.raises(
+            RuntimeProfileValidationError, match="organization-wide model provider"
+        ):
             with_default_mark(profile, model_name=None)
 
     def test_a_model_the_provider_does_not_list_is_refused(self) -> None:
-        with pytest.raises(ValueError, match="does not offer"):
+        with pytest.raises(RuntimeProfileValidationError, match="does not offer"):
             with_default_mark(_provider("Alpha", "a-1"), model_name="a-9")
 
 
@@ -331,9 +335,9 @@ class TestTestingASavedProvider:
 
     async def test_a_refused_local_completion_names_the_server(self) -> None:
         def refuse() -> ModelResponse:
-            raise httpx.ConnectError(
+            raise httpx2.ConnectError(
                 "refused",
-                request=httpx.Request("POST", "http://127.0.0.1:1234/v1/chat"),
+                request=httpx2.Request("POST", "http://127.0.0.1:1234/v1/chat"),
             )
 
         result = await _check(_provider_that(answers=refuse), name="Studio")
@@ -341,7 +345,9 @@ class TestTestingASavedProvider:
         assert result.message == "LM Studio isn't running on this computer."
 
     async def test_a_coding_agent_is_not_tested_here(self) -> None:
-        with pytest.raises(ValueError, match="Only a model provider"):
+        with pytest.raises(
+            RuntimeProfileValidationError, match="Only a model provider"
+        ):
             await check_saved_provider_connection(
                 ResolvedAgentRuntime(
                     profile=_harness(),

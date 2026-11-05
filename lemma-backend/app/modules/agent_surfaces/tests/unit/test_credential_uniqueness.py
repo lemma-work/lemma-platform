@@ -172,7 +172,11 @@ async def test_a_second_agent_in_one_pod_may_also_have_a_mailbox():
 
     repository = _Repository(first)
 
-    await ensure_unique_org_credential_binding(second, surface_repository=repository)
+    allowed = await ensure_unique_org_credential_binding(
+        second, surface_repository=repository
+    )
+
+    assert allowed is None
 
 
 async def test_a_custom_credential_surface_is_not_subject_to_the_system_rule():
@@ -235,7 +239,7 @@ def _slack_surface(
     *,
     workspace_id: str | None = "T_ACME",
     bot_identity: str | None = "U_LEMMABOT",
-    account_id=None,
+    pod_connector_slug: str = "slack-bot",
 ) -> AgentSurfaceEntity:
     """A Slack surface as `SurfaceAccountBindingResolver` leaves one.
 
@@ -253,7 +257,7 @@ def _slack_surface(
         config=SurfaceConfig(),
         agent_id=pod_id,
         credential_mode=SurfaceCredentialMode.CUSTOM,
-        account_id=account_id or uuid4(),
+        pod_connector_slug=pod_connector_slug,
         external_workspace_id=workspace_id,
         surface_identity_id=bot_identity,
     )

@@ -19,33 +19,86 @@ from .runtime_models import (
 )
 
 
-class RuntimeOverloaded(RuntimeError):
-    pass
+class RuntimeOverloaded(TimeoutError):
+    """No worker came free before the invocation's deadline.
+
+    Raised only after waiting, never on first contact with a full budget: a
+    burst wider than the sandbox's workers used to fail its overflow instantly,
+    though those runs had done nothing at all. The function never started, so
+    the run is safe to retry, and the backend reports it in those terms. A
+    ``TimeoutError`` because the deadline is what actually ran out.
+    """
+
+
+class WorkerBudgetExhausted(RuntimeError):
+    """Every worker slot is reserved right now; the caller decides whether to wait."""
 
 
 class WorkerProtocolError(RuntimeError):
     pass
 
 
+_OVERLOADED_MESSAGE = (
+    "no function worker came free before the deadline; the function never started"
+)
+
+
 class WorkerBudget:
+    """The sandbox-wide ceiling on worker processes, and a way to wait for one.
+
+    ``reserve`` never blocks, because its caller has a cheaper option than
+    waiting -- closing another revision's idle worker -- and must try that
+    first. A caller that then has to wait snapshots ``generation`` *before* its
+    failed attempt and hands it to ``wait_for_capacity``, so a slot freed
+    between the attempt and the wait is not slept through.
+    """
+
     def __init__(self, maximum: int) -> None:
         if maximum < 1:
             raise ValueError("function runtime worker maximum must be positive")
         self.maximum = maximum
         self._reserved = 0
-        self._lock = asyncio.Lock()
+        self._generation = 0
+        self._changed = asyncio.Condition()
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     async def reserve(self) -> None:
-        async with self._lock:
+        async with self._changed:
             if self._reserved >= self.maximum:
-                raise RuntimeOverloaded(
+                raise WorkerBudgetExhausted(
                     "function runtime worker safety ceiling is exhausted"
                 )
             self._reserved += 1
 
     async def release(self) -> None:
-        async with self._lock:
+        async with self._changed:
             self._reserved = max(0, self._reserved - 1)
+            self._signal_locked()
+
+    async def worker_idle(self) -> None:
+        """A busy worker went idle: reusable by its revision, reclaimable by others."""
+        async with self._changed:
+            self._signal_locked()
+
+    async def wait_for_capacity(self, *, since: int, deadline_at: datetime) -> None:
+        remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            raise RuntimeOverloaded(_OVERLOADED_MESSAGE)
+        async with self._changed:
+            try:
+                await asyncio.wait_for(
+                    self._changed.wait_for(lambda: self._generation != since),
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                raise RuntimeOverloaded(_OVERLOADED_MESSAGE) from None
+
+    def _signal_locked(self) -> None:
+        self._generation += 1
+        self._changed.notify_all()
 
 
 class RevisionWorker:
@@ -244,10 +297,14 @@ class RevisionWorkerPool:
 
     async def release(self, worker: RevisionWorker) -> None:
         async with self._lock:
-            if worker in self._workers and worker.healthy:
+            reusable = worker in self._workers and worker.healthy
+            if reusable:
                 self._idle.append(worker)
-                return
-            self._workers.discard(worker)
+            else:
+                self._workers.discard(worker)
+        if reusable:
+            await self._budget.worker_idle()
+            return
         await worker.close()
 
     async def discard(self, worker: RevisionWorker) -> None:
@@ -414,12 +471,20 @@ class RevisionWorkerRegistry:
         *,
         deadline_at: datetime,
     ) -> RevisionWorker:
+        # Reclaiming another revision's idle worker is immediate, so it comes
+        # first. Only when every worker is busy does the invocation wait -- for
+        # one to go idle or close, or for its own deadline.
         while True:
+            observed = self._budget.generation
             try:
                 return await pool.acquire(deadline_at=deadline_at)
-            except RuntimeOverloaded:
-                if not await self._reclaim_one_idle_worker(excluding=pool):
-                    raise
+            except WorkerBudgetExhausted:
+                if await self._reclaim_one_idle_worker(excluding=pool):
+                    continue
+                await self._budget.wait_for_capacity(
+                    since=observed,
+                    deadline_at=deadline_at,
+                )
 
     async def _reclaim_one_idle_worker(
         self,

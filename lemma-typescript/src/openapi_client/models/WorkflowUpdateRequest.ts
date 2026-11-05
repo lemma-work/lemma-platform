@@ -18,6 +18,10 @@ export type WorkflowUpdateRequest = {
      */
     icon_url?: (string | null);
     /**
+     * How many runs of this workflow may be in progress at once. A run started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run finishes. Null means no limit. Send null to remove it.
+     */
+    max_concurrent_runs?: (number | null);
+    /**
      * Updated workflow schedule ownership mode.
      */
     mode?: (WorkflowMode | null);

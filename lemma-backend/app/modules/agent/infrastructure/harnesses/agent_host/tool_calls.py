@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.modules.agent.domain.agent_host import AgentHostToolSource
 from app.modules.agent.domain.value_objects import JsonObject
 
 
@@ -29,14 +30,15 @@ from app.modules.agent.domain.value_objects import JsonObject
 class OpenToolCall:
     """What a result needs to know about the call it closes.
 
-    ``input`` is kept raw -- unbounded and untouched -- because a structured
-    final answer can ride in the arguments rather than the output, and bounding
-    would turn it into something that looks structured without being so.
+    ``source`` is whose tool it was, as the host reported it: only Lemma's own
+    ``final_answer`` may set the run's answer (``is_lemma_final_answer``).
+    ``None`` for a call this side opened itself, such as a permission card.
     """
 
     name: str
     input: object = None
     metadata: JsonObject = field(default_factory=dict)
+    source: AgentHostToolSource | None = None
 
 
 @dataclass(slots=True)

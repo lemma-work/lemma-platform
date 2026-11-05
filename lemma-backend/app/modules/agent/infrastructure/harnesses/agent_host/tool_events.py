@@ -41,6 +41,9 @@ from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
     bounded_tool_value,
     unbounded_tool_value,
 )
+from app.modules.agent.tools.final_answer.final_answer_toolset import (
+    FINAL_ANSWER_TOOL_NAME,
+)
 
 logger = get_logger(__name__)
 
@@ -123,7 +126,9 @@ def open_tool_call(
     ):
         if value:
             call_metadata[key] = value
-    return OpenToolCall(name=tool.name, input=call.input, metadata=call_metadata)
+    return OpenToolCall(
+        name=tool.name, input=call.input, metadata=call_metadata, source=tool.source
+    )
 
 
 def tool_call_events(
@@ -232,10 +237,24 @@ def tool_result_value(result: AgentHostToolResultPayload) -> JsonValue:
     return failed
 
 
-def final_answer_in(output: object, tool_input: object) -> JsonObject | None:
-    """A final-answer record in a call's output or, failing that, its input.
+def is_lemma_final_answer(call: OpenToolCall) -> bool:
+    """Whether this call is Lemma's own ``final_answer`` tool.
 
-    Read from the RAW values, before bounding: ``bounded_tool_value`` truncates
+    The only call allowed to set the run's answer. A marked record anywhere
+    else -- a fetched web page, a ``cat`` of a file, a third-party MCP result,
+    or the arguments of any call -- is content the agent read or wrote, and
+    adopting it would let whoever controls that content rewrite what the
+    person and any workflow downstream see as the result.
+    """
+    return call.source is AgentHostToolSource.LEMMA and (
+        call.name == FINAL_ANSWER_TOOL_NAME
+    )
+
+
+def final_answer_in(output: object) -> JsonObject | None:
+    """A final-answer record in the output of Lemma's ``final_answer`` call.
+
+    Read from the RAW value, before bounding: ``bounded_tool_value`` truncates
     long strings and replaces anything past its depth limit with a placeholder,
     which would turn a valid structured answer into something that still looks
     structured but is not.
@@ -244,6 +263,11 @@ def final_answer_in(output: object, tool_input: object) -> JsonObject | None:
     ``structuredContent``, or a single text block that is a JSON object) and
     passes the content blocks through when it cannot. The final-answer tool
     stamps its marker into both halves, so the text blocks are read too.
+
+    Never the call's arguments: the tool stamps the marker into what it
+    returns, and arguments are only what the agent asked for. An adapter that
+    reports no output leaves the answer to the tool's own record
+    (``infrastructure/agent_host/final_answer``).
     """
     record = final_answer_record(output)
     if record is None and isinstance(output, list):
@@ -252,4 +276,4 @@ def final_answer_in(output: object, tool_input: object) -> JsonObject | None:
                 record = final_answer_record(block.get("text"))
                 if record is not None:
                     break
-    return record or final_answer_record(tool_input)
+    return record

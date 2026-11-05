@@ -9,6 +9,7 @@ awake.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from uuid import UUID
 
 from pydantic import HttpUrl
@@ -21,15 +22,22 @@ from app.modules.agent.domain.organization_default import (
     is_marked_default,
     without_default_mark,
 )
+from app.modules.agent.domain.errors import (
+    RuntimeProfileNotFoundError,
+    RuntimeProfileValidationError,
+)
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     AnthropicCompatibleRuntimeConfig,
     HarnessRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
+    RuntimeModelCatalogEntry,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    declared_reasoning_models,
+    with_reasoning_declared,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.services.runtime_profile_service import (
@@ -39,9 +47,12 @@ from app.modules.agent.services.runtime_profile_creation import (
     normalize_profile_name,
 )
 from app.modules.agent.services.runtime_provider_patch import (
+    KeyMustBeReenteredError,
+    ProviderProfilePatch,
     resolve_catalog_names,
     resolve_provider_patch,
 )
+from app.core.log.log import get_logger
 from app.modules.agent.services.runtime_system_profiles import (
     agent_host_model_catalog,
 )
@@ -50,29 +61,78 @@ from app.modules.agent.services.runtime_system_profiles import (
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.services import runtime_provider_discovery as discovery
 
+logger = get_logger(__name__)
+
 
 def _harness_config(profile: AgentRuntimeProfile) -> HarnessRuntimeConfig:
-    """The profile's harness config, tolerating a legacy raw-dict row."""
-    if isinstance(profile.config, HarnessRuntimeConfig):
-        return profile.config
-    if isinstance(profile.config, dict):
-        return HarnessRuntimeConfig.model_validate(profile.config)
-    raise ValueError("This runtime profile has no Agent Host configuration")
+    # The profile validated its config against its protocol when it was read,
+    # so for an Agent Host profile this is always the harness shape.
+    if not isinstance(profile.config, HarnessRuntimeConfig):
+        raise RuntimeProfileValidationError(
+            "This runtime profile has no Agent Host configuration"
+        )
+    return profile.config
 
 
 def _provider_config(
     profile: AgentRuntimeProfile,
 ) -> OpenAICompatibleRuntimeConfig | AnthropicCompatibleRuntimeConfig:
-    if isinstance(
+    if not isinstance(
         profile.config,
         (OpenAICompatibleRuntimeConfig, AnthropicCompatibleRuntimeConfig),
     ):
-        return profile.config
-    if isinstance(profile.config, dict):
-        if profile.protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE:
-            return AnthropicCompatibleRuntimeConfig.model_validate(profile.config)
-        return OpenAICompatibleRuntimeConfig.model_validate(profile.config)
-    raise ValueError("This runtime profile has no provider configuration")
+        raise RuntimeProfileValidationError(
+            "This runtime profile has no provider configuration"
+        )
+    return profile.config
+
+
+def _with_reasoning(
+    profile: AgentRuntimeProfile,
+    catalog: list[RuntimeModelCatalogEntry],
+    requested: list[str] | UnsetType,
+) -> list[RuntimeModelCatalogEntry]:
+    """The catalog with its reasoning models marked.
+
+    Omitted keeps what was declared before, a model refresh included: the
+    provider's listing never says which models reason, so rebuilding the
+    catalog from it would otherwise forget them.
+    """
+    names = (
+        declared_reasoning_models(profile.model_catalog)
+        if isinstance(requested, UnsetType)
+        else set(requested)
+    )
+    return with_reasoning_declared(catalog, names)
+
+
+def _audited_patch(
+    settle: Callable[[], ProviderProfilePatch],
+    *,
+    profile_id: str,
+    organization_id: UUID,
+    user_id: UUID,
+) -> ProviderProfilePatch:
+    """Settle an edit, and write down who moved a provider's address -- or
+    tried to move it with the stored key still attached."""
+    try:
+        patch = settle()
+    except KeyMustBeReenteredError:
+        logger.warning(
+            "agent.runtime_profile.provider_origin_change.refused",
+            profile_id=profile_id,
+            organization_id=str(organization_id),
+            user_id=str(user_id),
+        )
+        raise
+    if patch.origin_changed:
+        logger.info(
+            "agent.runtime_profile.provider_origin.changed",
+            profile_id=profile_id,
+            organization_id=str(organization_id),
+            user_id=str(user_id),
+        )
+    return patch
 
 
 class AgentRuntimeProfileEditor:
@@ -110,9 +170,11 @@ class AgentRuntimeProfileEditor:
             include_disabled=True,
         )
         if profile is None:
-            raise ValueError("Runtime profile is not available")
+            raise RuntimeProfileNotFoundError()
         if profile.scope is RuntimeProfileScope.SYSTEM:
-            raise ValueError("The built-in Lemma profile cannot be edited")
+            raise RuntimeProfileValidationError(
+                "The built-in Lemma profile cannot be edited"
+            )
         return profile
 
     async def update_agent_host_profile(
@@ -132,14 +194,15 @@ class AgentRuntimeProfileEditor:
         A rename must work while the paired computer is asleep, so only a change
         that touches the harness configuration requires it to be live.
         """
-        assert self._service.repository is not None or True
         profile = await self._load_editable(
             profile_id=profile_id,
             organization_id=organization_id,
             user_id=user_id,
         )
         if profile.protocol is not RuntimeProfileProtocol.AGENT_HOST:
-            raise ValueError("This runtime profile is not an Agent Host profile")
+            raise RuntimeProfileValidationError(
+                "This runtime profile is not an Agent Host profile"
+            )
         assert self._service.repository is not None
 
         changes: dict[str, object] = {}
@@ -156,7 +219,9 @@ class AgentRuntimeProfileEditor:
             if self._service.host_repository is None:
                 raise RuntimeError("Agent Host repository is required")
             if profile.harness_id is None:
-                raise ValueError("This runtime profile is not bound to a harness")
+                raise RuntimeProfileValidationError(
+                    "This runtime profile is not bound to a harness"
+                )
             harness = await self._service.require_ready_harness(
                 harness_id=profile.harness_id,
                 organization_id=organization_id,
@@ -174,10 +239,6 @@ class AgentRuntimeProfileEditor:
                 stored.config_selections
                 if isinstance(config_selections, UnsetType)
                 else config_selections
-            )
-            selections = validate_agent_host_selections(
-                config_options=config_options,
-                selections=selections or {},
             )
 
             catalog = agent_host_model_catalog(
@@ -203,6 +264,13 @@ class AgentRuntimeProfileEditor:
                     model_name=default_model_name,
                 )
 
+            # After the model is settled: the options a selection is checked
+            # against are the ones that model offers.
+            selections = validate_agent_host_selections(
+                config_options=config_options,
+                selections=selections or {},
+                model_name=selected_model,
+            )
             changes["default_model_name"] = selected_model
             changes["model_catalog"] = catalog
             changes["config"] = HarnessRuntimeConfig(
@@ -219,9 +287,12 @@ class AgentRuntimeProfileEditor:
             )
         elif not isinstance(host_wait_timeout_seconds, UnsetType):
             stored = _harness_config(profile)
-            changes["config"] = stored.model_copy(
-                update={"host_wait_timeout_seconds": host_wait_timeout_seconds}
-            )
+            # Validated, not ``model_copy``: a copy skips the ``ge=1`` bound
+            # and a None slipped through it once.
+            changes["config"] = {
+                **stored.model_dump(),
+                "host_wait_timeout_seconds": host_wait_timeout_seconds,
+            }
 
         if not changes:
             return profile
@@ -241,6 +312,7 @@ class AgentRuntimeProfileEditor:
         model_names: list[str] | UnsetType = UNSET,
         headers: dict[str, str] | UnsetType = UNSET,
         model_settings: dict[str, object] | UnsetType = UNSET,
+        reasoning_model_names: list[str] | UnsetType = UNSET,
         refresh_models: bool = False,
     ) -> AgentRuntimeProfile:
         return await self._update_provider(
@@ -256,6 +328,7 @@ class AgentRuntimeProfileEditor:
             model_names=model_names,
             headers=headers,
             model_settings=model_settings,
+            reasoning_model_names=reasoning_model_names,
             refresh_models=refresh_models,
         )
 
@@ -273,6 +346,7 @@ class AgentRuntimeProfileEditor:
         model_names: list[str] | UnsetType = UNSET,
         headers: dict[str, str] | UnsetType = UNSET,
         model_settings: dict[str, object] | UnsetType = UNSET,
+        reasoning_model_names: list[str] | UnsetType = UNSET,
         refresh_models: bool = False,
     ) -> AgentRuntimeProfile:
         return await self._update_provider(
@@ -288,6 +362,7 @@ class AgentRuntimeProfileEditor:
             model_names=model_names,
             headers=headers,
             model_settings=model_settings,
+            reasoning_model_names=reasoning_model_names,
             refresh_models=refresh_models,
         )
 
@@ -306,6 +381,7 @@ class AgentRuntimeProfileEditor:
         model_names: list[str] | UnsetType,
         headers: dict[str, str] | UnsetType,
         model_settings: dict[str, object] | UnsetType,
+        reasoning_model_names: list[str] | UnsetType,
         refresh_models: bool,
     ) -> AgentRuntimeProfile:
         profile = await self._load_editable(
@@ -314,22 +390,29 @@ class AgentRuntimeProfileEditor:
             user_id=user_id,
         )
         if profile.protocol is not protocol:
-            raise ValueError("This runtime profile has a different provider protocol")
+            raise RuntimeProfileValidationError(
+                "This runtime profile has a different provider protocol"
+            )
         assert self._service.repository is not None
         is_anthropic = protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
         stored = _provider_config(profile)
-        patch = resolve_provider_patch(
-            profile,
-            stored,
-            is_anthropic=is_anthropic,
-            name=name,
-            description=description,
-            base_url=base_url,
-            api_key=api_key,
-            model_names=model_names,
-            headers=headers,
-            model_settings=model_settings,
-            refresh_models=refresh_models,
+        patch = _audited_patch(
+            lambda: resolve_provider_patch(
+                profile,
+                stored,
+                is_anthropic=is_anthropic,
+                name=name,
+                description=description,
+                base_url=base_url,
+                api_key=api_key,
+                model_names=model_names,
+                headers=headers,
+                model_settings=model_settings,
+                refresh_models=refresh_models,
+            ),
+            profile_id=profile.id,
+            organization_id=organization_id,
+            user_id=user_id,
         )
         changes = patch.changes
 
@@ -353,6 +436,9 @@ class AgentRuntimeProfileEditor:
             }
         else:
             catalog = list(profile.model_catalog)
+        catalog = _with_reasoning(profile, catalog, reasoning_model_names)
+        if catalog != list(profile.model_catalog):
+            changes["model_catalog"] = catalog
 
         catalog_names = {entry.name for entry in catalog}
         if not isinstance(default_model_name, UnsetType):
@@ -380,7 +466,9 @@ class AgentRuntimeProfileEditor:
                 if base_url is None:
                     # `_next_base_url` already refuses to clear it here; this is
                     # the same rule stated where the model actually needs it.
-                    raise ValueError("An OpenAI-compatible profile requires a base URL")
+                    raise RuntimeProfileValidationError(
+                        "An OpenAI-compatible profile requires a base URL"
+                    )
                 changes["config"] = OpenAICompatibleRuntimeConfig(
                     base_url=base_url,
                     headers=patch.headers,
@@ -419,7 +507,9 @@ class AgentRuntimeProfileEditor:
                     )
                 )
         except discovery.ProviderKeyRejectedError as exc:
-            raise ValueError(discovery.key_rejected_message(profile.name)) from exc
+            raise RuntimeProfileValidationError(
+                discovery.key_rejected_message(profile.name)
+            ) from exc
         return discovery._provider_model_catalog(
             discovered_models=discovered,
             fallback_model_names=resolve_catalog_names(
@@ -493,5 +583,5 @@ class AgentRuntimeProfileEditor:
             status=status,
         )
         if updated is None:
-            raise ValueError("Runtime profile is not available")
+            raise RuntimeProfileNotFoundError()
         return updated

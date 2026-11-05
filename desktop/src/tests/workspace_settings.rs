@@ -567,17 +567,17 @@ fn the_settings_view_is_an_allowlist() {
 fn the_menu_opens_settings_in_the_workspace_only_when_it_can_answer() {
     let page = url("http://app.lemma.localhost:52413/t");
     assert_eq!(
-        settings_destination("local", true, false, Some(&page), LOCAL, None),
+        settings_destination("local", true, false, Some(&page), LOCAL, None, "this-mac"),
         SettingsDestination::Workspace,
     );
     // Starting, broken, hosted, on the splash, or moved to a shared origin:
     // Local settings, which is the page that exists for those cases.
     assert_eq!(
-        settings_destination("local", false, false, Some(&page), LOCAL, None),
+        settings_destination("local", false, false, Some(&page), LOCAL, None, "this-mac"),
         SettingsDestination::Native,
     );
     assert_eq!(
-        settings_destination("local", true, true, Some(&page), LOCAL, None),
+        settings_destination("local", true, true, Some(&page), LOCAL, None, "this-mac"),
         SettingsDestination::Native,
     );
     assert_eq!(
@@ -587,7 +587,8 @@ fn the_menu_opens_settings_in_the_workspace_only_when_it_can_answer() {
             false,
             Some(&url("https://lemma.work/")),
             "https://lemma.work/",
-            None
+            None,
+            "this-mac",
         ),
         SettingsDestination::Native,
     );
@@ -598,17 +599,73 @@ fn the_menu_opens_settings_in_the_workspace_only_when_it_can_answer() {
             false,
             Some(&url("tauri://localhost/index.html")),
             LOCAL,
-            None
+            None,
+            "this-mac",
         ),
         SettingsDestination::Native,
     );
     let shared = "https://example.ngrok.app/";
     assert_eq!(
-        settings_destination("local", true, false, Some(&url(shared)), shared, None),
+        settings_destination(
+            "local",
+            true,
+            false,
+            Some(&url(shared)),
+            shared,
+            None,
+            "this-mac"
+        ),
         SettingsDestination::Native,
     );
     assert_eq!(
-        settings_destination("local", true, false, None, LOCAL, None),
+        settings_destination("local", true, false, None, LOCAL, None, "this-mac"),
+        SettingsDestination::Native,
+    );
+}
+
+#[test]
+fn a_hosted_workspace_takes_the_settings_that_are_not_about_this_mac() {
+    let hosted = "https://lemma.work/";
+    let page = url("https://lemma.work/t/pod/home");
+    assert_eq!(
+        settings_destination("hosted", false, false, Some(&page), hosted, None, "models"),
+        SettingsDestination::Workspace,
+    );
+    // This Mac is a local install's, and sign-in cannot take a dialog.
+    assert_eq!(
+        settings_destination(
+            "hosted",
+            false,
+            false,
+            Some(&page),
+            hosted,
+            None,
+            "this-mac"
+        ),
+        SettingsDestination::Native,
+    );
+    assert_eq!(
+        settings_destination(
+            "hosted",
+            false,
+            false,
+            Some(&url("https://lemma.work/auth/desktop")),
+            hosted,
+            None,
+            "models"
+        ),
+        SettingsDestination::Native,
+    );
+    assert_eq!(
+        settings_destination(
+            "hosted",
+            false,
+            false,
+            Some(&url("https://elsewhere.example/")),
+            hosted,
+            None,
+            "models"
+        ),
         SettingsDestination::Native,
     );
 }
@@ -632,7 +689,10 @@ fn the_settings_menu_items_go_through_the_fallback() {
     assert!(menus.contains(
         "\"control\" => {\n            open_settings(&app, \"this-mac\", \"overview\");"
     ));
-    assert!(menus.contains("open_settings(&app, \"this-mac-sharing\", \"overview\")"));
+    // Every arm answers an item the menus build: `control-ai` and
+    // `control-sharing` outlived theirs.
+    assert!(!menus.contains("\"control-ai\""));
+    assert!(!menus.contains("\"control-sharing\""));
 }
 
 #[test]

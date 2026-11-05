@@ -1,19 +1,24 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 import time
 from uuid import UUID
 
-from sqlalchemy.sql import text
 
 from app.modules.datastore.config import datastore_settings
-from app.core.config import settings
 from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileSearchResult,
     SearchMethod,
 )
 from app.modules.datastore.domain.document_processing import IndexingMetrics
+from app.modules.datastore.infrastructure.pod_schema_migrations import (
+    SEARCH_FILES_VERSION,
+    migrate_pod_schema,
+    pod_schema_version,
+)
 from app.modules.datastore.infrastructure.file_chunk_repository import (
     DatastoreFileChunkRepository,
 )
@@ -27,6 +32,46 @@ from app.modules.datastore.infrastructure.reranker import create_reranker
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchStageSeconds:
+    embed: float
+    retrieve: float
+    rerank: float
+    total: float
+
+
+class _StageTimings:
+    """Where one search spent its time, for the completion event.
+
+    Retrieval is what is left once the embedding call is taken out, so the
+    three stages add up to the whole search.
+    """
+
+    def __init__(self) -> None:
+        self._started = time.perf_counter()
+        self._seconds = {"embed": 0.0, "rerank": 0.0}
+        self._retrieve = 0.0
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._seconds[name] += time.perf_counter() - started
+
+    def retrieved(self) -> None:
+        self._retrieve = time.perf_counter() - self._started - self._seconds["embed"]
+
+    def seconds(self) -> SearchStageSeconds:
+        return SearchStageSeconds(
+            embed=round(self._seconds["embed"], 3),
+            retrieve=round(self._retrieve, 3),
+            rerank=round(self._seconds["rerank"], 3),
+            total=round(time.perf_counter() - self._started, 3),
+        )
 
 
 class PostgresSearchService:
@@ -49,187 +94,42 @@ class PostgresSearchService:
         )
         self.embedder = embedder
         self.reranker = reranker or create_reranker()
-        self._initialized = False
         self._last_embedded: tuple[str, list[float]] | None = None
 
-    # Serializes concurrent ensure_schema() calls. CREATE EXTENSION/TYPE ... IF
-    # NOT EXISTS is NOT atomic in Postgres: parallel indexers (e.g. the worker
-    # and an in-process indexer, or two pods on a fresh DB) racing the global
-    # pg_extension / pg_type catalogs hit "duplicate key" unique violations. A
-    # transaction-scoped advisory lock makes the idempotent setup race-free.
-    _ENSURE_SCHEMA_LOCK_KEY = 0x6C656D6D61  # "lemma"
+    async def ensure_schema(self) -> int:
+        """Bring this pod's search tables to the latest version, creating them.
 
-    async def ensure_schema(self):
-        if self._initialized:
-            return
-        async with self.engine.begin() as conn:
-            await conn.execute(
-                text("SELECT pg_advisory_xact_lock(:key)"),
-                {"key": self._ENSURE_SCHEMA_LOCK_KEY},
-            )
-            # The key above is a single global constant, so it serialises this
-            # method against itself -- which is all the database-wide catalogs
-            # below need. It does NOT serialise this pod's namespace against
-            # DatastoreSchemaManager, which creates the very same schema under
-            # `hashtext(schema_name)`. Two different keys exclude nobody: both
-            # paths could observe the namespace as absent and one would then
-            # lose on the pg_namespace.nspname unique index, which is what
-            # broke the datastore e2e shard. Take that key as well, always
-            # after the global one so every caller acquires the two in the same
-            # order and no pair of them can deadlock.
-            await conn.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:schema_name))"),
-                {"schema_name": self.schema_name},
-            )
-            # Azure Database for PostgreSQL checks CREATE EXTENSION privileges
-            # even when IF NOT EXISTS would otherwise be a no-op. The runtime
-            # datastore role is intentionally not an azure_pg_admin member, so
-            # first check the database-scoped catalog and only attempt creation
-            # for self-hosted installations where the extension is absent.
-            vector_installed = await conn.scalar(
-                text(
-                    "SELECT EXISTS ("
-                    "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
-                    ")"
-                )
-            )
-            if not vector_installed:
-                await conn.execute(text("CREATE EXTENSION vector"))
-            await conn.execute(
-                text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"')
-            )
-            await conn.execute(
-                text(
-                    f'''
-                    CREATE TABLE IF NOT EXISTS "{self.schema_name}".reserved_chunks (
-                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        chunk_index INTEGER NOT NULL,
-                        file_id UUID NOT NULL,
-                        content TEXT NOT NULL,
-                        embedding vector({settings.embedding_dimension}) NOT NULL,
-                        chunk_metadata JSONB,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                    '''
-                )
-            )
-            await conn.execute(
-                text(
-                    f'CREATE INDEX IF NOT EXISTS ix_reserved_chunks_file_id ON "{self.schema_name}".reserved_chunks(file_id)'
-                )
-            )
-            await conn.execute(
-                text(
-                    f'''
-                    CREATE INDEX IF NOT EXISTS ix_reserved_chunks_path
-                    ON "{self.schema_name}".reserved_chunks ((chunk_metadata ->> 'path'))
-                    '''
-                )
-            )
-            await conn.execute(
-                text(
-                    f'''
-                    CREATE INDEX IF NOT EXISTS ix_reserved_chunks_parent_path
-                    ON "{self.schema_name}".reserved_chunks ((chunk_metadata ->> 'parent_path'))
-                    '''
-                )
-            )
-            # text_pattern_ops so subtree filters (LIKE 'prefix/%') are index-backed
-            # outside the C locale; the plain btree above only serves equality.
-            await conn.execute(
-                text(
-                    f'''
-                    CREATE INDEX IF NOT EXISTS ix_reserved_chunks_path_pattern
-                    ON "{self.schema_name}".reserved_chunks
-                    ((chunk_metadata ->> 'path') text_pattern_ops)
-                    '''
-                )
-            )
-            await conn.execute(
-                text(
-                    f'''
-                    CREATE INDEX IF NOT EXISTS ix_reserved_chunks_text_search
-                    ON "{self.schema_name}".reserved_chunks
-                    USING GIN ((
-                        setweight(to_tsvector('english', COALESCE(chunk_metadata ->> 'path', '')), 'B') ||
-                        setweight(to_tsvector('english', content), 'A')
-                    ))
-                    '''
-                )
-            )
-        await self._ensure_vector_index()
-        self._initialized = True
+        The write path's entry: indexing a file needs the tables, so it
+        migrates inline (once per process per schema; see
+        ``pod_schema_migrations``). Readers never call this.
+        """
+        return await migrate_pod_schema(self.engine, self.schema_name, create=True)
 
-    async def _ensure_vector_index(self):
-        # HNSW over a half-precision (halfvec) cast of the embedding: ~half the
-        # index memory of a full vector index with negligible recall loss. The
-        # stored column stays vector(dim); only the index/query use halfvec.
-        dim = settings.embedding_dimension
-        # Retire the older full-precision hnsw / ivfflat indexes (lazy per-schema
-        # migration — this runs on next access for each existing pod schema).
-        for legacy in (
-            "ix_reserved_chunks_embedding_hnsw",
-            "ix_reserved_chunks_embedding_ivfflat",
-        ):
-            try:
-                async with self.engine.begin() as conn:
-                    await conn.execute(
-                        text(f'DROP INDEX IF EXISTS "{self.schema_name}".{legacy}')
-                    )
-            except Exception:
-                # A legacy index left behind is a waste of write throughput and
-                # disk in that pod, and nothing else will ever notice: this runs
-                # once per process per schema, so it is not a volume risk.
-                logger.warning(
-                    "datastore.postgres_search_service.legacy_index_drop.degraded",
-                    schema_name=self.schema_name,
-                    index_name=legacy,
-                    exc_info=True,
-                )
-        try:
-            async with self.engine.begin() as conn:
-                await conn.execute(
-                    text(
-                        f'''
-                        CREATE INDEX IF NOT EXISTS ix_reserved_chunks_embedding_halfvec
-                        ON "{self.schema_name}".reserved_chunks
-                        USING hnsw ((embedding::halfvec({dim})) halfvec_cosine_ops)
-                        WITH (m = 16, ef_construction = 64)
-                        '''
-                    )
-                )
-        except Exception as exc:
-            lower_msg = str(exc).lower()
-            extension_missing = "extension" in lower_msg and (
-                "does not exist" in lower_msg or "not installed" in lower_msg
-            )
-            if not extension_missing:
-                # Warning, and named: production runs at LOG_LEVEL=INFO, so at
-                # debug a pod whose vector index never built left no trace at
-                # all. Search keeps working by sequential scan and simply gets
-                # slower as the pod grows -- until `guard_query_plan`'s cost
-                # ceiling starts refusing unrelated queries in the same schema,
-                # which is the point somebody finally investigates.
-                logger.warning(
-                    "datastore.postgres_search_service.vector_index_build.degraded",
-                    schema_name=self.schema_name,
-                    exc_info=True,
-                )
+    async def schema_version(self) -> int:
+        """The shape this pod's search tables are in now, without changing it."""
+        return await pod_schema_version(self.engine, self.schema_name)
 
     async def index_file_chunks(
         self,
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
+        *,
+        sha256: str | None = None,
     ) -> IndexingMetrics:
         schema_started = time.perf_counter()
-        await self.ensure_schema()
+        version = await self.ensure_schema()
         schema_seconds = time.perf_counter() - schema_started
 
         if not chunks:
             logger.debug(
                 "datastore.postgres_search_service.no_chunks_s.diagnostic",
                 file_id=file_id,
+            )
+            # Still replace: a new revision with no text must not leave the
+            # previous revision's chunks answering for it.
+            await self.chunk_repo.add_chunks(
+                file_id, [], [], metadata, version=version, sha256=sha256
             )
             return IndexingMetrics(
                 chunk_count=0,
@@ -251,7 +151,9 @@ class PostgresSearchService:
             # add_chunks replaces the prior revision in one transaction. The old
             # searchable revision remains intact if embedding generation fails.
             persistence_started = time.perf_counter()
-            await self.chunk_repo.add_chunks(file_id, chunks, embeddings, metadata)
+            await self.chunk_repo.add_chunks(
+                file_id, chunks, embeddings, metadata, version=version, sha256=sha256
+            )
             persistence_seconds = time.perf_counter() - persistence_started
             metrics = IndexingMetrics(
                 chunk_count=len(chunks),
@@ -276,17 +178,40 @@ class PostgresSearchService:
             raise
 
     async def remove_file(self, file_id: UUID):
-        await self.ensure_schema()
-        await self.chunk_repo.remove_chunks_by_file(file_id)
+        version = await self.schema_version()
+        if version == 0:
+            return
+        await self.chunk_repo.remove_chunks_by_file(file_id, version=version)
 
     async def remove_files(self, file_ids: Sequence[UUID]) -> None:
         """The batch spelling, for a folder delete; see `remove_chunks_by_files`."""
-        await self.ensure_schema()
-        await self.chunk_repo.remove_chunks_by_files(file_ids)
+        version = await self.schema_version()
+        if version == 0:
+            return
+        await self.chunk_repo.remove_chunks_by_files(file_ids, version=version)
 
     async def update_file_path(self, file_id: UUID, path: str, parent_path: str | None):
-        await self.ensure_schema()
-        await self.chunk_repo.update_file_path(file_id, path, parent_path)
+        version = await self.schema_version()
+        if version == 0:
+            return
+        await self.chunk_repo.update_file_path(
+            file_id, path, parent_path, version=version
+        )
+
+    async def rename_folder(self, previous_path: str, new_path: str) -> bool:
+        """Tell the index a folder moved, in one statement; False if it cannot.
+
+        Version 2 keeps paths in one row per file, so this is one update. A
+        schema still on version 1 keeps them in every chunk, and the caller
+        repoints each file instead.
+        """
+        version = await self.schema_version()
+        if version == 0:
+            return True
+        if version < SEARCH_FILES_VERSION:
+            return False
+        await self.chunk_repo.rename_prefix(previous_path, new_path)
+        return True
 
     async def _embed(self, query: str) -> list[float]:
         """Embed the query, remembering the last one.
@@ -319,8 +244,12 @@ class PostgresSearchService:
         *,
         file_scope: SearchFileScope,
     ) -> list[DatastoreFileSearchResult]:
-        await self.ensure_schema()
         if file_scope.matches_nothing:
+            return []
+        # No DDL here: a pod whose tables do not exist yet has nothing indexed,
+        # and one still on the previous version is read in that shape.
+        version = await self.schema_version()
+        if version == 0:
             return []
 
         rerank_active = datastore_settings.reranker_mode != "off"
@@ -332,6 +261,7 @@ class PostgresSearchService:
             if rerank_active
             else limit
         )
+        timings = _StageTimings()
 
         if method == SearchMethod.TEXT:
             rows = await self.chunk_repo.text_search(
@@ -341,11 +271,13 @@ class PostgresSearchService:
                 scope_path=scope_path,
                 include_descendants=include_descendants,
                 file_scope=file_scope,
+                version=version,
             )
             ranked = list(rows)
             diversify = False
         elif method == SearchMethod.VECTOR:
-            emb = await self._embed(query)
+            with timings.stage("embed"):
+                emb = await self._embed(query)
             rows = await self.chunk_repo.vector_search(
                 emb,
                 pod_id=self.pod_id,
@@ -353,11 +285,13 @@ class PostgresSearchService:
                 scope_path=scope_path,
                 include_descendants=include_descendants,
                 file_scope=file_scope,
+                version=version,
             )
             ranked = list(rows)
             diversify = False
         else:
-            emb = await self._embed(query)
+            with timings.stage("embed"):
+                emb = await self._embed(query)
             per_side = max(limit * 3, pool)
             vector_results = await self.chunk_repo.vector_search(
                 emb,
@@ -366,6 +300,7 @@ class PostgresSearchService:
                 scope_path=scope_path,
                 include_descendants=include_descendants,
                 file_scope=file_scope,
+                version=version,
             )
             text_results = await self.chunk_repo.text_search(
                 query=query,
@@ -374,16 +309,42 @@ class PostgresSearchService:
                 scope_path=scope_path,
                 include_descendants=include_descendants,
                 file_scope=file_scope,
+                version=version,
             )
             ranked = self._merge_ranked_results(vector_results, text_results)
             diversify = True
 
+        timings.retrieved()
         results = [DatastoreFileSearchResult(**row) for row in ranked]
+        candidates = len(results)
         if rerank_active and results:
-            results = await self.reranker.rerank(query, results, top_n=len(results))
-        if diversify:
-            return self._diversify_file_results(results, limit)
-        return results[:limit]
+            # Only the pool goes to the reranker. Hybrid fetches `per_side`
+            # from each side for the fusion, so the merged list can be several
+            # times the pool -- and a reranker's cost grows with every chunk it
+            # is sent, on a hosted model that times out on a few hundred. The
+            # fused order already puts the best of them first.
+            results = results[:pool]
+            with timings.stage("rerank"):
+                results = await self.reranker.rerank(query, results, top_n=len(results))
+        returned = (
+            self._diversify_file_results(results, limit)
+            if diversify
+            else results[:limit]
+        )
+        seconds = timings.seconds()
+        logger.info(
+            "datastore.search.completed",
+            pod_id=str(self.pod_id),
+            method=method.value,
+            candidates=candidates,
+            reranked=len(results) if rerank_active else 0,
+            returned=len(returned),
+            embed_seconds=seconds.embed,
+            retrieve_seconds=seconds.retrieve,
+            rerank_seconds=seconds.rerank,
+            total_seconds=seconds.total,
+        )
+        return returned
 
     def _merge_ranked_results(
         self,

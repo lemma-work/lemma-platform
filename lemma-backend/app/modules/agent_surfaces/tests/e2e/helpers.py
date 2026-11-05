@@ -94,9 +94,16 @@ async def fake_slack(message_store, fixed_test_user):
 
 
 @pytest_asyncio.fixture
-async def fake_teams(message_store, fixed_test_user):
+async def fake_teams(message_store, fixed_test_user, monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+
     server = FakeTeamsServer(fixed_test_user["email"], message_store)
     await server.start()
+    # The bot token only goes to Bot Framework hosts; the double is local. The
+    # worker subprocess gets the same host through its environment.
+    monkeypatch.setattr(
+        surface_settings, "microsoft_bot_service_extra_host", "127.0.0.1"
+    )
     try:
         yield server
     finally:
@@ -224,6 +231,48 @@ async def _create_agent(
     return response.json()
 
 
+async def share_account_as_connector(
+    client: AsyncClient, pod_id: str, account_id, *, slug: str | None = None
+) -> str:
+    """Share the caller's own account with the pod as a SHARED pod connector.
+
+    What a person does before binding a surface to their own bot: the surface
+    runs as a pod connector, never as an account. Returns the slug; adding an
+    account already in the pod, or a connector that already runs as it, is
+    answered with the one there.
+    """
+    added = await client.post(
+        f"/pods/{pod_id}/connector-accounts",
+        json={"account_id": str(account_id), "visibility": "POD"},
+    )
+    assert added.status_code in (200, 201), added.text
+    pod_account = added.json()
+    if pod_account["visibility"] == "PERSONAL":
+        widened = await client.patch(
+            f"/pods/{pod_id}/connector-accounts/{pod_account['id']}",
+            json={"visibility": "POD"},
+        )
+        assert widened.status_code == 200, widened.text
+        pod_account = widened.json()
+    if pod_account.get("used_by"):
+        return pod_account["used_by"][0]
+    slug = (
+        slug
+        or f"{pod_account.get('connector_id') or 'bot'}-{UUID(str(account_id)).hex}"
+    )
+    declared = await client.post(
+        f"/pods/{pod_id}/connectors",
+        json={
+            "slug": slug,
+            "auth_config_id": pod_account["auth_config_id"],
+            "mode": "SHARED",
+            "shared_pod_account_id": pod_account["id"],
+        },
+    )
+    assert declared.status_code == 201, declared.text
+    return slug
+
+
 async def _create_surface(
     client: AsyncClient,
     pod_id: str,
@@ -241,7 +290,9 @@ async def _create_surface(
     if name:
         payload["name"] = name
     if config.get("account_id"):
-        payload["account_id"] = config["account_id"]
+        payload["pod_connector"] = await share_account_as_connector(
+            client, pod_id, config["account_id"]
+        )
     if config.get("credential_mode"):
         payload["credential_mode"] = config["credential_mode"]
     if allowed_channel_ids:
@@ -354,7 +405,10 @@ async def _ensure_connector_account(
     email: str | None = None,
     provider: AuthProvider = AuthProvider.LEMMA,
     config_source: str = "SYSTEM_DEFAULT",
+    organization_id: str | None = None,
 ) -> Account:
+    """The user's account for a connector, in ``organization_id`` -- by default
+    the first organisation they belong to."""
     if connector_id == "slack":
         credentials = dict(credentials)
         raw_response = dict(credentials.get("raw_response") or {})
@@ -366,12 +420,14 @@ async def _ensure_connector_account(
         if provider == AuthProvider.COMPOSIO
         else ConnectorKind.HTTP.value
     )
-    organization_id = await db_session.scalar(
-        select(OrganizationMember.organization_id)
-        .where(OrganizationMember.user_id == UUID(user_id))
-        .limit(1)
-    )
+    if organization_id is None:
+        organization_id = await db_session.scalar(
+            select(OrganizationMember.organization_id)
+            .where(OrganizationMember.user_id == UUID(user_id))
+            .limit(1)
+        )
     assert organization_id is not None
+    organization_id = UUID(str(organization_id))
     auth_config = await db_session.scalar(
         select(AuthConfig).where(
             AuthConfig.organization_id == organization_id,
@@ -452,6 +508,19 @@ async def _seed_external_user(
     phone: str | None = None,
     tenant_id: str | None = None,
 ) -> None:
+    """A sender already resolved to ``resolved_user_id``.
+
+    On Slack the cache stands only on Slack's proof of the sender in the
+    workspace (``slack_cached_identity``), so a Slack sender is seeded the way
+    ``record_proof`` leaves one: the proof, and the cache it writes through to.
+    """
+    if platform == "SLACK" and tenant_id:
+        await _seed_slack_proof(
+            db_session,
+            team=tenant_id,
+            sender=external_user_id,
+            user_id=resolved_user_id,
+        )
     db_session.add(
         AgentSurfaceExternalUser(
             platform=platform,
@@ -463,6 +532,104 @@ async def _seed_external_user(
             raw_profile={},
             resolved_user_id=resolved_user_id,
             last_seen_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.commit()
+
+
+async def _seed_slack_proof(
+    db_session: AsyncSession, *, team: str, sender: str, user_id: UUID
+) -> None:
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.modules.agent_surfaces.infrastructure.slack_manager_models import (
+        SlackWorkspacePersonModel,
+    )
+
+    now = datetime.now(timezone.utc)
+    await db_session.execute(
+        insert(SlackWorkspacePersonModel)
+        .values(
+            id=uuid4(),
+            team_id=team,
+            slack_user_id=sender,
+            user_id=user_id,
+            proved_by="INSTALL",
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing()
+    )
+
+
+async def _known_slack_sender(
+    db_session: AsyncSession,
+    *,
+    user_id: str,
+    sender: str = "U0123456",
+    team: str = "T0123456",
+) -> None:
+    """The fake workspace's sender, already known in it as ``user_id``.
+
+    A Slack profile email names nobody -- a workspace admin can set anybody's --
+    so a test whose Slack sender is a member says so the way a proof leaves it
+    (``_seed_external_user`` writes the proof for a Slack sender).
+    The defaults are ``platform_payloads.slack``'s ``SENDER_ID`` and ``TEAM_ID``.
+    """
+    await _seed_external_user(
+        db_session,
+        platform="SLACK",
+        external_user_id=sender,
+        tenant_id=team,
+        resolved_user_id=UUID(user_id),
+    )
+
+
+async def _bound_through_installation(
+    db_session: AsyncSession,
+    *,
+    platform: str,
+    tenant_id: str,
+    installation_id: UUID,
+    sender: str,
+    user_id: str,
+    verified_phone: str | None = None,
+) -> None:
+    """``sender`` proved who they are through this installation's own app.
+
+    On an app whose signing secret a customer holds, that is the only proof
+    that names a sender (``customer_held_secrets``): what the onboarding flow
+    leaves behind once its mailbox code comes back. WhatsApp's binding also
+    carries the number it was verified on, which has to be the user's own.
+    """
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+        SurfacePlatform,
+    )
+    from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+        VerifiedSurfaceIdentity,
+    )
+    from app.modules.agent_surfaces.services.onboarding_transport import (
+        platform_binding_key,
+    )
+
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform(platform),
+        conversation_type=ConversationType.EXTERNAL_DM,
+        tenant_id=tenant_id,
+        external_thread_id=sender,
+        sender_external_user_id=sender,
+        message_text="",
+    )
+    db_session.add(
+        VerifiedSurfaceIdentity(
+            binding_key=platform_binding_key(event, installation_id),
+            platform=platform,
+            tenant_id=tenant_id,
+            external_user_id=sender,
+            user_id=UUID(user_id),
+            verified_phone=verified_phone,
         )
     )
     await db_session.commit()
@@ -547,7 +714,6 @@ async def _set_user_mobile_number(
     *,
     user_id: str,
     mobile_number: str,
-    telegram_username: str | None = None,
     verified: bool = True,
 ) -> None:
     """Give the user a number the sender can be matched to.
@@ -559,8 +725,6 @@ async def _set_user_mobile_number(
     assert user is not None
     user.mobile_number = mobile_number
     user.mobile_verified_at = datetime.now(timezone.utc) if verified else None
-    if telegram_username is not None:
-        user.telegram_username = telegram_username
     await db_session.commit()
 
 
@@ -639,9 +803,13 @@ async def _conversation_by_external_thread(
     # -- a soft, negative-existence read is the intended contract for this
     # helper, not just an unhandled edge case. Only the terminus differs;
     # the poll shape is otherwise identical to `eventually()`.
+    #
+    # Always read at least once: a negative check made after the outcome is
+    # settled passes ``timeout_seconds=0`` and reads exactly once, instead of
+    # waiting out a window for something that cannot arrive.
     params = {"agent_name": agent_name} if agent_name else {}
     deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
+    while True:
         response = await client.get(
             f"/pods/{pod_id}/conversations",
             params=params,
@@ -651,8 +819,9 @@ async def _conversation_by_external_thread(
             metadata = item.get("metadata") or {}
             if metadata.get("external_thread_id") == external_thread_id:
                 return item
+        if asyncio.get_running_loop().time() >= deadline:
+            return None
         await asyncio.sleep(0.1)
-    return None
 
 
 async def _messages_for_conversation(

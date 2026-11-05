@@ -59,6 +59,7 @@ async def create_workflow(
     user_id: UUID,
     ctx: Context,
     run_title: list[str] | None = None,
+    max_concurrent_runs: int | None = None,
 ) -> WorkflowEntity:
     """Create a workflow with its graph."""
     return await get_workflow_service(uow).create_workflow(
@@ -74,6 +75,7 @@ async def create_workflow(
         requester_user_id=user_id,
         ctx=ctx,
         run_title=run_title,
+        max_concurrent_runs=max_concurrent_runs,
     )
 
 

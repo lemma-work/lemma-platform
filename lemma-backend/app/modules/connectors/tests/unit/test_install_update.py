@@ -7,6 +7,7 @@ user in the org; too lax and their accounts look healthy while every call 401s.
 from __future__ import annotations
 
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 
@@ -286,3 +287,49 @@ class TestRenegotiatingMcpAuthorization:
 
         assert called is False
         assert result == {"server_url": "https://new.example.com"}
+
+
+class TestALemmaMadeAppStopsBeingOneWhenAPersonReplacesItsCredentials:
+    """``app_made_by_lemma`` on an install says no person chose its signing
+    secret. Replacing the config is a person choosing it."""
+
+    @staticmethod
+    def _install():
+        from app.modules.connectors.domain.auth_config import (
+            AuthConfigEntity,
+            AuthConfigSource,
+        )
+
+        return AuthConfigEntity(
+            organization_id=uuid4(),
+            connector_id="slack",
+            name="crm (A0123)",
+            config_source=AuthConfigSource.ORG_CUSTOM,
+            config={"client_id": "1.2", "signing_secret": "from-slack"},
+            metadata={"app_made_by_lemma": True, "kept": 1},
+        )
+
+    def _updated(self, **changes):
+        from app.modules.connectors.services.install_update import apply_updates
+
+        fields = {"name": None, "config": None, "status": None, "is_default": None}
+        return apply_updates(
+            self._install(), updated_by_user_id=None, **{**fields, **changes}
+        )
+
+    def test_a_rename_keeps_it(self):
+        from app.modules.connectors.domain.auth_config import app_made_by_lemma
+
+        assert app_made_by_lemma(self._updated(name="crm bot").metadata)
+
+    def test_an_unchanged_config_keeps_it(self):
+        from app.modules.connectors.domain.auth_config import app_made_by_lemma
+
+        same = {"client_id": "1.2", "signing_secret": "from-slack"}
+        assert app_made_by_lemma(self._updated(config=same).metadata)
+
+    def test_a_replaced_secret_drops_it_and_nothing_else(self):
+        updated = self._updated(
+            config={"client_id": "1.2", "signing_secret": "a-person-chose"}
+        )
+        assert updated.metadata == {"kept": 1}

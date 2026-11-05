@@ -22,9 +22,11 @@ The model now:
   kind.
 - **Pool size is sized from concurrent in-flight queries**, by Little's Law:
   `queries_per_second × seconds_per_query`. An agent run is 95%+ non-database
-  latency, so a worker at `WORKER_CONCURRENCY=50` needs single-digit connections
+  latency, so a worker running dozens of turns needs single-digit connections
   in steady state. The pool absorbs the burst at task start and finish.
-- **`WORKER_CONCURRENCY` is a RAM and CPU budget**, unrelated to the pool.
+- **A worker's slots (`WORK_SLOTS_JSON`) are a RAM and CPU budget**, unrelated
+  to the request pool; the work runtime sizes its own small pool from its
+  classes' database slots.
 - **The cluster-wide ceiling is enforced at the server**, with
   `ALTER ROLE <app> CONNECTION LIMIT n`, not by arithmetic in application
   config. Postgres refusing connection *n+1* is a guarantee; a startup log line
@@ -179,7 +181,7 @@ are closed now, and each was invisible until something looked for it.
 | Blind spot | Why it mattered |
 | --- | --- |
 | `SessionUnitOfWorkFactory(...)()` not recognised as a session open | missed `app/composition` entirely, including open write transactions held across an HTTP download |
-| `ctx.uow()` not recognised | missed the whole streaq worker surface |
+| `ctx.uow()` not recognised | missed every worker lifespan and background job of the time |
 | Session-yielding context managers (`pod_services`, `uow_scope`, …) not recognised | session-holding blocks read as ordinary code |
 | Propagation required exactly one definition of a callee name | missed everything reached through an interface |
 | Third-party SDK calls invisible — no definition in `app/` for a name lookup to find | missed every SuperTokens / aiohttp / Redis call |

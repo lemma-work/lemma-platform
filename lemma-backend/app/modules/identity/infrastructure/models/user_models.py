@@ -30,9 +30,6 @@ class User(UUIDAuditBase):
     mobile_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    telegram_username: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
-    )
     country: Mapped[str | None] = mapped_column(String(100), nullable=True)
     timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)

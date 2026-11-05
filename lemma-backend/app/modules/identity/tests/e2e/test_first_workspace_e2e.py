@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationJoinPolicy,
@@ -35,10 +34,9 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 
 def _organization_service(uow) -> OrganizationService:
-    message_bus = get_message_bus()
     return OrganizationService(
-        organization_repository=OrganizationRepository(uow, message_bus=message_bus),
-        user_repository=UserRepository(uow, message_bus=message_bus),
+        organization_repository=OrganizationRepository(uow),
+        user_repository=UserRepository(uow),
         invitation_accept_base_url="https://app.example.test",
         pod_membership_port=SqlAlchemyPodMembershipAdapter(uow),
     )

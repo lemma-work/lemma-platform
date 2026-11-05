@@ -31,6 +31,8 @@ from pydantic import SecretStr
 
 from sandbox_runtime.errors import SandboxError
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.api.agent_host_schemas import AgentHostListResponse
@@ -196,6 +198,7 @@ def _run(conversation: Conversation) -> AgentRun:
     return AgentRun(
         conversation_id=conversation.id,
         started_at=datetime.now(timezone.utc),
+        agent_runtime=AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID),
         metadata={"source": "user_message"},
     )
 

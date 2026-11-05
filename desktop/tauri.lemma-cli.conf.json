@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "binaries/lemma-cli": "lemma-cli"
+    }
+  }
+}

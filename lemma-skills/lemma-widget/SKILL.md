@@ -41,6 +41,7 @@ per object, and their buttons act through the viewer's own connected account:
 | slack | thread |
 | intercom | conversation |
 | linkedin | post |
+| show | diagram, chart, note, image |
 
 The header comment at the top of each file is its contract: the `data` shape it
 reads, the connector, and every operation its buttons call. Fetch the real
@@ -52,6 +53,13 @@ display_resource(type="WIDGET", path="/skills/lemma-widget/library/gmail/email-t
 ```
 
 A draft reply belongs in `data.draft`; the person edits it and sends.
+
+`show` is the exception to fetching a record: its widgets draw what you give
+them and act on nothing. `show/diagram` takes Mermaid source, `show/chart` a
+Vega-Lite `spec` with its data inline, `show/note` markdown and `show/image` an
+https `url`, each with an optional `title`. Reach for them before writing a
+widget of your own: you write the diagram, the spec or the note, never the
+HTML around it.
 
 `gmail/inbox` is the exception to fetching first: pass only a Gmail search,
 `data={"query": "is:unread in:inbox"}`, and it reads the mail itself as the
@@ -101,8 +109,11 @@ over.
      and friends; never paste the token preamble, it is already there;
    - `window.lemma`: `lemma.query(sql)` → rows (`rows.truncated` when the cap
      cut it), `lemma.records(table, options)`, `lemma.compose(text)` and
-     `lemma.canCompose()`, and `lemma.esc / num / money / pct / date`. It loads
-     and authenticates the SDK itself on first use — never write an SDK loader;
+     `lemma.canCompose()`, `lemma.esc / num / money / pct / date`, and
+     `lemma.fail(message, where?)`, which says in place that the widget could
+     not draw and tells whoever showed it (uncaught errors are reported the
+     same way). It loads and authenticates the SDK itself on first use — never
+     write an SDK loader;
    - and the shapes most answers take, drawn to the visual standard below
      (hover, a hidden data table, mono figures, hairlines, state colours):
 
@@ -170,10 +181,15 @@ loaders, and malformed markup before display.
 - `content` — the HTML inline, for something small you will not revisit.
 - `public_url` — a URL to embed instead.
 
-Passing more than one, or none, is rejected. One more WIDGET-only field:
+Passing more than one, or none, is rejected. Three more fields, the first two
+WIDGET-only (setting them on any other resource type is rejected):
 
+- `data` — JSON the widget reads as `lemma.data`, with `path` or `content`.
+  This is how a library widget gets its record (above).
 - `loading_messages` — up to **4** short lines shown while the widget renders.
-  Setting them on any other resource type is rejected.
+- `fallback` — one or two plain-text lines carrying the names and numbers that
+  matter, for chat apps that cannot draw a widget (Slack, WhatsApp, Teams,
+  email). Write one for every widget.
 
 `name`, `filters`, and `query` belong to other types.
 
@@ -234,8 +250,9 @@ needs around it.
 - Loading, empty, error, and narrow-screen states are all deliberate.
 - Values reach the DOM through `textContent`, or escaped before `innerHTML`.
 - The view stays compact: no fixed positioning, no nested scrolling.
-- **Height is capped.** The inline view clips at **480px** with a fade and an
-  Expand control, and a self-reported height is clamped to 2400px. Design for
+- **Height is capped.** The inline view clips at most of the viewport (85%,
+  never less than **480px**) with an Expand control, and a self-reported height
+  is clamped to 2400px. Design for
   the fold: put the answer at the top, not below a long table. The frame follows
   the content both ways — a view that narrows itself shrinks the frame with it.
 - A follow-up for the agent goes through `lemma.compose`, which puts text in
@@ -347,9 +364,12 @@ await c.workflows.runs.create("onboard_customer");
 await lemma.act("gmail", "send_message", { to, subject, text }, { kind: "http" });
 ```
 
-`lemma.act(connector, operation, payload)` finds the organization's install of
-the connector itself; `kind` names the backend the operation names belong to,
-so a widget written for another one says so instead of failing obscurely.
+`lemma.act(connector, operation, payload)` runs through the pod connector that
+serves `connector` (the pod's, else the viewer's own install, declared on first
+use), so it uses the pod's account choice and never names an account. A
+connection the viewer still has to make or remake shows a Connect button beside
+the error. `kind` names the backend the operation names belong to, so a widget
+written for another one says so instead of failing obscurely.
 Everything runs under the viewer's own permissions and RLS, so a person who
 cannot write a table cannot write it through a widget either.
 

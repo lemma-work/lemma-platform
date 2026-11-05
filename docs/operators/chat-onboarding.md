@@ -8,8 +8,8 @@ Codes last at most ten minutes, allow three wrong attempts and require a
 sixty-second resend wait. Web and chat share email send limits.
 
 Apply backend migrations before starting the API and worker. Both must run the
-same version: the worker consumes `surface.onboarding.ready` from the normal
-transactional outbox. Pending requests are stored outside pod conversations and
+same version: the transaction that finishes onboarding writes the `surface.ingest`
+items that replay the held messages, and the worker runs them. Pending requests are stored outside pod conversations and
 purged after handoff, cancellation or expiry. Keep the worker running for replay
 and expiry cleanup. Do not log webhook form contents or email codes.
 

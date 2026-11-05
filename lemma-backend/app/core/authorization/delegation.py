@@ -111,22 +111,25 @@ def effective_agent_id(agent_id: UUID | None, *, pod_id: UUID) -> UUID:
 # A workload needs either an explicit grant of the destructive permission
 # (standing authority; keeps headless schedules/functions working) or a live
 # session approval from the user (APPROVE_FOR_SESSION, Redis-backed, TTL).
-# Data-level deletes (records via datastore.record.write, file deletes via
-# folder.write) are deliberately NOT in this set — they are routine
-# automation, scoped by RLS. Note connector_account.manage implies
-# connector_account.use; the gate applies to manage checks only.
+# Deleting a table's rows is in it (audit H14): one call empties a table, and
+# writing a row is not consent to that. File deletes through folder.write are
+# not -- a file is replaced as often as it is removed. Changing the pod's
+# connectors is in it: removing one stops everything that runs through it,
+# and pointing a SHARED one at an account decides whose credential the pod's
+# calls go out under.
 DESTRUCTIVE_ACTIONS = {
     Permissions.POD_DELETE,
     Permissions.POD_ROLE_MANAGE,
     Permissions.POD_MEMBER_MANAGE,
     Permissions.DATASTORE_TABLE_DELETE,
+    Permissions.DATASTORE_RECORD_DELETE,
     Permissions.FOLDER_DELETE,
     Permissions.FUNCTION_DELETE,
     Permissions.AGENT_DELETE,
     Permissions.WORKFLOW_DELETE,
     Permissions.APP_DELETE,
     Permissions.SCHEDULE_DELETE,
-    Permissions.CONNECTOR_ACCOUNT_MANAGE,
+    Permissions.POD_CONNECTOR_MANAGE,
 }
 
 
@@ -156,6 +159,24 @@ class DelegationClaims(BaseModel):
     scope: list[str] = Field(default_factory=list)
     invoked_by_user_id: UUID
     delegation_version: int
+
+
+def is_default_pod_agent_claims(claims: DelegationClaims | None) -> bool:
+    """Whether this token was minted for the pod's own assistant.
+
+    The one place the answer comes from a token rather than a row: this runs on
+    every delegated request, and ``is_pod_default_agent`` is deliberately free
+    of I/O so it need not become a query.
+
+    Both claims have to agree. The id arm alone would promote any workload
+    whose id happened to equal its pod's, and what turns on this is whether a
+    token acts with its user's permissions or only its own grants.
+    """
+    return (
+        claims is not None
+        and is_pod_default_agent(claims.actor_id, pod_id=claims.pod_id)
+        and claims.actor_name in {None, DEFAULT_POD_AGENT_NAME}
+    )
 
 
 class DelegationClaimsError(ValueError):

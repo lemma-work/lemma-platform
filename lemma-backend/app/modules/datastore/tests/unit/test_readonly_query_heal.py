@@ -18,8 +18,10 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import DBAPIError
 
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreDomainError
 from app.modules.datastore.domain.row_security import RowPrincipal
+from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 from app.modules.datastore.infrastructure.readonly_query import (
     execute_readonly_query,
 )
@@ -76,14 +78,15 @@ class _SchemaManager:
     heal_works: bool = True
     runs: int = 0
     heals: list[str] = field(default_factory=list)
-    ensured: int = 0
+    ensured: list[str] = field(default_factory=list)
+    roles: list[str] = field(default_factory=list)
     principal: RowPrincipal | None = None
 
     def get_schema_name(self, pod_id) -> str:
         return f"pod_{str(pod_id).replace('-', '_')}"
 
-    async def ensure_query_role(self) -> bool:
-        self.ensured += 1
+    async def ensure_query_role(self, schema_name: str) -> bool:
+        self.ensured.append(schema_name)
         return True
 
     async def heal_query_role_access(self, schema_name: str) -> bool:
@@ -102,6 +105,8 @@ class _SchemaManager:
 
         class _Session:
             async def execute(self, statement, params=None):
+                if str(statement).startswith("SET LOCAL ROLE"):
+                    manager.roles.append(str(statement))
                 if str(statement).startswith("EXPLAIN"):
                     manager.runs += 1
                     if manager.refusal is not None and manager.refusals > 0:
@@ -125,10 +130,10 @@ _NO_USAGE = ("42P01", 'relation "widgets" does not exist')
 _DENIED = ("42501", "permission denied for table widgets")
 
 
-async def _query(manager: _SchemaManager):
+async def _query(manager: _SchemaManager, pod_id=None):
     return await execute_readonly_query(
         manager,
-        uuid4(),
+        pod_id or uuid4(),
         "SELECT * FROM widgets",
         RowPrincipal.for_user(uuid4()),
     )
@@ -196,9 +201,22 @@ async def test_a_healed_schema_is_not_healed_again() -> None:
     assert manager.runs == 3
 
 
-async def test_the_role_is_ensured_before_the_first_query() -> None:
+async def test_the_pods_own_role_is_ensured_before_the_first_query() -> None:
     manager = _SchemaManager()
+    pod_id = uuid4()
 
-    await _query(manager)
+    await _query(manager, pod_id)
 
-    assert manager.ensured == 1
+    assert manager.ensured == [manager.get_schema_name(pod_id)]
+
+
+async def test_the_query_runs_as_the_pods_own_role_not_a_shared_one() -> None:
+    """The role is the pod boundary: a role every pod shares holds them all."""
+    manager = _SchemaManager()
+    pod_id = uuid4()
+
+    await _query(manager, pod_id)
+
+    role = pod_query_role_name(manager.get_schema_name(pod_id))
+    assert manager.roles == [f'SET LOCAL ROLE "{role}"']
+    assert role != datastore_settings.datastore_query_role

@@ -26,16 +26,25 @@ class PodBundleDomainEvent(DomainEvent):
 
 class BundleExportedEvent(PodBundleDomainEvent):
     event_type: str = "pod_bundle.exported"
+    #: The export's id, which is also written into the archive's ``pod.json``
+    #: (``infrastructure.bundle_identity``) so its imports can name it.
     bundle_id: UUID
     pod_id: UUID
     user_id: UUID | None = None
+    #: Resources the archive holds, counted as ``infrastructure.bundle_contents``
+    #: counts them -- the same rule the import's count uses.
     resource_count: int = 0
 
 
 class BundleImportCompletedEvent(PodBundleDomainEvent):
     event_type: str = "pod_bundle.import_completed"
-    bundle_id: UUID
+    import_id: UUID | None = None
+    #: The export the imported archive came out of, read from its ``pod.json``:
+    #: the same id ``BundleExportedEvent`` carries. ``None`` for a bundle no
+    #: Lemma export produced -- one built by the CLI, or a repository.
+    bundle_id: UUID | None = None
     pod_id: UUID
     user_id: UUID | None = None
+    #: Resources the imported bundle held, by the export's rule. Not the plan's
+    #: step count, which counts a table's rows and an agent's grants as steps.
     resource_count: int = 0
-    is_remix: bool = False

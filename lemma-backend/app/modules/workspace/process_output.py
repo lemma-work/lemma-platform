@@ -59,7 +59,7 @@ def has_stopped(process) -> bool:
     `ProcessDescriptor.state` is typed `object`, and a provider reporting a
     state this module does not know would read as running forever.
     """
-    if process.exit_code is not None:
+    if process.exit_code is not None or getattr(process, "exited_unobserved", False):
         return True
     return process.state in TERMINAL_PROCESS_STATES or str(
         getattr(process.state, "value", process.state)
@@ -102,6 +102,21 @@ def _wait_window(*, deadline_at: datetime, yield_seconds, elapsed: float) -> flo
     if yield_seconds is not None:
         window = min(window, yield_seconds - elapsed)
     return min(window, _MAX_OUTPUT_WAIT_SECONDS)
+
+
+#: Put where output the process printed was dropped before it was read.
+DROPPED_OUTPUT_MARKER = b"\n[... earlier output was dropped: it printed more than it keeps between reads ...]\n"
+
+
+def _dropped_since(snapshot, after_sequence: int) -> bool:
+    """Whether the process dropped output this reader had not read yet.
+
+    A buffer that stays under its limit by dropping its oldest chunks says
+    where what is left begins (``truncated_before_sequence``). Past the next
+    sequence this reader wanted, something it never saw is gone.
+    """
+    truncated = getattr(snapshot, "truncated_before_sequence", None)
+    return isinstance(truncated, int) and truncated > after_sequence + 1
 
 
 def _drain(chunks, after_sequence: int, stdout: bytearray, stderr: bytearray) -> int:
@@ -167,6 +182,7 @@ async def collect_process_output(
     stderr = bytearray()
     state = ProcessState.RUNNING
     exit_code: int | None = None
+    truncated = False
     polled = False
     while datetime.now(timezone.utc) < deadline_at:
         elapsed = time.monotonic() - started
@@ -206,6 +222,11 @@ async def collect_process_output(
         )
         state = snapshot.state
         exit_code = snapshot.exit_code
+        if _dropped_since(snapshot, after_sequence):
+            # Said where it happened, not just flagged: the reader sees which
+            # part of the output is missing.
+            truncated = True
+            stdout.extend(DROPPED_OUTPUT_MARKER)
         after_sequence = _drain(snapshot.chunks, after_sequence, stdout, stderr)
         output_cursor.remember_locally(operation_id, after_sequence)
         if state in TERMINAL_PROCESS_STATES:
@@ -250,4 +271,7 @@ async def collect_process_output(
         # error string to get it.
         "state": state.value,
         "error": _failure_message(state, exit_code),
+        # Some of what the process printed was dropped before it was read:
+        # ``stdout`` marks where (``DROPPED_OUTPUT_MARKER``).
+        "output_truncated": truncated,
     }

@@ -219,7 +219,10 @@ class PodReadFileRequest(BaseModel):
         ge=1,
         description="Documents only: last page, inclusive. Defaults to page_start.",
     )
-    max_chars: int = Field(default=50000, ge=1, le=400000)
+    # Capped at the default: a read is carried in the conversation for the rest
+    # of the run, and one of 400k characters was most of a model's window on
+    # its own. A longer document is read in parts, by page.
+    max_chars: int = Field(default=50000, ge=1, le=50000)
 
 
 class ViewDocumentPagesRequest(BaseModel):

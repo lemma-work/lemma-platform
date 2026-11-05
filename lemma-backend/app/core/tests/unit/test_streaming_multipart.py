@@ -109,3 +109,42 @@ async def test_process_capacity_fails_fast_without_reading_body() -> None:
             pass
 
     assert reads() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_disconnects_mid_upload_gives_its_slot_back() -> None:
+    """A cancelled upload must release what it held, every time: a slot lost
+    to a cancellation is lost for the life of the process."""
+    import asyncio
+
+    request, _ = _request([b"--lemma-boundary\r\n", b"never sent"])
+    first_chunk_read = asyncio.Event()
+    real_receive = request.receive
+
+    async def stalling_receive():
+        if first_chunk_read.is_set():
+            await asyncio.Event().wait()  # the client went quiet
+        first_chunk_read.set()
+        return await real_receive()
+
+    request._receive = stalling_receive
+    coordinator = UploadStagingCoordinator(max_requests=1, max_active_bytes=1024)
+
+    async def upload() -> None:
+        async with stream_multipart_form(
+            request,
+            file_limits={"file": MultipartFileLimit(max_bytes=1024)},
+            combined_max_bytes=1024,
+            coordinator=coordinator,
+        ):
+            pass
+
+    task = asyncio.create_task(upload())
+    await first_chunk_read.wait()
+    await asyncio.sleep(0)
+    assert coordinator.active_requests == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert (coordinator.active_requests, coordinator.active_bytes) == (0, 0)

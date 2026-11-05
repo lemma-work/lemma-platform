@@ -10,13 +10,18 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.authorization.context import ResourceType
+from app.core.authorization.authz_epoch import bump_after_commit
+from app.core.authorization.conferral import assert_can_confer_replacement
+from app.core.authorization.context import Context, ResourceType
+from app.core.authorization.grant_generation import (
+    AGENT_GRANTEE,
+    bump_agent_grant_generations,
+)
 from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import PERMISSION_BY_ID
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import (
-    connector_resource_id,
     resolve_resource_ids_by_names,
     resolve_resource_names_by_ids,
 )
@@ -30,7 +35,6 @@ __all__ = [
     "delete_resource_sharing_grants",
     "ensure_grant_uses_resource_name",
     "grant_resource_type_values",
-    "connector_resource_id",
     "list_grantee_resource_grants",
     "list_resource_grants",
     "normalize_pod_resource_grants",
@@ -135,16 +139,9 @@ def validate_pod_resource_grant_permissions(
 
 
 def _applicable_permission_ids(resource_type: ResourceType) -> frozenset[str]:
-    if resource_type in (
-        ResourceType.CONNECTOR,
-        ResourceType.CONNECTOR_ACCOUNT,
-    ):
-        return frozenset(
-            permission_id
-            for permission_id, definition in PERMISSION_BY_ID.items()
-            if definition.resource_type == resource_type.value
-            and definition.scope.value == "POD"
-        )
+    # The resource's role-grantable actions and nothing else. Owner-only
+    # actions -- sharing a pod account -- are absent by construction, so no
+    # grant can hand one out.
     return frozenset(RESOURCE_ACTIONS.get(resource_type, ()))
 
 
@@ -176,12 +173,33 @@ async def normalize_pod_resource_grants(
 async def replace_grantee_resource_grants(
     session: AsyncSession,
     *,
+    ctx: Context,
     pod_id: UUID,
     grantee_type: str,
     grantee_id: UUID,
     grants: Sequence[NormalizedResourceGrant],
     created_by_user_id: UUID | None,
+    action: str = "grant access you could not use yourself",
 ) -> None:
+    """Replace everything ``grantee_id`` holds in the pod with ``grants``.
+
+    The conferral bound runs here, in the writer, and not at each caller: the
+    bundle importer was a caller that skipped it, which let an editor import an
+    agent holding a delete they did not have (audit H13). Taking ``ctx`` as a
+    required argument is what makes "every grant write is bounded" a property
+    of the code rather than of every caller remembering. Only what the write
+    adds is conferred (`assert_can_confer_replacement`), so a grantee holding a
+    grant beyond the saver's reach can still be edited by them.
+    """
+    await assert_can_confer_replacement(
+        ctx,
+        session,
+        grants,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        action=action,
+    )
     await session.execute(
         delete(ResourcePermissionGrantModel).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
@@ -210,6 +228,8 @@ async def replace_grantee_resource_grants(
             )
         )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
+    bump_after_commit(session, pod_id)
 
 
 async def replace_resource_grantee_grant(
@@ -245,6 +265,8 @@ async def replace_resource_grantee_grant(
             )
         )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
+    bump_after_commit(session, pod_id)
 
 
 async def delete_resource_grantee_grant(
@@ -266,6 +288,8 @@ async def delete_resource_grantee_grant(
         )
     )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
+    bump_after_commit(session, pod_id)
 
 
 async def delete_resource_grants(
@@ -276,16 +300,31 @@ async def delete_resource_grants(
     resource_id: UUID,
 ) -> None:
     """Delete every grant on a resource (all grantee types). Use on delete."""
-    await session.execute(
-        delete(ResourcePermissionGrantModel).where(
+    deleted = await session.execute(
+        delete(ResourcePermissionGrantModel)
+        .where(
             ResourcePermissionGrantModel.pod_id == pod_id,
             ResourcePermissionGrantModel.resource_type.in_(
                 grant_resource_type_values(resource_type)
             ),
             ResourcePermissionGrantModel.resource_id == resource_id,
         )
+        .returning(
+            ResourcePermissionGrantModel.grantee_type,
+            ResourcePermissionGrantModel.grantee_id,
+        )
+    )
+    # Every agent that held a grant on it has just lost a tool.
+    await bump_agent_grant_generations(
+        session,
+        {
+            grantee_id
+            for grantee_type, grantee_id in deleted.all()
+            if grantee_type == AGENT_GRANTEE
+        },
     )
     await session.flush()
+    bump_after_commit(session, pod_id)
 
 
 async def delete_resource_sharing_grants(
@@ -311,6 +350,7 @@ async def delete_resource_sharing_grants(
         )
     )
     await session.flush()
+    bump_after_commit(session, pod_id)
 
 
 async def delete_grantee_grants(
@@ -329,6 +369,16 @@ async def delete_grantee_grants(
         )
     )
     await session.flush()
+    await _bump_if_agent(session, grantee_type, grantee_id)
+    bump_after_commit(session, pod_id)
+
+
+async def _bump_if_agent(
+    session: AsyncSession, grantee_type: str, grantee_id: UUID
+) -> None:
+    """An agent's grants changed: what was derived from them is stale."""
+    if grantee_type == AGENT_GRANTEE:
+        await bump_agent_grant_generations(session, {grantee_id})
 
 
 async def list_resource_grants(
@@ -486,6 +536,7 @@ async def apply_inline_workload_grants(
     grantee_id: UUID,
     permissions,
     created_by_user_id: UUID,
+    ctx: Context,
 ) -> bool:
     """Apply a create/update payload's inline ``permissions`` block.
 
@@ -513,12 +564,16 @@ async def apply_inline_workload_grants(
         pod_id=pod_id,
         grants=grants_payload,
     )
+    # The writer bounds it by what the saver could use themselves; an inline
+    # block once skipped that, letting an editor arm an agent with deletes.
     await replace_grantee_resource_grants(
         session,
+        ctx=ctx,
         pod_id=pod_id,
         grantee_type=grantee_type,
         grantee_id=grantee_id,
         grants=grants,
         created_by_user_id=created_by_user_id,
+        action=f"grant {grantee_type.lower()} permissions you could not use",
     )
     return True

@@ -225,7 +225,7 @@ async def test_resolve_execute_creates_only_the_durable_pending_run(
         revision_hash=f"sha256:{'2' * 64}",
     )
     function_repository.get_by_name.return_value = function
-    function_repository.get_for_update.return_value = function
+    function_repository.get_for_share.return_value = function
     run_repository.create_run.side_effect = lambda item: item
 
     resolved = await service.resolve_execute(
@@ -268,7 +268,7 @@ async def test_pinned_run_uses_the_selected_revision_contract(
         config_schema={"type": "object", "required": ["old_setting"]},
     )
     function_repository.get_by_name.return_value = function
-    function_repository.get_for_update.return_value = function
+    function_repository.get_for_share.return_value = function
     function_repository.get_revision_by_number.return_value = revision
     run_repository.create_run.side_effect = lambda run: run
     call = service.resolve_execute(
@@ -301,7 +301,7 @@ async def test_resolve_execute_requires_ready_revision(
 ) -> None:
     function = _function(status=FunctionStatus.DRAFT)
     function_repository.get_by_name.return_value = function
-    function_repository.get_for_update.return_value = function
+    function_repository.get_for_share.return_value = function
 
     with pytest.raises(FunctionValidationError, match="ready"):
         await service.resolve_execute(
@@ -326,7 +326,7 @@ async def test_resolve_execute_requests_backfill_for_ready_legacy_source(
         revision_hash=None,
     )
     function_repository.get_by_name.return_value = function
-    function_repository.get_for_update.return_value = function
+    function_repository.get_for_share.return_value = function
 
     with pytest.raises(LegacyFunctionRevisionRequired) as raised:
         await service.resolve_execute(

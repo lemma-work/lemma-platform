@@ -17,6 +17,9 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.progress_tools import progress_comment_for_tool_call
 from app.modules.agent_surfaces.domain.display_redaction import redact_secrets_in_text
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    PLATFORM_CAPABILITIES,
+)
 from app.modules.agent_surfaces.platforms.rendering import (
     sanitize_user_visible_text,
     strip_thinking_tokens,
@@ -32,11 +35,46 @@ def _surface_platform(conversation: Conversation) -> str | None:
     return str(platform).upper() if platform else None
 
 
-def _safe_run_error_text(event: AgentEvent) -> str:
-    del event
-    return (
-        "I couldn’t finish that request. Try it again without resending your message."
+_MAX_FAILURE_REASON_CHARS = 600
+
+
+def failure_notice(reason: str | None, platform: str | None) -> str:
+    """What the person is told when their request failed, and what to do next.
+
+    The reason is the run's own sentence for it -- a quota spent, a provider
+    down, a local model server not running -- which the web transcript always
+    had and a surface never did. Masked and clipped, because a provider's
+    words can quote a request. Unknown failures keep the plain apology.
+
+    The next step names only what this person can do here: a "Try again"
+    control where the platform renders one, and a typed "retry" everywhere,
+    since that works on email too.
+    """
+    clean = " ".join(
+        redact_secrets_in_text(sanitize_user_visible_text(reason or "")).split()
     )
+    if len(clean) > _MAX_FAILURE_REASON_CHARS:
+        clean = clean[: _MAX_FAILURE_REASON_CHARS - 1].rstrip() + "…"
+    capabilities = PLATFORM_CAPABILITIES.get(platform or "")
+    next_step = (
+        "Tap Try again, or reply “retry”, and I’ll run it again."
+        if capabilities is not None and capabilities.supports_native_retry
+        else "Reply “retry” and I’ll run it again."
+    )
+    return f"{clean or 'I couldn’t finish that request.'}\n\n{next_step}"
+
+
+def _safe_run_error_text(event: AgentEvent, platform: str | None) -> str:
+    """The failure notice for a run that ended on an ERROR or REJECTED event.
+
+    An ERROR event's data is the harness's user-facing sentence (the same text
+    the run row and the web transcript carry); a REJECTED one holds it under
+    ``detail``. Anything else is not a sentence written for a person.
+    """
+    data = event.data
+    if isinstance(data, dict):
+        data = data.get("detail")
+    return failure_notice(data if isinstance(data, str) else None, platform)
 
 
 def _progress_text_from_event(event: AgentEvent) -> str | None:

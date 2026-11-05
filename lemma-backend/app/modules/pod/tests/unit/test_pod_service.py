@@ -19,6 +19,7 @@ from app.modules.pod.domain.errors import (
 )
 from app.modules.pod.domain.pod_entities import (
     PodConfig,
+    PodCreationSource,
     PodEntity,
     PodJoinPolicy,
     PodMemberEntity,
@@ -90,6 +91,8 @@ async def test_create_pod_success_adds_admin_and_domain_event(
     events = create_arg.collect_events()
     assert len(events) == 1
     assert events[0].event_type == "pod.created"
+    # Asked for, unless a caller says it was provisioned for them.
+    assert events[0].source == "person"
 
     pod_member_create_arg = pod_member_repository_mock.create.await_args.args[0]
     assert pod_member_create_arg.role == PodRole.ADMIN
@@ -757,3 +760,41 @@ async def test_delete_pod_frees_its_inbound_addresses_in_the_same_request(
     assert await service.delete_pod(pod.id, requester_id) is True
 
     release.assert_awaited_once_with(uow, pod_id=pod.id)
+
+
+@pytest.mark.asyncio
+async def test_a_provisioned_pod_says_so_on_its_created_event(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+    pod_member_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+):
+    """Every person who joins an organization gets a workspace whether or not
+    they asked. Counted as a choice, it would make pods built track sign-ups."""
+    creator_id = uuid4()
+    organization_id = uuid4()
+    org_member = _make_org_member(
+        user_id=creator_id,
+        organization_id=organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    pod = _make_pod(organization_id=organization_id, user_id=creator_id)
+    organization_repository_mock.get_member.return_value = org_member
+    pod_repository_mock.create.return_value = pod
+    pod_member_repository_mock.create.return_value = PodMemberEntity(
+        pod_id=pod.id,
+        organization_member_id=org_member.id,
+        role=PodRole.ADMIN,
+    )
+
+    await pod_service.create_pod(pod, creator_id, source=PodCreationSource.PROVISIONED)
+
+    (event,) = pod_repository_mock.create.await_args.args[0].collect_events()
+    assert event.source == "provisioned"
+
+
+def test_a_deleted_pod_says_when_it_was_made():
+    pod = _make_pod(organization_id=uuid4(), user_id=uuid4())
+    pod.mark_deleted()
+    (event,) = pod.collect_events()
+    assert event.pod_created_at == pod.created_at

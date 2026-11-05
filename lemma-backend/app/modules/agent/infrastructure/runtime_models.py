@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Integer,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -237,6 +238,12 @@ class AgentHostRunLeaseModel(Base):
     terminal_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Where a reclaimed worker resumes the run's event stream, and the expiry
+    # of the credential the host holds; see `agent_host/run_resume.py`.
+    consumed_stream_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    credential_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -272,6 +279,15 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
             unique=True,
             postgresql_where=text("scope = 'PERSONAL'"),
         ),
+        # At most one profile carries the organization's default mark
+        # (``domain/organization_default``); setting a new one clears the old
+        # mark first, in the same transaction.
+        Index(
+            "uq_agent_runtime_profile_org_default",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("profile_metadata ? 'organization_default'"),
+        ),
         # Holds for legacy rows too: a NULL runtime_type takes the first
         # branch, which only requires harness_id to be NULL.
         CheckConstraint(
@@ -295,8 +311,10 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         nullable=True,
         index=True,
     )
+    # A personal profile is its owner's credential and goes with them; an
+    # organization-wide one has no owner.
     user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
@@ -316,12 +334,22 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         index=True,
     )
     profile_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    #: A counter for optimistic locking of profile writes; starts at 0.
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
 
     organization: Mapped[Any] = relationship(
         "Organization",
         foreign_keys=[organization_id],
     )
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
+
+    # Every UPDATE carries ``WHERE version = <the version this row was read
+    # at>`` and bumps it, so a write built from a read another write has since
+    # overtaken matches no row and raises StaleDataError instead of putting
+    # the older values back.
+    __mapper_args__ = {"version_id_col": version}
 
     def to_entity(self) -> AgentRuntimeProfile:
         return AgentRuntimeProfile(
@@ -340,4 +368,5 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
             credentials=self.credentials,
             status=RuntimeProfileStatus(self.status),
             metadata=self.profile_metadata or {},
+            version=self.version or 0,
         )

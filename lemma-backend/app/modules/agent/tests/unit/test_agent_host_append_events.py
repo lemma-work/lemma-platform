@@ -11,11 +11,8 @@ from dataclasses import dataclass
 from uuid import UUID, uuid7
 
 import pytest
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
+from fakeredis.aioredis import FakeRedis
 
-from app.core.config import settings
-from app.core.infrastructure.redis.client import close_redis_clients
 from app.modules.agent.domain.agent_host import (
     AgentHostEvent,
     AgentHostEventBatch,
@@ -35,16 +32,6 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
 
 
 pytestmark = pytest.mark.asyncio
-
-
-async def _redis_available() -> bool:
-    try:
-        client = Redis.from_url(settings.redis_url, decode_responses=True)
-        await client.ping()
-        await client.aclose()
-        return True
-    except RedisError, OSError:
-        return False
 
 
 @dataclass
@@ -102,10 +89,12 @@ def _batch(
 
 @pytest.fixture
 async def stream():
-    if not await _redis_available():
-        pytest.skip("redis is not reachable")
-    yield AgentHostEventStream()
-    await close_redis_clients()
+    # fakeredis runs the stream's own Lua append script in-process (with
+    # `lupa`), so the watermark rules are exercised as written without writing
+    # into whatever Redis answers on the developer's default port.
+    redis = FakeRedis(decode_responses=True)
+    yield AgentHostEventStream(client=redis)
+    await redis.aclose()
 
 
 class TestHappyPath:

@@ -724,6 +724,12 @@ def _environment(
             [{"slug_prefix": SPEND_CAP_PROBE_SLUG_PREFIX, "monthly_limit_usd": 0}]
         ),
         "AUTH_ALTCHA_ENABLED": "false",
+        # A Telegram handle is not proof of anything, so a scenario's person
+        # proves their Telegram account by sharing their contact, matched to
+        # the number on their profile. Nothing here can verify a number (that
+        # takes a real WhatsApp or Telegram login), so the stack accepts the
+        # one unverified number a profile claims -- Lemma Desktop's setting.
+        "SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH": "true",
         # The one substitution the stack makes, and it is deliberate: agent runs
         # use a deterministic scripted model rather than a real provider. It is a
         # supported setting (`e2e_llm_mode`), not a patched-in fake, so the code
@@ -864,8 +870,6 @@ DECIDED_BY_THE_STACK = (
     "ENABLE_RESEND_POLLING_MODE",
     # Where sandboxes run. `WORKSPACE_PROVIDER` is pinned to docker below, and a
     # stray hosted-provider key would send function runs somewhere else.
-    "AGENTBOX_API_KEY",
-    "AGENTBOX_API_URL",
     "E2B_API_KEY",
     # Whether documents are converted. PS-DATA-041 is specifically about what a
     # deployment does when conversion is unavailable, so it has to be.
@@ -996,9 +1000,9 @@ _SINGLE_CONSUMER_RECEIVERS = (
 def _how_many_workers(env: dict[str, str]) -> int:
     """How many worker processes to run. One unless asked for more.
 
-    The product expects replicas — `schedule_poller` says so in as many words:
-    "Every replica runs this. Nothing elects a leader; the claim decides who
-    fires." The suite ran exactly one, which is fine per journey and is what CI
+    The product expects replicas: every worker runs the work runtime, nothing
+    elects a leader, and the claim decides who runs an item. The suite ran
+    exactly one, which is fine per journey and is what CI
     does, and is the wrong shape for a local run of every journey at once: 380
     scenarios queue their agent runs through a single event loop, and the first
     thing to give is a scenario waiting on a reply that is merely behind a
@@ -1332,6 +1336,8 @@ def start_stack(configure: Callable[[StackSpec], None] | None = None):
                     "0.0.0.0",
                     "--port",
                     str(port),
+                    "--ws-max-size",
+                    "1048576",
                     "--log-level",
                     "warning",
                 ],

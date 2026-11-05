@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from app.modules.connectors.infrastructure.webhook_sources.github import (
+    SUPPORTED_EVENTS,
+)
+
 pytestmark = pytest.mark.unit
 
 _CONFIG = Path(__file__).resolve().parents[5] / "scripts" / "lemma_apps_config.json"
@@ -181,3 +185,17 @@ def test_input_schemas_keep_full_fidelity(github_operations):
     title = properties["body"]["properties"]["title"]
     assert title.get("description")
     assert "oneOf" in title
+
+
+def test_a_trigger_is_offered_for_exactly_the_events_the_webhook_source_accepts():
+    """Three lists name the same events: these triggers, `SUPPORTED_EVENTS`,
+    and the App manifest (held to the second in `test_github_app_manifest`).
+
+    A trigger for an event the source drops can be scheduled and never fires,
+    with nothing anywhere to say why; an accepted event with no trigger is one
+    nobody can schedule.
+    """
+    apps = json.loads(_CONFIG.read_text(encoding="utf-8"))
+    entry = next(app for app in apps if app["name"] == "github")
+    offered = {trigger["event_type"] for trigger in entry["triggers"]}
+    assert offered == SUPPORTED_EVENTS

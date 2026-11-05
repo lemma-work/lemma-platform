@@ -23,7 +23,8 @@ class UserProfileRequest:
         first_name (None | str | Unset):
         last_name (None | str | Unset):
         mobile_number (None | str | Unset):
-        telegram_username (None | str | Unset):
+        telegram_username (None | str | Unset): Deprecated: accepted and ignored, and will be removed. A Telegram
+            account is linked by sharing a contact with a Lemma bot, never by a handle typed onto a profile.
         timezone (None | str | Unset):
     """
 

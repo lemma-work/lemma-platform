@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.domain.generation import ReasoningEffort
+
 from app.core.config import reveal_secret
 from app.modules.agent.config import AgentSettings
 
@@ -22,12 +24,19 @@ EXPECTED = [
         7200.0,
     ),
     ("agent_run_budget_tool_failures", "AGENT_RUN_BUDGET_TOOL_FAILURES", 15),
+    ("agent_run_budget_repeated_calls", "AGENT_RUN_BUDGET_REPEATED_CALLS", 10),
     (
         "agent_run_budget_unattended_wall_clock_seconds",
         "AGENT_RUN_BUDGET_UNATTENDED_WALL_CLOCK_SECONDS",
         7200.0,
     ),
     ("agent_run_warn_at", "AGENT_RUN_WARN_AT", 0.8),
+    # How long an Agent Host turn may hold its worker parked on a person.
+    (
+        "agent_host_parked_window_seconds",
+        "AGENT_HOST_PARKED_WINDOW_SECONDS",
+        600.0,
+    ),
     (
         "agent_run_stop_poll_interval_seconds",
         "AGENT_RUN_STOP_POLL_INTERVAL_SECONDS",
@@ -41,11 +50,14 @@ EXPECTED = [
     ("agent_memory_index_max_chars", "AGENT_MEMORY_INDEX_MAX_CHARS", 2000),
     ("agent_attached_document_max_chars", "AGENT_ATTACHED_DOCUMENT_MAX_CHARS", 24000),
     ("agent_memory_section_max_chars", "AGENT_MEMORY_SECTION_MAX_CHARS", 6000),
+    ("agent_memory_file_max_chars", "AGENT_MEMORY_FILE_MAX_CHARS", 8000),
     (
         "agent_memory_brief_cache_ttl_seconds",
         "AGENT_MEMORY_BRIEF_CACHE_TTL_SECONDS",
         60,
     ),
+    ("agent_memory_after_turn", "AGENT_MEMORY_AFTER_TURN", True),
+    ("agent_memory_pass_model", "AGENT_MEMORY_PASS_MODEL", None),
     ("function_run_poll_interval_seconds", "FUNCTION_RUN_POLL_INTERVAL_SECONDS", 0.5),
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
     ("vision_model", "VISION_MODEL", None),
@@ -73,9 +85,14 @@ EXPECTED = [
         60.0,
     ),
     (
+        "agent_history_compaction_timeout_seconds",
+        "AGENT_HISTORY_COMPACTION_TIMEOUT_SECONDS",
+        120.0,
+    ),
+    (
         "agent_model_stream_total_timeout_seconds",
         "AGENT_MODEL_STREAM_TOTAL_TIMEOUT_SECONDS",
-        300.0,
+        900.0,
     ),
     ("agent_model_http_max_connections", "AGENT_MODEL_HTTP_MAX_CONNECTIONS", 100),
     ("widget_url_expiry_seconds", "WIDGET_URL_EXPIRY_SECONDS", 1800),
@@ -87,6 +104,9 @@ EXPECTED = [
     ("web_fetch_impersonate_browser", "WEB_FETCH_IMPERSONATE_BROWSER", True),
 ]
 FACTORY_FIELDS = {"local_agent_runtime_config_path"}
+# An enum, so the generic "sentinel" override cannot exercise it; read from
+# its environment variable in `test_reasoning_effort_reads_its_env_var`.
+ENUM_FIELDS = {"lemma_openai_reasoning_effort"}
 
 
 def _clear(monkeypatch):
@@ -120,10 +140,11 @@ MOVED_FROM_CORE = [
         "claude-sonnet-4-5,claude-haiku-4-5",
     ),
     ("lemma_default_model_type", "LEMMA_DEFAULT_MODEL_TYPE", "openai_compat"),
-    ("lemma_llm_caching_enabled", "LEMMA_LLM_CACHING_ENABLED", False),
+    ("lemma_llm_caching_enabled", "LEMMA_LLM_CACHING_ENABLED", True),
     ("lemma_openai_default_model", "LEMMA_OPENAI_DEFAULT_MODEL", ""),
     ("lemma_openai_model_names", "LEMMA_OPENAI_MODEL_NAMES", ""),
     ("lemma_openai_vision_model_names", "LEMMA_OPENAI_VISION_MODEL_NAMES", ""),
+    ("lemma_openai_reasoning_model_names", "LEMMA_OPENAI_REASONING_MODEL_NAMES", ""),
 ]
 
 
@@ -138,7 +159,24 @@ def test_agent_settings_field_set_is_exact():
         *(f for f, _e, _d in EXPECTED),
         *(f for f, _e, _d in MOVED_FROM_CORE),
         *FACTORY_FIELDS,
+        *ENUM_FIELDS,
     }
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("low", ReasoningEffort.LOW), (" HIGH ", ReasoningEffort.HIGH), ("", None)],
+)
+def test_reasoning_effort_reads_its_env_var(monkeypatch, raw, expected):
+    """Blank is unset, as an empty variable in a deployment manifest means."""
+    monkeypatch.setenv("LEMMA_OPENAI_REASONING_EFFORT", raw)
+    assert AgentSettings().lemma_openai_reasoning_effort == expected
+
+
+def test_an_unknown_reasoning_effort_fails_at_startup(monkeypatch):
+    monkeypatch.setenv("LEMMA_OPENAI_REASONING_EFFORT", "extreme")
+    with pytest.raises(ValueError):
+        AgentSettings()
 
 
 def test_agent_runtime_config_path_default_and_env(monkeypatch):

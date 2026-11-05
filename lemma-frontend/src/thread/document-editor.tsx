@@ -212,11 +212,22 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
             attributes: { class: "md doc" },
         },
         onUpdate: ({ editor, transaction }) => {
-            /* Focus, not just a changed document. Opening a file runs it
+            /* Every change is written, focus or not. "Show view" on a live
+               view, "Show it" on an HTML block and a to-do's tick all change
+               the page from outside the caret, and TipTap's `focus()` lands a
+               frame after the change it is chained to — asking for focus here
+               dropped each of them unless somebody went on to type.
+
+               What must not be written is a read. Opening a file runs it
                through the parser and back, and the markdown that comes out is
-               normalised — so without this, reading a document with `*` bullets
-               in it would rewrite them on disk without anybody touching a key. */
-            if (!transaction.docChanged || !editor.isFocused) return;
+               normalised, so a read that counted would rewrite `*` bullets on
+               disk without anybody touching a key. None arrives here: the
+               opening text is the editor's content before any transaction, a
+               file read in later is set without an update (the adopt-effect
+               below), and a plugin tidying the document on its own — the
+               trailing paragraph — rides on a transaction that changed nothing
+               itself, and `transaction` is that one. */
+            if (!transaction.docChanged) return;
             setDraft(joinFrontmatter(frontNow.current, markdownOf(editor)));
         },
         immediatelyRender: false,
@@ -292,7 +303,7 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     const flush = useCallback(async () => {
         if (!editor) return;
         const next = joinFrontmatter(frontNow.current, markdownOf(editor));
-        /* Nothing typed, nothing written: the same rule as `onUpdate`, which
+        /* Nothing changed, nothing written: the same rule as `onUpdate`, which
            keeps a read from re-emitting the file in this editor's dialect. */
         if (next === savedNow.current) return;
         setDraft(next);
@@ -526,7 +537,9 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
         if (text === saved) return;
         setSaved(text);
         setDraft(text);
-        editor.commands.setContent(splitFrontmatter(text).body);
+        /* A read, so no update: `onUpdate` writes every change it hears of,
+           and this one would go back to disk in the editor's dialect. */
+        editor.commands.setContent(splitFrontmatter(text).body, { emitUpdate: false });
         /* A heading the agent wrote is not one typed here (see `titleAsFound`). */
         titleAsFound.current = titleOf(editor);
     }, [dirty, editor, saved, text]);

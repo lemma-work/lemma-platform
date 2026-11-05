@@ -35,7 +35,7 @@ from .runtime_models import (
     WorkerRequest,
 )
 from .trace_context import bind_trace_context
-from .worker_pool import RevisionWorkerRegistry, RuntimeOverloaded
+from .worker_pool import RevisionWorkerRegistry
 
 
 _MAX_INPUT_BYTES = 1024 * 1024
@@ -446,10 +446,11 @@ async def _invoke(request: Request) -> JSONResponse:
             )
         report = await service.invoke(**parameters)
         return JSONResponse(report.model_dump(mode="json"))
+    # No overload answer here: capacity is waited for inside the run's task,
+    # and a run that never gets a worker settles as a failed report that says
+    # it never started. Nothing on this path can raise it.
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
-    except RuntimeOverloaded as exc:
-        return JSONResponse({"error": str(exc)}, status_code=503)
     except Exception:
         return JSONResponse({"error": "function runtime failed"}, status_code=500)
 

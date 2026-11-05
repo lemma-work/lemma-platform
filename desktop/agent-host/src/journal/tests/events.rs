@@ -276,3 +276,56 @@ fn retention_removes_only_old_terminal_runs() {
             .is_some()
     );
 }
+
+/// A batch is bounded by bytes as well as by count: Lemma reads no frame past
+/// 1 MiB, and 256 events of streamed output can be several times that. An
+/// event larger than the bound on its own is a batch of its own.
+#[test]
+fn a_batch_never_grows_past_its_byte_bound() {
+    use crate::link::protocol::EVENT_BATCH_MAX_BYTES;
+
+    let (_directory, journal, target, command, spec) = fixture();
+    journal
+        .accept_start(target, &command, &spec, "codex", "1.0")
+        .unwrap();
+    let append = |text: String| {
+        let mut payload = JsonMap::new();
+        payload.insert("text".into(), serde_json::Value::from(text));
+        journal
+            .append_event(
+                target,
+                spec.agent_run_id,
+                1,
+                EventType::AgentMessageChunk,
+                None,
+                payload,
+            )
+            .unwrap();
+    };
+    for _ in 0..200 {
+        append("x".repeat(20 * 1024));
+    }
+    append("z".repeat(2 * EVENT_BATCH_MAX_BYTES));
+    append("after".to_owned());
+
+    let batches = journal.pending_events(target, 1024).unwrap();
+    let sizes: Vec<usize> = batches
+        .iter()
+        .map(|batch| serde_json::to_string(batch).unwrap().len())
+        .collect();
+    let mut oversized = 0;
+    for (batch, size) in batches.iter().zip(&sizes) {
+        if *size > EVENT_BATCH_MAX_BYTES + 64 {
+            assert_eq!(batch.events.len(), 1, "a batch of {size} bytes");
+            oversized += 1;
+        }
+    }
+    assert_eq!(oversized, 1);
+    // Still contiguous and complete, in order.
+    let sequences: Vec<u64> = batches
+        .iter()
+        .flat_map(|batch| batch.events.iter().map(|event| event.sequence))
+        .collect();
+    assert_eq!(sequences, (1..=202).collect::<Vec<_>>());
+    assert!(batches.len() >= 200 * 20 * 1024 / EVENT_BATCH_MAX_BYTES);
+}

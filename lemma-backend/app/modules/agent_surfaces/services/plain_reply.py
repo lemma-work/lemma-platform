@@ -15,6 +15,8 @@ them against an API that is already failing.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from collections.abc import Mapping
 
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
@@ -25,7 +27,7 @@ from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceE
 async def reply_text(
     *,
     adapter: SurfacePlatformAdapterPort,
-    credentials: Mapping[str, object],
+    credentials: SurfaceCredentials,
     event: ParsedInboundSurfaceEvent,
     message: str,
     metadata: Mapping[str, object] | None = None,
@@ -37,7 +39,7 @@ async def reply_text(
     know lets it propagate.
     """
     return await adapter.deliver(
-        credentials=dict(credentials),
+        credentials=credentials,
         event=event,
         envelope=SurfaceEnvelope(text=message),
         metadata=dict(metadata) if metadata is not None else None,

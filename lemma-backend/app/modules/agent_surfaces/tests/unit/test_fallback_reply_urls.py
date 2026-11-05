@@ -55,7 +55,7 @@ def test_pod_access_url_is_shared_across_every_surface_platform(
         name=f"{platform.value.lower()}-access-link",
         agent_id=uuid4(),
         surface_type=platform,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         config=SurfaceConfig(),
         is_active=True,
     )

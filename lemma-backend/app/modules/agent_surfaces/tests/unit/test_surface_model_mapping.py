@@ -49,7 +49,7 @@ def _row(**overrides) -> AgentSurface:
     row.event_mode = "WEBHOOK"
     row.credential_mode = "SYSTEM"
     row.config = {}
-    row.account_id = None
+    row.pod_connector_slug = None
     row.external_workspace_id = None
     row.external_tenant_id = None
     row.external_channel_id = None
@@ -116,3 +116,20 @@ def test_the_skip_is_logged_where_an_operator_will_see_it() -> None:
     spec = EVENT_CATALOG["agent_surfaces.surface_row.retired_value_skipped.degraded"]
     assert spec.level == "warning"
     assert {"surface_id", "column", "value"} <= spec.fields
+
+
+def test_a_surfaces_webhook_secret_never_appears_in_its_repr() -> None:
+    """An entity in a log line or a traceback must not carry the credential."""
+    from app.core.crypto import get_secret_cipher
+
+    row = _row(
+        surface_type="TELEGRAM",
+        name="telegram",
+        webhook_secret=get_secret_cipher().encrypt_str("telegram-secret-token"),
+    )
+    entity = row.to_entity()
+
+    assert "telegram-secret-token" not in repr(entity)
+    assert "telegram-secret-token" not in str(entity.model_dump())
+    assert entity.webhook_secret is not None
+    assert entity.webhook_secret.get_secret_value() == "telegram-secret-token"

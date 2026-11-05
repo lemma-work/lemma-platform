@@ -20,8 +20,8 @@ import pytest
 from app.modules.agent_surfaces.platforms.email_render import render_email_content
 
 
-def _html(content: str, content_type: str = "markdown") -> str:
-    _, html = render_email_content(content=content, content_type=content_type)
+def _html(content: str, content_type: str = "markdown", **kwargs) -> str:
+    _, html = render_email_content(content=content, content_type=content_type, **kwargs)
     assert html is not None
     return html
 
@@ -94,6 +94,21 @@ class TestEverythingCarriesInlineStyling:
         assert html.startswith("<div style=")
         assert "max-width:640px" in html, "text would run the full window width"
         assert "font-family:" in html, "the client would pick its own face"
+
+    def test_the_column_is_centred_not_pinned_left(self):
+        """A 640px block with no auto margin sits against the left edge of the
+        window, which reads as a broken layout rather than a deliberate one."""
+        html = _html("hello")
+        assert "margin:0 auto" in html, "the column is pinned to the left edge"
+
+    def test_a_caller_can_ask_for_a_full_width_body(self):
+        """The cap is right for a reply and wrong for a message whose point is a
+        wide table or layout, so the caller gets to say which it is."""
+        html = _html("hello", full_width=True)
+        assert "max-width:640px" not in html, "the requested full width was capped"
+        assert "max-width:none" in html
+        # Centring is kept, so there is one wrapper shape rather than two.
+        assert "margin:0 auto" in html
 
     def test_code_inside_pre_does_not_double_up_the_chrome(self):
         html = _html("```\nx = 1\n```")

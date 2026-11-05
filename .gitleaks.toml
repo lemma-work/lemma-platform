@@ -181,3 +181,20 @@ is a keyword argument with an integer on the right.
 regexes = [
   '''ttl_seconds=3600''',
 ]
+
+[[allowlists]]
+description = '''
+Not a secret: the string gitleaks matched is `ttl_seconds=60`. Test bytes
+`data=b"secret file"` sat on the same line as the next keyword argument, and
+`generic-api-key` read `secret file", ` as a key and took the rest of the line
+as its value (`test_agent_host_transfers_e2e.py`).
+
+The adjacency is gone -- the call now puts each argument on its own line -- but
+gitleaks scans the commits a pull request introduces rather than its result.
+`main` is squash-merged, so the line never reaches its history. By exact value,
+like the `ttl_seconds=3600` entry above: a keyword argument with an integer on
+the right cannot be a credential.
+'''
+regexes = [
+  '''ttl_seconds=60''',
+]

@@ -29,8 +29,12 @@ CONVERSATION = uuid4()
 
 
 def _ctx(*, contact_id=CONTACT):
+    # Not a contact's run, though still somebody outside the pod: another pod
+    # asking over a link.
     audience = (
-        Audience.contact(contact_id) if contact_id is not None else Audience.outsiders()
+        Audience.contact(contact_id)
+        if contact_id is not None
+        else Audience.pod(uuid4())
     )
     return SimpleNamespace(
         deps=SimpleNamespace(

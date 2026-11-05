@@ -43,11 +43,11 @@ __all__ = [
     "add_visitor_code",
     "attach_visitor_conversation",
     "consume_visitor_code",
-    "conversation_has_visitor",
     "forget_contact_visitor_sessions",
     "forget_session_liveness",
     "identify_visitor_session",
     "latest_visitor_conversation",
+    "live_visitor_sessions",
     "open_visitor_session",
     "renew_visitor_session",
     "revoke_visitor_sessions",
@@ -57,7 +57,6 @@ __all__ = [
     "touch_visitor_session",
     "visitor_session",
     "visitor_session_by_secret",
-    "visitor_conversation_contact",
     "visitor_session_is_live",
 ]
 
@@ -128,6 +127,21 @@ async def visitor_session(
     uow: SqlAlchemyUnitOfWork, session_id: UUID
 ) -> VisitorSession | None:
     return await VisitorSessionRepository(uow.session).get(session_id)
+
+
+async def live_visitor_sessions(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    contact_id: UUID,
+    strength: VisitorStrength,
+    now: datetime,
+    limit: int = 20,
+) -> list[VisitorSession]:
+    """The contact's sessions of this strength that have not ended, the one
+    last seen first: the chats on the site they can still come back to."""
+    return await VisitorSessionRepository(uow.session).live_for_contact(
+        contact_id, strength=strength, now=now, limit=limit
+    )
 
 
 async def visitor_session_by_secret(
@@ -287,22 +301,6 @@ async def consume_visitor_code(uow: SqlAlchemyUnitOfWork, code_id: UUID) -> bool
 
 
 # -- reads for routing --------------------------------------------------------
-
-
-async def conversation_has_visitor(
-    session: AsyncSession, conversation_id: UUID
-) -> bool:
-    """Whether a visitor's session leads to this conversation."""
-    return await VisitorSessionRepository(session).leads_to(conversation_id)
-
-
-async def visitor_conversation_contact(
-    session: AsyncSession, conversation_id: UUID
-) -> tuple[bool, UUID | None]:
-    """Whether a visitor's session leads here, and the contact it names if any."""
-    return await VisitorSessionRepository(session).contact_for_conversation(
-        conversation_id
-    )
 
 
 async def forget_contact_visitor_sessions(

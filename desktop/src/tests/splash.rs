@@ -157,6 +157,27 @@ fn the_dock_follows_what_is_actually_on_screen() {
     );
 }
 
+/// A pod app opened from a fullscreen workspace gets a window, not a tab.
+///
+/// macOS tabs a new window into a fullscreen one by default, which put a tab
+/// bar across the workspace and the app in a tab beside it. Switching that off
+/// only counts if it happens before the first window is ordered in.
+#[test]
+fn windows_never_merge_into_tabs() {
+    let source = include_str!("../app.rs").replace("\r\n", "\n");
+    let setup = function_body(&source, "fn setup(");
+    let off = setup
+        .find("disallow_window_tabbing()")
+        .expect("setup must switch native window tabbing off");
+    let first_window = setup
+        .find("build_main_window(")
+        .expect("setup builds the main window");
+    assert!(
+        off < first_window,
+        "tabbing has to be off before the first window exists"
+    );
+}
+
 #[test]
 fn ready_auto_navigation_only_treats_the_native_installer_as_splash() {
     assert!(native_splash_url(

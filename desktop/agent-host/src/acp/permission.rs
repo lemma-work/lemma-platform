@@ -108,22 +108,28 @@ pub(crate) fn is_scoped_mcp_tool_approval(
         || title_names_a_published_tool(&value, scoped_tools)
 }
 
-/// The tool names Lemma said it serves on this run's MCP endpoint.
+/// The tool names Lemma said it serves on this run's MCP endpoint, lowercased
+/// for comparing.
 ///
 /// Absent for an older control plane that does not publish them, in which case
 /// this check simply contributes nothing and the other two still apply.
 pub(crate) fn scoped_mcp_tool_names(mcp: &Value) -> HashSet<String> {
+    published_mcp_tool_names(mcp)
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// The tool names Lemma said it serves on this run's MCP endpoint, spelled as
+/// it spelled them: what an agent names the tools, where a rule has to match
+/// exactly (`session_options::lemma_tool_rules`).
+pub(crate) fn published_mcp_tool_names(mcp: &Value) -> impl Iterator<Item = &str> {
     mcp.get("tool_names")
         .and_then(Value::as_array)
-        .map(|names| {
-            names
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|name| name.trim().to_ascii_lowercase())
-                .filter(|name| !name.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
 }
 
 /// Does the request name a tool Lemma told us it serves?

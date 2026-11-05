@@ -7,6 +7,7 @@ actually spawned (parent_id linkage + same user). These tests pin that guard.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from uuid import uuid4
@@ -14,6 +15,10 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.subagent_results import (
+    PARENT_RUN_KEY,
+    REPORTS_TO_PARENT_KEY,
+)
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services import subagent_service as subagent_module
 from app.modules.agent.services.subagent_service import (
@@ -113,7 +118,12 @@ class _CommittingUowFactory:
         return self
 
     async def __aenter__(self):
-        return SimpleNamespace(session=SimpleNamespace(), commit=self._commit)
+        # A session with no children in it: the spawn finds nothing earlier
+        # to hand back, and creates one.
+        session = SimpleNamespace(
+            execute=AsyncMock(), scalar=AsyncMock(return_value=None), flush=AsyncMock()
+        )
+        return SimpleNamespace(session=session, commit=self._commit)
 
     async def __aexit__(self, exc_type, exc, tb):
         return None
@@ -187,6 +197,20 @@ async def test_self_spawn_without_name_named_parent_bypasses_grant(monkeypatch):
     assert captured.create_kwargs["agent_name"] == "parent"
     assert captured.create_kwargs["require_execute_grant"] is False
     assert captured.run_kwargs["require_execute_grant"] is False
+
+
+async def test_a_spawned_child_reports_to_the_run_that_spawned_it(monkeypatch):
+    """Only children spawned with the mark have results delivered, so one
+    spawned before delivery existed is never delivered late."""
+    deps = _deps(uuid4())
+    captured = _patch_spawn(monkeypatch)
+    service = SubAgentService(_CommittingUowFactory(), parent_runtime=_parents)
+
+    await service.spawn(deps, agent_name=None, input_data="Count the issues.")
+
+    metadata = captured.create_kwargs["metadata"]
+    assert metadata[REPORTS_TO_PARENT_KEY] is True
+    assert metadata[PARENT_RUN_KEY] == str(deps.agent_run_id)
 
 
 async def test_self_spawn_with_own_name_bypasses_grant(monkeypatch):

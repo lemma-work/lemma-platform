@@ -248,6 +248,112 @@ async def verify_installation(access_token: str, installation_id: str) -> bool:
     return False
 
 
+#: Pages of `/user/installations` read when proving one is administered. A
+#: person with more than this many visible installations is not a case worth a
+#: longer walk; failing to find it refuses the claim, the safe direction.
+_MAX_INSTALLATION_PAGES = 10
+_PER_PAGE = 100
+
+
+async def _listed(
+    client: httpx.AsyncClient, access_token: str, installation_id: str
+) -> Installation | None:
+    """This installation as `/user/installations` lists it for this token."""
+    for page in range(1, _MAX_INSTALLATION_PAGES + 1):
+        response = await client.get(
+            _USER_INSTALLATIONS_URL,
+            headers=_headers(access_token),
+            params={"per_page": _PER_PAGE, "page": page},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        found = payload.get("installations") if isinstance(payload, dict) else None
+        items = [item for item in (found or []) if isinstance(item, dict)]
+        for item in items:
+            if str(item.get("id")) == str(installation_id):
+                return item
+        if len(items) < _PER_PAGE:
+            return None
+    return None
+
+
+async def _is_the_user(
+    client: httpx.AsyncClient, access_token: str, account: Installation
+) -> bool:
+    response = await client.get(f"{_API_ROOT}/user", headers=_headers(access_token))
+    if response.status_code != 200:
+        return False
+    me = response.json()
+    return (
+        isinstance(me, dict)
+        and me.get("id") is not None
+        and str(me.get("id")) == str(account.get("id"))
+    )
+
+
+async def _is_org_admin(
+    client: httpx.AsyncClient, access_token: str, organization: str
+) -> bool:
+    response = await client.get(
+        f"{_API_ROOT}/user/memberships/orgs/{quote(organization, safe='')}",
+        headers=_headers(access_token),
+    )
+    if response.status_code != 200:
+        return False
+    membership = response.json()
+    return (
+        isinstance(membership, dict)
+        and membership.get("role") == "admin"
+        and membership.get("state") == "active"
+    )
+
+
+async def administers(access_token: str, installation_id: str) -> bool:
+    """Whether this token's GitHub user controls that installation (audit H4).
+
+    Seeing an installation is not controlling it: a contractor with read on one
+    repository sees it in `/user/installations`. Binding an unbound installation
+    to a Lemma organization hands that organization the App's token on every
+    repository in it, so the claimant has to be the installation's owner on
+    GitHub's side -- the GitHub user it is installed on, or an admin of the
+    GitHub organization it is installed on (`members: read` in the manifest is
+    what lets a user token ask). Anything else, a failed call included, is no.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            item = await _listed(client, access_token, installation_id)
+            account = item.get("account") if item else None
+            if not isinstance(account, dict):
+                administered = False
+            elif account.get("type") == "User":
+                administered = await _is_the_user(client, access_token, account)
+            elif account.get("type") == _ORGANIZATION and account.get("login"):
+                administered = await _is_org_admin(
+                    client, access_token, str(account["login"])
+                )
+            else:
+                administered = False
+    except httpx.HTTPError, ValueError:
+        logger.warning(
+            "connectors.github_installation.administration_unproven.degraded",
+            exc_info=True,
+        )
+        return False
+    if not administered:
+        logger.info("connectors.github_installation.not_administered.denied")
+    return administered
+
+
+async def credentials_administer(
+    credentials: CredentialBlob, installation_id: str | None
+) -> bool:
+    """`administers`, for a credential blob as the connect flow holds it."""
+    token = _access_token(credentials)
+    if not token or not installation_id:
+        return False
+    return await administers(token, installation_id)
+
+
 async def resolve_outcome(
     access_token: str,
     *,
@@ -322,3 +428,18 @@ async def bound_external_ref(
     if not token:
         return None
     return (await resolve_outcome(token, stated=stated)).installation_id
+
+
+async def proved_external_ref(
+    connector_id: str, credentials: CredentialBlob, callback_url: str | None
+) -> tuple[str | None, bool]:
+    """``bound_external_ref``, and whether GitHub says the person controls it.
+
+    The proof decides only whether an installation nobody holds yet may be
+    bound (audit H4); asked here, with no connection held, by the one phase of
+    the callback that may make network calls.
+    """
+    external_ref = await bound_external_ref(connector_id, credentials, callback_url)
+    if not external_ref or (connector_id or "").strip().lower() != "github":
+        return external_ref, False
+    return external_ref, await credentials_administer(credentials, external_ref)

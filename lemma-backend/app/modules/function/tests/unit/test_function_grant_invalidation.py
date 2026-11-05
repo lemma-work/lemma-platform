@@ -113,4 +113,5 @@ async def test_a_payload_that_says_nothing_about_permissions_opens_no_connection
         function=SimpleNamespace(id=uuid4()),
         data=SimpleNamespace(permissions=None),
         user=SimpleNamespace(id=uuid4()),
+        request=SimpleNamespace(),
     )

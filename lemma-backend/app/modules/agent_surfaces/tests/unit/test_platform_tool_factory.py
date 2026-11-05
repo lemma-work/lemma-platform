@@ -103,8 +103,8 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
         surface, prefer_native=True
     )
 
-    assert credentials["api_key"] == "re_test"
-    assert credentials["from_address"] == "ops.acme@ops.lemma.work"
+    assert credentials.api_key.get_secret_value() == "re_test"
+    assert credentials.from_address == "ops.acme@ops.lemma.work"
 
 
 @pytest.mark.parametrize("platform", ["RESEND", "WHATSAPP", "TELEGRAM"])
@@ -211,11 +211,11 @@ async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
     await factory.build_toolsets(conversation=_conversation_for_surface(surface))
 
     assert built, "no WhatsApp toolset was built at all"
-    assert built[0]["access_token"] == "the-pools-token", (
+    assert built[0].access_token.get_secret_value() == "the-pools-token", (
         "the agent's tools were handed the deployment's token, so every send "
         "went out as a number the recipient has never seen"
     )
-    assert built[0]["phone_number_id"] == "pool-b"
+    assert built[0].phone_number_id == "pool-b"
 
 
 @pytest.mark.asyncio

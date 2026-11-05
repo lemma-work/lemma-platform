@@ -24,10 +24,12 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
+from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
+from app.modules.test_support.authz import allow_all_context
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.timeout(900)]
@@ -197,17 +199,9 @@ def _service(db_manager, *, waiting_on: str | None = None, owner: UUID | None = 
     )
 
 
-class _Ctx:
+def _person_ctx(user_id: UUID) -> Context:
     """An authorization context for the person whose sandbox this is."""
-
-    def __init__(self, user_id: UUID) -> None:
-        self.user_id = user_id
-        self.delegated_by_user_id = None
-        self.is_user_equivalent = False
-        self.pod_id = None
-
-    async def require(self, *_args, **_kwargs) -> None:
-        return None
+    return allow_all_context(user_id=user_id)
 
 
 async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
@@ -227,7 +221,7 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
     user_id = UUID(fixed_test_user["id"])
-    auth = _Ctx(user_id)
+    auth = _person_ctx(user_id)
     service = _service(db_manager)
 
     await _serve_the_site(ctx)

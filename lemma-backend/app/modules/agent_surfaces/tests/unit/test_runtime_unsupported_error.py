@@ -80,4 +80,4 @@ def test_polling_mode_makes_a_local_email_surface_supported(monkeypatch) -> None
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
     )
-    service._validate_runtime_supported(surface)  # does not raise
+    assert service._validate_runtime_supported(surface) is None

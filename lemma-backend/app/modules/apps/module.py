@@ -18,7 +18,7 @@ def _routers():
     return [app_router, app_access, public_app, public_sdk]
 
 
-def _register_streaq() -> None:
+def _register_periodic_work() -> None:
     import app.modules.apps.events.tasks  # noqa: F401
 
 
@@ -45,5 +45,5 @@ module = LemmaModule(
     name="apps",
     resource_names=_resource_names,
     routers=_routers,
-    register_streaq=_register_streaq,
+    register_periodic_work=_register_periodic_work,
 )

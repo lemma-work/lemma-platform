@@ -25,10 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.test_support.e2e.agent_work import run_approval_work
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 import json
 
-from app.modules.agent_surfaces.events.handlers import (
+from app.modules.agent_surfaces.composition import (
     build_surface_ingress,
     build_surface_turn_starter,
 )
@@ -88,32 +89,18 @@ def approval_script(final_text: str) -> list:
 async def run_deferred_reconciliation(
     db_session: AsyncSession, *, conversation_id, pod_id
 ) -> None:
-    """Do the half a platform webhook defers to the worker.
+    """Do the half a platform webhook hands to the worker.
 
-    Surface interactions call ``resolve_user_approval_internal`` with
-    ``defer_reconciliation=True``: the decision commits inline, but running the
-    approved tool and starting the resume run are handed to the
-    ``reconcile_agent_approval`` job so the webhook can answer immediately.
-    These tests drive the ingress directly and run no worker, so without this
-    no resume run is ever created. A denial needs nothing here — only an
-    approved tool defers.
+    A surface interaction records the decision with an
+    ``agent.approval.execute`` item, so the webhook can answer immediately;
+    the item runs the approved tool and starts the resume run. These tests
+    drive the ingress directly and run no worker, so without this no resume run
+    is ever created. A denial needs nothing here -- only an approved tool is
+    the worker's.
     """
-    from contextlib import asynccontextmanager
-
-    from app.modules.agent.events.handlers import reconcile_agent_approval_now
-
-    @asynccontextmanager
-    async def uow_factory():
-        yield SqlAlchemyUnitOfWork(db_session)
-
-    await reconcile_agent_approval_now(
-        {
-            "conversation_id": str(conversation_id),
-            "approval_id": TOOL_CALL_ID,
-            "pod_id": str(pod_id),
-        },
-        uow_factory=uow_factory,
-    )
+    del conversation_id, pod_id
+    await db_session.commit()
+    await run_approval_work()
 
 
 async def _tool_return(client: AsyncClient, *, pod_id: str, conversation_id) -> dict:
@@ -137,6 +124,7 @@ async def _staged(platform: SurfacePlatform, platform_fake, **kwargs) -> Surface
     )
 
 
+@pytest.mark.drives_work
 @pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
 async def test_a_tapped_approve_runs_the_tool_and_resumes_the_run(
     platform: SurfacePlatform,

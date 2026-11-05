@@ -8,8 +8,34 @@ class LemmaError(Exception):
     """Base exception for the Lemma SDK."""
 
 
+class LemmaDeprecationWarning(UserWarning):
+    """A call the server still serves but will stop serving.
+
+    A ``UserWarning``, not a ``DeprecationWarning``: Python hides the latter
+    outside ``__main__``, and the code calling a deprecated route is nearly
+    always a pod function or an agent's script, which is exactly who has to
+    see it. The message says what to call instead.
+    """
+
+
 class LemmaConfigError(LemmaError):
     """Raised when SDK configuration is missing or invalid."""
+
+
+class LemmaInvalidIdError(LemmaError, ValueError):
+    """An id that is not one: Lemma's ids are UUIDs.
+
+    Raised before any request is made. Still a ``ValueError``, so code that
+    caught the bare ``UUID()`` failure keeps working; the message says what was
+    given and what an id looks like, where Python's said "badly formed
+    hexadecimal UUID string"."""
+
+    def __init__(self, value: object) -> None:
+        self.value = value
+        super().__init__(
+            f"{str(value)!r} is not an id: Lemma ids are UUIDs, "
+            "like 0190f2c4-6a1e-7b3d-9c2a-4e5f6a7b8c9d."
+        )
 
 
 @dataclass
@@ -21,11 +47,25 @@ class LemmaAPIError(LemmaError):
     raw_response: Any | None = None
     request_id: str | None = None
 
+    @property
+    def connect_url(self) -> str | None:
+        """Where to connect or reconnect the account a connector needs.
+
+        Set on ``CONNECTION_REQUIRED`` and ``REAUTH_REQUIRED`` refusals (the
+        latter only for the account's owner, the one person who can fix it).
+        """
+        if isinstance(self.details, dict):
+            url = self.details.get("connect_url")
+            if isinstance(url, str) and url:
+                return url
+        return None
+
     def __str__(self) -> str:
         prefix = f"[{self.status_code}]"
         code = f" {self.code}:" if self.code else ""
+        link = f" Connect at {self.connect_url}" if self.connect_url else ""
         suffix = f" (request_id={self.request_id})" if self.request_id else ""
-        return f"{prefix}{code} {self.message}{suffix}"
+        return f"{prefix}{code} {self.message}{link}{suffix}"
 
 
 # Typed subclasses so callers can `except LemmaNotFoundError` / `except

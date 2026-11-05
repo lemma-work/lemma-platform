@@ -169,3 +169,10 @@ test("a note, and a message from somebody in the group, say so; a plain one says
     assert.equal(turns[1].human?.from, undefined);
     assert.deepEqual(Object.keys(turns[2].human ?? {}).sort(), ["at", "id", "text"]);
 });
+
+test("a conversation another teammate opened says which one", () => {
+    const origin = originOf({ source: "pod_ask", ask: { from_pod_name: "Support" } }, "CHAT");
+    assert.equal(origin.kind, "ask");
+    assert.equal(origin.label, "From Support");
+});
+

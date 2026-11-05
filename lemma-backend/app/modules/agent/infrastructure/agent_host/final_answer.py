@@ -24,6 +24,7 @@ from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import JsonObject
@@ -105,7 +106,8 @@ async def adopt_recorded_final_answer(
         return
     try:
         record = await read_final_answer(uow_factory, agent_run_id=agent_run_id)
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_if_database_unavailable(exc)
         # The stream-inferred answer, if any, still stands.
         logger.warning(
             "agent.agent_host.final_answer_read_failed.degraded", exc_info=True

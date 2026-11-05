@@ -45,7 +45,7 @@ def _surface(pod_id, platform=SurfacePlatform.WHATSAPP, *, created_offset=0):
 def _own_bot_surface(pod_id, platform=SurfacePlatform.TELEGRAM, *, created_offset=0):
     """A surface on a bot the pod brought itself — its own handle, its own address."""
     surface = _surface(pod_id, platform, created_offset=created_offset)
-    surface.account_id = uuid4()
+    surface.pod_connector_slug = "own-bot"
     surface.credential_mode = SurfaceCredentialMode.CUSTOM
     return surface
 
@@ -214,3 +214,25 @@ async def test_set_default_rejects_unknown_surface():
             platform=SurfacePlatform.WHATSAPP,
             surface_id=uuid4(),
         )
+
+
+async def test_set_default_answers_a_foreign_surface_on_another_platform_as_not_found():
+    """A surface in a pod the person cannot see is "not found" whatever its
+    platform. Checking the platform first answered "platform does not match"
+    for it, which says the id exists and what it is."""
+    pod_a, other_pod = uuid4(), uuid4()
+    foreign = _surface(other_pod, SurfacePlatform.TELEGRAM)
+    service, users = _service(
+        pod_ids=[pod_a],
+        surfaces_by_pod={pod_a: []},
+        preferences=UserPreferences(),
+        get_surface=lambda sid: foreign if sid == foreign.id else None,
+    )
+
+    with pytest.raises(AgentSurfaceNotFoundError):
+        await service.set_default_surface(
+            user_id=uuid4(),
+            platform=SurfacePlatform.WHATSAPP,
+            surface_id=foreign.id,
+        )
+    users.set_preferences.assert_not_awaited()

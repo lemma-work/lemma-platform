@@ -5,11 +5,10 @@ stream cannot be rebuilt from sequence 1 -- the host no longer has those events.
 Demanding 1 anyway rejects every batch it has left, forever, and the run emits
 nothing at all while reporting that the host never terminalized.
 
-These run against real Redis. They used to use an in-memory fake, which was
-reasonable while the acceptance rule lived in Python: the empty-vs-lost
-distinction had to be exercised deterministically. The rule now lives in the
-stream's own atomic append script, so a fake would only assert that a
-reimplementation of it agrees with itself.
+The rule lives in the stream's own atomic append script, so a hand-written fake
+would only assert that a reimplementation of it agrees with itself. These run
+the script itself, in fakeredis, which executes Lua against its emulation of
+the stream commands -- the real rule, without a Redis server.
 """
 
 from __future__ import annotations
@@ -19,11 +18,8 @@ from dataclasses import dataclass
 from uuid import UUID, uuid7
 
 import pytest
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
+from fakeredis.aioredis import FakeRedis
 
-from app.core.config import settings
-from app.core.infrastructure.redis.client import close_redis_clients
 from app.modules.agent.domain.agent_host import (
     AgentHostEvent,
     AgentHostEventBatch,
@@ -36,30 +32,26 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
 )
+from app.modules.agent.infrastructure.agent_host.event_intake import (
+    bounded_event_payload,
+)
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostProtocolViolation,
+    AgentHostSequenceGap,
 )
 
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _redis_available() -> bool:
-    try:
-        client = Redis.from_url(settings.redis_url, decode_responses=True)
-        await client.ping()
-        await client.aclose()
-        return True
-    except RedisError, OSError:
-        return False
-
-
 @pytest.fixture
 async def stream():
-    if not await _redis_available():
-        pytest.skip("redis is not reachable")
-    yield AgentHostEventStream()
-    await close_redis_clients()
+    # fakeredis runs the stream's own Lua append script in-process (with
+    # `lupa`), so the watermark rules are exercised as written without writing
+    # into whatever Redis answers on the developer's default port.
+    redis = FakeRedis(decode_responses=True)
+    yield AgentHostEventStream(client=redis)
+    await redis.aclose()
 
 
 @dataclass
@@ -202,3 +194,50 @@ class TestConcurrentBatches:
             2,
             3,
         ]
+
+
+class TestTrimmingFollowsTheConsumer:
+    """The stream used to be capped by length, and a run left without a
+    consumer for a few minutes -- a deploy -- lost its oldest unread events.
+    It is trimmed only below what the consumer has persisted now."""
+
+    async def test_a_trim_keeps_the_cursor_and_everything_after_it(
+        self, stream
+    ) -> None:
+        run_id, host_id = uuid7(), uuid7()
+        repo = _repo(_Lease(run_id, host_id), stream)
+        await repo.append_events(host_id=host_id, batch=_batch(run_id, [1, 2, 3, 4]))
+        read = await stream.read(run_id=run_id)
+
+        await stream.trim_consumed(run_id=run_id, cursor=read[1].stream_id)
+
+        kept = await stream.read(run_id=run_id)
+        assert [event.sequence for event in kept] == [2, 3, 4]
+
+    async def test_a_trim_to_the_newest_entry_is_not_a_lost_stream(
+        self, stream
+    ) -> None:
+        """An empty stream reads to the append script as one Redis lost, and it
+        would then accept a gap. The cursor's own entry is never trimmed."""
+        run_id, host_id = uuid7(), uuid7()
+        repo = _repo(_Lease(run_id, host_id), stream)
+        await repo.append_events(host_id=host_id, batch=_batch(run_id, [1, 2]))
+        read = await stream.read(run_id=run_id)
+
+        await stream.trim_consumed(run_id=run_id, cursor=read[-1].stream_id)
+
+        with pytest.raises(AgentHostSequenceGap):
+            await repo.append_events(host_id=host_id, batch=_batch(run_id, [5]))
+
+
+def test_an_oversized_event_keeps_its_small_fields():
+    """Refusing the batch would have the host resend it forever; dropping the
+    event would leave a gap the stream then refuses."""
+    payload = {"status": "completed", "output": "x" * 2_000, "error": None}
+
+    bounded = bounded_event_payload(payload, limit=500)
+
+    assert bounded["status"] == "completed"
+    assert bounded["error"] is None
+    assert "omitted" in bounded["output"]
+    assert bounded_event_payload({"text": "small"}, limit=500) == {"text": "small"}

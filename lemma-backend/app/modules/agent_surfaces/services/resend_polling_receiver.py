@@ -4,21 +4,29 @@ Resend's inbound webhook is push-only, so a runtime without a public HTTPS URL
 (the desktop app) never sees replies. This is the pull counterpart, mirroring
 the Telegram polling receiver: list the account's received emails, resolve each
 to its pod surface by recipient address exactly as the webhook controller does,
-and publish the same ``SurfaceWebhookReceivedEvent`` so the existing enrich →
-ingress path fills the body and runs the agent. The email id is the
-``source_event_id``, so an overlapping poll cannot double-deliver.
+and store it through the same acceptor, so the ``surface.ingest`` path fills
+the body and runs the agent. The email id is the ``source_event_id`` (minted
+as the webhook mints it), so an overlapping poll -- or the webhook delivering
+the same mail -- cannot store it twice. The cursor moves in the transaction
+that stores the email it passed.
 """
 
 from __future__ import annotations
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    ResendCredentials,
+    as_secret,
+)
+
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.events.inbox import stable_event_id
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import resolve_resend_api_key
@@ -26,7 +34,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
@@ -40,6 +47,8 @@ from app.modules.agent_surfaces.services.resend_recipients import (
 )
 from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
+    ReceiverFailureStreak,
+    ReceiverInbox,
     receiver_key,
 )
 
@@ -50,8 +59,12 @@ logger = get_logger(__name__)
 _RESEND_POLL_INTERVAL_SECONDS = 20.0
 _RESEND_POLL_PAGE_CAP = 10
 
+# Any: one row of Resend's received-emails list, provider JSON with no shape
+# until `normalize_resend_inbound` reads it. Stores it, with the cursor past it.
+ResendEmailIngest = Callable[[dict[str, Any]], Awaitable[None]]
 
-def resend_receiver_credentials() -> dict[str, Any] | None:
+
+def resend_receiver_credentials() -> ResendCredentials | None:
     """System Resend credentials for the poller, or ``None`` if the key is unset."""
     api_key = resolve_resend_api_key()
     if not api_key:
@@ -59,13 +72,14 @@ def resend_receiver_credentials() -> dict[str, Any] | None:
             "agent_surfaces.resend_polling_receiver.resend_system_surface_exists_but.diagnostic"
         )
         return None
-    return {"api_key": api_key}
+    return ResendCredentials(api_key=as_secret(api_key))
 
 
 def resend_candidate_from_surface(
-    surface: AgentSurfaceEntity, credentials: dict[str, Any]
+    surface: AgentSurfaceEntity, credentials: CredentialsLike
 ) -> NativeReceiverCandidate | None:
-    api_key = str(credentials.get("api_key") or "").strip()
+    resend = ResendCredentials.of(credentials)
+    api_key = (reveal_secret(resend.api_key) or "").strip()
     if not api_key:
         logger.debug(
             "agent_surfaces.resend_polling_receiver.resend_native_receiver_skipped_surface.diagnostic"
@@ -79,7 +93,7 @@ def resend_candidate_from_surface(
         platform=SurfacePlatform.RESEND,
         surface_ids=(surface.id,),
         credential_label="system",
-        credentials=credentials,
+        credentials=resend,
     )
 
 
@@ -100,39 +114,78 @@ def _emails_before_cursor(
 
 
 class ResendPollingReceiverRunner:
-    def __init__(self, candidate: NativeReceiverCandidate) -> None:
+    def __init__(
+        self,
+        candidate: NativeReceiverCandidate,
+        inbox: ReceiverInbox | None = None,
+        *,
+        ingest: ResendEmailIngest | None = None,
+    ) -> None:
         self._candidate = candidate
+        self._inbox = inbox or ReceiverInbox(candidate)
+        self._ingest = ingest or self._ingest_email
+        self._failures = ReceiverFailureStreak(
+            platform=candidate.platform,
+            credential_label=candidate.credential_label,
+        )
 
     async def run(self) -> None:
-        api_key = str(self._candidate.credentials.get("api_key") or "").strip()
-        if not api_key:
+        resend = ResendCredentials.of(self._candidate.credentials)
+        if not reveal_secret(resend.api_key):
             logger.debug(
                 "agent_surfaces.resend_polling_receiver.resend_native_receiver_missing_key.diagnostic"
             )
             return
 
-        service = ResendPlatformService({"api_key": api_key})
-        cursor = await _load_resend_cursor(self._candidate.key)
+        service = ResendPlatformService(ResendCredentials(api_key=resend.api_key))
+        cursor = await self._inbox.load_cursor(
+            legacy=lambda: _load_legacy_resend_cursor(self._candidate.key)
+        )
 
         while True:
             try:
-                new_items, newest_id = await self._collect_new_emails(service, cursor)
-                if newest_id and newest_id != cursor:
-                    # Oldest first, so a conversation's messages ingest in order.
-                    # On the first run new_items is empty (history is seeded, not
-                    # replayed), so this just advances the cursor.
-                    for item in reversed(new_items):
-                        await self._ingest_email(item)
-                    cursor = newest_id
-                    await _store_resend_cursor(self._candidate.key, cursor)
+                cursor = await self.poll_once(service, cursor)
+                self._failures.succeeded()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._failures.failed(exc)
+            await asyncio.sleep(_RESEND_POLL_INTERVAL_SECONDS)
+
+    async def poll_once(
+        self, service: ResendPlatformService, cursor: str | None
+    ) -> str | None:
+        """Ingest what arrived since ``cursor``; the cursor to resume from.
+
+        The cursor advances one email at a time, in the transaction that
+        stores it, so a storing failure stops it just short of that email and
+        the next poll retries from there. Storing is a row insert; whatever
+        goes wrong *processing* an email is the ingest item's to retry and,
+        past its attempts, to record -- it never holds the cursor.
+        """
+        new_items, newest_id = await self._collect_new_emails(service, cursor)
+        if not newest_id or newest_id == cursor:
+            return cursor
+        if not new_items:
+            # The first poll: history is seeded, not replayed.
+            await self._inbox.store_cursor(newest_id)
+            return newest_id
+        reached = cursor
+        # Oldest first, so a conversation's messages ingest in order.
+        for item in reversed(new_items):
+            try:
+                await self._ingest(item)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.debug(
-                    "agent_surfaces.resend_polling_receiver.resend_polling_receiver_error.diagnostic",
+                logger.warning(
+                    "agent_surfaces.resend_polling_receiver.email_ingest_failed.degraded",
+                    email_id=_email_id(item),
                     exc_info=True,
                 )
-            await asyncio.sleep(_RESEND_POLL_INTERVAL_SECONDS)
+                break
+            reached = _email_id(item) or reached
+        return reached
 
     async def _collect_new_emails(
         self, service: ResendPlatformService, cursor: str | None
@@ -169,7 +222,9 @@ class ResendPollingReceiverRunner:
         data = {**item, "email_id": item.get("id")}
         normalized = normalize_resend_inbound({"data": data})
         recipients = normalized.get("recipients") or []
+        email_id = _email_id(item)
         if not recipients:
+            await self._inbox.store_cursor(email_id)
             return
 
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
@@ -180,6 +235,7 @@ class ResendPollingReceiverRunner:
             logger.debug(
                 "agent_surfaces.resend_polling_receiver.resend_polling_no_surface_for_address.diagnostic"
             )
+            await self._inbox.store_cursor(email_id)
             return
 
         # Minted by the same helper the webhook uses. A deployment can be
@@ -194,46 +250,35 @@ class ResendPollingReceiverRunner:
                 "agent_surfaces.resend_polling_receiver.resend_email_has_no_identifier.degraded",
                 surface_id=str(surface.id),
             )
+            await self._inbox.store_cursor(email_id)
             return
-        event = SurfaceWebhookReceivedEvent(
-            event_id=stable_event_id({"event_id": source_event_id}),
+        # Keyed by the surface, as the webhook keys it: a deployment running
+        # both routes stores one email once.
+        await self._inbox.accept(
             source="resend",
             payload=normalized,
-            headers={"x-lemma-surface-event-mode": "native_receiver"},
+            cursor=email_id,
             surface_id=surface.id,
             source_event_id=source_event_id,
+            receiver_scope=str(surface.id),
         )
-        await EventPublisher.publish(event.stream_name(), event)
 
 
 def _resend_cursor_key(key: str) -> str:
     return f"agent_surfaces:resend_cursor:{key}"
 
 
-async def _load_resend_cursor(key: str) -> str | None:
+async def _load_legacy_resend_cursor(key: str) -> str | None:
+    """The cursor Redis held before receivers kept it in Postgres: read once."""
     redis = get_redis(url=settings.redis_url)
     try:
         raw = await redis.get(_resend_cursor_key(key))
-        if raw is None:
-            return None
-        return raw.decode() if isinstance(raw, bytes) else str(raw)
     except Exception:
-        # Warning, and it matters more than it looks: no cursor means "seed
-        # silently", so a Redis failure here makes the poller skip every email
-        # that arrived while it was unable to say where it had got to.
         logger.warning(
             "agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.degraded",
             exc_info=True,
         )
         return None
-
-
-async def _store_resend_cursor(key: str, cursor: str) -> None:
-    redis = get_redis(url=settings.redis_url)
-    try:
-        await redis.set(_resend_cursor_key(key), cursor)
-    except Exception:
-        logger.warning(
-            "agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.degraded",
-            exc_info=True,
-        )
+    if raw is None:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else str(raw)

@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TeamsReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 from urllib.parse import quote
 
@@ -10,6 +17,7 @@ from app.core.log.log import get_logger
 import aiohttp
 
 from app.core.net.aiohttp_client import new_aiohttp_session
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -17,7 +25,13 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
-from app.modules.agent_surfaces.platforms.common import payload_any
+from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts, PlacePrivacy
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.platforms.teams.line_changes import teams_line_changes
+from app.modules.agent_surfaces.platforms.teams.group_updates import (
+    teams_group_updates,
+)
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.adapter_egress import (
     TeamsSurfaceEgress,
@@ -48,6 +62,25 @@ def _graph_message_url(
     return f"{base}/{quote(str(message_id))}"
 
 
+def tenant_verified_address(user_principal_name: object) -> str | None:
+    """The sender's address, but only one their tenant proved it owns.
+
+    A Teams sender's address resolves to a Lemma user, and the run then
+    executes as that user. Entra's `mail` attribute is free text an
+    administrator (or a guest invitation) can set to anyone's address, so it
+    is never used. A user principal name's suffix has to be a domain the
+    tenant verified in DNS, so it cannot claim somebody else's -- except for a
+    guest, whose principal name is the host tenant's rewrite of a foreign
+    address (`alice_example.com#EXT#@host.onmicrosoft.com`) and proves nothing
+    about it. A sender with no such address goes through first-use
+    verification instead of being matched by email.
+    """
+    principal = str(user_principal_name or "").strip()
+    if "@" not in principal or "#ext#" in principal.lower():
+        return None
+    return principal
+
+
 class TeamsSurfaceAdapter(TeamsSurfaceEgress):
     platform = "TEAMS"
 
@@ -60,7 +93,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         return self._parser.parse(payload, headers)
 
     async def enrich_inbound_event(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent:
         del credentials
         item = await self._graph_message_for(event)
@@ -104,8 +137,8 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
             return None
 
         tenant_id = event.tenant_id
-        team_id = event.reply_target.get("team_id")
-        channel_id = event.reply_target.get("channel_id")
+        team_id = reply_target_as(event, TeamsReplyTarget).team_id
+        channel_id = reply_target_as(event, TeamsReplyTarget).channel_id
         message_id = event.external_message_id
         if not tenant_id or not team_id or not channel_id or not message_id:
             logger.debug(
@@ -126,8 +159,10 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
 
         graph_team_id = await client.resolve_graph_team_id(
             raw_team_id=str(team_id),
-            team_aad_group_id=event.reply_target.get("team_aad_group_id"),
-            service_url=event.reply_target.get("service_url"),
+            team_aad_group_id=reply_target_as(
+                event, TeamsReplyTarget
+            ).team_aad_group_id,
+            service_url=reply_target_as(event, TeamsReplyTarget).service_url,
         )
         if not graph_team_id:
             logger.debug(
@@ -156,6 +191,51 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         )
         return None
 
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        return teams_group_updates(payload)
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        return teams_line_changes(payload, self._parser)
+
+    async def read_place_privacy(
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
+    ) -> PlaceFacts | None:
+        """A group chat is its members'; a team channel is what Graph says its
+        ``membershipType`` is. None when Graph cannot be asked."""
+        del credentials
+        if str(event.metadata.get("channel_type") or "").lower() == "groupchat":
+            return PlaceFacts(privacy=PlacePrivacy.PRIVATE)
+        target = reply_target_as(event, TeamsReplyTarget)
+        if not event.tenant_id or not target.team_id or not target.channel_id:
+            return None
+        token = await self._get_graph_token(event.tenant_id)
+        if not token:
+            return None
+        try:
+            graph_team_id = await client.resolve_graph_team_id(
+                raw_team_id=str(target.team_id),
+                team_aad_group_id=target.team_aad_group_id,
+                service_url=target.service_url,
+            )
+            if not graph_team_id:
+                return None
+            channel = await client.get_json(
+                f"{client.GRAPH_BASE}/teams/{quote(graph_team_id)}"
+                f"/channels/{quote(str(target.channel_id))}?$select=membershipType",
+                token,
+            )
+        except aiohttp.ClientError, TimeoutError:
+            logger.info("agent_surfaces.teams.place_privacy_unknown.observed")
+            return None
+        membership = str((channel or {}).get("membershipType") or "").lower()
+        if membership == "standard":
+            return PlaceFacts(privacy=PlacePrivacy.PUBLIC)
+        if membership in ("private", "shared"):
+            return PlaceFacts(privacy=PlacePrivacy.PRIVATE)
+        return None
+
     def _text_with_attachments(
         self, event: ParsedInboundSurfaceEvent, attachments: list[dict[str, Any]]
     ) -> str:
@@ -167,7 +247,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         return f"{text}\n\n{attachment_text}" if text else attachment_text
 
     async def fetch_sender_profile(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> SurfaceSenderProfile | None:
         del credentials
         tenant_id = event.tenant_id
@@ -201,7 +281,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
                 ) as response:
                     if response.status < 400:
                         data = await response.json()
-                        email = payload_any(data, "mail", "userPrincipalName")
+                        email = tenant_verified_address(data.get("userPrincipalName"))
                         return SurfaceSenderProfile(
                             external_user_id=str(data.get("id") or bf_user_id or ""),
                             email=email,
@@ -252,7 +332,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
     async def fetch_thread_context(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         limit: int = 15,
     ):
@@ -267,7 +347,7 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
     async def download_attachment(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
@@ -297,18 +377,25 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         The response `properties` dict sometimes contains `email` depending on
         the tenant's Teams configuration. This does not require Graph admin consent.
         """
-        if not event.tenant_id:
+        conversation_id = reply_target_as(event, TeamsReplyTarget).conversation_id
+        if not event.tenant_id or not conversation_id:
+            return None
+        try:
+            base_url = client.bf_service_url(
+                reply_target_as(event, TeamsReplyTarget).service_url
+            )
+        except AgentSurfaceValidationError:
+            logger.warning(
+                "agent_surfaces.adapter.teams_service_url_refused.degraded",
+                exc_info=True,
+            )
             return None
         bot_token = await self._get_bot_token(event.tenant_id)
         if not bot_token:
             return None
 
-        conversation_id = event.reply_target.get("conversation_id")
-        if not conversation_id:
-            return None
-
         url = (
-            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"{base_url}"
             f"/v3/conversations/{quote(str(conversation_id))}/members/{quote(bf_user_id)}"
         )
         try:
@@ -328,13 +415,10 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
             )
             return None
 
-        # Standard fields: id, name, aadObjectId
-        # Teams-specific extension: `properties` may contain `email`
-        props = data.get("properties") or data.get("userPrincipalName") or {}
-        email = None
-        if isinstance(props, dict):
-            email = payload_any(props, "email", "userPrincipalName")
-        if not email:
-            # Some tenants return email directly on the member object
-            email = payload_any(data, "email", "userPrincipalName")
-        return email or None
+        # The roster's `email` is the directory's `mail`, which an administrator
+        # sets freely; only the principal name is bound to a verified domain.
+        props = data.get("properties")
+        principal = (
+            props.get("userPrincipalName") if isinstance(props, dict) else None
+        ) or data.get("userPrincipalName")
+        return tenant_verified_address(principal)

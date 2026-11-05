@@ -1,6 +1,6 @@
 """Unit tests for the LEMMA-harness capability layer.
 
-Covers: core/extra partitioning, current-time trailing injection, prompt-cache
+Covers: core/extra partitioning, where the run's context part sits, prompt-cache
 session affinity, and that deferred extra tools stay out of the initial request
 (discoverable via tool search) — all without a live stack.
 """
@@ -29,8 +29,8 @@ from app.modules.agent.capabilities.assembler import (
 )
 from types import SimpleNamespace
 
-from app.modules.agent.capabilities.current_time import CurrentTimeCapability
 from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
+from app.modules.agent.capabilities.run_context import RunContextCapability
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.registry import (
     pod_toolset,
@@ -96,8 +96,8 @@ def test_prompt_caching_keys_on_conversation_id():
     # (Google's rejects the whole request), so the generic path sends only the
     # baseline `user` lever.
     assert "openai_prompt_cache_key" not in settings
-    # Provider-specific headers (e.g. x-session-affinity for Fireworks) are
-    # added by subclasses registered via configure_caching_capability().
+    # No provider-specific headers: the protocol names a wire format, not a
+    # vendor, so nothing here may assume who is answering.
     assert "extra_headers" not in settings
 
 
@@ -113,9 +113,8 @@ def test_openai_compatible_settings_stay_inside_the_baseline_schema():
         400 Invalid JSON payload received.
         Unknown name "prompt_cache_key": Cannot find field.
 
-    on every turn of every Gemini conversation. Anything outside the baseline
-    Chat Completions schema belongs in a provider subclass registered through
-    `configure_caching_capability()`, never on the generic path.
+    on every turn of every Gemini conversation. Nothing outside the baseline
+    Chat Completions schema is sent on this protocol.
     """
     settings = PromptCachingCapability(conversation_id=uuid4()).get_model_settings()
 
@@ -170,6 +169,30 @@ def test_showing_your_work_is_taught_on_both_paths():
     remote = FRAGMENT_BY_TOOLSET.get(AgentToolset.USER_INTERACTION)
     assert remote is not None, "the remote-harness path lost the fragment"
     assert "display_resource" in remote.read_text()
+
+
+def test_independent_calls_are_invited_into_one_turn_on_both_paths():
+    """Nothing set or forbade parallel calls, and no fragment invited them, so
+    a run made one read per model turn. The reply rules are the one prompt every
+    run gets on both harnesses, so that is where the invitation lives."""
+    from app.modules.agent.domain.entities import Agent, Conversation
+    from app.modules.agent.domain.prompts import build_agent_instructions
+
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="reader",
+        instruction="",
+    )
+    for include_fragments in (True, False):
+        prompt = build_agent_instructions(
+            agent=agent,
+            conversation=conversation,
+            ctx=SimpleNamespace(run_toolsets=[]),
+            include_toolset_prompts=include_fragments,
+        )
+        assert "as parallel tool calls" in " ".join(prompt.split())
 
 
 def test_the_workspace_contract_follows_the_machine_the_commands_run_on():
@@ -250,9 +273,6 @@ async def test_the_memory_capability_is_appended_only_when_memory_is_enabled():
 @pytest.mark.anyio
 async def test_assembler_returns_capabilities_for_every_visible_toolset():
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.current_time import (
-        CurrentTimeCapability as _CT,
-    )
     from app.modules.agent.capabilities.prompt_caching import (
         PromptCachingCapability as _PC,
     )
@@ -276,7 +296,7 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
         isinstance(c, InstructedToolsetCapability) and c.name == "workspace_cli"
         for c in capabilities
     )
-    assert any(isinstance(c, _CT) for c in capabilities)
+    assert any(isinstance(c, RunContextCapability) for c in capabilities)
     assert any(isinstance(c, _PC) for c in capabilities)
     # No extra tools → no ToolSearch capability.
     assert not any(type(c).__name__ == "ToolSearch" for c in capabilities)
@@ -311,7 +331,33 @@ async def test_caching_capability_uses_the_lever_its_protocol_understands():
 
     anthropic_settings = await settings_for(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
     assert anthropic_settings["anthropic_cache_instructions"] == "5m"
+    # The history too, not only the prefix in front of it: without a
+    # message-level breakpoint every step of a run re-reads every message.
+    assert anthropic_settings["anthropic_cache_messages"] == "5m"
     assert "openai_user" not in anthropic_settings
+
+
+@pytest.mark.anyio
+async def test_affinity_is_keyed_on_the_pod_and_agent_a_real_run_carries():
+    """The production key, not the fallback: a real run context has a pod and
+    an agent name, and every conversation with that agent in that pod shares
+    the long start of its prompt."""
+    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.tools.context import ConversationContext
+
+    pod_id, conversation_id = uuid4(), uuid4()
+    ctx = ConversationContext(
+        user_id=uuid4(),
+        pod_id=pod_id,
+        conversation_id=conversation_id,
+        agent_name="researcher",
+    )
+    capabilities = await build_lemma_harness_tooling(
+        ctx=ctx, full_toolsets=[web_search_toolset], enable_prompt_caching=True
+    )
+    caching = next(c for c in capabilities if isinstance(c, PromptCachingCapability))
+
+    assert caching.get_model_settings()["openai_user"] == f"{pod_id}:researcher"
 
 
 class _FakeRepo:
@@ -516,6 +562,10 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     assert "0 of 2 done" in planned["reminder"]
     # The exact call to make, in the task's own words, so flipping it is copying.
     assert "- [x] Fetch the Q3 report" in planned["reminder"]
+    # Check off promptly -- but the list is no lock on the work: nothing says
+    # to finish one item before touching the next.
+    assert "as soon as it is finished" in planned["reminder"]
+    assert "before starting" not in planned["reminder"]
 
     flipped = await call({"todos": ["- [x] Fetch the Q3 report"]})
     assert flipped["todos"] == ["- [x] Fetch the Q3 report", "- [ ] Summarize"]
@@ -681,7 +731,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_current_time_and_deferral_in_real_run():
+async def test_run_context_and_deferral_in_real_run():
     visible = FunctionToolset[object]()
 
     @visible.tool_plain
@@ -703,22 +753,20 @@ async def test_current_time_and_deferral_in_real_run():
             for tool in info.function_tools
         }
         captured["settings"] = dict(info.model_settings or {})
-        parts = messages[-1].parts
-        captured["last_text"] = " ".join(getattr(part, "content", "") for part in parts)
-        captured["last_part"] = parts[-1]
         turns.append(list(messages))
-        # First pass calls a tool, forcing a second model request in the same run
-        # so the time note's once-per-run behaviour is exercised.
+        # First pass calls a tool, forcing a second model request in the same
+        # run, so where the part goes on a later request is exercised.
         if len(turns) == 1:
             return ModelResponse(parts=[ToolCallPart("visible_tool", {})])
         return ModelResponse(parts=[TextPart("done")])
 
+    context = "<run_context>\nthe run's context\n</run_context>"
     conversation_id = uuid4()
     agent = Agent(
         _deferring_model(model_fn),
         toolsets=[visible, extra.defer_loading()],
         capabilities=[
-            CurrentTimeCapability(),
+            RunContextCapability(context),
             PromptCachingCapability(conversation_id=conversation_id),
             ToolSearch(),
         ],
@@ -730,47 +778,68 @@ async def test_current_time_and_deferral_in_real_run():
     assert captured["defer"]["visible_tool"] is False
     assert captured["defer"]["hidden_tool"] is True
 
-    # The time note rides as a USER part, never a SystemPromptPart: Anthropic
-    # hoists system parts to the front of the system prompt, which would put a
-    # per-turn value ahead of the whole cacheable prefix.
-    first_turn = turns[0]
-    note_parts = [
-        part
-        for message in first_turn
-        for part in getattr(message, "parts", [])
-        if isinstance(part, UserPromptPart) and str(part.content).startswith("<notes>")
-    ]
-    assert len(note_parts) == 1
-    assert str(note_parts[0].content).endswith("</notes>")
+    def user_texts(messages: list[object]) -> list[str]:
+        return [
+            str(part.content)
+            for message in messages
+            for part in getattr(message, "parts", [])
+            if isinstance(part, UserPromptPart)
+        ]
+
+    # A USER part, never a SystemPromptPart: Anthropic hoists system parts to
+    # the front of the system prompt, ahead of the whole cacheable prefix.
     assert not any(
-        isinstance(part, SystemPromptPart) and str(part.content).startswith("<notes>")
-        for message in first_turn
+        isinstance(part, SystemPromptPart) and "<run_context>" in str(part.content)
+        for message in turns[0]
         for part in getattr(message, "parts", [])
     )
+    # First request: just before the person's message, which stays last.
+    assert user_texts(turns[0])[-2:] == [context, "hello"]
 
-    # The user's own message is the last thing the model reads; the note sits
-    # immediately before it.
-    request_parts = first_turn[-1].parts
-    user_texts = [
-        str(part.content) for part in request_parts if isinstance(part, UserPromptPart)
-    ]
-    assert user_texts[-1] == "hello"
-    assert user_texts[-2].startswith("<notes>")
-
-    # ...and it is added exactly once per run, not once per model request. The
-    # graph writes the capability's edit back into run state, so an unconditional
-    # append would accumulate a note per step.
+    # Later request: once, at the tail -- after the tool result, not left in
+    # the middle of a transcript the next run will replay without it.
     assert len(turns) == 2
-    second_turn_notes = [
-        part
-        for message in turns[1]
-        for part in getattr(message, "parts", [])
-        if isinstance(part, UserPromptPart) and str(part.content).startswith("<notes>")
-    ]
-    assert len(second_turn_notes) == 1
+    assert user_texts(turns[1]).count(context) == 1
+    tail = turns[1][-1].parts
+    assert isinstance(tail[-1], UserPromptPart) and tail[-1].content == context
+    assert user_texts(turns[1])[0] == "hello"
 
     # Prompt-cache session affinity is applied to the request settings.
     assert captured["settings"].get("openai_user") == str(conversation_id)
+
+
+@pytest.mark.anyio
+async def test_on_anthropic_the_context_part_marks_the_prefix_before_it():
+    """The breakpoint goes in front of the part, which moves every step: one
+    after it would cache a prefix no later request starts with."""
+    from pydantic_ai.messages import CachePoint, ModelMessage, ModelRequest
+
+    history: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="earlier question")]),
+        ModelResponse(parts=[TextPart("earlier answer")]),
+    ]
+    seen: list[list[object]] = []
+
+    def model_fn(messages, info: AgentInfo) -> ModelResponse:
+        del info
+        seen.append(list(messages))
+        return ModelResponse(parts=[TextPart("done")])
+
+    context = "<run_context>\nx\n</run_context>"
+    agent = Agent(
+        FunctionModel(model_fn),
+        capabilities=[RunContextCapability(context, mark_cache_boundary=True)],
+    )
+    await agent.run("hello", message_history=history, deps=object())
+
+    part = next(
+        part
+        for message in seen[0]
+        for part in getattr(message, "parts", [])
+        if isinstance(part, UserPromptPart) and isinstance(part.content, list)
+    )
+    assert isinstance(part.content[0], CachePoint)
+    assert part.content[1] == context
 
 
 # The 12 user-facing function tools (view_image is a separate, vision-gated
@@ -1018,7 +1087,7 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
 async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypatch):
     """Deferral hides a toolset's schemas. It must not hide what the tool means.
 
-    `message_user` returns immediately and the reply never comes back as a tool
+    `channel_post` returns immediately and the reply never comes back as a tool
     result, so an agent that only learns the tool exists — from the hint — and
     not how it behaves will send a message and then wait for something that
     cannot arrive. Wrapping the deferred toolset in a plain ToolsetCapability
@@ -1067,12 +1136,12 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     # Hidden from the prefix — an interactive assistant should not reach for
     # "message a colleague" or "go to sleep" without going looking first.
     assert {
-        "message_user",
-        "check_messages",
+        "channel_post",
+        "channel_read",
         "list_pod_members",
         "wait_for",
     } <= captured["deferred"]
-    assert not ({"message_user", "wait_for"} & captured["visible"])
+    assert not ({"channel_post", "wait_for"} & captured["visible"])
 
     # ...but the contract still rides in the prefix.
     messaging = [
@@ -1083,7 +1152,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     assert len(messaging) == 1, "deferring messaging dropped its instructions"
     instructions = messaging[0].get_instructions()
     assert "wait_for" in instructions
-    assert "background_instruction" in instructions
+    assert "channel_read(asked_by_me=True)" in instructions
 
 
 @pytest.mark.anyio
@@ -1214,7 +1283,7 @@ async def test_every_deferred_group_is_labelled(monkeypatch):
 
     assert hint is not None
     assert "Additional tools" not in hint
-    # The member lookup has to be discoverable, or message_user stays unusable
+    # The member lookup has to be discoverable, or channel_post stays unusable
     # for anyone the agent only knows by name.
     assert "list_pod_members" in hint
 
@@ -1263,7 +1332,7 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
     await agent.run("hi", deps=deps)
 
-    assert {"message_user", "list_pod_members"} <= captured["visible"]
+    assert {"channel_post", "list_pod_members"} <= captured["visible"]
 
 
 def test_the_deferred_hint_is_byte_stable_across_builds():

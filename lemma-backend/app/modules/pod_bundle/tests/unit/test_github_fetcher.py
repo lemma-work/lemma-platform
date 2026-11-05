@@ -239,3 +239,99 @@ async def test_stream_stops_when_size_cap_is_crossed(monkeypatch):
         )
     assert exc.value.code == "GITHUB_ARCHIVE_TOO_LARGE"
     assert body.yielded == 3
+
+
+# The pod's `github` connector refusing -- no connector declared, the person
+# has not connected -- is not the end of an import: a public repository needs
+# no account. The refusal is what the person sees only when it is the remedy.
+
+_CONNECT = "https://app.example/pods/p/connections?connector=github"
+
+
+def _refusing_runner(error):
+    async def run(operation_name, payload):
+        del operation_name, payload
+        raise error
+
+    return run
+
+
+async def test_a_public_repo_imports_anonymously_when_the_connector_refuses():
+    from app.modules.connectors.contracts.pod_connectors import (
+        ConnectionRequiredError,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"PK\x03\x04x")
+
+    fetcher = GithubBundleFetcher(
+        client=_client(handler),
+        operation_runner=_refusing_runner(
+            ConnectionRequiredError(
+                slug="github", connector_id="github", connect_url=_CONNECT
+            )
+        ),
+    )
+
+    assert await fetcher.fetch_zipball(owner="acme", repo="crm") == b"PK\x03\x04x"
+    assert fetcher.used_anonymous_access is True
+
+
+async def test_a_private_repo_reports_the_connection_it_needs():
+    """GitHub answers 404 for a private repository it was asked for
+    anonymously; the thing to tell the person is to connect, with the link."""
+    from app.modules.connectors.contracts.pod_connectors import (
+        ConnectionRequiredError,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    fetcher = GithubBundleFetcher(
+        client=_client(handler),
+        operation_runner=_refusing_runner(
+            ConnectionRequiredError(
+                slug="github", connector_id="github", connect_url=_CONNECT
+            )
+        ),
+    )
+
+    with pytest.raises(ConnectionRequiredError) as refused:
+        await fetcher.fetch_zipball(owner="acme", repo="secret")
+    assert refused.value.details["connect_url"] == _CONNECT
+
+
+async def test_a_pod_without_a_github_connector_says_so_for_a_private_repo():
+    from app.modules.connectors.contracts.pod_connectors import (
+        PodConnectorNotFoundError,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    fetcher = GithubBundleFetcher(
+        client=_client(handler),
+        operation_runner=_refusing_runner(PodConnectorNotFoundError("github")),
+    )
+
+    with pytest.raises(PodConnectorNotFoundError):
+        await fetcher.fetch_zipball(owner="acme", repo="secret")
+
+
+async def test_a_rate_limit_stays_a_rate_limit_when_the_connector_refused():
+    """It is retried as one; the connector's refusal would end the import."""
+    from app.modules.connectors.contracts.pod_connectors import (
+        PodConnectorNotFoundError,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429)
+
+    fetcher = GithubBundleFetcher(
+        client=_client(handler),
+        operation_runner=_refusing_runner(PodConnectorNotFoundError("github")),
+    )
+
+    with pytest.raises(GithubImportError) as exc:
+        await fetcher.fetch_zipball(owner="acme", repo="busy")
+    assert exc.value.code == "GITHUB_RATE_LIMITED"

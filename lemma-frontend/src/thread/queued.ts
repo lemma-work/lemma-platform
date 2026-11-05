@@ -25,6 +25,16 @@ export interface Queued {
      *  agent's context, and withdrawing it would hide what the agent is
      *  answering. */
     withdrawable: boolean;
+    /** Held behind a question the teammate asked: it is heard once the person
+     *  answers that, not before. Set only when true. */
+    waitingOnAnswer?: true;
+}
+
+/** Said while the teammate worked, which then stopped to ask something. The
+ *  run that answers the question carries it, so it is still owed a hearing
+ *  with nothing running -- unlike a message left behind by Stop. */
+export function isWaitingOnAnswer(message: RawMessage): boolean {
+    return isQueued(message) && Boolean(meta(message).waiting_on_answer);
 }
 
 function meta(message: RawMessage): Record<string, unknown> {
@@ -49,8 +59,10 @@ export function isWithdrawable(message: RawMessage): boolean {
  *  Only while a run is going. A run that ended without delivering them -- the
  *  person pressed Stop -- has nothing left to wait for, and a tray promising
  *  otherwise would be a promise nothing keeps; they are then drawn as what they
- *  are, messages that were sent. `withdrawn` hides the ones taken back here
- *  before the server's list catches up. */
+ *  are, messages that were sent. The exception is a run that ended on a
+ *  question: what was said meanwhile is held for the answer, and stays here
+ *  saying so. `withdrawn` hides the ones taken back here before the server's
+ *  list catches up. */
 export function splitQueued(
     messages: RawMessage[],
     running: boolean,
@@ -61,11 +73,13 @@ export function splitQueued(
     const ordered = [...messages].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
     for (const message of ordered) {
         if (message.id && withdrawn.has(message.id)) continue;
-        if (running && isQueued(message)) {
+        const held = isWaitingOnAnswer(message);
+        if ((running || held) && isQueued(message)) {
             queued.push({
                 id: message.id ?? "",
                 text: (message.text ?? message.content ?? "").trim(),
                 withdrawable: isWithdrawable(message),
+                ...(held ? { waitingOnAnswer: true as const } : {}),
             });
             continue;
         }

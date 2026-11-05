@@ -90,3 +90,30 @@ def test_str_plaintext_is_encrypted_then_idempotent():
 def test_str_empty_is_skipped():
     cipher = _cipher(_ring(("A", Fernet.generate_key()), primary="A"))
     assert _reencrypt_value(cipher, STR_COL, "", force=False) is None
+
+
+def test_every_registered_column_is_a_column_the_models_declare():
+    """A registry row naming a renamed column fails the whole walk on its
+    first statement, so nothing after it is ever re-encrypted."""
+    from app.core.crypto.rotation import REGISTRY
+    from app.core.infrastructure.db.base import Base
+    from app.modules.test_support.e2e_base import _import_e2e_models
+
+    _import_e2e_models()
+    missing = [
+        col.label
+        for col in REGISTRY
+        if col.table not in Base.metadata.tables
+        or col.column not in Base.metadata.tables[col.table].columns
+    ]
+    assert not missing
+
+
+def test_the_slack_configuration_tokens_are_re_encrypted():
+    from app.core.crypto.rotation import REGISTRY
+
+    labels = {col.label for col in REGISTRY}
+    assert {
+        "slack_configuration_tokens.access_token",
+        "slack_configuration_tokens.refresh_token",
+    } <= labels

@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import emit
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
+from app.modules.analytics.events.wiring import (
+    ProjectionReads,
+    actor_or_system,
+    origin_of,
 )
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
-from app.modules.analytics.events.wiring import actor_or_system, origin_of, router
 from app.modules.apps.domain.events import (
-    APP_EVENTS_STREAM,
     AppCreatedEvent,
     AppPublishedEvent,
 )
@@ -22,17 +17,15 @@ from app.modules.apps.domain.events import (
 WIRED = frozenset({"app.created", "app.published"})
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    APP_EVENTS_STREAM,
-    group="analytics-app",
-    consumer="analytics-app-consumer",
+@projection(
+    AppCreatedEvent.get_event_type(),
+    AppPublishedEvent.get_event_type(),
 )
 async def on_app_event(
     event: dict[str, object],
-    fs_logger: Logger,
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    reads: ProjectionReads | None = None,
 ) -> None:
+    reads = reads or ProjectionReads()
     event_type = event.get("event_type")
     if event_type not in {
         AppCreatedEvent.get_event_type(),
@@ -48,6 +41,7 @@ async def on_app_event(
                 "app.created",
                 actor=actor_or_system(created.user_id),
                 origin=origin,
+                organization_id=await reads.organization_of_pod(created.pod_id),
                 pod_id=created.pod_id,
                 properties={"pod_id": created.pod_id, "app_id": created.app_id},
             )
@@ -57,8 +51,9 @@ async def on_app_event(
             "app.published",
             actor=actor_or_system(published.user_id),
             origin=origin,
+            organization_id=await reads.organization_of_pod(published.pod_id),
             pod_id=published.pod_id,
             properties={"pod_id": published.pod_id, "app_id": published.app_id},
         )
 
-    await inbox.process("analytics.app", event, record)
+    await record()

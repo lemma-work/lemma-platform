@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
@@ -26,17 +26,23 @@ from app.modules.test_support.e2e.function_helpers import (
     connector_function_code,
     create_function,
     create_table,
+    declare_pod_connector,
     mcp_function_code,
     patch_connector_operation_execution,
     replace_function_resource_grants,
     replace_role_resource_grants,
     run_function,
     seed_connector_operation,
-    seed_user,
+    seed_pod_shared_account,
     typed_function_code,
     wait_for_run_completion,
 )
 from app.modules.test_support.e2e.waiters import eventually, wait_for_status
+from app.modules.test_support.e2e_authz import (
+    add_pod_member,
+    invite_org_member,
+    signup_user,
+)
 
 # `usefixtures` is deliberately NOT here. At module scope it made every test
 # boot a uvicorn backend server and a local sandbox server, including the ones
@@ -55,6 +61,7 @@ pytestmark = [
 ]
 
 
+@pytest.mark.slow  # prints latencies and asserts no budget: nightly, not a PR gate
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_concurrent_hot_runs_reports_average_execution_time(
@@ -143,9 +150,32 @@ async def {function_name}(ctx: FunctionContext, data: HotInput) -> HotResult:
         assert output["caller_user_id"]
 
 
+async def _grant_function_the_connector(
+    authenticated_client, pod_id: str, function_name: str, slug: str
+) -> None:
+    """The function may run ``slug``; the caller already may (POD visibility)."""
+    await replace_function_resource_grants(
+        authenticated_client,
+        pod_id,
+        function_name,
+        [
+            {
+                "resource_type": "function",
+                "resource_name": function_name,
+                "permission_ids": ["function.read"],
+            },
+            {
+                "resource_type": "connector",
+                "resource_name": slug,
+                "permission_ids": ["connector.use"],
+            },
+        ],
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
-async def test_function_connector_operation_resolves_user_owned_account_in_backend(
+async def test_function_runs_a_per_member_connector_as_the_invoking_member(
     authenticated_client,
     test_pod,
     fixed_test_user,
@@ -156,59 +186,31 @@ async def test_function_connector_operation_resolves_user_owned_account_in_backe
     suffix = uuid4().hex[:8]
     connector_id = f"dynamic_app_{suffix}"
     function_name = f"dynamic_app_func_{suffix}"
-    await seed_connector_operation(
+    seeded = await seed_connector_operation(
         db_session,
         connector_id=connector_id,
         organization_id=test_pod["organization_id"],
         user_id=fixed_test_user["id"],
         api_key="dynamic-secret",
     )
+    await declare_pod_connector(
+        authenticated_client,
+        pod_id,
+        slug=connector_id,
+        auth_config_id=seeded.auth_config_id,
+    )
 
-    function = await create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
             "name": function_name,
-            "description": "Function app operation using dynamic account resolution",
-            "code": connector_function_code(
-                function_name,
-                connector_id,
-            ),
+            "description": "Runs an operation through a per-member pod connector",
+            "code": connector_function_code(function_name, connector_id),
         },
     )
-    await replace_function_resource_grants(
-        authenticated_client,
-        pod_id,
-        function_name,
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ],
-    )
-    await replace_role_resource_grants(
-        authenticated_client,
-        pod_id,
-        "POD_ADMIN",
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ],
+    await _grant_function_the_connector(
+        authenticated_client, pod_id, function_name, connector_id
     )
 
     with patch_connector_operation_execution(connector_id):
@@ -227,8 +229,9 @@ async def test_function_connector_operation_resolves_user_owned_account_in_backe
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
-async def test_function_connector_operation_resolves_agent_owned_account_in_backend(
+async def test_function_runs_a_shared_connector_as_the_account_its_owner_shared(
     authenticated_client,
+    async_client,
     test_pod,
     fixed_test_user,
     db_session,
@@ -236,73 +239,55 @@ async def test_function_connector_operation_resolves_agent_owned_account_in_back
 ):
     pod_id = test_pod["id"]
     suffix = uuid4().hex[:8]
-    connector_id = f"fixed_app_{suffix}"
-    function_name = f"fixed_app_func_{suffix}"
-    fixed_account_owner = await seed_user(db_session)
-    account = await seed_connector_operation(
+    connector_id = f"shared_app_{suffix}"
+    function_name = f"shared_app_func_{suffix}"
+    # A colleague in the pod: a shared account serves only while its owner is
+    # still a member.
+    owner = await signup_user(async_client, "shared-account-owner")
+    owner_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=test_pod["organization_id"],
+        user=owner,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=owner_member["id"],
+        role="POD_USER",
+    )
+    seeded = await seed_connector_operation(
         db_session,
         connector_id=connector_id,
         organization_id=test_pod["organization_id"],
-        user_id=fixed_account_owner.id,
-        api_key="fixed-secret",
+        user_id=UUID(owner["id"]),
+        api_key="shared-secret",
+    )
+    shared = await seed_pod_shared_account(
+        db_session, pod_id=pod_id, account=seeded.account
+    )
+    await declare_pod_connector(
+        authenticated_client,
+        pod_id,
+        slug=connector_id,
+        auth_config_id=seeded.auth_config_id,
+        mode="SHARED",
+        shared_pod_account_id=shared,
     )
 
-    function = await create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
             "name": function_name,
-            "description": "Function app operation using fixed account resolution",
-            "code": connector_function_code(
-                function_name,
-                connector_id,
-                account_id=str(account.id),
-            ),
+            "description": "Runs an operation through a shared pod connector",
+            "code": connector_function_code(function_name, connector_id),
         },
     )
-    await replace_function_resource_grants(
-        authenticated_client,
-        pod_id,
-        function_name,
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-            {
-                "resource_type": "connector_account",
-                "resource_name": str(account.id),
-                "permission_ids": ["connector_account.use"],
-            },
-        ],
-    )
-    await replace_role_resource_grants(
-        authenticated_client,
-        pod_id,
-        "POD_ADMIN",
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-            {
-                "resource_type": "connector_account",
-                "resource_name": str(account.id),
-                "permission_ids": ["connector_account.use"],
-            },
-        ],
+    # The function's grant is on the connector, never on the account: which
+    # account the connector means was its owner's decision.
+    await _grant_function_the_connector(
+        authenticated_client, pod_id, function_name, connector_id
     )
 
     with patch_connector_operation_execution(connector_id):
@@ -310,18 +295,18 @@ async def test_function_connector_operation_resolves_agent_owned_account_in_back
             authenticated_client,
             pod_id,
             function_name,
-            {"message": "hello-fixed"},
+            {"message": "hello-shared"},
         )
 
     output = final_run["output_data"]
-    assert output["echoed_message"] == "hello-fixed"
-    assert output["used_api_key"] == "fixed-secret"
+    assert output["echoed_message"] == "hello-shared"
+    assert output["used_api_key"] == "shared-secret"
     assert output["caller_user_id"] == str(fixed_test_user["id"])
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
-async def test_function_connector_operation_fails_when_user_owned_account_missing(
+async def test_function_reports_connection_required_with_its_connect_link(
     authenticated_client,
     test_pod,
     fixed_test_user,
@@ -332,57 +317,29 @@ async def test_function_connector_operation_fails_when_user_owned_account_missin
     suffix = uuid4().hex[:8]
     connector_id = f"missing_account_app_{suffix}"
     function_name = f"missing_account_func_{suffix}"
-    await seed_connector_operation(
+    seeded = await seed_connector_operation(
         db_session,
         connector_id=connector_id,
         organization_id=test_pod["organization_id"],
     )
+    await declare_pod_connector(
+        authenticated_client,
+        pod_id,
+        slug=connector_id,
+        auth_config_id=seeded.auth_config_id,
+    )
 
-    function = await create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
             "name": function_name,
             "description": "Function app operation missing user account",
-            "code": connector_function_code(
-                function_name,
-                connector_id,
-            ),
+            "code": connector_function_code(function_name, connector_id),
         },
     )
-    await replace_function_resource_grants(
-        authenticated_client,
-        pod_id,
-        function_name,
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ],
-    )
-    await replace_role_resource_grants(
-        authenticated_client,
-        pod_id,
-        "POD_ADMIN",
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ],
+    await _grant_function_the_connector(
+        authenticated_client, pod_id, function_name, connector_id
     )
 
     final_run = await run_function(
@@ -394,8 +351,11 @@ async def test_function_connector_operation_fails_when_user_owned_account_missin
     )
 
     assert final_run["error"]
-    assert "ACCOUNT_RESOLUTION_ERROR" in final_run["error"]
-    assert "Connect your account first" in final_run["error"]
+    assert "CONNECTION_REQUIRED" in final_run["error"]
+    # The remedy travels with the refusal: where to connect, in this pod.
+    assert (
+        f"/pods/{pod_id}/connections?connector={connector_id}" in (final_run["error"])
+    )
 
 
 @pytest.mark.asyncio
@@ -410,6 +370,9 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     suffix = uuid4().hex[:8]
     function_name = f"api_timeout_{suffix}"
     table_name = f"timeout_records_{suffix}"
+    # Past the 2 s deadline set below, so the write only happens if the
+    # timeout failed to stop the execution.
+    write_after_seconds = 3
 
     await create_table(authenticated_client, pod_id, table_name)
 
@@ -428,7 +391,7 @@ class TimeoutResult(BaseModel):
     record_id: str
 
 async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutResult:
-    await asyncio.sleep(5)
+    await asyncio.sleep({write_after_seconds})
     pod = Pod.from_env()
     record = pod.table("{table_name}").create(
         {{
@@ -455,7 +418,10 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
     # `FunctionSettings`, and patching it on core's object would create an
     # attribute nothing reads while the real deadline stayed at its default --
     # the run would not time out and the test would fail for the wrong reason.
-    monkeypatch.setattr(function_settings, "function_api_deadline_seconds", 2)
+    deadline_seconds = 2
+    monkeypatch.setattr(
+        function_settings, "function_api_deadline_seconds", deadline_seconds
+    )
     response = await authenticated_client.post(
         f"/pods/{pod_id}/functions/{function_name}/runs",
         json={"input_data": {"title": "should-not-write"}},
@@ -475,7 +441,14 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
     assert final_run["error"]
     assert "timed out" in final_run["error"].lower()
 
-    await asyncio.sleep(4)
+    # The write the function would have made, had it kept running, lands
+    # `write_after_seconds` after its execution started. The run failed one
+    # deadline after that start, so the write would land no later than
+    # `write_after_seconds - deadline_seconds` after the failure was seen --
+    # measured from here rather than from the request, which a late sandbox
+    # start would put too early. Absence is evidence once that moment, plus a
+    # margin for the write itself, has passed.
+    await asyncio.sleep(max(0.0, write_after_seconds - deadline_seconds) + 2.0)
 
     rerun_response = await authenticated_client.get(
         f"/pods/{pod_id}/functions/{function_name}/runs/{run_id}"
@@ -516,7 +489,7 @@ class JobResult(BaseModel):
     result: str
 
 async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.1)
     return JobResult(result=data.text.upper())"""
 
     await create_function(
@@ -776,7 +749,7 @@ class ConcResult(BaseModel):
     doubled: int
 
 async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
-    await asyncio.sleep(2)
+    await asyncio.sleep(0.5)
     return ConcResult(doubled=data.n * 2)"""
 
     await create_function(
@@ -825,7 +798,7 @@ class ConcResult(BaseModel):
     doubled: int
 
 async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
-    await asyncio.sleep(3)
+    await asyncio.sleep(0.5)
     return ConcResult(doubled=data.n * 2)"""
 
     await create_function(
@@ -984,6 +957,14 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
             auth_config_id=install.id,
             credentials={"api_key": "unused-by-this-server"},
         )
+        # Operations run through a pod connector, named by its slug; the
+        # function names that and never the installation.
+        await declare_pod_connector(
+            authenticated_client,
+            test_pod["id"],
+            slug=connector_id,
+            auth_config_id=install.id,
+        )
 
         function = await create_function(
             authenticated_client,
@@ -991,7 +972,7 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
             {
                 "name": function_name,
                 "description": "Runs an MCP tool through the connectors SDK",
-                "code": mcp_function_code(function_name, install.name),
+                "code": mcp_function_code(function_name, connector_id),
             },
         )
         grants = [
@@ -1031,7 +1012,7 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
 # -- FunctionUseCases sagas with no direct HTTP entry point of their own -----
 #
 # upsert_function_for_import (bundle import), execute_function_as_workload
-# (agent-as-tool) and dispatch_function_for_workflow/cancel_function_run
+# (agent-as-tool), the workflow step's dispatch and cancel_function_run
 # (workflow node control) have no HTTP surface at all -- they're built the same
 # way their real callers build them (app/modules/agent/tools/
 # callable_tool_factory.py, function/infrastructure/workflow_control.py) via
@@ -1197,20 +1178,21 @@ async def test_execute_function_as_workload_runs_under_the_agent_delegated_conte
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
-async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_it(
+async def test_a_workflow_function_step_is_queued_and_the_worker_completes_it(
     authenticated_client, test_pod, fixed_test_user, db_manager, worker
 ):
-    """``dispatch_function_for_workflow`` is the workflow-node path
-    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.execute_function``):
-    it forces ASYNCHRONOUS dispatch even for an API function and returns
-    PENDING without running the sandbox inline, so the workflow engine can
-    suspend on the run id and let the ``FunctionRunCompleted`` event resume
-    it. Drive it against the real queue + worker."""
+    """The workflow-node path
+    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.execute_function``)
+    forces ASYNCHRONOUS dispatch even for an API function: it writes the run
+    and the item that starts it in the workflow's own transaction and returns
+    PENDING without running the sandbox inline, so the workflow can park on
+    the run id. Drive it against the real queue and worker."""
     from uuid import UUID
 
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-    from app.modules.function.api.dependencies import build_function_use_cases
-    from app.modules.function.domain.entities import FunctionRunStatus
+    from app.modules.function.infrastructure.workflow_control import (
+        FunctionControlAdapter,
+    )
 
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
@@ -1227,28 +1209,19 @@ async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_
         },
     )
 
-    use_cases = build_function_use_cases(
-        SessionUnitOfWorkFactory(db_manager.session_factory)
-    )
-    dispatched = await use_cases.dispatch_function_for_workflow(
-        pod_id=pod_id,
-        name=func_name,
-        input_data={"value": 41},
-        user_id=user_id,
-    )
+    async with SessionUnitOfWorkFactory(db_manager.session_factory)() as uow:
+        dispatched = await FunctionControlAdapter(uow).execute_function(
+            func_name, {"value": 41}, pod_id, user_id
+        )
 
     # PENDING, and NOT run inline even though this is an API function -- the
     # whole point of the workflow path is that the caller never blocks on the
     # sandbox round-trip.
-    assert dispatched.status == FunctionRunStatus.PENDING
-    assert dispatched.job_id
-    assert dispatched.id is not None
+    assert dispatched["status"] == "PENDING", dispatched
+    run_id = str(dispatched["run_id"])
 
     final_run = await wait_for_run_completion(
-        authenticated_client,
-        str(pod_id),
-        func_name,
-        str(dispatched.id),
+        authenticated_client, str(pod_id), func_name, run_id
     )
     assert final_run["status"] == "COMPLETED", final_run
     assert final_run["output_data"]["result"] == 42

@@ -106,25 +106,35 @@ async def _record_app_session(connection, session, user_id: UUID | str) -> None:
         return
 
     # Once per session, so the read is negligible -- and without it the event
-    # loses its pod group, which for a pod-scoped noun is most of its value.
-    pod_id = await _pod_of(app_id)
-    if pod_id is None:
+    # loses its groups, which for a pod-scoped noun is most of its value.
+    scope = await _scope_of(app_id)
+    if scope is None:
         return
+    pod_id, organization_id = scope
     emit(
         "app.session_started",
         actor=AnalyticsActor.user(user_id),
         origin=Origin(OriginKind.APP),
+        organization_id=organization_id,
         pod_id=pod_id,
         properties={"app_id": app_id, "pod_id": pod_id},
     )
 
 
-async def _pod_of(app_id: UUID) -> UUID | None:
+async def _scope_of(app_id: UUID) -> tuple[UUID, UUID] | None:
+    """The app's pod and the organization holding it, in one read."""
     from sqlalchemy import text
 
     from app.core.infrastructure.db.session import async_session_maker
 
     async with async_session_maker() as session:
-        return await session.scalar(
-            text("SELECT pod_id FROM apps WHERE id = :app_id"), {"app_id": app_id}
-        )
+        row = (
+            await session.execute(
+                text(
+                    "SELECT a.pod_id, p.organization_id FROM apps a "
+                    "JOIN pods p ON p.id = a.pod_id WHERE a.id = :app_id"
+                ),
+                {"app_id": app_id},
+            )
+        ).one_or_none()
+    return (row[0], row[1]) if row is not None else None

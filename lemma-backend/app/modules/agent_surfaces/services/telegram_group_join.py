@@ -21,6 +21,8 @@ question put to the bot.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from dataclasses import dataclass
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -48,7 +50,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
@@ -74,7 +76,7 @@ async def claim_telegram_group_join(
     Called before any session is open: spending the code is a Redis call and
     the hello a Telegram one, and neither should hold a connection.
     """
-    telegram = _telegram_adapter(request, adapters)
+    telegram = telegram_adapter_for(request, adapters)
     if telegram is None:
         return False
     parsed = await telegram.parse_inbound_event(request.payload, request.headers)
@@ -95,7 +97,7 @@ async def claim_telegram_group_join(
     return True
 
 
-def _telegram_adapter(
+def telegram_adapter_for(
     request: SurfaceIngressRequest, adapters: SurfacePlatformAdapterRegistry
 ) -> SurfacePlatformAdapterPort | None:
     """The Telegram adapter, when this delivery could be a Telegram update."""
@@ -113,7 +115,7 @@ def _telegram_adapter(
 @dataclass(frozen=True, slots=True)
 class _Adopted:
     surface: AgentSurfaceEntity
-    credentials: dict[str, object]
+    credentials: SurfaceCredentials
     hello: str
     created: bool
 
@@ -131,8 +133,7 @@ async def _adopt(
     groups = SurfaceGroupRepository(uow.session)
     group, created = await groups.ensure_noting_creation(
         pod_id=surface.pod_id,
-        surface_id=surface.id,
-        platform=SurfacePlatform.TELEGRAM.value,
+        surface=surface,
         external_channel_id=str(parsed.external_channel_id),
         title=_title(parsed),
     )
@@ -167,7 +168,7 @@ async def _say_hello(
         await telegram.send_message(
             credentials=adopted.credentials, event=parsed, message=adopted.hello
         )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.info(
             "agent_surfaces.telegram_group_join.hello_failed.observed",
             surface_id=str(adopted.surface.id),

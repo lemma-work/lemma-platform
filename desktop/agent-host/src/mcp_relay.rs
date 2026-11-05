@@ -57,8 +57,9 @@ pub(crate) const MAX_RELAY_LINE: usize = 8 * 1024 * 1024;
 const MAX_FIRST_LINE: usize = 64 * 1024;
 /// How long a new connection has to present the token.
 const AUTH_DEADLINE: Duration = Duration::from_secs(5);
-/// Bridge connections held at once. One per running agent is the workload.
-const MAX_CONNECTIONS: usize = 64;
+/// Bridge connections held at once. One per running agent is the workload, so
+/// this is the most runs a host may take (`config::MAX_SUPPORTED_RUNS`).
+const MAX_CONNECTIONS: usize = 128;
 /// How often a parked wait checks whether its run has ended.
 const RUN_CHECK: Duration = Duration::from_secs(5);
 
@@ -539,6 +540,7 @@ mod tests {
             mcp: serde_json::json!({ "token": "run-token" }),
             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
             system_prompt_delivery: None,
+            pre_approvals: Vec::new(),
         };
         let command = Command {
             command_id: Uuid::new_v4(),

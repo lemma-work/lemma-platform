@@ -1,5 +1,6 @@
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { capabilities, firstSentence } from "@/stage/colleagues";
+import { describeChoice, type Runtime } from "./runtimes";
 
 /** The agents behind a teammate, read off the wire.
  *
@@ -78,6 +79,40 @@ export interface AgentGrant {
     permissions: string[];
 }
 
+/** What an agent holds over a pod connector: running operations through it.
+ *  Granted by the connector's slug, which is what the agent's tool names. */
+export const CONNECTOR_USE = "connector.use";
+
+function isConnectorGrant(grant: AgentGrant): boolean {
+    return grant.resource.toLowerCase() === "connector";
+}
+
+/** The pod connectors an agent may use, by slug. */
+export function connectorGrantSlugs(grants: AgentGrant[]): string[] {
+    return grants.filter(isConnectorGrant).map((grant) => grant.name);
+}
+
+/** The agent's grants with its connector grants replaced by `slugs`: every
+ *  other grant goes back exactly as it was, because the server replaces the
+ *  whole set and a grant left out is a grant taken away. */
+export function withConnectorGrants(grants: AgentGrant[], slugs: string[]): AgentGrant[] {
+    const kept = grants.filter((grant) => !isConnectorGrant(grant));
+    const unique = [...new Set(slugs.map((slug) => slug.trim()).filter(Boolean))];
+    return [...kept, ...unique.map((slug) => ({ resource: "connector", name: slug, permissions: [CONNECTOR_USE] }))];
+}
+
+/** The body of `PUT /pods/{pod}/agents/{name}/permissions`. Resource types
+ *  go as the API spells them, lowercase. */
+export function grantsBody(grants: AgentGrant[]): { grants: { resource_type: string; resource_name: string; permission_ids: string[] }[] } {
+    return {
+        grants: grants.map((grant) => ({
+            resource_type: grant.resource.toLowerCase(),
+            resource_name: grant.name,
+            permission_ids: grant.permissions,
+        })),
+    };
+}
+
 export interface AgentDetail extends AgentRow {
     description: string;
     instruction: string;
@@ -85,14 +120,36 @@ export interface AgentDetail extends AgentRow {
      *  is named but the model is left to the profile's own default — the API
      *  drops `model_name` from the payload entirely in that case, so an empty
      *  string here and a missing key there are the same fact. */
-    runtime: { profile: string; model: string } | null;
+    runtime: PinnedRuntime | null;
     input: SchemaNote | null;
     output: SchemaNote | null;
     grants: AgentGrant[];
 }
 
+/** `agent_runtime` as stored. `settings` is kept whole -- every generation
+ *  field, not only the two this page edits -- because a save writes the
+ *  runtime back, and a field dropped here would be erased there. */
+export interface PinnedRuntime {
+    profile: string;
+    model: string;
+    settings: Record<string, unknown>;
+    /** A coding agent's option values for this agent alone — effort, mode —
+     *  keyed as the agent published them. Empty is "as the runtime has them". */
+    selections: Record<string, string>;
+}
+
+/** `GenerationSettings.reasoning_effort`, as the API spells it. */
+export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high"] as const;
+
 function text(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
+}
+
+/** The string-valued entries of an object: a selection is one of the values
+ *  an agent published, and those are strings. */
+function stringValues(value: unknown): Record<string, string> {
+    const entries = Object.entries(object(value) ?? {});
+    return Object.fromEntries(entries.filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== ""));
 }
 
 function list(value: unknown): unknown[] {
@@ -213,7 +270,14 @@ export function readAgentDetail(raw: unknown): AgentDetail {
         blurb: row.blurb || firstSentence(text(item.instruction)),
         description: text(item.description),
         instruction: typeof item.instruction === "string" ? item.instruction : "",
-        runtime: profile ? { profile, model: text(runtime?.model_name) } : null,
+        runtime: profile
+            ? {
+                profile,
+                model: text(runtime?.model_name),
+                settings: object(runtime?.settings) ?? {},
+                selections: stringValues(runtime?.config_selections),
+            }
+            : null,
         input: readSchema(item.input_schema),
         output: readSchema(item.output_schema),
         grants: list(permissions?.grants).map((entry) => {
@@ -268,16 +332,64 @@ export function whyNot(agent: Pick<AgentRow, "actions" | "front" | "broken" | "l
 export interface AgentDraft {
     description: string;
     instruction: string;
+    /** Empty is "not set here": the model's or the provider's own default. */
+    reasoningEffort: string;
+    /** Digits as typed; empty is unset. */
+    maxOutputTokens: string;
+    /** A coding agent's option values; see `PinnedRuntime.selections`. */
+    selections: Record<string, string>;
+    /** Carried, not edited: the settings live on it, so saving them writes it. */
+    runtime: PinnedRuntime | null;
 }
 
 export function draftOfAgent(detail: AgentDetail | null | undefined): AgentDraft {
+    const settings = detail?.runtime?.settings ?? {};
+    const effort = settings.reasoning_effort;
+    const cap = settings.max_output_tokens;
     return {
         description: (detail?.description ?? "").trim(),
         /* Not trimmed. An instruction is a document — its blank lines and its
            trailing newline are how it was written, and normalising them makes
            every load look like an edit. */
         instruction: detail?.instruction ?? "",
+        reasoningEffort: typeof effort === "string" ? effort : "",
+        maxOutputTokens: typeof cap === "number" ? String(cap) : "",
+        selections: { ...(detail?.runtime?.selections ?? {}) },
+        runtime: detail?.runtime ?? null,
     };
+}
+
+export interface AgentRuntimePatch {
+    profile_id: string;
+    model_name?: string;
+    settings: Record<string, unknown> | null;
+    config_selections?: Record<string, string>;
+}
+
+/** The pinned runtime with the edited settings written into it.
+ *
+ *  Whole, because `agent_runtime` is replaced rather than merged on PATCH:
+ *  the profile, the model, every other setting and the agent's selections go
+ *  back as they were — leaving the selections out would clear them. */
+function runtimeWithSettings(runtime: PinnedRuntime, draft: AgentDraft): AgentRuntimePatch {
+    const settings: Record<string, unknown> = { ...runtime.settings };
+    delete settings.reasoning_effort;
+    delete settings.max_output_tokens;
+    if (draft.reasoningEffort) settings.reasoning_effort = draft.reasoningEffort;
+    if (draft.maxOutputTokens.trim()) settings.max_output_tokens = Number(draft.maxOutputTokens.trim());
+    const selections = Object.fromEntries(Object.entries(draft.selections).filter(([, value]) => Boolean(value)));
+    return {
+        profile_id: runtime.profile,
+        ...(runtime.model ? { model_name: runtime.model } : {}),
+        settings: Object.keys(settings).length ? settings : null,
+        ...(Object.keys(selections).length ? { config_selections: selections } : {}),
+    };
+}
+
+function sameSelections(a: Record<string, string>, b: Record<string, string>): boolean {
+    const live = (selections: Record<string, string>) => Object.entries(selections).filter(([, value]) => Boolean(value));
+    const left = live(a);
+    return left.length === live(b).length && left.every(([key, value]) => b[key] === value);
 }
 
 /** Only what changed. `description` is nullable on the API and `instruction`
@@ -286,14 +398,22 @@ export function draftOfAgent(detail: AgentDetail | null | undefined): AgentDraft
 export function agentChanges(before: AgentDraft, after: AgentDraft): {
     description?: string | null;
     instruction?: string;
+    agent_runtime?: AgentRuntimePatch;
 } {
-    const patch: { description?: string | null; instruction?: string } = {};
+    const patch: { description?: string | null; instruction?: string; agent_runtime?: AgentRuntimePatch } = {};
     const description = after.description.trim();
     if (description !== before.description.trim()) {
         patch.description = description === "" ? null : description;
     }
     if (after.instruction !== before.instruction && after.instruction.trim() !== "") {
         patch.instruction = after.instruction;
+    }
+    const generation =
+        after.reasoningEffort !== before.reasoningEffort ||
+        after.maxOutputTokens.trim() !== before.maxOutputTokens.trim() ||
+        !sameSelections(before.selections, after.selections);
+    if (generation && after.runtime) {
+        patch.agent_runtime = runtimeWithSettings(after.runtime, after);
     }
     return patch;
 }
@@ -310,6 +430,10 @@ export function hasAgentChanges(before: AgentDraft, after: AgentDraft): boolean 
  */
 export function agentProblems(draft: AgentDraft): Partial<Record<keyof AgentDraft, string>> {
     const found: Partial<Record<keyof AgentDraft, string>> = {};
+    const cap = draft.maxOutputTokens.trim();
+    if (cap && !/^[1-9][0-9]*$/.test(cap)) {
+        found.maxOutputTokens = "A whole number of tokens, or empty for the model's own limit.";
+    }
     if (draft.instruction.trim() === "") {
         found.instruction = "An agent has to say what it is for. This cannot be emptied.";
     } else if (draft.instruction.length > MAX_INSTRUCTION) {
@@ -320,12 +444,21 @@ export function agentProblems(draft: AgentDraft): Partial<Record<keyof AgentDraf
     return found;
 }
 
-/** What a pinned runtime is called, when it is pinned at all. */
-export function runtimeLine(detail: Pick<AgentDetail, "runtime">): string {
+/** What a pinned runtime is called, when it is pinned at all.
+ *
+ *  `agent_runtime` holds the profile's id, which is nothing a person named.
+ *  Given the organization's runtimes — the whole list, retired ones included —
+ *  it says the profile's name the way the model picker does, and says when the
+ *  profile has been retired: an agent pinned to one cannot take a run, and
+ *  that is the one thing about it worth knowing. The id is the fallback while
+ *  the list loads, or for a profile this person cannot see. */
+export function runtimeLine(detail: Pick<AgentDetail, "runtime">, runtimes?: readonly Runtime[]): string {
     if (!detail.runtime) return "";
-    return detail.runtime.model
-        ? detail.runtime.profile + " · " + detail.runtime.model
-        : detail.runtime.profile;
+    const { profile, model } = detail.runtime;
+    const runtime = runtimes?.find((entry) => entry.id === profile);
+    const said = runtime ? describeChoice([runtime], { runtimeId: profile, model }) : "";
+    if (!runtime || !said) return model ? profile + " · " + model : profile;
+    return runtime.archived ? runtime.name + " (retired)" + said.slice(runtime.name.length) : said;
 }
 
 /** The addresses that stop answering if this agent goes.

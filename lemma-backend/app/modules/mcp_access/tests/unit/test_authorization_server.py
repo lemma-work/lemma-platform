@@ -91,7 +91,7 @@ async def test_authorize_holds_the_request_and_sends_the_browser_to_consent():
     assert held.pod_id == str(pod_id)
     # Nothing asked for means everything the server offers, for the person to
     # see on the consent screen.
-    assert held.scopes == ["pod:read", "pod:write"]
+    assert held.scopes == ["pod:read", "pod:write", "pod:events"]
 
 
 @pytest.mark.asyncio

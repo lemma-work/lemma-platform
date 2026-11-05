@@ -27,6 +27,21 @@ def test_changing_mobile_clears_verification_and_emits_cache_invalidation_event(
     assert events[0].user_id == user.id
 
 
+def test_a_telegram_handle_is_not_a_profile_field():
+    """A handle on a profile proved nothing, so a profile no longer holds one.
+
+    An older client may still send it; the profile ignores it rather than
+    storing a claim nobody checks.
+    """
+    user = UserEntity(email="test+tg@example.com")
+
+    user.update_profile(telegram_username="asha", first_name="Asha")
+
+    assert user.first_name == "Asha"
+    assert "telegram_username" not in user.model_dump()
+    assert user.collect_events() == []
+
+
 @pytest.mark.asyncio
 async def test_create_user_emits_signup_event_without_personal_org(
     user_service: UserService,
@@ -177,3 +192,18 @@ async def test_update_user_rejects_another_profiles_unverified_mobile_number(
 
     user_repository_mock.get_id_by_mobile_digits.assert_awaited_once_with("14155552671")
     user_repository_mock.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_user_records_how_the_person_signed_up(
+    user_service: UserService,
+    user_repository_mock: AsyncMock,
+):
+    user = UserEntity(email="test+provider@example.com")
+    user_repository_mock.get_by_email.return_value = None
+    user_repository_mock.create.return_value = user
+
+    await user_service.create_user(user, signup_method="google")
+
+    (event,) = user_repository_mock.create.await_args.args[0].collect_events()
+    assert event.method == "google"

@@ -191,7 +191,7 @@ async def test_a_vision_model_reads_the_image_and_the_run_carries_on(
     )
     # Already metered: the factory wraps what it builds, exactly as a run gets it.
     model = pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.public_snapshot(),
+        runtime_profile=resolved.runtime_snapshot().as_payload(),
         runtime_credentials=resolved.credentials,
     )
     assert isinstance(model, MeteredModel)

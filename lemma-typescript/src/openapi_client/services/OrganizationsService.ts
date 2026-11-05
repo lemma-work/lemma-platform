@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { NavigationResponse } from '../models/NavigationResponse.js';
 import type { OrganizationCreateRequest } from '../models/OrganizationCreateRequest.js';
+import type { OrganizationEffectivePermissionsResponse } from '../models/OrganizationEffectivePermissionsResponse.js';
 import type { OrganizationHomeResponse } from '../models/OrganizationHomeResponse.js';
 import type { OrganizationInvitationListResponse } from '../models/OrganizationInvitationListResponse.js';
 import type { OrganizationInvitationRequest } from '../models/OrganizationInvitationRequest.js';
@@ -436,6 +437,27 @@ export class OrganizationsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * My Permissions In An Organization
+     * The organization-level permission ids the caller holds here, such as `org.installation.manage`. Pod permissions are `/pods/{pod_id}/permissions/me`.
+     * @param organizationId
+     * @returns OrganizationEffectivePermissionsResponse Successful Response
+     * @throws ApiError
+     */
+    public static orgPermissionsMe(
+        organizationId: string,
+    ): CancelablePromise<OrganizationEffectivePermissionsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/permissions/me',
+            path: {
+                'organization_id': organizationId,
+            },
             errors: {
                 422: `Validation Error`,
             },

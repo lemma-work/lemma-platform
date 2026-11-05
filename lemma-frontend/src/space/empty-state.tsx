@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
-import { ChatIcon, FileIcon, LinkIcon, PlusIcon, UploadIcon } from "@/ui/icons";
+import { ChatIcon, FileIcon, FolderIcon, LinkIcon, PlusIcon, UploadIcon } from "@/ui/icons";
 import { EmptyPicture } from "./empty-art";
 import type { Empty, EmptyAction } from "./empty-copy";
 
@@ -11,6 +11,7 @@ import type { Empty, EmptyAction } from "./empty-copy";
 export type EmptyHandlers = {
     page?: () => void;
     upload?: () => void;
+    folder?: () => void;
     chat?: () => void;
     row?: () => void;
     reach?: () => void;
@@ -34,6 +35,8 @@ function Glyph({ action }: { action: EmptyAction }) {
             return <FileIcon size={16} />;
         case "upload":
             return <UploadIcon size={16} />;
+        case "folder":
+            return <FolderIcon size={16} />;
         case "row":
             return <PlusIcon size={16} />;
         case "reach":

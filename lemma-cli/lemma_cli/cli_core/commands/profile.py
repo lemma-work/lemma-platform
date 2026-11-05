@@ -7,7 +7,7 @@ import typer
 
 from ..io import emit
 from ..payload import read_json
-from ..state import run_with_client, state_from_ctx
+from ..state import err_console, run_with_client, state_from_ctx
 
 app = typer.Typer(help="View and edit the current user's Lemma profile.")
 
@@ -31,7 +31,15 @@ def update_profile(
     first_name: str | None = typer.Option(None, "--first-name"),
     last_name: str | None = typer.Option(None, "--last-name"),
     mobile_number: str | None = typer.Option(None, "--mobile-number", "--phone"),
-    telegram_username: str | None = typer.Option(None, "--telegram-username"),
+    telegram_username: str | None = typer.Option(
+        None,
+        "--telegram-username",
+        hidden=True,
+        help=(
+            "Deprecated and ignored. A Telegram account is linked by sharing "
+            "your contact with a Lemma bot, not by a handle on your profile."
+        ),
+    ),
     country: str | None = typer.Option(None, "--country"),
     timezone: str | None = typer.Option(None, "--timezone"),
     date_of_birth: str | None = typer.Option(None, "--date-of-birth"),
@@ -49,6 +57,11 @@ def update_profile(
 ) -> None:
     """Update your user profile."""
     state = state_from_ctx(ctx)
+    if telegram_username is not None:
+        err_console.print(
+            "--telegram-username is deprecated and ignored: share your contact "
+            "with a Lemma Telegram bot to link your account."
+        )
     payload = read_json(json_payload, file, required=False)
     payload.update(
         _clean_payload(
@@ -56,7 +69,6 @@ def update_profile(
                 "first_name": first_name,
                 "last_name": last_name,
                 "mobile_number": mobile_number,
-                "telegram_username": telegram_username,
                 "country": country,
                 "timezone": timezone,
                 "date_of_birth": date_of_birth,

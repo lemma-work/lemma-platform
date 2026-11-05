@@ -9,7 +9,6 @@ from pydantic import SecretStr
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.modules.decisions.config import DecisionsSettings
-from app.modules.decisions.domain.errors import DecisionUnavailableError
 from app.modules.decisions.infrastructure.providers.registry import build_provider
 from app.modules.decisions.infrastructure.rate_limit import OrganizationRateLimiter
 
@@ -73,14 +72,20 @@ def test_the_model_provider_is_the_default() -> None:
     assert build_provider(DecisionsSettings()).name == "model"
 
 
-def test_typesafe_is_chosen_by_setting_and_needs_its_key() -> None:
-    with pytest.raises(DecisionUnavailableError) as raised:
-        build_provider(DecisionsSettings(decision_provider="typesafe"))
-    assert raised.value.reason == "not_configured"
-
+def test_typesafe_is_chosen_by_setting_when_its_key_is_set() -> None:
     provider = build_provider(
         DecisionsSettings(
             decision_provider="typesafe", typesafe_api_key=SecretStr("sk-test")
         )
     )
     assert provider.name == "typesafe"
+
+
+def test_typesafe_without_its_key_falls_back_to_the_model() -> None:
+    """Decisions keep working on the deployment's model rather than failing
+    every call because one key is missing."""
+    provider = build_provider(
+        DecisionsSettings(decision_provider="typesafe", decision_model="fast-model")
+    )
+    assert provider.name == "model"
+    assert provider._model_name == "fast-model"

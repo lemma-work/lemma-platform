@@ -16,7 +16,7 @@ export type WebSearchResponse = {
      */
     message?: (string | null);
     /**
-     * Set when the search could not be run exactly as asked — for example a vertical this provider does not serve.
+     * Set when the search could not be run exactly as asked — for example a vertical this provider does not serve — or when it found nothing, which is not always the same as nothing existing.
      */
     note?: (string | null);
     /**

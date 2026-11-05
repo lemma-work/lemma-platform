@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from app.modules.connectors.domain.errors import (
+    OperationExecutionConflictError,
     OperationExecutionInfrastructureError,
     OperationExecutionNotFoundError,
+    OperationExecutionRejectedError,
     OperationNotFoundError,
 )
 from app.modules.pod_bundle.domain.errors import (
@@ -515,6 +517,50 @@ async def test_native_commit_reads_a_rejected_ref_update_as_a_branch_race():
             message="publish",
             expected_head="head-sha",
         )
+
+
+def _ref_update_refused_with(error: Exception):
+    async def runner(op, payload):
+        del payload
+        if op == "git_update_ref":
+            raise error
+        return {
+            "result": {
+                "git_get_ref": {"object": {"sha": "head-sha"}},
+                "repos_get_commit": {"commit": {"tree": {"sha": "base-tree"}}},
+                "git_create_blob": {"sha": "blob-sha"},
+                "git_create_tree": {"sha": "new-tree"},
+                "git_create_commit": {"sha": "new-commit"},
+            }[op]
+        }
+
+    return NativeGithubOps(runner).commit_files(
+        owner="acme",
+        repo="crm",
+        branch="main",
+        upserts={"pod.json": b"{}"},
+        deletes=set(),
+        message="publish",
+        expected_head="head-sha",
+    )
+
+
+async def test_a_ref_update_the_provider_conflicts_on_is_a_branch_race():
+    with pytest.raises(GithubBranchRaceError):
+        await _ref_update_refused_with(
+            OperationExecutionConflictError("", details={"upstream_status": 409})
+        )
+
+
+async def test_a_ref_update_branch_rules_refuse_is_not_a_branch_race():
+    """A refusal for its own reason -- branch rules, say -- is not "the branch
+    moved". Read as a race, it would tell the person the branch changed when it
+    had not, and send them to retry a write the rules will refuse again. The
+    refusal's status is 400, not 422, for this reason."""
+    refused = OperationExecutionRejectedError("", details={"upstream_status": 405})
+
+    with pytest.raises(OperationExecutionRejectedError):
+        await _ref_update_refused_with(refused)
 
 
 async def test_missing_atomic_connector_operation_is_a_stable_capability_error():

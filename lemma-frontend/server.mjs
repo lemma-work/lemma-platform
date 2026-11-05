@@ -3,8 +3,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
-import { attachVoiceGateway } from './server/voice-gateway.mjs';
-import { attachLiveGateway } from './server/live-gateway.mjs';
 
 const dev = process.argv.includes('--dev');
 const portIndex = process.argv.indexOf('--port');
@@ -49,24 +47,17 @@ const { default: next } = await import('next');
  * container's own name. */
 const host = process.env.LEMMA_FRONTEND_HOST?.trim() || undefined;
 
-// Next installs its own upgrade listener after the first HTTP request. Keep
-// that listener on a separate event bus so it never consumes voice sockets.
+// Next installs its own upgrade listener after the first HTTP request, on a
+// bus of its own so this server decides which upgrades reach it. Voice calls
+// no longer pass through here -- they go to the API -- so every one does.
 const nextUpgrades = new EventEmitter();
 const app = next({ dev, dir: here, hostname: host ?? '0.0.0.0', port, httpServer: nextUpgrades });
-await app.prepare(); // Loads Next's environment files before voice connections start.
+await app.prepare();
 const handle = app.getRequestHandler();
 const server = createServer((request, response) => handle(request, response));
-// One per voice model. Each gateway claims its own path and ignores the
-// other's, so which one the browser opens is the browser's choice —
-// NEXT_PUBLIC_VOICE_PROVIDER decides it, and both can be running at once.
-const gateways = [attachVoiceGateway(server), attachLiveGateway(server)];
-const VOICE_PATHS = new Set(['/api/voice', '/api/live']);
-server.on('upgrade', (request, socket, head) => {
-    if (!VOICE_PATHS.has(new URL(request.url, 'http://localhost').pathname)) nextUpgrades.emit('upgrade', request, socket, head);
-});
+server.on('upgrade', (request, socket, head) => nextUpgrades.emit('upgrade', request, socket, head));
 server.listen(port, host, () => console.log(`Lemma listening on ${host ?? '*'}:${port}`));
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
-    for (const gateway of gateways) for (const client of gateway.clients) client.close(1001, 'Server restarting');
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
 });

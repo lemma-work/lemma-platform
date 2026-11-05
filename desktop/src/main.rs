@@ -103,7 +103,7 @@ mod artifact_install;
 use interprocess::local_socket::GenericFilePath;
 #[cfg(windows)]
 use interprocess::local_socket::GenericNamespaced;
-use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
+use interprocess::local_socket::{prelude::*, Name};
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 /// Port `cargo tauri dev` serves `frontendDist` on. A packaged build has no
@@ -142,10 +142,18 @@ const CANVAS_DARK: tauri::window::Color = tauri::window::Color(19, 19, 17, 255);
 /// installation's daemon, adopt its runtime, and reset its pods. Baked in at
 /// compile time, so the isolation travels with the artifact instead of
 /// depending on how it was launched.
-const DATA_DIR_NAME: &str = match option_env!("LEMMA_DESKTOP_DATA_DIR_NAME") {
-    Some(name) => name,
-    None => "Lemma",
-};
+const DATA_DIR_NAME: &str = data_dir_name(option_env!("LEMMA_DESKTOP_DATA_DIR_NAME"));
+
+/// An empty name is no name. `make desktop-dmg` once passed the variable empty
+/// for a release build, and `option_env!` read that as `Some("")` -- so the app
+/// kept its data in Application Support itself, where resetting local data
+/// would have deleted every other app's data with it.
+const fn data_dir_name(configured: Option<&'static str>) -> &'static str {
+    match configured {
+        Some(name) if !name.is_empty() => name,
+        _ => "Lemma",
+    }
+}
 
 /// Whether a shipped pattern already covers this concrete origin.
 ///

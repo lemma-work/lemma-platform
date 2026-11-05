@@ -6,10 +6,15 @@ one implementation instead of duplicating reserve/record/release plumbing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent.domain.runtime_profiles import (
+    MODEL_PROVIDER_PROTOCOLS,
+    RuntimeProfileProtocol,
+)
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.usage.contracts import (
     AgentRunUsage,
@@ -39,6 +44,19 @@ def usage_source_for(audience: Audience) -> str:
     return outside_source_for(audience) or "agent_run"
 
 
+def metered_per_request(runtime_profile: Mapping[str, object | None] | None) -> bool:
+    """Whether this run's model is called from here and metered as it streams.
+
+    A model-provider run is; an Agent Host run reports its usage at the end.
+    Compared as the protocol enum, not as the strings it is spelled with.
+    """
+    protocol = (runtime_profile or {}).get("protocol")
+    try:
+        return RuntimeProfileProtocol(str(protocol)) in MODEL_PROVIDER_PROTOCOLS
+    except ValueError:
+        return False
+
+
 class RunUsageRecorder:
     """Thin façade over `UsageService` for the agent run lifecycle."""
 
@@ -56,10 +74,7 @@ class RunUsageRecorder:
         runtime_profile: dict[str, object | None],
         outside_audience: bool = False,
     ) -> UsageReservation | None:
-        if runtime_profile.get("protocol") in {
-            "OPENAI_COMPATIBLE",
-            "ANTHROPIC_COMPATIBLE",
-        }:
+        if metered_per_request(runtime_profile):
             await check_run_budget(
                 factory=self.uow_factory,
                 organization_id=organization_id,
@@ -107,10 +122,7 @@ class RunUsageRecorder:
         runtime_profile: dict[str, object | None] | None,
         status: str,
     ) -> None:
-        if runtime_profile and runtime_profile.get("protocol") in {
-            "OPENAI_COMPATIBLE",
-            "ANTHROPIC_COMPATIBLE",
-        }:
+        if metered_per_request(runtime_profile):
             await finalize_metered_run(agent_run_id, status, factory=self.uow_factory)
 
     async def release(self, reservation: UsageReservation | None) -> None:
@@ -129,10 +141,7 @@ class RunUsageRecorder:
         status: str,
         reservation: UsageReservation | None,
     ) -> None:
-        if runtime_profile and runtime_profile.get("protocol") in {
-            "OPENAI_COMPATIBLE",
-            "ANTHROPIC_COMPATIBLE",
-        }:
+        if metered_per_request(runtime_profile):
             return
         async with self.uow_factory() as uow:
             await self._service(uow).record_agent_run_usage(

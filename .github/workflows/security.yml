@@ -2,6 +2,13 @@ name: Security
 
 on:
   pull_request:
+  # The merge queue. Each gating check here runs on a merge group exactly as
+  # on a pull request, scoped by the same filters to the queued pull request's
+  # own change. CodeQL does not: its analyses never fail on a finding, so in
+  # the queue they would only upload results against a temporary ref -- see
+  # `codeql-python`.
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
@@ -13,7 +20,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: security-${{ github.ref }}
+  # Superseded pull request pushes are cancelled; pushes to main never are.
+  # Main's runs are the ones that warm every cache a pull request restores
+  # from, and a burst of merges used to cancel all but the last of them.
+  # On main the group is the commit itself, so no run there is ever queued
+  # behind, or cancelled by, the next merge. (From #796, which merged into a
+  # stacked branch and never reached main.)
+  group: security-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,12 +42,13 @@ jobs:
       backend_image: ${{ steps.scope.outputs.backend_image }}
     steps:
       - uses: actions/checkout@v7
+      # On a merge group this diffs the group's own base_sha..head_sha; the
+      # note on the same step in ci.yml says why that is the right diff.
       - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
-            python:
-              - '**/*.py'
+            python_manifests:
               - '**/pyproject.toml'
               - '**/uv.lock'
               - '.github/workflows/security.yml'
@@ -67,12 +81,27 @@ jobs:
               - 'lemma-pod-bundle/pyproject.toml'
               - 'lemma-pod-bundle/uv.lock'
               - '.github/workflows/security.yml'
+      # Python that ships, which is what CodeQL's findings are about. A pull
+      # request that only edits tests no longer starts the 5-minute analysis;
+      # the push to main and the weekly schedule still analyse everything.
+      # Its own step because a negated pattern needs `every`, and that
+      # quantifier would apply to every filter in a step.
+      - uses: dorny/paths-filter@v4
+        id: python-code
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**/*.py'
+              - '!**/tests/**'
+              - '!**/test_*.py'
+              - '!**/conftest.py'
       - name: Resolve scheduled/manual scope
         id: scope
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PYTHON_CHANGED: ${{ steps.filter.outputs.python }}
+          PYTHON_CHANGED: ${{ steps.python-code.outputs.code == 'true' || steps.filter.outputs.python_manifests == 'true' }}
           JAVASCRIPT_CHANGED: ${{ steps.filter.outputs.javascript }}
           DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.dependencies }}
           PYTHON_DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.python_dependencies }}
@@ -96,7 +125,12 @@ jobs:
     timeout-minutes: 15
     name: Dependency review
     needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.dependencies == 'true'
+    # The action reads the base and head to compare from a merge group's
+    # payload as it does from a pull request's, so the queue gets the same
+    # review rather than a skip that "Security passed" would count as a pass.
+    if: >-
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+      needs.changes.outputs.dependencies == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -108,7 +142,16 @@ jobs:
     timeout-minutes: 30
     name: CodeQL (python)
     needs: changes
-    if: needs.changes.outputs.python == 'true'
+    # Not in the merge queue. Neither analysis fails on a finding -- the
+    # findings comment below reports them, and "Security passed" fails only on
+    # an analysis that broke -- so a queue run would gate nothing. It would
+    # still spend about five runner-minutes per entry and upload SARIF against
+    # a `gh-readonly-queue/main/...` ref that is deleted moments later. The
+    # pull request's run already analysed this change, and the push to main
+    # analyses what lands.
+    if: >-
+      github.event_name != 'merge_group' &&
+      needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -126,7 +169,10 @@ jobs:
     timeout-minutes: 30
     name: CodeQL (javascript-typescript)
     needs: changes
-    if: needs.changes.outputs.javascript == 'true'
+    # Not in the merge queue, for the reason on `codeql-python`.
+    if: >-
+      github.event_name != 'merge_group' &&
+      needs.changes.outputs.javascript == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -155,7 +201,12 @@ jobs:
     needs:
       - codeql-python
       - codeql-javascript
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    # Only when an analysis actually ran: with both skipped there is nothing
+    # to report, and the job would still take a runner slot.
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' &&
+      (needs.codeql-python.result != 'skipped' ||
+       needs.codeql-javascript.result != 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -213,10 +264,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # An event neither scan step names leaves this job green having scanned
+      # nothing, so every event that gates a merge is named here. A merge
+      # group has no `before`; its range is its own base and head, the queued
+      # pull request's commits on top of main or of the entry queued ahead.
       - name: Scan commits introduced by this change
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        if: >-
+          github.event_name == 'pull_request' ||
+          github.event_name == 'merge_group' ||
+          github.event_name == 'push'
         env:
-          SCAN_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+          SCAN_RANGE: >-
+            ${{ github.event_name == 'pull_request'
+            && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha)
+            || github.event_name == 'merge_group'
+            && format('{0}..{1}', github.event.merge_group.base_sha, github.event.merge_group.head_sha)
+            || format('{0}..{1}', github.event.before, github.sha) }}
         run: >-
           docker run --rm
           -v "$PWD:/repo"
@@ -245,6 +308,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - run: uv sync --extra local
       - name: Export locked third-party dependency graph
         run: >-

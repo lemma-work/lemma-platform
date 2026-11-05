@@ -11,8 +11,8 @@ clients, and resource-level grants for users, roles, and workloads.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Pods, members, roles, effective permissions, join requests, resource access |
-| Redis consumers | Provision a pod datastore schema after creation; notify admins of join requests |
-| Published stream | `pod_events` for create/member/delete/join lifecycle |
+| Work kinds | `pod.provision` (the pod's datastore schema, written with the pod), `pod.join_request.email` (`delivery`) |
+| Facts emitted | `PodDeleted` and member removal, which agent, schedule, surfaces and MCP access subscribe to |
 
 ## Main data model
 

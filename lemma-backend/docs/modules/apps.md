@@ -130,6 +130,28 @@ separated by host routing. Path normalization and archive extraction prevent
 asset traversal. Apps remain arbitrary user-authored HTML/JS, so isolation by
 origin and response headers is part of the security boundary.
 
+An app's page acts as its viewer, with the viewer's whole access, but only in
+its own pod (`app/core/app_pin.py`, audit H20). A cookie request whose `Origin`
+-- or, through the `/_lemma` door, whose `Host` -- is an app host may call any
+`/pods/{its pod}/...` route and the few outside it in
+`actor_policy.APP_ROUTES`: `/users/me` (phone number and date of birth left
+out), the connector catalogue, connector setup in its own pod's organization,
+the chat model catalogue, and its access ticket. Anything else, a pod route for
+another pod included, is a 403 `APP_ROUTE_NOT_ALLOWED` naming the route. An app
+host that names no app is `APP_HOST_UNKNOWN`. A cookie request with
+`Origin: null` is refused on every state-changing method
+(`ORIGIN_NULL_NOT_ALLOWED`). A pod named in a body rather than the path -- the
+deprecated org-level execute's `pod_id` -- is pinned the same way: an app's page
+runs in its own pod whether or not it names one. Even in its own pod, the routes
+that are a person's own act (`actor_policy.require_person`: sharing or adding
+their account to the pod and letting it into sandboxes, asking members to
+connect, answering an agent's approval or question, approving a join request,
+opening a function to contacts) refuse an app with `APP_PERSON_ONLY`. The
+person's own sandbox browser socket, `/workspace/browser/view`, refuses any app
+host's origin. Bearer tokens are never read as an app. The
+authenticated asset route serves an app's files with
+`Content-Security-Policy: sandbox`, so they never run on the API's own origin.
+
 ## Tests and operations
 
 Tests cover lifecycle, host routing, public serving, storage compensation,

@@ -2,10 +2,18 @@
 
 Two policies live here, and both apply to every conversation the same way --
 where a conversation came from (web, task, Slack, WhatsApp, ...) never changes
-what the model is shown. Only the newest ``MAX_HISTORY_AGENT_RUNS`` runs are
-carried at all, and everything older than the most recent few is collapsed to
-what still matters (every user message, the closing answer) with a notice saying
-how many runs were dropped.
+what the model is shown. Only the newest runs, up to ``MAX_HISTORY_AGENT_RUNS``,
+are carried at all, and everything older than the most recent few is collapsed
+to what still matters (every user message, the closing answer) with a notice
+saying how many runs were dropped.
+
+Both move in fixed blocks of ``ELISION_BLOCK_RUNS``, counted from the start of
+the conversation, never one run at a time. A provider caches the request
+prefix, and the history is most of it: collapsing the oldest full run on every
+new run rewrote the history inside the cached prefix on every run, and dropping
+the oldest carried run every run past the cap left nothing cacheable at all.
+Block-aligned, consecutive runs share the whole history up to the newest run,
+and the prefix is rewritten once every few runs instead of on each.
 
 Runs are read through ``AgentRun.message_count`` rather than by counting what is
 loaded: the runtime history loader deliberately fetches older runs down to two
@@ -23,7 +31,12 @@ import json
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.agent.domain.folded_turns import framed_folds, newest_folds
+from app.modules.agent.domain.history_notices import SYNTHETIC_NOTICE_PREFIX
+from app.modules.agent.domain.unattached_cut import newest_unattached
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
+from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
+from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -32,13 +45,14 @@ from app.modules.agent.domain.entities import (
     RuntimeHistoryWindow,
 )
 
-#: Opens every message this module synthesizes. Two jobs: the model reads it as
-#: scaffolding rather than as something a person said, and the compactor can tell
-#: these apart from real user turns so it does not pin them forever.
-SYNTHETIC_NOTICE_PREFIX = "[conversation history]"
-
-#: Runs kept with every message. Older runs are elided to first and last.
+#: At least this many of the newest runs keep every message. Older runs are
+#: elided to what still matters about them.
 FULL_HISTORY_AGENT_RUN_COUNT = 5
+
+#: Runs are elided, and dropped, this many at a time. Between two boundaries
+#: the history only grows at its end, so every run shares its predecessor's
+#: whole history as a cached prefix.
+ELISION_BLOCK_RUNS = 5
 
 #: The oldest runs a conversation carries at all, elided ones included.
 #:
@@ -55,13 +69,40 @@ FULL_HISTORY_AGENT_RUN_COUNT = 5
 MAX_HISTORY_AGENT_RUNS = 60
 
 
-def cap_history_runs(runs: list[AgentRun]) -> list[AgentRun]:
+def _block_start(total_runs: int, *, keep: int) -> int:
+    """The first run, counted from the conversation's start, of a block-aligned
+    tail that keeps at least ``keep`` runs."""
+    return max(0, (total_runs - keep) // ELISION_BLOCK_RUNS * ELISION_BLOCK_RUNS)
+
+
+def first_carried_run(total_runs: int) -> int:
+    """How many of the conversation's oldest runs are not carried at all.
+
+    A multiple of the block size, so the carried tail holds between
+    ``MAX_HISTORY_AGENT_RUNS - ELISION_BLOCK_RUNS`` and one short of
+    ``MAX_HISTORY_AGENT_RUNS`` runs -- never more than the loader reads.
+    """
+    return _block_start(total_runs, keep=MAX_HISTORY_AGENT_RUNS - ELISION_BLOCK_RUNS)
+
+
+def first_full_run(total_runs: int) -> int:
+    """The oldest run, counted from the conversation's start, kept whole."""
+    return _block_start(total_runs, keep=FULL_HISTORY_AGENT_RUN_COUNT)
+
+
+def cap_history_runs(
+    runs: list[AgentRun], *, total_runs: int | None = None
+) -> list[AgentRun]:
     """The newest runs, however many the conversation actually has.
 
     Cuts whole runs, so a tool call and its return -- which live in the same
     run -- are never separated. The most recent run is always kept.
+    ``total_runs`` is how many the conversation has, when ``runs`` is only the
+    newest of them: the cut is counted from the conversation's start.
     """
-    return runs[-MAX_HISTORY_AGENT_RUNS:]
+    total = len(runs) if total_runs is None else total_runs
+    offset = total - len(runs)
+    return runs[max(0, first_carried_run(total) - offset) :]
 
 
 def bound_runtime_history(
@@ -83,17 +124,26 @@ def bound_runtime_history(
     for a caller whose ``runs`` is already a window: without it the count starts
     from the window and the notice under-reports by everything the window took.
     """
-    bounded = cap_history_runs(runs)
-    return bounded, (len(runs) if total_runs is None else total_runs) - len(bounded)
+    total = len(runs) if total_runs is None else total_runs
+    bounded = cap_history_runs(runs, total_runs=total)
+    return bounded, total - len(bounded)
 
 
-def runtime_full_run_ids(runs: list[AgentRun]) -> set[UUID]:
+def runtime_full_run_ids(
+    runs: list[AgentRun], *, already_dropped: int = 0
+) -> set[UUID]:
     """Which runs need every message, decided the same way the prompt decides.
 
-    Caps first and takes the most recent runs of what survives, so the set is
-    picked from the runs the prompt will actually carry.
+    ``runs`` is the conversation's newest runs with ``already_dropped`` older
+    ones before them, so each run's place in the conversation is known.
     """
-    return {run.id for run in cap_history_runs(runs)[-FULL_HISTORY_AGENT_RUN_COUNT:]}
+    total = already_dropped + len(runs)
+    first_full = first_full_run(total)
+    return {
+        run.id
+        for index, run in enumerate(runs, start=already_dropped)
+        if index >= first_full
+    }
 
 
 def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
@@ -121,9 +171,16 @@ def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
     )
 
 
-#: How many run-less notifications ride along with the history. They are short
-#: and rarely stack up, so this is a backstop rather than a budget.
-MAX_UNATTACHED_NOTIFICATIONS = 20
+#: How many notifications and held messages ride along with the history, the
+#: newest kept. A backstop rather than a budget: notifications rarely stack up,
+#: and where lines do -- a stretch a member answered by hand, where both sides
+#: are run-less -- the agent taking the conversation back picks up from the newest.
+MAX_UNATTACHED_MESSAGES = 20
+
+#: How many copies a contact merge folded in (``folded_turns``) ride along, the
+#: newest kept. Their own bound, not a share of the one above: a long chat
+#: folded in would take every place in it, and the notifications would go.
+MAX_FOLDED_MESSAGES = 40
 
 
 def oldest_carried_sequence(runs: list[AgentRun]) -> int | None:
@@ -140,25 +197,36 @@ def first_sequence_of_run(runs: list[AgentRun], run_id: UUID) -> int | None:
     return None
 
 
-def unattached_notification_window(
+def unattached_message_window(
     runs: list[AgentRun],
     run_id: UUID,
     *,
     dropped_runs: int,
 ) -> tuple[int | None, int | None]:
-    """``(after, before)`` sequences bounding the run-less notifications to carry.
+    """``(after, before)`` sequences bounding the run-less messages to carry.
 
-    The lower bound exists to keep a notification that is older than the
-    history out of it, so it applies only when history *was* cut. Applied
+    The lower bound exists to keep a message that is older than the history
+    out of it, so it applies only when history *was* cut. Applied
     unconditionally it is the oldest message the prompt carries, and for a
     conversation a notification opened that is the first run's own first
     message -- the notification precedes it, so the person's first reply to a
-    report or a reminder was read against nothing.
+    report or a reminder was read against nothing. A contact whose first words
+    were held for a person is the same.
 
     The upper bound is the turn being answered, whether or not anything was cut.
     """
     after = oldest_carried_sequence(runs) if dropped_runs > 0 else None
     return after, first_sequence_of_run(runs, run_id)
+
+
+class ChannelReader(Protocol):
+    """Reads the channel a history's messages refer to into them
+    (``channel_background``): the background of the runs named, and every
+    member's follow-up."""
+
+    async def __call__(
+        self, messages: list[Message], *, background_of_runs: set[UUID]
+    ) -> list[Message]: ...
 
 
 class RuntimeHistorySource(Protocol):
@@ -168,13 +236,14 @@ class RuntimeHistorySource(Protocol):
         self, runs: list[AgentRun], *, full_run_ids: set[UUID]
     ) -> list[AgentRun]: ...
 
-    async def load_unattached_notifications(
+    async def load_unattached_messages(
         self,
         conversation_id: UUID,
         *,
         after_sequence: int | None,
         before_sequence: int | None,
         limit: int,
+        folded_limit: int,
     ) -> list[Message]: ...
 
 
@@ -184,13 +253,17 @@ async def assemble_runtime_history(
     *,
     conversation_id: UUID,
     run_id: UUID,
+    read_channel: ChannelReader | None = None,
 ) -> list[Message]:
     """Every message the model is shown for ``run_id``, in the order it reads them.
 
     One place for the whole recipe so the runner and anything that wants to know
-    what a turn will see cannot drift apart on it -- the notification bounds in
-    particular are a decision about *this* history, and were made inline where
-    nothing could exercise them without a database.
+    what a turn will see cannot drift apart on it -- the bounds on run-less
+    messages in particular are a decision about *this* history, and were made
+    inline where nothing could exercise them without a database. Those ride
+    along with the runs: notifications, what somebody outside the pod said
+    while a person had them (``held_turns``), and what a contact merge copied
+    in from another of their chats, read as that chat's (``folded_turns``).
     """
     # The trim decides which runs need every message, and it can keep an
     # old-but-active run while dropping newer ones -- so it runs before the
@@ -200,24 +273,37 @@ async def assemble_runtime_history(
     bounded, dropped_runs = bound_runtime_history(
         window.runs, total_runs=window.total_runs
     )
-    await source.attach_runtime_history_messages(
-        bounded, full_run_ids=runtime_full_run_ids(bounded)
-    )
+    full_run_ids = runtime_full_run_ids(bounded, already_dropped=dropped_runs)
+    await source.attach_runtime_history_messages(bounded, full_run_ids=full_run_ids)
     messages = select_runtime_history(bounded, already_dropped=dropped_runs)
     # Belong to no run, so the run-keyed reads above never see them; sequences
     # are conversation-wide, so the harness places them.
-    after_sequence, before_sequence = unattached_notification_window(
+    after_sequence, before_sequence = unattached_message_window(
         bounded, run_id, dropped_runs=dropped_runs
     )
-    messages.extend(
-        await source.load_unattached_notifications(
+    # One more than is carried of each, so a cut can be told to the model
+    # rather than made silently: an agent taking a conversation back from a
+    # member who answered by hand for a while would otherwise answer a thread
+    # whose start it never saw.
+    unattached, folds_cut = newest_folds(
+        await source.load_unattached_messages(
             conversation_id,
             after_sequence=after_sequence,
             before_sequence=before_sequence,
-            limit=MAX_UNATTACHED_NOTIFICATIONS,
-        )
+            limit=MAX_UNATTACHED_MESSAGES + 1,
+            folded_limit=MAX_FOLDED_MESSAGES + 1,
+        ),
+        keep=MAX_FOLDED_MESSAGES,
     )
-    return messages
+    messages.extend(newest_unattached(unattached, keep=MAX_UNATTACHED_MESSAGES))
+    if read_channel is not None:
+        # A run cut to its requests keeps none of what it was shown around them.
+        messages = await read_channel(
+            messages, background_of_runs=full_run_ids | {run_id}
+        )
+    # After the channel is read in, which drops a copied follow-up whose line
+    # is gone: a stretch of copies is framed as what is left of it.
+    return framed_folds(messages, cut=folds_cut)
 
 
 def without_private_runs(
@@ -234,7 +320,10 @@ def without_private_runs(
 
     Whole runs go, so a tool call never loses its return. A note queued into
     another run's history is dropped on its own. The current run is never
-    dropped: a private run reads its own note.
+    dropped: a private run reads its own note. What the stranger said while a
+    person had them stays: it is in no run, and never a note (``held_turns``).
+    So does what a merge copied in of another of their chats, which is only
+    what they saw of it (``folded_turns``).
     """
     private = {
         run.id
@@ -260,27 +349,74 @@ def select_runtime_history(
     # within a run) stay intact.
     #
     # `already_dropped` is what a caller that trimmed before loading messages
-    # (see `bound_runtime_history`) took out. The cap below is idempotent, so
-    # such a list loses nothing here and would silently lose its notice too.
-    original_count = len(runs) + already_dropped
-    runs = cap_history_runs(runs)
+    # (see `bound_runtime_history`) took out. Counted into the total, the cap
+    # below takes nothing more from such a list, and its notice survives.
+    total = len(runs) + already_dropped
+    runs = cap_history_runs(runs, total_runs=total)
+    dropped = total - len(runs)
     prefix: list[Message] = []
-    if runs and len(runs) < original_count:
-        prefix = [_dropped_runs_notice(runs[0], original_count - len(runs))]
-    if len(runs) <= FULL_HISTORY_AGENT_RUN_COUNT:
-        return prefix + [message for run in runs for message in run.ordered_messages()]
-
-    recent_run_ids = {run.id for run in runs[-FULL_HISTORY_AGENT_RUN_COUNT:]}
+    if runs and dropped:
+        prefix = [_dropped_runs_notice(runs[0], dropped)]
+    recent_run_ids = runtime_full_run_ids(runs, already_dropped=dropped)
     selected: list[Message] = []
     for run in runs:
         messages = run.ordered_messages()
         if not messages:
             continue
         if run.id in recent_run_ids or run.message_count <= 2:
-            selected.extend(messages)
-            continue
-        selected.extend(_collapsed_run(run, messages))
+            kept = messages
+        else:
+            kept = _collapsed_run(run, messages)
+        if run.status is AgentRunStatus.STOPPED:
+            kept = _closed_by_stop(run, kept)
+        selected.extend(kept)
     return prefix + selected
+
+
+#: What a stopped run's history ends on. A run stopped half way ends on a
+#: request and the tool calls made for it, with nothing saying it is over, and
+#: the next run read that as work still to finish: asked "what is 2+2?" after a
+#: stopped essay, it wrote the essay and said it was done.
+STOPPED_BY_MEMBER = (
+    f"{SYNTHETIC_NOTICE_PREFIX} This request was stopped by the member before it "
+    "finished. It is stopped: do not continue it, finish it or report it as "
+    "done. Answer only what is asked after this; do it again only if asked again."
+)
+
+
+def _closed_by_stop(run: AgentRun, messages: list[Message]) -> list[Message]:
+    """``messages`` with the stop said where it happened.
+
+    After the work the run did, and before anything said after Stop was
+    pressed: those lines ride on the stopped run and are what the next run
+    answers, so they read as coming after the stop, not as part of what
+    was stopped.
+    """
+    stop_after = (run.metadata or {}).get(STOP_REQUESTED_AFTER_SEQUENCE)
+    if isinstance(stop_after, bool) or not isinstance(stop_after, int):
+        stop_after = None
+    cut = len(messages)
+    if stop_after is not None:
+        while (
+            cut
+            and messages[cut - 1].role is MessageRole.USER
+            and messages[cut - 1].sequence > stop_after
+        ):
+            cut -= 1
+    if not cut:
+        return messages
+    marker = Message(
+        conversation_id=run.conversation_id,
+        # Ties the last message it follows; the history is sorted stably, so
+        # it stays after it.
+        sequence=messages[cut - 1].sequence,
+        agent_run_id=run.id,
+        role=MessageRole.USER,
+        kind=MessageKind.NOTIFICATION,
+        text=STOPPED_BY_MEMBER,
+        metadata={"synthetic": True, "summary_kind": "agent_run_stopped"},
+    )
+    return [*messages[:cut], marker, *messages[cut:]]
 
 
 def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:

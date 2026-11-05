@@ -6,6 +6,7 @@ class IdentityStrength(str, Enum):
     CODE = "CODE"
     HOST = "HOST"
     MEMBER = "MEMBER"
+    SESSION = "SESSION"
 
     def __str__(self) -> str:
         return str(self.value)

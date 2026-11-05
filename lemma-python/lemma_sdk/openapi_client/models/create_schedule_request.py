@@ -26,11 +26,19 @@ class CreateScheduleRequest:
 
     Attributes:
         schedule_type (ScheduleType): Type of schedule source.
-        account_id (None | Unset | UUID): Connected connector account used to provision provider-backed webhook
-            schedules.
+        account_id (None | Unset | UUID): Deprecated -- do not send; name `pod_connector` instead. Still accepted, as
+            the pod connector that serves this account to you.
         agent_name (None | str | Unset): Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the
             pod's default assistant, which has no name of its own.
-        config (CreateScheduleRequestConfig | Unset):
+        config (CreateScheduleRequestConfig | Unset): Settings for the schedule's type: `cron`/`scheduled_at`/`timezone`
+            for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5
+            fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`;
+            **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set
+            `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that
+            finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and
+            `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default
+            to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default`
+            changes the default for `bulk_writes`.
         connector_trigger_id (None | str | Unset): Connector trigger id for agent WEBHOOK schedules. Do not provide this
             for workflow schedules; workflow WEBHOOK schedules derive it from the workflow start configuration.
         filter_instruction (None | str | Unset): Optional schedule-level LLM filter instruction. Filters belong to the
@@ -45,6 +53,10 @@ class CreateScheduleRequest:
             assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides
             whether to fire.
         name (None | str | Unset): Stable pod-scoped schedule name used for import/export upserts.
+        pod_connector (None | str | Unset): The pod connector, by slug, a WEBHOOK schedule listens through -- for a
+            connector trigger or an MCP server's event. The account it means is the connector's decision: your own for a
+            per-member connector, the shared one for a shared connector. It is resolved again on every fire and renewal, as
+            the schedule's owner.
         visibility (None | str | Unset):
         workflow_name (None | str | Unset):
     """
@@ -61,6 +73,7 @@ class CreateScheduleRequest:
     include_outside_rows: bool | Unset = False
     instruction: None | str | Unset = UNSET
     name: None | str | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
     visibility: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -126,6 +139,12 @@ class CreateScheduleRequest:
         else:
             name = self.name
 
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
+
         visibility: None | str | Unset
         if isinstance(self.visibility, Unset):
             visibility = UNSET
@@ -163,6 +182,8 @@ class CreateScheduleRequest:
             field_dict["instruction"] = instruction
         if name is not UNSET:
             field_dict["name"] = name
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
         if visibility is not UNSET:
             field_dict["visibility"] = visibility
         if workflow_name is not UNSET:
@@ -280,6 +301,15 @@ class CreateScheduleRequest:
 
         name = _parse_name(d.pop("name", UNSET))
 
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
+
         def _parse_visibility(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -309,6 +339,7 @@ class CreateScheduleRequest:
             include_outside_rows=include_outside_rows,
             instruction=instruction,
             name=name,
+            pod_connector=pod_connector,
             visibility=visibility,
             workflow_name=workflow_name,
         )

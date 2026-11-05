@@ -50,6 +50,8 @@ def resolve_vision_mode(
 
 def vision_mode_from_runtime_profile(
     runtime_profile: object,
+    *,
+    delegate_model_configured: bool,
 ) -> AgentVisionMode:
     """Derive the mode from a persisted runtime-profile snapshot.
 
@@ -57,8 +59,10 @@ def vision_mode_from_runtime_profile(
     rather than from a freshly resolved runtime. Falls back to the delegate when
     the snapshot predates ``model_capabilities`` — old runs then behave as they
     did before rather than losing image support outright.
+
+    Whether a delegate is configured is the caller's to say: it is deployment
+    configuration, which the domain does not read.
     """
-    from app.modules.agent.services.vision_service import vision_delegate_available
 
     capabilities = (
         runtime_profile.get("model_capabilities")
@@ -70,5 +74,5 @@ def vision_mode_from_runtime_profile(
     )
     return resolve_vision_mode(
         model_supports_vision=supports_vision,
-        delegate_model_configured=vision_delegate_available(),
+        delegate_model_configured=delegate_model_configured,
     )

@@ -35,7 +35,13 @@ and it is built for amd64 only.
 
 Builds are created from the monorepo source. Both profiles default to 1 vCPU and
 2 GB RAM; deployments may override the build resources with
-`E2B_{WORKSPACE,FUNCTION}_{CPU_COUNT,MEMORY_MB}`. E2B's template build
+`E2B_{WORKSPACE,FUNCTION}_{CPU_COUNT,MEMORY_MB}`. The default workspace build is
+the `1x2048` size, which the backend knows as `E2B_WORKSPACE_TEMPLATE_SIZE`, so
+a plan selling 1 vCPU and 2048 MB needs no template of its own. Any other size
+a plan sells is its own template:
+`build_templates.py --target workspace --size 2x4096` builds
+`lemma-workspace-2x4096`, and `E2B_WORKSPACE_SIZE_TEMPLATES` maps the size to
+its pinned `<template_id>:<build_id>`. E2B's template build
 API does not expose a disk-size setting, and function filesystems are treated as
 ephemeral because the provider allocation is destroyed after the configured idle
 period.

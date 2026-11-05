@@ -1,14 +1,5 @@
 {
   "name": "Connector Pod",
   "format_version": 2,
-  "description": "A pod with a Slack surface bound to a connector account variable.",
-  "variables": {
-    "slack_account": {
-      "type": "account",
-      "source_value": "019ebad7-9c4f-7143-8273-60e9ff368696",
-      "connector": "slack",
-      "connector_kind": "composio",
-      "description": "Connector account for the slack surface"
-    }
-  }
+  "description": "A pod with a Slack surface running through a shared pod connector."
 }

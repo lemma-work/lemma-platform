@@ -25,9 +25,9 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from typing import Any, TypeGuard
 
-import httpx
+import httpx2
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -53,6 +53,9 @@ from pydantic_ai.models.function import (
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.modules.agent.domain.run_context_prompt import RUN_CONTEXT_OPEN
+
+_SENT_NOTE = re.compile(r"^<notes>Sent [^<]*</notes>\s*")
 
 logger = get_logger(__name__)
 
@@ -96,7 +99,7 @@ def _current_run_turn_index(messages: Sequence[ModelMessage]) -> int:
         if not isinstance(message, ModelRequest):
             continue
         parts = message.parts
-        has_user = any(isinstance(part, UserPromptPart) for part in parts)
+        has_user = any(_is_users(part) for part in parts)
         has_tool_return = any(isinstance(part, ToolReturnPart) for part in parts)
         if has_user and not has_tool_return:
             last_user = i
@@ -105,19 +108,32 @@ def _current_run_turn_index(messages: Sequence[ModelMessage]) -> int:
     )
 
 
+def _is_users(part: object) -> TypeGuard[UserPromptPart]:
+    """A prompt part the person wrote, not the run's context part beside it.
+
+    The context part rides at the tail of every request after the first, so
+    counting it as the person's turn would restart the script on every step.
+    """
+    if not isinstance(part, UserPromptPart):
+        return False
+    content = part.content
+    return not (isinstance(content, str) and content.startswith(RUN_CONTEXT_OPEN))
+
+
 def _last_user_text(messages: Sequence[ModelMessage]) -> str:
-    """The user's own last message.
+    """The user's own last message, without the note of when they sent it.
 
     Parts are scanned in reverse as well as messages: a request can carry more
-    than one ``UserPromptPart`` — the runtime-notes block is prepended to the
-    user's turn — and the *user's* text is the last of them, not the first.
+    than one ``UserPromptPart`` -- the run's context part sits beside the
+    user's turn -- and only the person's own counts.
     """
     for message in reversed(messages):
         if isinstance(message, ModelRequest):
             for part in reversed(message.parts):
-                if isinstance(part, UserPromptPart):
+                if _is_users(part):
                     content = part.content
-                    return content.strip() if isinstance(content, str) else str(content)
+                    text = content if isinstance(content, str) else str(content)
+                    return _SENT_NOTE.sub("", text, count=1).strip()
     return ""
 
 
@@ -345,8 +361,9 @@ def _raise_scripted_error(
         # The production failure this exists to reproduce: the provider accepts
         # the request and then drops the connection mid-answer. The harness
         # retries from the messages already recorded, so a journey scripting
-        # this should still complete cleanly.
-        raise httpx.ReadError(message)
+        # this should still complete cleanly. `httpx2`, because that is the
+        # stack the provider SDKs run on and so what a real drop raises.
+        raise httpx2.ReadError(message)
     raise RuntimeError(message)
 
 

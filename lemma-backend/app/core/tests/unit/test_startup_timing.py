@@ -110,3 +110,18 @@ def test_an_embedded_worker_ending_first_does_not_unfreeze_the_api() -> None:
     finally:
         release_startup_heap()  # API ends
     assert gc.get_freeze_count() == 0
+
+
+def test_a_test_process_freezes_without_collecting_first(monkeypatch) -> None:
+    import gc
+    import time
+
+    collected: list[int] = []
+    monkeypatch.setattr(gc, "collect", lambda *a: collected.append(1) or 0)
+    try:
+        _, frozen = finish_startup(time.monotonic(), collect=False)
+        assert frozen > 0
+        assert collected == []
+    finally:
+        release_startup_heap()
+    assert gc.get_freeze_count() == 0

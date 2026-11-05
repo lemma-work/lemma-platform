@@ -34,14 +34,14 @@ export interface SampleSpace {
 }
 
 /** A schedule that runs a workflow, switched on for everyone by `owner`
- *  (Priya, unless said): on a cron, when a row is added to `table`, or when a
- *  connected account's `source` sends its `trigger`. */
-type When = { cron: string } | { table: string } | { source: string; account: string; trigger: string };
+ *  (Priya, unless said): on a cron, when a row is added to `table`, or when
+ *  `source` sends its `trigger` through the space's `connector`. */
+type When = { cron: string } | { table: string } | { source: string; connector: string; trigger: string };
 function schedule(pod: string, name: string, workflow: string, when: When, firedDaysAgo: number, owner = "priya-user"): Record<string, unknown> {
     const kind = "cron" in when ? { schedule_type: "TIME", config: { cron: when.cron, timezone: "Europe/London" } }
         : "table" in when ? { schedule_type: "DATASTORE", config: { table_name: when.table, operations: ["INSERT"] } }
         : { schedule_type: "WEBHOOK", config: { source: when.source } };
-    const listens = "source" in when ? { account_id: when.account, connector_trigger_id: when.trigger } : { account_id: null, connector_trigger_id: null };
+    const listens = "source" in when ? { pod_connector: when.connector, connector_trigger_id: when.trigger } : { pod_connector: null, connector_trigger_id: null };
     return {
         id: pod + "-" + name, pod_id: pod, name, ...kind, workflow_name: workflow, workflow_id: "wf-" + workflow, instruction: null,
         filter_instruction: null, filter_output_schema: null, ...listens,
@@ -173,8 +173,8 @@ Posted in the thread where the person reported it, once the engineer who shipped
         .sort((a, b) => Number(b.reports) - Number(a.reports))
         .map(({ theme, reports, stage, owner }) => ({ theme, reports, stage, owner: owner || "No owner" })),
     schedules: [
-        schedule("kit", "every_feedback_message", "capture-feedback", { source: "slack", account: "acct-acme-slack", trigger: "slack.message_posted" }, 0.002, "sample-user"),
-        schedule("kit", "when_a_fix_merges", "close-the-loop", { source: "github", account: "acct-acme-github", trigger: "github.pull_request_merged" }, 0.47, "sample-user"),
+        schedule("kit", "every_feedback_message", "capture-feedback", { source: "slack", connector: "slack", trigger: "slack.message_posted" }, 0.002, "sample-user"),
+        schedule("kit", "when_a_fix_merges", "close-the-loop", { source: "github", connector: "github", trigger: "github.pull_request_merged" }, 0.47, "sample-user"),
         schedule("kit", "nightly_reconcile", "nightly-reconcile", { cron: "0 2 * * *" }, 0.35, "sample-user"),
     ],
 };

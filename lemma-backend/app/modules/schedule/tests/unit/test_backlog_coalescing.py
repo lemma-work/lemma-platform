@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.modules.schedule.services.due_schedule_claimer import (
-    _coalesced_cursor,
+from app.modules.schedule.domain.time_cursor import (
+    coalesced_cursor as _coalesced_cursor,
     next_cursor_for,
 )
 

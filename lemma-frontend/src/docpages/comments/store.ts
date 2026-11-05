@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { lemma } from "@/session/client";
+import { liveAvailable, podLive } from "@/live/pod-live";
 import { isForbidden } from "@/session/auth-state";
 import { COMMENTS_TABLE, readComment, type CommentRow } from "./model";
 
@@ -165,14 +166,21 @@ export function useComments(podId: string, filePath: string, enabled: boolean) {
             sampleListeners.add(refresh);
             return () => { sampleListeners.delete(refresh); };
         }
-        const handle = lemma(podId).datastore.watchChanges({
-            table: COMMENTS_TABLE,
-            onChange: (frame) => {
-                const path = (frame.payload as { file_path?: unknown } | null | undefined)?.file_path;
-                if (path === undefined || path === filePath) refresh();
+        if (!liveAvailable()) return;
+        /* The table's rows on the pod's one live socket, beside everything
+           else live in the app. A change carries the row as it is now; a
+           delete carries none, and could be anybody's. A resync means some
+           were missed. */
+        const subscription = podLive(podId).subscribe("records", { table: COMMENTS_TABLE }, {
+            onEvents: (changes) => {
+                for (const change of changes) {
+                    const row = (change as { row?: { file_path?: unknown } | null } | null)?.row;
+                    if (!row || row.file_path === undefined || row.file_path === filePath) { refresh(); return; }
+                }
             },
+            onResync: refresh,
         });
-        return () => handle.close();
+        return () => subscription.close();
     }, [cache, enabled, filePath, podId]);
 
     return query;

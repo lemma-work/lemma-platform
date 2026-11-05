@@ -80,7 +80,12 @@ async def test_it_runs_in_the_vm_even_on_a_host_run():
 
     assert result.success, result.error
     assert runtime.vm_sessions == 1 and runtime.host_sessions == 0
-    assert runtime.session.commands == ["agent-browser open http://localhost:3000"]
+    assert runtime.session.commands == [
+        (
+            "flock -o -w 45 -E 75 /tmp/lemma-capture.lock "
+            "agent-browser open http://localhost:3000"
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -103,7 +108,7 @@ async def test_it_is_not_a_shell():
         runtime=runtime,
     )
     (command,) = runtime.session.commands
-    assert command == "agent-browser open 'x;' rm -rf '~' '&&' echo pwned"
+    assert command.endswith("agent-browser open 'x;' rm -rf '~' '&&' echo pwned")
 
 
 @pytest.mark.parametrize("args", ["", "agent-browser", 'open "unterminated'])
@@ -135,3 +140,41 @@ def test_a_host_run_reads_images_from_the_mac_except_under_the_vm_home(
 def test_a_vm_run_always_reads_from_the_vm():
     ctx = _host_ctx().model_copy(update={"host_workspace": None})
     assert _on_the_host(ctx, "chart.png") is False
+
+
+async def test_it_waits_for_a_capture_in_progress_rather_than_switching_its_tab():
+    """`save-webpage` holds this lock for a capture; a command run without it
+    rebinds the shared session's tab and the capture saves the wrong page."""
+    runtime = FakeRuntime()
+    await browser_command_internal(
+        _host_ctx(),
+        BrowserCommandRequest(args="click @e2", timeout_seconds=20),
+        runtime=runtime,
+    )
+
+    (command,) = runtime.session.commands
+    # The wait fits inside the call's own 20 s, so a queued click cannot land
+    # after the agent has stopped waiting for it.
+    assert command.startswith("flock -o -w 10 -E 75 /tmp/lemma-capture.lock ")
+
+
+async def test_a_browser_busy_for_the_whole_wait_says_so():
+    runtime = FakeRuntime()
+
+    async def busy(*, cmd, **_):
+        runtime.session.commands.append(cmd)
+        return {
+            "success": False,
+            "exit_code": 75,
+            "stdout": "",
+            "stderr": "",
+            "completed": True,
+        }
+
+    runtime.session.exec_command = busy
+    result = await browser_command_internal(
+        _host_ctx(), BrowserCommandRequest(args="snapshot -i"), runtime=runtime
+    )
+
+    assert not result.success
+    assert "busy" in (result.error or "")

@@ -83,3 +83,8 @@ class AgentRunCompletedEvent(AgentDomainEvent):
     agent_id: UUID | None = None
     user_id: UUID | None = None
     started_at: datetime | None = None
+    #: How much the run did: model tokens in and out, and tool calls, from the
+    #: usage the finalizer records for billing. ``None`` when the runtime
+    #: reported no usage, which is not the same as reporting zero.
+    token_count: int | None = None
+    tool_call_count: int | None = None

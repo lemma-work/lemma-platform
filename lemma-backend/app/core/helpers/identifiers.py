@@ -34,11 +34,3 @@ def normalize_mobile_e164(value: str | None) -> str:
             "Enter a mobile number with its country code, for example +14155552671"
         )
     return f"+{digits}"
-
-
-def normalize_telegram(value: str | None) -> str | None:
-    """Lower-case a telegram username, matching ``ux_users_telegram_username_lower``."""
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    return normalized or None

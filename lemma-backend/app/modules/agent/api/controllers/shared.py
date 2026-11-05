@@ -4,26 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 
+from app.core.api.actor_policy import require_person
 from app.modules.usage.contracts.execution import build_usage_service
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import BadRequestError
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
-from app.modules.agent.domain.value_objects import JsonObject
+from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
+from app.modules.agent.domain.value_objects import (
+    ConversationAgentSelection,
+    JsonObject,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
-)
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
@@ -31,6 +32,14 @@ from app.modules.agent.services.realtime import (
 )
 
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
+
+#: On every route that answers what an agent is waiting on -- an approval, an
+#: ``ask_user`` question -- on the person's behalf. It must be the person's own
+#: answer, never their software's: the sandbox holds a delegated token for the
+#: very person whose approval the agent is waiting on, so without this an agent
+#: approved its own request with ``lemma`` and the card read as though the
+#: person had (H5). Whatever a workload was granted or approved for.
+PERSON_ANSWERS = require_person("answer an approval")
 _TERMINAL_STREAM_EVENTS = {"completed", "stopped", "error"}
 
 #: An SSE comment: ignored by every client, visible as traffic to everything in
@@ -52,17 +61,6 @@ def _build_conversation_service(uow) -> ConversationService:
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_data_service(uow),
-        usage_service=build_usage_service(uow),
-    )
-
-
-def _build_conversation_retry_service(uow) -> ConversationRetryService:
-    return ConversationRetryService(
-        uow=uow,
-        conversation_repository=ConversationRepository(uow),
-        agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_data_service(uow),
         usage_service=build_usage_service(uow),
     )
 
@@ -155,8 +153,15 @@ async def with_keepalive(
     chunks: AsyncGenerator[str, None],
     *,
     interval_seconds: float = STREAM_KEEPALIVE_SECONDS,
+    on_idle: Callable[[], Awaitable[str | None]] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Re-yield ``chunks``, sending a comment frame through a long silence.
+
+    ``on_idle`` is asked once per silent interval; a frame it returns is sent
+    and ends the stream. A run's ending is published once, over Pub/Sub, and a
+    message published while the subscription was reconnecting (a Redis blip)
+    is gone -- without this the client got keepalives forever for a run that
+    had already finished.
 
     The pending pull is held across a timeout rather than cancelled. Cancelling
     an async generator's ``__anext__`` closes the generator, so the naive
@@ -170,6 +175,10 @@ async def with_keepalive(
                 pending = asyncio.ensure_future(anext(chunks))
             done, _ = await asyncio.wait({pending}, timeout=interval_seconds)
             if not done:
+                ending = await on_idle() if on_idle is not None else None
+                if ending is not None:
+                    yield ending
+                    return
                 yield KEEPALIVE_FRAME
                 continue
             try:
@@ -192,3 +201,18 @@ async def with_keepalive(
         # which runs at an unrelated moment and, for a subscription iterator,
         # after the client has already gone.
         await chunks.aclose()
+
+
+def parse_conversation_agent_selection(
+    agent_name: str | None,
+) -> ConversationAgentSelection[str]:
+    if agent_name is None:
+        return ConversationAgentSelection.all()
+    if not agent_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="agent_name cannot be empty",
+        )
+    if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
+        return ConversationAgentSelection.pod_default()
+    return ConversationAgentSelection.named(agent_name)

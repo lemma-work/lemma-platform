@@ -1,39 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from fastapi import HTTPException
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.permissions import Permissions
-from app.modules.agent_surfaces.api.schemas import (
-    SurfaceBehaviorConfigInput,
-    surface_config_from_input,
+from app.modules.agent_surfaces.services.surface_connection_resolver import (
+    SurfaceConnectionResolver,
 )
-from app.modules.agent_surfaces.domain.entities import (
-    SurfaceChannelRoute,
-    SurfaceConfig,
-    SurfaceGroupPolicy,
-    SurfaceIdentityPolicy,
-    SurfacePlatform,
-    SurfaceSendPolicy,
-    SurfaceSlackConfig,
-    SurfaceTelegramConfig,
-)
-from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
-from app.modules.agent_surfaces.domain.surface_config import (
-    ContactAnswer,
-    SurfaceContactPolicy,
-)
-from app.modules.apps.contracts import get_ready_pod_app_by_name
-from app.modules.pod.contracts.members import pod_member_id
-from app.modules.connectors.contracts import AccountNotFoundError
-
-# Asserts that this person owns this account, raising ``AccountNotFoundError``
-# when they do not. Bound to a unit of work by the caller.
-AssertAccountOwner = Callable[..., Awaitable[None]]
 
 
 async def require_surface_agent_action(
@@ -85,7 +60,13 @@ async def may_perform_surface_agent_action(
 
 
 async def surface_setup_for_reader(
-    *, service, ctx, pod_id: UUID, surface_name: str
+    *,
+    service,
+    ctx,
+    connection_resolver: SurfaceConnectionResolver,
+    pod_id: UUID,
+    surface_name: str,
+    viewer_user_id: UUID,
 ) -> dict[str, object]:
     """This surface's setup state, with only what this reader may be shown.
 
@@ -106,239 +87,7 @@ async def surface_setup_for_reader(
             agent_id=surface.agent_id,
             action=Permissions.AGENT_UPDATE,
         ),
+        connection=await connection_resolver.for_surface(
+            surface, pod_id=pod_id, viewer_user_id=viewer_user_id
+        ),
     )
-
-
-async def require_own_account(
-    account_id: UUID | None,
-    *,
-    user_id: UUID,
-    organization_id: UUID | None,
-    assert_owner: AssertAccountOwner,
-) -> None:
-    """A caller may only point a surface at an account they own.
-
-    Accounts are personal, so binding someone else's is not a permission an
-    editor has — it would hand the pod a credential its owner never offered.
-    Rebinding to *your own* account is the supported repair when the account a
-    surface runs on expires or its owner leaves, and that path passes this check.
-    """
-    if account_id is None:
-        return
-    try:
-        await assert_owner(account_id, user_id=user_id, organization_id=organization_id)
-    # `assert_owner` answers "not yours" and "no such account" with the
-    # same AccountNotFoundError, which is the whole point: the caller learns
-    # nothing about accounts they do not own. Caught by its own name rather than
-    # through a base class, because which 404 base it carries is exactly what
-    # this branch changes.
-    except AccountNotFoundError as exc:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "That account belongs to someone else. Connect your own account "
-                "for this platform, then bind the surface to it."
-            ),
-        ) from exc
-
-
-def _resolve_channel_routes(
-    *,
-    config_input: SurfaceBehaviorConfigInput,
-) -> list[SurfaceChannelRoute]:
-    """The channels this surface's agent may be spoken to in.
-
-    No agent resolution and no per-route permission check: a channel is an
-    allow-list entry now, so there is no second agent to be authorized against.
-    Whoever may configure the surface may say where its one agent answers.
-    """
-    return [
-        SurfaceChannelRoute(
-            channel_id=route.channel_id,
-            channel_name=route.channel_name,
-        )
-        for route in config_input.channels
-    ]
-
-
-async def resolve_telegram_config(
-    *,
-    uow,
-    pod_id: UUID,
-    platform: SurfacePlatform,
-    app_name: str | None,
-    ctx,
-) -> SurfaceTelegramConfig:
-    resolved_name = str(app_name or "").strip()
-    if not resolved_name:
-        return SurfaceTelegramConfig()
-    if platform is not SurfacePlatform.TELEGRAM:
-        raise AgentSurfaceValidationError(
-            "A Telegram Mini App can only be set on a Telegram surface"
-        )
-    app = await get_ready_pod_app_by_name(
-        uow=uow,
-        pod_id=pod_id,
-        app_name=resolved_name,
-        ctx=ctx,
-    )
-    if app is None:
-        raise AgentSurfaceValidationError(
-            "The selected Telegram Mini App must belong to this pod and be deployed"
-        )
-    return SurfaceTelegramConfig(app_name=app.name)
-
-
-async def resolve_slack_config(
-    *,
-    uow,
-    pod_id: UUID,
-    platform: SurfacePlatform,
-    app_name: str | None,
-    ctx,
-) -> SurfaceSlackConfig:
-    """Resolve the Slack block.
-
-    Only the featured app is left. This used to carry everyone's per-person DM
-    agent choices forward across a save, and a flag saying whether to honour
-    them; both went with the shared bot they were written for.
-    """
-    resolved_name = str(app_name or "").strip()
-    if not resolved_name:
-        return SurfaceSlackConfig()
-    if platform is not SurfacePlatform.SLACK:
-        raise AgentSurfaceValidationError(
-            "A Slack app can only be featured on a Slack surface"
-        )
-    app = await get_ready_pod_app_by_name(
-        uow=uow,
-        pod_id=pod_id,
-        app_name=resolved_name,
-        ctx=ctx,
-    )
-    if app is None:
-        raise AgentSurfaceValidationError(
-            "The selected app must belong to this pod and be deployed"
-        )
-    return SurfaceSlackConfig(app_name=app.name)
-
-
-async def resolve_contact_policy(
-    *,
-    uow,
-    pod_id: UUID,
-    requested: SurfaceContactPolicy,
-    current: SurfaceContactPolicy | None,
-    ctx,
-) -> SurfaceContactPolicy:
-    """The contact policy to store: who answers, and who looks after them.
-
-    Turning contacts on with nobody named makes the person turning them on the
-    one their conversations belong to -- the way bringing a bot into a group
-    makes that member answer for it. Whoever is named must be in the pod: a
-    conversation belongs to somebody, and questions passed on must reach
-    somebody who can act on them.
-    """
-    looked_after_by = requested.looked_after_by or (
-        current.looked_after_by if current is not None else None
-    )
-    if requested.answer is not ContactAnswer.OFF and looked_after_by is None:
-        looked_after_by = getattr(ctx, "user_id", None)
-    if looked_after_by is not None and (
-        await pod_member_id(uow, pod_id, looked_after_by) is None
-    ):
-        raise AgentSurfaceValidationError(
-            "Contacts must be looked after by a member of this pod"
-        )
-    return SurfaceContactPolicy(
-        answer=requested.answer, looked_after_by=looked_after_by
-    )
-
-
-async def resolve_surface_config(
-    *,
-    uow,
-    pod_id: UUID,
-    platform: SurfacePlatform,
-    config_input: SurfaceBehaviorConfigInput,
-    ctx,
-) -> SurfaceConfig:
-    channel_routes = _resolve_channel_routes(config_input=config_input)
-    config = surface_config_from_input(config_input, channel_routes=channel_routes)
-    config.telegram = await resolve_telegram_config(
-        uow=uow,
-        pod_id=pod_id,
-        platform=platform,
-        app_name=config_input.telegram.app_name,
-        ctx=ctx,
-    )
-    config.slack = await resolve_slack_config(
-        uow=uow,
-        pod_id=pod_id,
-        platform=platform,
-        app_name=config_input.slack.app_name,
-        ctx=ctx,
-    )
-    config.contacts = await resolve_contact_policy(
-        uow=uow,
-        pod_id=pod_id,
-        requested=config.contacts,
-        current=None,
-        ctx=ctx,
-    )
-    return config
-
-
-async def merge_surface_config(
-    *,
-    uow,
-    existing: SurfaceConfig,
-    pod_id: UUID,
-    platform: SurfacePlatform,
-    config_input: SurfaceBehaviorConfigInput,
-    ctx,
-) -> SurfaceConfig:
-    updates: dict = {}
-    if "identity" in config_input.model_fields_set:
-        updates["identity"] = SurfaceIdentityPolicy(
-            allowed_domains=config_input.identity.allowed_domains,
-            allowed_email_addresses=config_input.identity.allowed_email_addresses,
-        )
-    if "channels" in config_input.model_fields_set:
-        updates["channels"] = _resolve_channel_routes(config_input=config_input)
-    if "send_policy" in config_input.model_fields_set:
-        updates["send_policy"] = SurfaceSendPolicy(
-            allow_send=config_input.send_policy.allow_send
-        )
-    if "telegram" in config_input.model_fields_set:
-        updates["telegram"] = await resolve_telegram_config(
-            uow=uow,
-            pod_id=pod_id,
-            platform=platform,
-            app_name=config_input.telegram.app_name,
-            ctx=ctx,
-        )
-    if "slack" in config_input.model_fields_set:
-        updates["slack"] = await resolve_slack_config(
-            uow=uow,
-            pod_id=pod_id,
-            platform=platform,
-            app_name=config_input.slack.app_name,
-            ctx=ctx,
-        )
-    if "groups" in config_input.model_fields_set:
-        updates["groups"] = SurfaceGroupPolicy(
-            answers_outsiders=config_input.groups.answers_outsiders
-        )
-    if "contacts" in config_input.model_fields_set:
-        updates["contacts"] = await resolve_contact_policy(
-            uow=uow,
-            pod_id=pod_id,
-            requested=SurfaceContactPolicy(
-                answer=config_input.contacts.answer,
-                looked_after_by=config_input.contacts.looked_after_by,
-            ),
-            current=existing.contacts,
-            ctx=ctx,
-        )
-    return existing.model_copy(update=updates)

@@ -7,13 +7,15 @@ identity: who is paired, whether they are alive, and what they can run.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import Select, delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
+    AgentHostHarnessHealth,
     AgentHostHarnessSnapshot,
     AgentHostStatus,
     HostHello,
@@ -34,6 +36,47 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentHostModel,
     AgentHostPairingModel,
 )
+
+
+class HostRowLock(StrEnum):
+    """How a read of one ``agent_hosts`` row holds it until the transaction ends.
+
+    The row is locked by three kinds of transaction at once on a busy host, and
+    only the weakest lock each one needs keeps them from deadlocking:
+
+    - every command or lease insert takes ``FOR KEY SHARE`` through its
+      foreign key, usually while holding a run's lease;
+    - a run start reads the host to admit the run;
+    - the host's ``control`` frame rewrites the heartbeat row and then locks
+      the leases of the runs it reports on.
+
+    So a lease is locked before the host row in one transaction and after it in
+    another. That is safe only while nothing that may hold or wait for a lease
+    locks the host row in a mode that conflicts with ``FOR KEY SHARE`` -- and
+    ``FOR UPDATE`` does. Neither mode here does. ``FOR UPDATE`` is left to
+    re-pairing, which rewrites ``host_secret_hash`` (a unique key, so the
+    write itself needs it) and touches no lease.
+    """
+
+    #: Holds off any write to the row, but not other readers or key-share
+    #: lockers. What admission needs: the host cannot be revoked or have its
+    #: status changed between the check and the enqueue.
+    SHARE = "share"
+    #: A write that leaves the key alone. Conflicts with ``SHARE`` and with
+    #: other writers, never with a foreign key's ``FOR KEY SHARE``.
+    NO_KEY_UPDATE = "no_key_update"
+
+
+def _locked(
+    stmt: Select[tuple[AgentHostModel]], lock: HostRowLock | None
+) -> Select[tuple[AgentHostModel]]:
+    match lock:
+        case None:
+            return stmt
+        case HostRowLock.SHARE:
+            return stmt.with_for_update(read=True)
+        case HostRowLock.NO_KEY_UPDATE:
+            return stmt.with_for_update(key_share=True)
 
 
 # Heartbeat rows are rewritten at most this often; the 90s offline threshold
@@ -218,11 +261,9 @@ class AgentHostRepository:
         return host
 
     async def get(
-        self, host_id: UUID, *, for_update: bool = False
+        self, host_id: UUID, *, lock: HostRowLock | None = None
     ) -> AgentHostModel | None:
-        stmt = select(AgentHostModel).where(AgentHostModel.id == host_id)
-        if for_update:
-            stmt = stmt.with_for_update()
+        stmt = _locked(select(AgentHostModel).where(AgentHostModel.id == host_id), lock)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_many(self, host_ids: set[UUID]) -> dict[UUID, AgentHostModel]:
@@ -243,9 +284,9 @@ class AgentHostRepository:
         ).scalar_one_or_none()
 
     async def require(
-        self, host_id: UUID, *, for_update: bool = False
+        self, host_id: UUID, *, lock: HostRowLock | None = None
     ) -> AgentHostModel:
-        host = await self.get(host_id, for_update=for_update)
+        host = await self.get(host_id, lock=lock)
         if host is None:
             raise AgentHostNotFound("Agent Host was not found")
         return host
@@ -313,7 +354,10 @@ class AgentHostRepository:
         ):
             return host
 
-        host = await self.require(host_id, for_update=True)
+        # Not FOR UPDATE: this frame goes on to lock leases, and a credential
+        # refresh holding one of those leases inserts a command whose foreign
+        # key needs FOR KEY SHARE on this row. See HostRowLock.
+        host = await self.require(host_id, lock=HostRowLock.NO_KEY_UPDATE)
         if host.revoked_at is not None:
             raise AgentHostProtocolViolation("Agent Host is revoked")
         host.protocol_version = protocol
@@ -386,7 +430,10 @@ class AgentHostRepository:
         or unacknowledged commands are cancelled (``terminalize_revoked_host``):
         a removed computer must not keep a run waiting on it.
         """
-        host = await self.get(host_id, for_update=True)
+        # Strong enough to wait for every admission in flight (they hold
+        # SHARE), and weak enough not to wait on a refresh's command insert,
+        # since terminalizing goes on to lock this host's leases.
+        host = await self.get(host_id, lock=HostRowLock.NO_KEY_UPDATE)
         if host is None or host.user_id != user_id:
             raise AgentHostNotFound("Agent Host was not found")
         timestamp = now or utcnow()
@@ -440,6 +487,30 @@ class AgentHostRepository:
                 setattr(harness, key, value)
         await self.session.flush()
         return harness
+
+    async def disable_unreported_harnesses(
+        self, *, host_id: UUID, reported_keys: set[str]
+    ) -> None:
+        """Mark this host's harnesses that its latest report left out DISABLED.
+
+        A host reports every agent its manifest knows on each publish, ready or
+        not, so one missing from the report is gone from that computer -- a
+        release that stopped shipping its adapter. Left as it was, it kept its
+        last health, READY included, and admission queued runs to an agent the
+        host no longer has.
+        """
+        await self.session.execute(
+            update(AgentHostHarnessModel)
+            .where(
+                AgentHostHarnessModel.host_id == host_id,
+                AgentHostHarnessModel.harness_key.not_in(reported_keys),
+                AgentHostHarnessModel.health != AgentHostHarnessHealth.DISABLED.value,
+            )
+            .values(
+                health=AgentHostHarnessHealth.DISABLED.value,
+                stale_reason="No longer reported by this computer.",
+            )
+        )
 
     async def get_harness(
         self,

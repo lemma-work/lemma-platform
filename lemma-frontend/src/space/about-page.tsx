@@ -1,190 +1,290 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
 import { isForbidden } from "@/session/auth-state";
 import { SkillsView } from "@/skills/skills-view";
 import { StandingWork } from "@/schedule/standing-work";
-import { Surfaces } from "@/shell/surfaces";
-import { RunsOn } from "@/shell/runs-on";
+import { ModelChoice } from "@/shell/runs-on";
+import { ReachPanel } from "@/shell/reach";
+import { PodConnections } from "@/connect/pod-connections";
+import { useSearchParams } from "next/navigation";
 import { WhoCanJoin } from "@/shell/who-can-join";
 import { AtTheDoor } from "@/shell/at-the-door";
 import { AddPeople } from "@/shell/add-people";
-import { ChevronRightIcon, EditIcon, LockIcon, PlusIcon } from "@/ui/icons";
+import type { SettingsSection } from "@/settings/settings-modal";
+import {
+    AgentIcon, AskIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, ConnectorIcon, EditIcon, LockIcon, MemoryIcon, ModelIcon,
+    PeopleIcon, PlugIcon, PlusIcon, ReachIcon, TaughtIcon,
+} from "@/ui/icons";
+import { AgentAccess } from "./agent-access";
 import { AgentMark } from "./agent-mark";
 import { WhatItRemembers } from "./what-it-remembers";
 import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
+import { AskedBy, ConnectTeammate, useMayConnect } from "./connect-teammate";
 import { DeleteTeammate } from "./delete-teammate";
+import { useAboutLines } from "./about-lines";
+import type { AboutSection } from "./about-sections";
 
-/** Where a link into About lands. Each is a section of the one page. */
-export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model";
+export { isAboutSection, type AboutSection } from "./about-sections";
 
-const SECTIONS: readonly string[] = ["people", "channels", "skills", "memory", "schedules", "agents", "model"] satisfies AboutSection[];
-
-/** Whether a word from an address is one of About's sections. */
-export function isAboutSection(value: string | null | undefined): value is AboutSection {
-    return typeof value === "string" && SECTIONS.includes(value);
+/** The parts of About, in the order the overview lays them out: five rows
+ *  of two — what it thinks with, what it knows and hands on, what it can
+ *  reach and does unasked, where it is reached, and who it works with.
+ *  Named with plain nouns, the words people already use for
+ *  these things elsewhere: "Agents", "Default model", "Skills". `label` is
+ *  the tile's word, the breadcrumb's, and the part's own heading unless
+ *  `title` says more. `blurb` stands in for the tile's live line when that
+ *  line cannot be read. */
+interface Part {
+    id: AboutSection;
+    label: string;
+    icon: ComponentType<{ size?: number }>;
+    title?: (name: string) => string;
+    note: (name: string) => string;
+    blurb: string;
 }
 
-/** The teammate itself, as a page: who it is and what it is for, then
- *  everything about how it works — who it works with, where it can be
- *  reached, what it has been taught, what it does without being asked, what
- *  it hands work to and what it thinks with.
+const PARTS: readonly Part[] = [
+    { id: "model", label: "Default model", icon: ModelIcon,
+        note: (name) => "What " + name + " thinks with, unless an agent names its own.", blurb: "The model it thinks with" },
+    { id: "skills", label: "Skills", icon: TaughtIcon,
+        note: (name) => "Instructions " + name + " follows when a task matches. People write these.", blurb: "Instructions people wrote" },
+    { id: "memory", label: "Memory", icon: MemoryIcon,
+        note: (name) => "Notes " + name + " writes as it works. Open one to read or fix it.", blurb: "Notes it wrote itself" },
+    { id: "agents", label: "Agents", icon: AgentIcon,
+        note: (name) => "Agents that take a piece of the job from " + name + " or from a workflow.", blurb: "Agents it hands work to" },
+    { id: "connections", label: "Connections", icon: ConnectorIcon,
+        note: (name) => "The apps " + name + " works through — Gmail, Slack, GitHub and the rest — and whose account each one uses: each person’s own, or one somebody shared here.",
+        blurb: "What it works through" },
+    { id: "schedules", label: "Standing work", icon: ClockIcon,
+        note: () => "What it does without being asked, on a time or an event.", blurb: "What it does unasked" },
+    { id: "channels", label: "Channels", icon: ReachIcon, title: (name) => "Where to reach " + name,
+        note: (name) => "Pick a channel and " + name + " answers there, under its own name.", blurb: "Where it answers" },
+    { id: "ai-tools", label: "MCP", icon: PlugIcon, title: () => "Connect ChatGPT, Claude and others",
+        note: (name) => "Add " + name + " to any AI app that speaks MCP, and use it from there.", blurb: "Use it from other AI apps" },
+    { id: "people", label: "People", icon: PeopleIcon,
+        note: (name) => "Everyone here can open what is in " + name + "’s space.", blurb: "Who can open its space" },
+    { id: "works-with", label: "Teammates", icon: AskIcon, title: (name) => "Teammates " + name + " works with",
+        note: (name) => "As you: " + name + " asks with your access there, and checks with you first. Allowed: that teammate lets " + name + " ask it with nobody present, reading only what it shared.",
+        blurb: "Other teammates it can ask" },
+];
+
+/** A part's heading on its own page. */
+function titleOf(part: Part, name: string): string {
+    return part.title ? part.title(name) : part.label;
+}
+
+/** A part's short name, for the breadcrumb above its page. */
+export function aboutLabel(section: AboutSection): string {
+    return PARTS.find((part) => part.id === section)?.label ?? "About";
+}
+
+/** The teammate itself, as a page: who it is and what it is for, then a
+ *  tile for each part of how it works, each saying what is true there now.
  *
- *  These used to be settings of a place. They are facts about the teammate,
- *  and read that way: "what Kit has been taught", not "Skills". Each section
- *  is the same working component Settings stacked before — nothing here is a
- *  second copy of how a schedule or a channel works. What is left in
- *  Settings is about the space rather than the teammate. */
-export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings, onDeleted }: {
+ *  This was one page that stacked every part — thirteen of them, eight
+ *  screens tall, with a row of jumps that ran off its own edge — and four of
+ *  those were the organization's (connectors, models, two kinds of usage),
+ *  copies of what Settings already holds. Now the overview fits on a screen
+ *  and a part opens as a page of its own at `/t/{pod}/about/{part}`, so Back
+ *  steps out of it and a link can name it. Each part is still the same
+ *  working component it always was; nothing here is a second copy of how a
+ *  schedule or a channel works. */
+export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSettings, onAsk, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, onDeleted }: {
     pod: Pod;
     orgId: string | null;
     orgName: string;
-    /** The section a link asked for; the page scrolls it into view. */
+    /** The part that is open, or null for the overview. */
     section: AboutSection | null;
-    /** Bumped with every ask, so asking for the same section twice scrolls
-     *  to it twice. */
-    request?: number;
+    /** Open a part, or go back to the overview. */
+    onSection: (section: AboutSection | null) => void;
+    /** The organization's settings, where connectors, models and usage live. */
+    onOpenSettings: (section: SettingsSection) => void;
     /** Start a new conversation with this teammate. */
     onAsk: () => void;
     onOpenAgent: (name: string) => void;
+    /** Go to another teammate. */
+    onOpenTeammate: (podId: string) => void;
     /** Put words in the composer for the teammate to act on. */
     onAskFor: (text: string) => void;
     onOpenRun: (runId: string, label: string) => void;
     onOpenConversation: (id: string) => void;
     onFile: (path: string) => void;
-    onSettings: () => void;
     /** The teammate has just been deleted: leave its space. */
     onDeleted: () => void;
 }) {
     const page = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        if (!section) return;
-        page.current?.querySelector(`[data-about="${section}"]`)?.scrollIntoView({ block: "start" });
-    }, [section, request]);
+    /* A part opens at its top, and the overview where it starts. */
+    useEffect(() => { page.current?.scrollTo({ top: 0 }); }, [section]);
+    const part = section ? PARTS.find((one) => one.id === section) : undefined;
 
     return (
         <div className="aboutpage" ref={page}>
             <div className="aboutpage__column">
-                <Hero pod={pod} orgId={orgId} onAsk={onAsk} />
-                <Jumps page={page} />
-
-                <Section id="people" title="People" note={"Everyone here can open what is in " + pod.name + "’s space."}>
-                    <AddPeople pod={pod} orgId={orgId} />
-                    <WhoCanJoin podId={pod.id} orgName={orgName} />
-                    <AtTheDoor podId={pod.id} teammate={pod.name} />
-                </Section>
-
-                <Section id="channels" title={"Where to reach " + pod.name} note="Channels outside the app it answers in.">
-                    <Surfaces pod={pod} expanded />
-                </Section>
-
-                <Section id="skills" title={"What " + pod.name + " has been taught"} note="Instructions it follows when a task matches.">
-                    <SkillsView
-                        podId={pod.id}
-                        teammate={pod.name}
+                {part ? (
+                    <PartPage
+                        pod={pod}
+                        part={part}
+                        orgId={orgId}
+                        orgName={orgName}
+                        onBack={() => onSection(null)}
+                        onOpenAgent={onOpenAgent}
+                        onOpenTeammate={onOpenTeammate}
+                        onAskFor={onAskFor}
+                        onOpenRun={onOpenRun}
+                        onOpenConversation={onOpenConversation}
                         onFile={onFile}
-                        onCreate={() => onAskFor(
-                            "Write me a new skill. Use the lemma-skill-creator skill: decide its triggers, "
-                            + "write the instructions, and publish it under /skills. Ask me what it should do first."
-                        )}
                     />
-                </Section>
-
-                <Section id="memory" title={"What " + pod.name + " remembers"} note="Written down as it works. Open a note to read or fix it.">
-                    <WhatItRemembers pod={pod} onFile={onFile} />
-                </Section>
-
-                <Section id="schedules" title="Standing work" note="What it does without being asked, on a time or an event.">
-                    <StandingWork podId={pod.id} teammate={pod.name} members={pod.members} orgId={orgId} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />
-                </Section>
-
-                <Section
-                    id="agents"
-                    title="Hands work to"
-                    note={"Agents that take a piece of the job from " + pod.name + " or from a workflow."}
-                    action={<button className="aboutpage__action" onClick={() => onAskFor(
-                        "Set up a new agent I can hand work to. Ask me what it should be for, what it may use, and who should be able to talk to it."
-                    )}><PlusIcon size={14} /> New agent</button>}
-                >
-                    <AgentList pod={pod} onOpen={onOpenAgent} />
-                </Section>
-
-                <Section id="model" title="Runs on" note={"What " + pod.name + " thinks with, unless an agent names its own."}>
-                    <RunsOn podId={pod.id} orgId={pod.orgId} />
-                </Section>
-
-                <p className="aboutpage__foot">
-                    AI tools, the models {orgName} can use, and usage are in{" "}
-                    <button className="linkish" onClick={onSettings}>Settings</button>.
-                </p>
-
-                {/* Last, and after everything that says how it works: the one
-                    act on this page that cannot be taken back. Not one of the
-                    jumps — nobody should arrive here by a shortcut. */}
-                <DeleteTeammate pod={pod} orgId={orgId} onDeleted={onDeleted} />
+                ) : <>
+                    <Hero pod={pod} orgId={orgId} onAsk={onAsk} />
+                    <Parts pod={pod} onOpen={onSection} />
+                    {/* What the organization shares is in Settings, once, for
+                        every teammate. Said here because it used to be here,
+                        and somebody will come looking. */}
+                    <p className="aboutpage__elsewhere">
+                        <span>Shared by everyone in {orgName}, in Settings:</span>
+                        <button className="linkish" onClick={() => onOpenSettings("models")}>Models</button>
+                        <button className="linkish" onClick={() => onOpenSettings("usage")}>Usage</button>
+                    </p>
+                    {/* Last, and after everything that says how it works: the
+                        one act on this page that cannot be taken back. Not a
+                        tile — nobody should arrive here by a shortcut. */}
+                    <DeleteTeammate pod={pod} orgId={orgId} onDeleted={onDeleted} />
+                </>}
             </div>
         </div>
     );
 }
 
-/** The page's sections, as a row that stays at the top while you scroll.
- *  About grew to seven sections; this is how you get to the fifth without
- *  scrolling past the first four. The section in view is marked. */
-const JUMPS: { id: AboutSection; label: string }[] = [
-    { id: "people", label: "People" },
-    { id: "channels", label: "Channels" },
-    { id: "skills", label: "Taught" },
-    { id: "memory", label: "Remembers" },
-    { id: "schedules", label: "Standing work" },
-    { id: "agents", label: "Hands work to" },
-    { id: "model", label: "Runs on" },
-];
-
-function Jumps({ page }: { page: RefObject<HTMLDivElement | null> }) {
-    const [at, setAt] = useState<AboutSection | null>(null);
-    /* The jump just taken stays marked until the person scrolls themselves:
-       while the page glides there, and at the bottom, where the last
-       sections can never reach the bar because the page runs out first. */
-    const asked = useRef<AboutSection | null>(null);
-    useEffect(() => {
-        const root = page.current;
-        if (!root) return;
-        const pick = () => {
-            if (asked.current) { setAt(asked.current); return; }
-            /* The one nearest the top of the viewport, below the bar itself. */
-            const top = root.getBoundingClientRect().top + 72;
-            let current: AboutSection | null = null;
-            for (const jump of JUMPS) {
-                const section = root.querySelector(`[data-about="${jump.id}"]`);
-                if (section && section.getBoundingClientRect().top <= top) current = jump.id;
-            }
-            setAt(current);
-        };
-        const mine = () => { asked.current = null; };
-        pick();
-        root.addEventListener("scroll", pick, { passive: true });
-        for (const kind of ["wheel", "touchstart", "keydown"] as const) root.addEventListener(kind, mine, { passive: true });
-        return () => {
-            root.removeEventListener("scroll", pick);
-            for (const kind of ["wheel", "touchstart", "keydown"] as const) root.removeEventListener(kind, mine);
-        };
-    }, [page]);
-    const go = (id: AboutSection) => {
-        asked.current = id;
-        setAt(id);
-        const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        page.current?.querySelector(`[data-about="${id}"]`)?.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
-    };
+/** The overview's grid: a tile a part, its mark, its name and one live line. */
+function Parts({ pod, onOpen }: { pod: Pod; onOpen: (section: AboutSection) => void }) {
+    const lines = useAboutLines(pod);
     return (
-        <nav className="aboutpage__jumps" aria-label="On this page">
-            {JUMPS.map((jump) => (
-                <button key={jump.id} aria-current={at === jump.id ? "true" : undefined} onClick={() => go(jump.id)}>{jump.label}</button>
-            ))}
+        <nav className="aboutparts" aria-label={"About " + pod.name}>
+            {PARTS.map((part) => {
+                const line = lines[part.id];
+                return (
+                    <button key={part.id} className="aboutparts__tile" onClick={() => onOpen(part.id)}>
+                        <span className="aboutparts__mark"><part.icon size={20} /></span>
+                        <span className="aboutparts__label">{part.label}</span>
+                        <span className="aboutparts__line">
+                            {line.needs && <span className="aboutparts__dot" role="img" aria-label="Needs you" />}
+                            <span>{line.text ?? part.blurb}</span>
+                        </span>
+                        <ChevronRightIcon size={16} className="aboutparts__go" aria-hidden="true" />
+                    </button>
+                );
+            })}
         </nav>
+    );
+}
+
+/** One part on its own page: the way back, its heading and note, and the
+ *  same component the part has always been drawn with. */
+function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile }: {
+    pod: Pod;
+    part: Part;
+    orgId: string | null;
+    orgName: string;
+    onBack: () => void;
+    onOpenAgent: (name: string) => void;
+    onOpenTeammate: (podId: string) => void;
+    onAskFor: (text: string) => void;
+    onOpenRun: (runId: string, label: string) => void;
+    onOpenConversation: (id: string) => void;
+    onFile: (path: string) => void;
+}) {
+    /* Open on nobody for a new connection; on one teammate to change what it
+       reads. */
+    const [connecting, setConnecting] = useState<{ asker?: string } | null>(null);
+    const manageLinks = useMayConnect(pod.id);
+    /* The connector a link named — every typed refusal's `connect_url`. */
+    const focus = useSearchParams().get("connector");
+
+    let action: ReactNode = null;
+    let body: ReactNode;
+    switch (part.id) {
+        case "people":
+            body = <>
+                <AddPeople pod={pod} orgId={orgId} />
+                <WhoCanJoin podId={pod.id} orgName={orgName} />
+                <AtTheDoor podId={pod.id} teammate={pod.name} />
+            </>;
+            break;
+        case "channels":
+            body = <ReachPanel pod={pod} inline />;
+            break;
+        case "connections":
+            body = <PodConnections pod={pod} focus={focus} />;
+            break;
+        case "works-with":
+            action = manageLinks ? (
+                <button className="aboutpage__action aboutpage__action--long" onClick={() => setConnecting({})}>
+                    <PlusIcon size={14} /> Let another teammate ask {pod.name}
+                </button>
+            ) : null;
+            body = <>
+                <WorksWith pod={pod} onOpen={onOpenTeammate} />
+                <AskedBy pod={pod} onOpen={onOpenTeammate} onEdit={(asker) => setConnecting({ asker })} />
+                {connecting && <ConnectTeammate pod={pod} asker={connecting.asker} onClose={() => setConnecting(null)} />}
+            </>;
+            break;
+        case "skills":
+            body = (
+                <SkillsView
+                    podId={pod.id}
+                    teammate={pod.name}
+                    layout="grid"
+                    onFile={onFile}
+                    onCreate={() => onAskFor(
+                        "Write me a new skill. Use the lemma-skill-creator skill: decide its triggers, "
+                        + "write the instructions, and publish it under /skills. Ask me what it should do first."
+                    )}
+                />
+            );
+            break;
+        case "memory":
+            body = <WhatItRemembers pod={pod} onFile={onFile} />;
+            break;
+        case "schedules":
+            body = <StandingWork podId={pod.id} teammate={pod.name} members={pod.members} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />;
+            break;
+        case "agents":
+            action = (
+                <button className="aboutpage__action" onClick={() => onAskFor(
+                    "Set up a new agent I can hand work to. Ask me what it should be for, what it may use, and who should be able to talk to it."
+                )}><PlusIcon size={14} /> New agent</button>
+            );
+            body = <AgentList pod={pod} onOpen={onOpenAgent} />;
+            break;
+        case "model":
+            body = <ModelChoice podId={pod.id} orgId={pod.orgId} orgName={orgName} />;
+            break;
+        case "ai-tools":
+            body = <AgentAccess pod={pod} />;
+            break;
+    }
+
+    return (
+        <section className="aboutpart" aria-label={titleOf(part, pod.name)}>
+            <button className="aboutpart__back" onClick={onBack}>
+                <ChevronLeftIcon size={15} />
+                <TeammateFace pod={pod} size={20} />
+                <span>{pod.name}</span>
+            </button>
+            <header className="aboutpart__head">
+                <div className="aboutpage__heading">
+                    <h1>{titleOf(part, pod.name)}</h1>
+                    {action}
+                </div>
+                <p>{part.note(pod.name)}</p>
+            </header>
+            <div className="aboutpage__content">{body}</div>
+        </section>
     );
 }
 
@@ -252,21 +352,6 @@ function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: ()
     );
 }
 
-function Section({ id, title, note, action, children }: { id: string; title: string; note?: string; action?: ReactNode; children: ReactNode }) {
-    return (
-        <section className="aboutpage__section" data-about={id} aria-label={title}>
-            <header>
-                <div className="aboutpage__heading">
-                    <h2>{title}</h2>
-                    {action}
-                </div>
-                {note && <p>{note}</p>}
-            </header>
-            <div className="aboutpage__content">{children}</div>
-        </section>
-    );
-}
-
 /** The agents this teammate hands work to. Not the teammate's own agent,
  *  which is the teammate and has this whole page. A row opens the agent's
  *  own page; nothing about an agent is configured inside this list. */
@@ -309,6 +394,48 @@ function AgentList({ pod, onOpen }: { pod: Pod; onOpen: (name: string) => void }
                     </li>
                 );
             })}
+        </ul>
+    );
+}
+
+/** The other teammates this one can ask: through you, or connected.
+ *
+ *  Partly yours: through you means you are in both, so someone else opening
+ *  this page sees their own. The same list the teammate reads before it asks,
+ *  so nothing here is something it would be refused. */
+function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void }) {
+    const askable = useQuery({
+        queryKey: ["askable-pods", pod.id],
+        queryFn: () => source.askablePods(pod.id),
+        staleTime: 60_000,
+    });
+    if (askable.isPending) return <p className="aboutpage__quiet">Loading…</p>;
+    if (askable.isError) {
+        return (
+            <p className="aboutpage__quiet" role="alert">
+                Couldn’t load who {pod.name} can ask.{" "}
+                <button className="linkish" onClick={() => void askable.refetch()}>Try again</button>
+            </p>
+        );
+    }
+    if (askable.data.length === 0) {
+        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other teammate you’re in, or one that lets it.</p>;
+    }
+    return (
+        <ul className="agentlist">
+            {askable.data.map((other) => (
+                <li key={other.id}>
+                    <button className="agentlist__row" onClick={() => onOpen(other.id)}>
+                        <TeammateFace pod={other} size={32} />
+                        <span className="agentlist__body">
+                            <span className="agentlist__title"><b>{other.name}</b></span>
+                            <small>{other.description || "No job written down yet."}</small>
+                        </span>
+                        <span className="agentlist__can">{[other.throughYou && "As you", other.connected && "Allowed by " + other.name].filter(Boolean).join(" · ")}</span>
+                        <ChevronRightIcon size={16} />
+                    </button>
+                </li>
+            ))}
         </ul>
     );
 }

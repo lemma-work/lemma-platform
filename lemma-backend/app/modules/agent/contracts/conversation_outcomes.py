@@ -56,8 +56,7 @@ async def load_conversation_outcome(
     whole entity and its latest run to read a status and a timestamp -- so the
     ledger had two readers of one fact that did not agree. The entity's status
     falls back to the latest *run*'s status when the conversation's own column
-    is null; the sweep in `schedule/services/run_recovery_service.py` has always
-    read the column. Two answers to "is this target finished" is how a run
+    is null; the ledger has always read the column. Two answers to "is this target finished" is how a run
     settles one way live and the other way on recovery.
     """
     return (await load_conversation_outcomes(uow, [conversation_id])).get(

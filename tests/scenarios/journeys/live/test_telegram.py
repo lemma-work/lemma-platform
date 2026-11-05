@@ -70,7 +70,7 @@ async def test_a_real_message_reaches_a_real_person(world):
         # send *through* — and that is a person's job, not a failure.
         pytest.skip(
             "waiting on a person: nobody has messaged the bot yet. Send it one "
-            "message from the Telegram account in SCENARIOS_TELEGRAM_HANDLE, "
+            "message from the Telegram account in TELEGRAM_SESSION, "
             "once — the surface stands between runs, so this is not per run"
         )
     assert answer.status_code == 200, (

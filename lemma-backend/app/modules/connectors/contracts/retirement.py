@@ -6,7 +6,8 @@ for that, and the import budget says so out loud.
 """
 
 from app.modules.connectors.services.account_retirement import (
+    retire_accounts,
     retire_accounts_for_tenant,
 )
 
-__all__ = ["retire_accounts_for_tenant"]
+__all__ = ["retire_accounts", "retire_accounts_for_tenant"]

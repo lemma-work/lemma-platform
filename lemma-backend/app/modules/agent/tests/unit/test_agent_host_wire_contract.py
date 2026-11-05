@@ -54,6 +54,7 @@ from app.modules.agent.domain.agent_host_link import (
     HostExecutionCapability,
     HostFrameType,
     LinkErrorCode,
+    McpBody,
     OpMethod,
     ServerFrameType,
 )
@@ -160,9 +161,14 @@ def test_the_tool_event_payloads_are_the_ones_this_side_models() -> None:
         AgentHostEventType.TOOL_CALL.value: AgentHostToolCallPayload,
         AgentHostEventType.TOOL_CALL_RESULT.value: AgentHostToolResultPayload,
     }
-    for case in CONTRACT["tool_events"]:
-        for raw in case["events"]:
-            models[raw["type"]].model_validate(raw["payload"])
+    validated = [
+        models[raw["type"]].model_validate(raw["payload"])
+        for case in CONTRACT["tool_events"]
+        for raw in case["events"]
+    ]
+
+    assert validated, "the contract carries no tool events to check"
+    assert {type(payload) for payload in validated} == set(models.values())
 
 
 def test_the_declared_limits_are_the_ones_this_side_enforces() -> None:
@@ -276,6 +282,21 @@ def test_the_link_error_codes_are_the_ones_the_host_acts_on() -> None:
     )
 
 
+def test_an_mcp_listing_relayed_with_null_params_is_answered() -> None:
+    """MCP lets ``tools/list`` omit ``params``; a host released before its
+    bridge filled them in sends ``null``. Refused, the agent ran every turn
+    without any of Lemma's tools, approvals and questions included."""
+    body = McpBody.model_validate(
+        {
+            "conversation_id": str(uuid7()),
+            "token": "run-token",
+            "method": "tools/list",
+            "params": None,
+        }
+    )
+    assert body.params == {}
+
+
 def test_the_link_path_and_heartbeat_are_shared() -> None:
     link = CONTRACT["link"]
     assert AGENT_HOST_LINK_PATH == link["path"]
@@ -295,6 +316,31 @@ def test_the_host_execution_ops_are_the_ones_the_exec_server_serves() -> None:
     assert OP_FAILURE_KINDS == set(contract["failure_kinds"])
     assert LinkErrorCode.OP_FAILED.value == contract["error_code"]
     assert OP_MAX_DATA_BYTES == contract["max_data_bytes"]
+
+
+def test_bulk_bytes_bounds_and_routes_are_shared() -> None:
+    """What rides the link is bounded the same way on both sides, and the
+    bytes that do not ride it go to the same routes, named the same way."""
+    from app.core.server_limits import WS_MAX_BYTES
+    from app.modules.agent.domain import agent_host_transfer as transfer
+    from app.modules.workspace.providers import agent_host_ops as provider
+
+    bulk = CONTRACT["bulk_bytes"]
+    assert WS_MAX_BYTES == bulk["max_message_bytes"]
+    assert transfer.LINK_EVENT_BATCH_MAX_BYTES == bulk["event_batch_max_bytes"]
+    assert transfer.LINK_INLINE_DATA_BYTES == bulk["inline_data_bytes"]
+    assert provider.INLINE_DATA_BYTES == bulk["inline_data_bytes"]
+    assert transfer.TRANSFER_MAX_BYTES == bulk["transfer_max_bytes"]
+    assert provider.OP_MAX_DATA_BYTES == bulk["transfer_max_bytes"]
+    assert transfer.BLOB_MAX_BYTES == bulk["blob_max_bytes"]
+    assert transfer.TRANSFER_PATH == bulk["transfer_path"]
+    assert transfer.BLOB_PATH == bulk["blob_path"]
+    assert transfer.DIGEST_HEADER == bulk["digest_header"]
+    assert transfer.BLOB_FIELD == bulk["blob_field"]
+    assert transfer.STAGED_FIELD == bulk["staged_field"]
+    assert transfer.STAGED_BODY_MAX_BYTES == bulk["staged_body_max_bytes"]
+    assert transfer.LINK_OUTBOUND_INLINE_BYTES == bulk["outbound_inline_bytes"]
+    assert bulk["hello_flag"] in HelloBody.model_fields
 
 
 def test_the_host_execution_capability_rides_on_hello_and_control() -> None:

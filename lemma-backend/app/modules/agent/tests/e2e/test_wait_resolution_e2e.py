@@ -2,12 +2,12 @@
 
 The happy paths are covered where the decision is made, against a pure function.
 What needs a database is the other half: that a wait whose target has vanished
-still wakes the agent with something truthful, and that a wait whose scheduler
-event never arrived is picked up by the sweep rather than sitting ACTIVE and
-past-due for the life of the deployment.
+still wakes the agent with something truthful, and that a wait is fired by the
+work item written with it -- through the runtime's own claim and execute --
+and only when it is due.
 
 These are the failure paths `PS-AGENT-023` promises and that a fake repository
-cannot hold the line on — claiming under a row lock, the partial unique index on
+cannot hold the line on -- claiming under a row lock, the partial unique index on
 one ACTIVE wait per conversation, and the resume run are all SQL.
 """
 
@@ -20,6 +20,7 @@ import pytest
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.core.infrastructure.work import WorkWriter
 from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -35,11 +36,9 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.wait_reconcile_service import (
-    RECONCILE_AFTER,
-    WaitReconcileService,
-)
+from app.modules.agent.services.wait_timers import arm_wait
 from app.modules.agent.services.wait_wake_service import AgentWaitService
+from app.modules.test_support.e2e.agent_work import run_wait_work
 
 pytestmark = [pytest.mark.e2e]
 
@@ -124,6 +123,7 @@ async def _a_wait(
             },
         )
         await AgentConversationWaitRepository(uow).create(wait)
+        await arm_wait(WorkWriter.of(uow), wait, wait.scheduled_at)
         await uow.commit()
     return wait
 
@@ -133,6 +133,7 @@ async def _reload(wait_id: UUID) -> AgentConversationWaitEntity | None:
         return await AgentConversationWaitRepository(uow).get(wait_id)
 
 
+@pytest.mark.drives_work
 async def test_a_process_whose_sandbox_is_gone_wakes_rather_than_waiting_out_the_hour(
     waiting_conversation,
 ) -> None:
@@ -140,7 +141,8 @@ async def test_a_process_whose_sandbox_is_gone_wakes_rather_than_waiting_out_the
 
     Sitting until the one-hour ceiling would be the worst answer available: the
     agent waits an hour to be told nothing, and the person watching sees a
-    conversation that looks alive and is not.
+    conversation that looks alive and is not. Driven through its
+    ``agent.wait.poll`` item, which probes outside any transaction.
     """
     wait = await _a_wait(
         waiting_conversation,
@@ -150,17 +152,15 @@ async def test_a_process_whose_sandbox_is_gone_wakes_rather_than_waiting_out_the
         target_ref=str(uuid4()),
     )
 
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        resumed = await AgentWaitService(uow).resolve(wait=wait)
-        await uow.commit()
+    assert await run_wait_work(due_now=True) == 1
 
-    assert resumed is True, "a process that cannot be read must still wake the agent"
     resolved = await _reload(wait.id)
     assert resolved is not None
     assert resolved.status is AgentWaitStatus.COMPLETED
     assert resolved.spec["woke_because"] == AgentWaitWakeReason.TARGET_GONE.value
 
 
+@pytest.mark.drives_work
 async def test_a_subagent_run_that_no_longer_exists_wakes_as_gone(
     waiting_conversation,
 ) -> None:
@@ -171,23 +171,20 @@ async def test_a_subagent_run_that_no_longer_exists_wakes_as_gone(
         target_ref=str(uuid4()),
     )
 
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        resumed = await AgentWaitService(uow).resolve(wait=wait)
-        await uow.commit()
+    assert await run_wait_work(due_now=True) == 1
 
-    assert resumed is True
     resolved = await _reload(wait.id)
     assert resolved is not None
+    assert resolved.status is AgentWaitStatus.COMPLETED
     assert resolved.spec["woke_because"] == AgentWaitWakeReason.TARGET_GONE.value
 
 
 async def test_a_second_resolution_does_not_start_a_second_run(
     waiting_conversation,
 ) -> None:
-    """The sweep and the timer race on every wait, so this is the common case.
+    """A late or duplicate fire is the common race: the row lock settles it.
 
-    The claim is a row lock, which is why this needs the database: whichever
-    resolution gets there second sees a non-ACTIVE row and stops.
+    Whichever resolution gets there second sees a non-ACTIVE row and stops.
     """
     wait = await _a_wait(
         waiting_conversation,
@@ -196,46 +193,44 @@ async def test_a_second_resolution_does_not_start_a_second_run(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        first = await AgentWaitService(uow).resolve(wait=wait)
+        first = await AgentWaitService(uow).fire(wait.id)
         await uow.commit()
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        second = await AgentWaitService(uow).resolve(wait=wait)
+        second = await AgentWaitService(uow).fire(wait.id)
         await uow.commit()
 
     assert (first, second) == (True, False)
 
 
-async def test_the_sweep_resolves_a_wait_whose_scheduler_event_never_arrived(
+@pytest.mark.drives_work
+async def test_a_wait_fires_when_due_and_its_item_goes_with_it(
     waiting_conversation,
 ) -> None:
-    """The backstop `PS-AGENT-023` promises: a lost fire must not strand a run.
-
-    Overdue by more than the grace period, because firing the moment
-    `scheduled_at` passes would race the real timer on every healthy wait.
-    """
+    """Due now, the item fires it once; nothing of the wait is left queued."""
     wait = await _a_wait(
         waiting_conversation,
-        wait_type=AgentWaitType.SUBAGENT,
-        target_ref=str(uuid4()),
-        scheduled_in=-(RECONCILE_AFTER + timedelta(minutes=5)),
+        wait_type=AgentWaitType.TIME,
+        target_ref="",
+        scheduled_in=-timedelta(seconds=1),
     )
 
-    woken = await WaitReconcileService().reconcile_due_waits()
+    assert await run_wait_work() == 1
+    assert await run_wait_work() == 0
 
-    assert woken >= 1, "the sweep left a past-due wait ACTIVE"
     resolved = await _reload(wait.id)
     assert resolved is not None
     assert resolved.status is AgentWaitStatus.COMPLETED
+    assert resolved.spec["woke_because"] == AgentWaitWakeReason.TIMER.value
 
 
-async def test_a_healthy_future_wait_is_left_alone_by_the_sweep(
+@pytest.mark.drives_work
+async def test_a_healthy_future_wait_is_left_alone(
     waiting_conversation,
 ) -> None:
-    """The other half of the grace period, and the one that would go unnoticed.
+    """Its item is not due, so nothing runs it early.
 
-    A sweep that fired eagerly would wake every wait early, which reads as the
-    feature working — the agent does come back — while removing the whole point
-    of it.
+    Waking early would read as the feature working -- the agent does come
+    back -- while removing the whole point of it.
     """
     wait = await _a_wait(
         waiting_conversation,
@@ -244,7 +239,7 @@ async def test_a_healthy_future_wait_is_left_alone_by_the_sweep(
         scheduled_in=timedelta(minutes=30),
     )
 
-    await WaitReconcileService().reconcile_due_waits()
+    assert await run_wait_work() == 0
 
     untouched = await _reload(wait.id)
     assert untouched is not None

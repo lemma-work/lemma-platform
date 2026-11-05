@@ -39,6 +39,33 @@ pub(crate) fn restore_dock_presence(app: &AppHandle) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn restore_dock_presence(_app: &AppHandle) {}
 
+/// Keep every window a window, never a native tab of another one.
+///
+/// macOS merges a new window into the frontmost one as a tab whenever that one
+/// is in fullscreen -- "Prefer tabs: in full screen" is the system default, not
+/// something anybody chose for Lemma. So opening a pod app from a fullscreen
+/// workspace did not open a window: it grew a tab bar across the top of the
+/// workspace, squeezing it 36pt below the camera band, and put the app in a tab
+/// beside it. Closing the app then meant finding the right tab, and ⌘W on the
+/// workspace's tab hid the workspace out of a tab group the app was still in.
+///
+/// Class-wide and before the first window, because AppKit decides when a
+/// window is ordered in. Lemma has no document windows that would want tabs.
+#[cfg(target_os = "macos")]
+pub(crate) fn disallow_window_tabbing() {
+    use objc2::runtime::Bool;
+    use objc2::{class, msg_send};
+    // SAFETY: a class property setter taking a BOOL, called from `setup` on
+    // the main thread.
+    unsafe {
+        let () = msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing: Bool::NO];
+    }
+}
+
+/// Nothing tabs windows together off macOS.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn disallow_window_tabbing() {}
+
 /// Bring a window to the front, rather than merely making it visible.
 ///
 /// `show()` un-hides a window. On macOS it does not make the *application*

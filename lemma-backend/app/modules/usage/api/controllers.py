@@ -32,11 +32,13 @@ from app.modules.usage.api.schemas import (
     UsageSummaryResponse,
 )
 from app.modules.usage.domain.accounting import money
+from app.modules.usage.domain.contacts_cap import StoredContactsCap
 from app.modules.usage.domain.entities import UsageRecord, UsageSummary
 from app.modules.usage.domain.errors import UsageAccessDeniedError
 from app.modules.usage.infrastructure.contacts_cap_repository import (
     UsageContactsCapRepository,
 )
+from app.modules.contacts.contracts import answered_contacts_in_organization
 from app.modules.usage.services.contacts_cap import contacts_cap_status
 from app.core.authorization.permissions import Permissions, SYSTEM_ROLE_PERMISSIONS
 from app.core.log.log import get_logger
@@ -366,6 +368,10 @@ async def _contacts_cap(uow: UoWDep, organization_id: UUID) -> ContactsCapRespon
         monthly_limit_usd=None if limit is None else float(limit),
         is_default=status_now.cap.is_default,
         spent_this_month_usd=float(status_now.spent_usd),
+        max_contacts=status_now.cap.max_contacts,
+        answered_contacts=await answered_contacts_in_organization(
+            uow, organization_id=organization_id
+        ),
     )
 
 
@@ -417,11 +423,30 @@ async def update_contacts_cap(
     """
     user: UserEntity = request.state.user
     await _require_billing_manager(user=user, organization_id=organization_id, uow=uow)
-    limit = None if body.monthly_limit_usd is None else money(body.monthly_limit_usd)
     previous = await contacts_cap_status(uow, organization_id)
-    await UsageContactsCapRepository(uow.session).set_monthly_limit(
+    caps = UsageContactsCapRepository(uow.session)
+    # Each half the caller says nothing about stays as it was -- an owner's
+    # choice, or the default: changing the spend must not lift a limit on how
+    # many are answered, nor changing the count drop the spend cap.
+    stored = await caps.stored(organization_id) or StoredContactsCap(
+        None, monthly_limit_set=False
+    )
+    chosen = body.model_fields_set
+    limit = (
+        (None if body.monthly_limit_usd is None else money(body.monthly_limit_usd))
+        if "monthly_limit_usd" in chosen
+        else stored.monthly_limit_usd
+    )
+    await caps.set_cap(
         organization_id,
-        monthly_limit_usd=limit,
+        StoredContactsCap(
+            monthly_limit_usd=limit,
+            monthly_limit_set="monthly_limit_usd" in chosen or stored.monthly_limit_set,
+            max_contacts=(
+                body.max_contacts if "max_contacts" in chosen else stored.max_contacts
+            ),
+            max_contacts_set="max_contacts" in chosen or stored.max_contacts_set,
+        ),
         updated_by_user_id=user.id,
     )
     logger.info(

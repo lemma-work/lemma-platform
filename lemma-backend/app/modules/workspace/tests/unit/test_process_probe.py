@@ -8,13 +8,18 @@ the mistake the idle sweep already made once, releasing a sandbox mid-command.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.modules.workspace.providers.base import ProcessDescriptor, ProviderGone
+from app.modules.workspace.providers.base import (
+    ProcessDescriptor,
+    ProviderGone,
+    ProviderNotReady,
+)
 from app.modules.workspace.services.process_probe import (
     ProcessProbeStatus,
     probe_process,
@@ -69,7 +74,7 @@ def _descriptor(state, exit_code=None):
     )
 
 
-def _service(*, processes=None, inspect_result=SimpleNamespace(), raises=None):
+def _provider(*, processes=None, inspect_result=SimpleNamespace(), raises=None):
     async def _inspect(_provider_id, *, deadline_at):
         if raises is not None:
             raise raises
@@ -80,9 +85,7 @@ def _service(*, processes=None, inspect_result=SimpleNamespace(), raises=None):
             raise raises
         return processes or []
 
-    return SimpleNamespace(
-        _provider=SimpleNamespace(inspect=_inspect, list_processes=_list_processes)
-    )
+    return SimpleNamespace(inspect=_inspect, list_processes=_list_processes)
 
 
 @pytest.fixture
@@ -97,7 +100,7 @@ async def test_a_running_process_reads_as_running(one_live_sandbox):
     probe = await probe_process(
         user_id=uuid4(),
         process_id=_PROCESS_ID,
-        service=_service(processes=[_descriptor(ProcessState.RUNNING)]),
+        provider=_provider(processes=[_descriptor(ProcessState.RUNNING)]),
         uow_factory=_Uow(None),
         repository=one_live_sandbox,
     )
@@ -110,7 +113,7 @@ async def test_an_exited_process_reads_as_finished_with_its_code(one_live_sandbo
     probe = await probe_process(
         user_id=uuid4(),
         process_id=_PROCESS_ID,
-        service=_service(processes=[_descriptor(ProcessState.FAILED, exit_code=2)]),
+        provider=_provider(processes=[_descriptor(ProcessState.FAILED, exit_code=2)]),
         uow_factory=_Uow(None),
         repository=one_live_sandbox,
     )
@@ -132,7 +135,7 @@ async def test_a_cancelled_process_with_no_exit_code_still_reads_as_finished(
     probe = await probe_process(
         user_id=uuid4(),
         process_id=_PROCESS_ID,
-        service=_service(processes=[_descriptor(ProcessState.CANCELLED)]),
+        provider=_provider(processes=[_descriptor(ProcessState.CANCELLED)]),
         uow_factory=_Uow(None),
         repository=one_live_sandbox,
     )
@@ -146,7 +149,7 @@ async def test_a_process_the_sandbox_no_longer_lists_reads_as_gone(one_live_sand
     probe = await probe_process(
         user_id=uuid4(),
         process_id=_PROCESS_ID,
-        service=_service(processes=[]),
+        provider=_provider(processes=[]),
         uow_factory=_Uow(None),
         repository=one_live_sandbox,
     )
@@ -164,7 +167,7 @@ async def test_an_unreachable_provider_is_not_read_as_an_ending(one_live_sandbox
     probe = await probe_process(
         user_id=uuid4(),
         process_id=_PROCESS_ID,
-        service=_service(raises=ProviderGone("nope")),
+        provider=_provider(raises=ProviderGone("nope")),
         uow_factory=_Uow(None),
         repository=one_live_sandbox,
     )
@@ -178,7 +181,7 @@ async def test_an_empty_metadata_listing_is_not_read_as_an_ending(one_live_sandb
     probe = await probe_process(
         user_id=uuid4(),
         process_id=_PROCESS_ID,
-        service=_service(inspect_result=None),
+        provider=_provider(inspect_result=None),
         uow_factory=_Uow(None),
         repository=one_live_sandbox,
     )
@@ -192,9 +195,119 @@ async def test_a_user_with_no_live_sandbox_reads_as_gone():
     probe = await probe_process(
         user_id=uuid4(),
         process_id=_PROCESS_ID,
-        service=_service(),
+        provider=_provider(),
         uow_factory=_Uow(None),
         repository=_repository(sandboxes=[], instance=None),
     )
 
     assert probe.status is ProcessProbeStatus.GONE
+
+
+class _PerSandboxProvider:
+    """Answers differently per sandbox: the shape a desktop-plus-cloud user has."""
+
+    def __init__(self, answers):
+        self._answers = answers
+
+    async def inspect(self, provider_id, *, deadline_at):
+        del deadline_at
+        answer = self._answers[provider_id]
+        if isinstance(answer, Exception):
+            raise answer
+        return SimpleNamespace(provider_id=provider_id)
+
+    async def list_processes(self, instance, *, deadline_at):
+        del deadline_at
+        return self._answers[instance.provider_id]
+
+
+def _two_live_sandboxes():
+    sandboxes = [SimpleNamespace(id=uuid4()), SimpleNamespace(id=uuid4())]
+    instances = {
+        sandboxes[0].id: SimpleNamespace(provider_id="sbx-offline"),
+        sandboxes[1].id: SimpleNamespace(provider_id="sbx-cloud"),
+    }
+
+    class _Repository:
+        def __init__(self, _uow):
+            pass
+
+        async def list_for_owner(self, **_kwargs):
+            return sandboxes
+
+        async def current_instance(self, sandbox_id):
+            return instances[sandbox_id]
+
+    return _Repository
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_sandbox_does_not_hide_the_one_that_lists_the_process():
+    """The first sandbox not answering used to end the probe as UNREADABLE, so
+    a process that finished in the second was waited on to its deadline."""
+    probe = await probe_process(
+        user_id=uuid4(),
+        process_id=_PROCESS_ID,
+        provider=_PerSandboxProvider(
+            {
+                "sbx-offline": ProviderNotReady("the Mac is asleep"),
+                "sbx-cloud": [_descriptor(ProcessState.SUCCEEDED, exit_code=0)],
+            }
+        ),
+        uow_factory=_Uow(None),
+        repository=_two_live_sandboxes(),
+    )
+
+    assert probe.status is ProcessProbeStatus.FINISHED
+    assert probe.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_unreadable_wins_over_gone_when_no_sandbox_lists_the_process():
+    """The sandbox that did not answer may be the one running it."""
+    probe = await probe_process(
+        user_id=uuid4(),
+        process_id=_PROCESS_ID,
+        provider=_PerSandboxProvider(
+            {"sbx-offline": ProviderNotReady("asleep"), "sbx-cloud": []}
+        ),
+        uow_factory=_Uow(None),
+        repository=_two_live_sandboxes(),
+    )
+
+    assert probe.status is ProcessProbeStatus.UNREADABLE
+
+
+@pytest.mark.asyncio
+async def test_a_lost_watch_the_provider_could_not_settle_reads_as_unreadable(
+    one_live_sandbox,
+):
+    """UNKNOWN is "the provider stopped watching", not "still running". Read as
+    running, it was waited on for the whole deadline with nothing to say."""
+    probe = await probe_process(
+        user_id=uuid4(),
+        process_id=_PROCESS_ID,
+        provider=_provider(processes=[_descriptor(ProcessState.UNKNOWN)]),
+        uow_factory=_Uow(None),
+        repository=one_live_sandbox,
+    )
+
+    assert probe.status is ProcessProbeStatus.UNREADABLE
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_exited_unobserved_reads_as_finished(one_live_sandbox):
+    probe = await probe_process(
+        user_id=uuid4(),
+        process_id=_PROCESS_ID,
+        provider=_provider(
+            processes=[
+                replace(_descriptor(ProcessState.UNKNOWN), exited_unobserved=True)
+            ]
+        ),
+        uow_factory=_Uow(None),
+        repository=one_live_sandbox,
+    )
+
+    assert probe.status is ProcessProbeStatus.FINISHED
+    assert probe.exit_code is None

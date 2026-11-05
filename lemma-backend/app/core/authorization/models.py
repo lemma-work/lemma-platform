@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import (
@@ -187,5 +195,13 @@ class ResourcePermissionGrantModel(UUIDCreatedBase):
             "resource_type",
             "permission_id",
             "resource_id",
+        ),
+        # Grants to another pod -- links -- found from the pod that holds them,
+        # which no pod_id-led index can do.
+        Index(
+            "ix_rpg_pod_grantee",
+            "grantee_id",
+            "permission_id",
+            postgresql_where=text("grantee_type = 'POD'"),
         ),
     )

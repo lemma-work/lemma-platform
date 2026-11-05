@@ -58,6 +58,19 @@ export function writeDraft(store: KeyValueStore, draftKey: string, text: string)
     writeAll(store, drafts);
 }
 
+/** Which box a draft belongs to.
+ *
+ *  A pane showing a conversation keys by it, so two conversations with the same
+ *  teammate keep two drafts and neither is offered the other's words. A pane
+ *  whose conversation does not exist yet — the chat beside a doc, before
+ *  anything has been sent — keys by what that pane is about, so its words wait
+ *  for it without following the person to the next doc. A pane with neither
+ *  keeps the one draft a new conversation in the main pane has always had. */
+export function draftKeyFor(podId: string, conversationId: string | null, scope?: string | null): string {
+    if (conversationId) return podId + ":" + conversationId;
+    return scope ? podId + ":new:" + scope : podId + ":new";
+}
+
 /** The browser's storage, or nothing — a private window can refuse it, and a
  *  draft is not worth an error. */
 export function draftStore(): KeyValueStore | null {

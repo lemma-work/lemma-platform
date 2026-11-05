@@ -23,6 +23,7 @@ import re
 from pathlib import Path
 
 import pytest
+from app.modules.test_support import source_tree
 
 pytestmark = pytest.mark.unit
 
@@ -51,7 +52,7 @@ def _hooks_the_bootstrap_sets() -> set[str]:
 
 
 def _production_files():
-    for path in (ROOT / "app").rglob("*.py"):
+    for path in source_tree.python_files(ROOT / "app"):
         parts = path.parts
         if "tests" in parts or "test_support" in parts:
             continue
@@ -64,7 +65,7 @@ def _read_by_production(attribute: str) -> list[str]:
     return [
         path.relative_to(ROOT).as_posix()
         for path in _production_files()
-        if pattern.search(path.read_text(encoding="utf-8"))
+        if pattern.search(source_tree.source(path))
     ]
 
 

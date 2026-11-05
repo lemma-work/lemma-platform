@@ -55,7 +55,6 @@ class _RecordingSession:
 
 POD_ID = uuid4()
 OWNER_ID = uuid4()
-ORG_ID = uuid4()
 
 #: What each hydrator's `select` returns, per type. Four different shapes, which
 #: is itself why the mapping is easy to get wrong.
@@ -66,8 +65,6 @@ ROWS = {
     "no_visibility": (POD_ID, OWNER_ID),
     #: FOLDER/DOCUMENT also fetch the path, for the folder-grant cascade.
     "datastore_file": (POD_ID, OWNER_ID, "POD", "/some/path"),
-    #: The connector tables are keyed by organization, not pod.
-    "org_scoped": (ORG_ID, OWNER_ID),
 }
 
 #: Types whose hydrator resolves a **pod** — the ones the cross-pod clamp works for.
@@ -81,16 +78,11 @@ LEARNS_POD = {
     ResourceType.CONVERSATION: "no_visibility",
     ResourceType.FOLDER: "datastore_file",
     ResourceType.DOCUMENT: "datastore_file",
-}
-
-#: Types whose hydrator reads a row but resolves only an **organization**. The
-#: connector tables have no pod column, so `pod_id` is passed through untouched
-#: and the cross-pod clamp has nothing to compare. Deliberate: a connector is an
-#: org-wide capability and the real boundary is the connected *account*,
-#: enforced in `account_resolution_service`.
-LEARNS_ORG_ONLY = {
-    ResourceType.CONNECTOR_ACCOUNT: "org_scoped",
-    ResourceType.CONNECTOR_AUTH_CONFIG: "org_scoped",
+    # A pod connector and a pod account are the pod's own rows. They used to
+    # learn no pod at all -- a connector was a uuid5 of a catalog id and an
+    # account an org row -- so the clamp had nothing to compare them with.
+    ResourceType.CONNECTOR: "generic",
+    ResourceType.CONNECTOR_ACCOUNT: "generic",
 }
 
 #: A pod's own id *is* its pod, so this one needs no table. Every caller passes
@@ -100,8 +92,8 @@ LEARNS_POD_WITHOUT_A_QUERY = {ResourceType.POD}
 
 #: Types hydration does not look up at all.
 #:
-#: `CONNECTOR` is deliberate — its hydrator returns early without a pod, and
-#: says why in prose. `ORGANIZATION` and `ROLE` have no pod: a pod-default agent
+#: `CONNECTOR_AUTH_CONFIG` is an org installation; managing one is an org
+#: permission checked without a ref. `ORGANIZATION` and `ROLE` have no pod: a pod-default agent
 #: is refused an org-scoped action earlier, by `_is_pod_scoped_permission`.
 #: `POD_MEMBER` and `DATASTORE_RECORD` are pod-scoped but nothing in production
 #: builds a `ResourceRef` for either — they exist as permission ids and grant
@@ -113,7 +105,7 @@ LEARNS_POD_WITHOUT_A_QUERY = {ResourceType.POD}
 #: read by `user_id`. Nothing builds a ref for it *yet* — the resolution service
 #: that will is the one place that should, and it lands with a hydrator.
 NO_LOOKUP = {
-    ResourceType.CONNECTOR,
+    ResourceType.CONNECTOR_AUTH_CONFIG,
     ResourceType.ORGANIZATION,
     ResourceType.ROLE,
     ResourceType.POD_MEMBER,
@@ -127,15 +119,13 @@ def test_every_resource_type_is_accounted_for():
 
     Without it, adding a type silently opts it out of the cross-pod clamp.
     """
-    covered = (
-        set(LEARNS_POD) | set(LEARNS_ORG_ONLY) | NO_LOOKUP | LEARNS_POD_WITHOUT_A_QUERY
-    )
+    covered = set(LEARNS_POD) | NO_LOOKUP | LEARNS_POD_WITHOUT_A_QUERY
     assert covered == set(ResourceType), (
         f"a ResourceType is in no set: {set(ResourceType) - covered}"
     )
-    assert len(LEARNS_POD) + len(LEARNS_ORG_ONLY) + len(NO_LOOKUP) + len(
-        LEARNS_POD_WITHOUT_A_QUERY
-    ) == len(set(ResourceType)), "a ResourceType is in more than one set"
+    assert len(LEARNS_POD) + len(NO_LOOKUP) + len(LEARNS_POD_WITHOUT_A_QUERY) == len(
+        set(ResourceType)
+    ), "a ResourceType is in more than one set"
 
 
 @pytest.mark.asyncio
@@ -152,25 +142,6 @@ async def test_a_pod_scoped_type_learns_its_pod_from_the_row(resource_type):
 
     assert session.queries == 1, "hydration did not ask the database"
     assert hydrated.pod_id == POD_ID
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "resource_type",
-    sorted(LEARNS_ORG_ONLY, key=lambda t: t.name),
-    ids=lambda t: t.name,
-)
-async def test_an_org_scoped_type_learns_an_org_and_no_pod(resource_type):
-    session = _RecordingSession(ROWS[LEARNS_ORG_ONLY[resource_type]])
-    service = Authorizer(session)
-
-    hydrated = await service._hydrate_resource(
-        ResourceRef(resource_type=resource_type, resource_id=uuid4())
-    )
-
-    assert session.queries == 1
-    assert hydrated.organization_id == ORG_ID
-    assert hydrated.pod_id is None
 
 
 @pytest.mark.asyncio

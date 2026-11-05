@@ -8,19 +8,35 @@ the *result* of resolving an approval, as opposed to the decision a user made
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import NamedTuple
 
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 
 
+class ApprovalResolutionStatus(str, Enum):
+    """What resolving an approval did. Lowercase: it is the API's ``status``."""
+
+    #: This call recorded the decision.
+    RESOLVED = "resolved"
+    #: The decision was already recorded; this call only finished a prior
+    #: half-done resume (the self-heal path).
+    RECONCILED = "reconciled"
+    #: The decision is durable and a worker job owns the rest.
+    QUEUED = "queued"
+
+
 class ApprovalResolution(NamedTuple):
-    """Approval status plus the authoritative (stored) decision.
+    """Approval status plus the authoritative (stored) decision."""
 
-    ``status`` is ``"resolved"`` when this call recorded the decision,
-    ``"reconciled"`` when it only finished a prior half-done resume (the
-    self-heal path), or ``"queued"`` when the decision is durable and a worker
-    job owns the rest.
-    """
-
-    status: str
+    status: ApprovalResolutionStatus
     decision: AgentRunApprovalDecision
+
+
+#: In a DENY's response: nobody decided before the question's time ran out --
+#: the run is told so, rather than that a person turned it down.
+EXPIRED_UNANSWERED = "expired_unanswered"
+
+
+def expired_unanswered(response: dict[str, object]) -> bool:
+    return response.get(EXPIRED_UNANSWERED) is True

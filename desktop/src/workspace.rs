@@ -333,6 +333,55 @@ pub(crate) fn overridden_workspace_capability() -> Option<String> {
     workspace_capability_for(configured)
 }
 
+/// The connected server, granted the shipped workspace commands -- or `None`
+/// for Lemma Cloud, which `capabilities/workspace.json` already names.
+///
+/// Its own identifier per origin, because a person can connect one server
+/// after another in a single run of the app, and a capability cannot be added
+/// twice under one name.
+pub(crate) fn hosted_workspace_capability(hosted: &str) -> Option<String> {
+    let capability = workspace_capability_for(std::iter::once(hosted.to_owned()))?;
+    let mut value: Value = serde_json::from_str(&capability).ok()?;
+    let digest = hosted
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    value["identifier"] = json!(format!("workspace-hosted-server-{digest:016x}"));
+    value["description"] =
+        json!("The Lemma server this app was connected to from the chooser, granted the same commands as Lemma Cloud.");
+    Some(value.to_string())
+}
+
+/// Grant the connected server its commands, once per origin. Called before
+/// anything navigates there: at launch and when the person connects it.
+pub(crate) fn grant_hosted_workspace_capability(app: &AppHandle, hosted: &str) {
+    let Some(capability) = hosted_workspace_capability(hosted) else {
+        return;
+    };
+    let Ok(url) = tauri::Url::parse(hosted) else {
+        return;
+    };
+    let origin = url.origin().ascii_serialization();
+    let shell: State<Shell> = app.state();
+    if !shell
+        .granted_workspace_origins
+        .lock_or_recover()
+        .insert(origin.clone())
+    {
+        return;
+    }
+    if let Err(error) = app.add_capability(capability) {
+        shell
+            .granted_workspace_origins
+            .lock_or_recover()
+            .remove(&origin);
+        append_install_log(&format!(
+            "could not grant the Lemma server at {origin} its commands: {error}"
+        ));
+    }
+}
+
 pub(crate) fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<String> {
     let shipped = shipped_workspace_origins();
     let mut urls: Vec<String> = Vec::new();

@@ -35,10 +35,8 @@ def _routers():
     ]
 
 
-def _event_routers():
-    from app.modules.pod.events.pod_handlers import router
-
-    return [router]
+def _register_work() -> None:
+    import app.modules.pod.events.join_request_work  # noqa: F401
 
 
 def _pod_liveness():
@@ -48,10 +46,17 @@ def _pod_liveness():
     return pod_is_live
 
 
+def _namespace_directory():
+    """Which organization owns a pod's work; see `contracts/namespace_directory.py`."""
+    from app.modules.pod.contracts.namespace_directory import PodNamespaceDirectory
+
+    return PodNamespaceDirectory()
+
+
 module = LemmaModule(
     name="pod",
     pod_liveness=_pod_liveness,
+    namespace_directory=_namespace_directory,
     routers=_routers,
-    event_routers=_event_routers,
-    stream_groups=(("pod_events", "pod-join-request-events"),),
+    register_work=_register_work,
 )

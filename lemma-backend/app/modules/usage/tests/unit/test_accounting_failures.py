@@ -1,6 +1,7 @@
 """Accounting failures retain useful UI classifications without provider data."""
 
 import httpx
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
@@ -65,6 +66,9 @@ def test_checkpoint_failure_explains_retained_authority() -> None:
     [
         httpx.ReadError("connection died"),
         httpx.ConnectError("never opened"),
+        httpx2.ReadError("connection died"),
+        httpx2.ConnectError("never opened"),
+        httpx2.ReadTimeout("no bytes"),
         TimeoutError("no bytes"),
     ],
 )
@@ -87,7 +91,7 @@ def test_a_drop_wrapped_by_the_provider_client_is_still_the_harness_s() -> None:
     # openai and anthropic both wrap the transport error rather than raise it,
     # so a check that only looks at the outermost exception sees nothing.
     wrapped = RuntimeError("provider client")
-    wrapped.__cause__ = httpx.ReadError("connection died")
+    wrapped.__cause__ = httpx2.ReadError("connection died")
     assert is_harness_owned_drop(wrapped)
 
 

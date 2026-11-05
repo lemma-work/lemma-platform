@@ -13,16 +13,27 @@ sandbox lifecycle belongs to [workspace](workspace.md).
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Agent CRUD/permissions, conversations/messages/SSE, runtime profiles, Agent Host pairing/dispatch, tools, widgets |
-| Redis consumer | Converts agent lifecycle events into queued work and title generation |
-| streaq tasks | Run agents, generate titles, reconcile orphaned runs |
-| Published stream | `agent_events` |
+| Work kinds | `agent.turn` (`interactive`) and `agent.turn.automation` (`automation`), one per run and one at a time per conversation, written with the run; `agent.title`; `agent.approval.execute`, written with an approval decision; `agent.wait.fire`, `agent.wait.poll` and `agent.wait.resolve_child` for paused turns; `agent.followup`, `agent.subagent_result` and `pod_ask.deliver`, written in a finished run's transaction; `agent.pause_questions` after a run ends (its pause questions brought in line, its batch of questions to people sealed) and `agent.asked_question_closed` as one closes, which write `agent.replies_arrived` once the run has finished and nothing it asked still waits; `agent.pause_expired` when a paused question's time ran out (resumed as nobody answering, never approved) |
+| Facts emitted | `AgentRunFinished` in every run's terminal transaction; workflow, schedule, surfaces and the parent's wait subscribe |
+| Periodic work | `agent.host_dispatch_reconcile` (5 min), `agent.host_retained_state_cleanup` (daily) |
+| After-commit projection | Drops a cached memory-brief section when the file behind it is written, from the committed `datastore.file.*` events |
 | Mounted MCP apps | Conversation and pod tool servers are assembled by the backend root using agent services |
 
-Durable lifecycle events are staged in the PostgreSQL outbox and reach Redis
-Streams only through the core message bus. Transient token/status frames use the
-core realtime-channel port with a Redis Pub/Sub adapter; each SSE connection
-leases one subscription connection and releases it on completion, failure, or
-cancellation.
+Everything that must follow a run's end is a work item or a fact written in the
+transaction that ends it, so a crash between the end and its follow-ups cannot
+lose one. Each step of a turn (a tool call, its return, the answer) commits
+fenced by the turn's claim, so a worker that lost the turn's lease cannot add a
+second answer, and a resumed turn whose answer had committed ends on it without
+asking the model again. Lemma's database being unreachable mid-turn interrupts
+the turn, which resumes; it is never recorded as the model failing. Transient token/status frames use the core realtime-channel port with
+a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
+and releases it on completion, failure, or cancellation.
+
+Migration `0056_agent_surface_bundle_work` arms every active wait. A turn that
+was running on the old transport, and a conversation paused on an approval that
+was decided but not yet executed, are failed with a message asking the person
+to continue; nothing is replayed
+([cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13)).
 
 ## Main data model
 
@@ -46,7 +57,7 @@ cancellation.
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
 | `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
-| `/me/runtime/agent-hosts...`, `/agent-host/link` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP) |
+| `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
 | `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-11-08) |
 
@@ -72,6 +83,18 @@ context; destructive operations require a standing grant or session approval.
 Agent Host runs are fenced by a per-run lease row, so a host that reconnects
 cannot double-dispatch a run already in flight.
 
+Every harness's events pass one place before anything reads them
+(`run_event_pump._split_message_event`): reasoning a model wrote into its text
+becomes a thought (`core/text/thinking_tags`, which also catches a block the
+prompt opened and only `</think>` closes, and on the live stream withdraws what
+it showed with a `stream_reset`), and an approval the agent asks for is
+preceded by its `message` to the person (`domain/approval_message`), so a run
+that stops for one never ends on a half sentence. A provider's tool call ids
+are not trusted to be unique: a response is executed and stored with one call
+per id (`domain/tool_call_ids`), and a call reusing an id the conversation
+already holds is stored under a new one, its return following it
+(`RunMessageWriter._unique_call_id`).
+
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
@@ -83,6 +106,49 @@ and fragments for its enabled toolsets. Resource authoring details live in
 skills. Agent and conversation instructions follow
 the static guidance; runtime context and the task list follow those to preserve
 the cached prefix. In-process capabilities and Agent Host use the same fragments.
+
+A message answering a line in a channel keeps which lines of the channel it
+was handed as background, never what they said, and a member's line written
+into a contact's conversation is a mark naming its line, never its words
+(`contact_conversations.append_follow_up`). Both are read from the channel's
+timeline as the run's history is put together
+(`services/channel_background.with_channel_background`, from
+`runtime_history.assemble_runtime_history` and for messages steered into a
+run), so an edit, a deletion or a forgotten contact reaches every later
+prompt; the visitor's page and an export read a follow-up the same way. Only
+the runs carried whole get their background -- an older run is reduced to its
+requests and answer -- so the read is bounded and moves in elision's blocks.
+A run answering a line in Lemma answers the lines whose words it read
+(`services/channel_answers`, recorded in `channel_line_answers`).
+
+A message the person sends while a run is finishing is steered into it
+(`capabilities/pending_user_messages`), and the run goes on to answer that
+too. The answer it had already written is then not the run's final answer --
+its output is still the last -- but it was an answer: the pydantic-ai node
+loop marks it `answered_before_steer` when the request that sent the run on
+carries the person's words rather than a retry (`domain/steered_answers`).
+`contracts/run_replies` reads up to five of them, and each is a line of its own
+ahead of the final answer, in Lemma and on a platform (`run:{run}:{n}`, the
+final answer staying `run:{run}`). Such a line rides none of the run's files,
+finishes no live stream, and is not sent at all where the run's Slack stream
+already shows it.
+
+Three kinds of message belong to no run and still reach the model, placed by
+sequence among the runs around them: notifications; what somebody outside
+the pod said while a person had them, with whatever they were told instead
+(`domain/held_turns`); and what a contact merge copied in from the person's
+conversation that lost its seat (`contracts/folded_history`). None is carried
+from after the turn being answered, nor, once older runs are cut from the
+history, from before what remains of it
+(`runtime_history.unattached_message_window`). The copies sit where the merge
+put them, after what the kept conversation held then, so each stretch of them
+is opened by a notice saying it is another chat's, and closed by one when
+anything follows it (a closing notice after everything else would read as the
+turn to answer). A copied message is read with no sending time, since its own
+is the merge's. They have
+their own bound, the newest `MAX_FOLDED_MESSAGES`, apart from the newest
+`MAX_UNATTACHED_MESSAGES` of the other two, and the opening notice says when
+it left some out (`domain/folded_turns`).
 
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through

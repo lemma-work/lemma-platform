@@ -53,6 +53,30 @@ workload kind:
 The function logical ID is therefore exactly the pod ID without sharing a namespace
 with user workspaces. Provider-generated IDs remain private sandbox data.
 
+**One workspace per person, not per pod or agent.** Every conversation a person
+has -- with any pod's assistant or any named agent -- runs in their one
+workspace sandbox, so its disk, its installed tools and the browser's signed-in
+sites are there for the next one. A sandbox per pod and actor was tried and
+rejected: it multiplied persisted disks by every pod and agent a person touches,
+and made them sign in to a site again for each agent.
+
+What keeps those runs apart is the session, not the sandbox. Each session's
+processes are handed a delegated `LEMMA_TOKEN` minted for that session's pod and
+workload, so a named agent's commands act with that agent's grants and the
+assistant's with the person's. Tool configuration that has to hold a credential
+follows the same rule: `git` and `gh` read the GitHub credential from a
+directory of the session's own under `/tmp/lemma-sess/`, named in that
+session's environment (`workspace/contracts/session_config.py`), never from
+global git config the next session would also read.
+
+That separates sessions from one another's credentials by accident, not by
+force. Every process in the sandbox runs as the same UID over the same home: a
+process can read any other's `/proc/<pid>/environ` and another session's
+directory, and a run that writes `~/.bashrc` or a `~/.local/bin` shim runs code
+in later shells. A named agent restricted by its grants can therefore, with
+effort, reach a token minted for the assistant. A Linux user per actor, with
+its own home, is the step that would close that; it is not taken yet.
+
 ## 2. Problem statement
 
 The current implementation couples four independently difficult concerns:
@@ -534,6 +558,9 @@ idle threshold expire, the allocation is destroyed on every provider.
 - Reusable human access/refresh tokens never enter function sandboxes.
 - Workspace credentials are short-lived, session-scoped, and removed before
   release.
+- One workspace sandbox belongs to one person. Each session in it carries its
+  own delegated token and its own credential directory; sessions share a UID,
+  so this separates them by convention rather than by the kernel.
 - Function invocation and the Lemma SDK use one delegated function-session bearer,
   cached for up to five minutes by `(user, pod, function, revision hash)`. Grants
   remain live backend data and are checked when the token is used rather than

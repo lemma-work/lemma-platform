@@ -8,7 +8,9 @@ came before built an eight-mixin ingress service and then reassigned
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -22,9 +24,9 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     ConversationType,
     ParsedInboundSurfaceEvent,
+    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
@@ -36,15 +38,20 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.services import egress_service
+from app.modules.agent_surfaces.services.private_message import (
+    PrivateMessage,
+    PrivateSend,
+)
 from app.modules.agent_surfaces.services.display_resource_content import (
     PodFileDelivery,
     PodFileParts,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    AnsweredAt,
     _ASK_USER_TOOL_ARGS,
     _ASK_USER_TOOL_ARGS_FLAT,
     _REQUEST_APPROVAL_TOOL_ARGS,
-    _ask_user_link,
+    _answered_in_thread,
     _delivering_adapter,
     _pending,
     _resend_surface,
@@ -52,6 +59,7 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     _slack_surface,
     _teams_surface,
     build_egress,
+    surface_conversation,
     conversation_operations,  # noqa: F401  (autouse fixture)
 )
 
@@ -61,7 +69,7 @@ pytestmark = pytest.mark.asyncio
 async def test_send_processing_indicator_for_conversation_uses_last_surface_event():
     surface = _teams_surface()
     conversation_id = uuid4()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="TEAMS",
@@ -86,10 +94,7 @@ async def test_send_processing_indicator_for_conversation_uses_last_surface_even
     egress = build_egress(
         adapter=adapter,
         surfaces=[surface],
-        existing_link=link,
-    )
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
+        answered=link,
     )
 
     sent = await egress.progress.show_typing(
@@ -109,7 +114,7 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="SLACK",
@@ -122,10 +127,7 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
     egress = build_egress(
         adapter=adapter,
         surfaces=[surface],
-        existing_link=link,
-    )
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
+        answered=link,
     )
 
     sent = await egress.send_agent_message_for_conversation(
@@ -138,13 +140,214 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
     assert adapter.send_message.await_args.kwargs["message"] == "assistant update"
 
 
+def _slack_group_event() -> ParsedInboundSurfaceEvent:
+    """A channel somebody addressed the bot in, as opposed to a direct chat."""
+    return ParsedInboundSurfaceEvent(
+        platform="SLACK",
+        conversation_type=ConversationType.EXTERNAL_GROUP,
+        tenant_id="T123",
+        external_channel_id="C123",
+        external_thread_id="C123",
+        external_message_id="1700000000.000200",
+        sender_external_user_id="U123",
+        sender_display_name="Asha",
+        message_text="what's our margin on this deal?",
+        is_dm=False,
+        mentioned_agent=True,
+        reply_target={"channel": "C123"},
+    )
+
+
+def _link(
+    surface,
+    event: ParsedInboundSurfaceEvent,
+    *,
+    conversation_id,
+    kind: str,
+) -> AnsweredAt:
+    return AnsweredAt(
+        surface_id=surface.id,
+        conversation_id=conversation_id,
+        platform="SLACK",
+        external_channel_id=event.external_channel_id,
+        external_thread_id=event.external_thread_id,
+        external_user_id=event.sender_external_user_id,
+        conversation_kind=kind,
+        last_event=event.model_dump(mode="json"),
+    )
+
+
+def _member_in_group(surface, group_conversation):
+    """The group's conversation is this member's: who they are, for seating
+    their private one."""
+    member = uuid4()
+    agent_conversations.surface_conversation.return_value = surface_conversation(
+        conversation_id=group_conversation,
+        user_id=member,
+        pod_id=surface.pod_id,
+        agent_id=surface.agent_id,
+    )
+    return member
+
+
+async def test_a_message_for_one_person_in_a_group_goes_to_their_own_chat():
+    """`surface_send_message` promises one person, and a group is not one person.
+
+    The conversation is the member's, but its address is the group: delivering
+    to the conversation posted the aside in front of everybody in it.
+    """
+    surface = _slack_surface()
+    group_conversation, private_conversation = uuid4(), uuid4()
+    group_link = _link(
+        surface,
+        _slack_group_event(),
+        conversation_id=group_conversation,
+        kind="CHANNEL",
+    )
+    private_link = _link(
+        surface, _slack_event(), conversation_id=private_conversation, kind="DM"
+    )
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=group_link)
+    member = _member_in_group(surface, group_conversation)
+    egress.delivery.seats.answer(
+        private_conversation,
+        private_link.source(surface),
+        private_link.last_event,
+        person=member,
+        agent_id=surface.agent_id,
+    )
+
+    sent = await PrivateMessage(egress=egress).send(
+        conversation_id=group_conversation,
+        message="the floor is 40k",
+    )
+
+    assert sent is PrivateSend.SENT
+    adapter.send_message.assert_awaited_once()
+    assert adapter.send_message.await_args.kwargs["message"] == "the floor is 40k"
+    assert adapter.send_message.await_args.kwargs["event"].external_channel_id == "D123"
+
+
+async def test_a_member_with_no_private_chat_is_not_messaged_in_the_group():
+    """The group is not a fallback for a message meant for one person."""
+    surface = _slack_surface()
+    group_conversation = uuid4()
+    group_link = _link(
+        surface,
+        _slack_group_event(),
+        conversation_id=group_conversation,
+        kind="CHANNEL",
+    )
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=group_link)
+    _member_in_group(surface, group_conversation)
+
+    sent = await PrivateMessage(egress=egress).send(
+        conversation_id=group_conversation,
+        message="the floor is 40k",
+    )
+
+    assert sent is PrivateSend.NO_PRIVATE_CHAT
+    adapter.send_message.assert_not_awaited()
+
+
+async def test_a_newer_private_chat_in_another_pod_does_not_hide_this_pods():
+    """The private chat in *this* pod, not the freshest one anywhere.
+
+    A personal DM comes in through the company's installation and is answered
+    in the person's own pod, so on one surface their newest private chat can be
+    another pod's -- and taking only that one reached nobody.
+    """
+    surface = _slack_surface()
+    group_conversation, elsewhere, here = uuid4(), uuid4(), uuid4()
+    group_link = _link(
+        surface,
+        _slack_group_event(),
+        conversation_id=group_conversation,
+        kind="CHANNEL",
+    )
+    now = datetime.now(timezone.utc)
+    newer_elsewhere = replace(
+        _link(surface, _slack_event(), conversation_id=elsewhere, kind="DM"),
+        pod_id=uuid4(),
+        last_inbound_at=now,
+    )
+    older_here = replace(
+        _link(surface, _slack_event(), conversation_id=here, kind="DM"),
+        last_inbound_at=now - timedelta(days=3),
+    )
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=group_link)
+    member = _member_in_group(surface, group_conversation)
+    for place in (newer_elsewhere, older_here):
+        source = place.source(surface)
+        egress.delivery.seats.answer(
+            place.conversation_id,
+            source,
+            place.last_event,
+            person=member,
+            agent_id=surface.agent_id,
+        )
+
+    private = await egress.delivery.private_thread_for(
+        await egress.delivery.resolve_egress_target(group_conversation)
+    )
+
+    assert private == here
+
+
+async def test_a_message_for_one_person_on_an_email_thread_drops_the_copies():
+    """An email thread with other people on it is a group too: a reply-all
+    copies all of them, so the aside goes to the sender alone, same thread."""
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    event = _slack_event().model_copy(
+        update={
+            "platform": SurfacePlatform.RESEND,
+            "reply_target": {
+                "recipient_email": "asha@acme.test",
+                "cc": ["tom@client.test"],
+            },
+        }
+    )
+    link = _link(surface, event, conversation_id=conversation_id, kind="EMAIL")
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
+
+    sent = await PrivateMessage(egress=egress).send(
+        conversation_id=conversation_id, message="the floor is 40k"
+    )
+
+    assert sent is PrivateSend.SENT
+    reply_target = adapter.send_message.await_args.kwargs["event"].reply_target
+    assert reply_target["recipient_email"] == "asha@acme.test"
+    assert "cc" not in reply_target
+
+
+async def test_a_message_in_a_direct_chat_still_goes_to_that_chat():
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    link = _link(surface, _slack_event(), conversation_id=conversation_id, kind="DM")
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
+
+    sent = await PrivateMessage(egress=egress).send(
+        conversation_id=conversation_id,
+        message="on my way",
+    )
+
+    assert sent is PrivateSend.SENT
+    assert adapter.send_message.await_args.kwargs["event"].external_channel_id == "D123"
+
+
 async def test_send_agent_message_strips_thinking_tokens_before_delivery():
     """Model reasoning/thinking tags must never reach a surface as a chat
     message. The ingress service strips them as a final safety net."""
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="SLACK",
@@ -157,10 +360,7 @@ async def test_send_agent_message_strips_thinking_tokens_before_delivery():
     egress = build_egress(
         adapter=adapter,
         surfaces=[surface],
-        existing_link=link,
-    )
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
+        answered=link,
     )
 
     # Build the message with literal thinking tags (constructed programmatically
@@ -186,7 +386,7 @@ async def test_send_agent_message_returns_false_when_only_thinking_tokens():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="SLACK",
@@ -199,10 +399,7 @@ async def test_send_agent_message_returns_false_when_only_thinking_tokens():
     egress = build_egress(
         adapter=adapter,
         surfaces=[surface],
-        existing_link=link,
-    )
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
+        answered=link,
     )
 
     open_tag, close_tag = chr(60) + "think" + chr(62), chr(60) + "/think" + chr(62)
@@ -221,7 +418,7 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="SLACK",
@@ -234,10 +431,7 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
     egress = build_egress(
         adapter=adapter,
         surfaces=[surface],
-        existing_link=link,
-    )
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
+        answered=link,
     )
 
     sent = await egress.send_display_resource_for_conversation(
@@ -253,8 +447,8 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
     assert isinstance(render_plan, SurfaceDisplayRenderPlan)
     assert render_plan.title == "Table: deals"
     assert render_plan.primary_action is not None
-    assert "/pod/" in render_plan.primary_action.url
-    assert "tab=deals" in render_plan.primary_action.url
+    assert "/t/" in render_plan.primary_action.url
+    assert render_plan.primary_action.url.endswith("/table/deals")
 
 
 async def test_a_delivered_file_carries_no_caption(monkeypatch):
@@ -268,7 +462,7 @@ async def test_a_delivered_file_carries_no_caption(monkeypatch):
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="SLACK",
@@ -279,10 +473,7 @@ async def test_a_delivered_file_carries_no_caption(monkeypatch):
     )
     adapter = _delivering_adapter()
     adapter._render_file.return_value = True
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     resolve = AsyncMock(
         return_value=PodFileParts(
             files=[
@@ -313,13 +504,10 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
     adapter._render_choices.return_value = True
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_question.return_value = _pending(
         "ask_user", tool_call_id="tool-1", tool_args=_ASK_USER_TOOL_ARGS
     )
@@ -351,13 +539,10 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
     adapter._render_choices.return_value = True
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_question.return_value = _pending(
         # The real production shape: pydantic-ai flattens the single model
         # parameter, so the args are the model's own fields.
@@ -385,13 +570,10 @@ async def test_send_approval_prompt_renders_native_buttons():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
     adapter._render_decision.return_value = True  # platform rendered native buttons
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_approval.return_value = _pending(
         "request_approval",
         tool_call_id="tool-2",
@@ -431,15 +613,12 @@ async def test_an_older_unanswered_question_does_not_shadow_the_approval():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
     adapter.deliver.return_value = DeliveryReceipt(
         parts={"decision": PartDelivery.NATIVE}
     )
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
 
     stale_question = _pending("ask_user", tool_call_id="tool-ask")
     the_approval = _pending(
@@ -473,13 +652,10 @@ async def test_send_approval_prompt_falls_back_to_text():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
     adapter._render_decision.return_value = False  # platform has no native buttons
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_approval.return_value = _pending(
         "request_approval",
         tool_call_id="tool-2",
@@ -500,13 +676,10 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
     adapter._render_decision.return_value = True
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_approval.return_value = _pending(
         "request_approval",
         tool_call_id="tool-2",
@@ -528,12 +701,9 @@ async def test_send_approval_prompt_skips_when_no_pending():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_approval.return_value = None
 
     sent = await egress.send_approval_prompt_for_conversation(
@@ -548,7 +718,7 @@ async def test_an_email_surface_delivers_the_question_in_its_one_reply():
     surface = _resend_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="RESEND",
@@ -558,10 +728,7 @@ async def test_an_email_surface_delivers_the_question_in_its_one_reply():
         last_event=parsed_event.model_dump(mode="json"),
     )
     adapter = _delivering_adapter("RESEND")
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_question.return_value = _pending(
         "ask_user", tool_call_id="tool-1", tool_args=_ASK_USER_TOOL_ARGS
     )
@@ -578,9 +745,6 @@ async def test_send_processing_indicator_for_conversation_stops_without_link():
     surface = _teams_surface()
     adapter = AsyncMock()
     egress = build_egress(adapter=adapter, surfaces=[surface])
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        None
-    )
 
     sent = await egress.progress.show_typing(
         conversation_id=uuid4(),
@@ -605,7 +769,7 @@ async def test_a_refused_typing_indicator_does_not_cost_the_answer():
     """
     surface = _teams_surface()
     conversation_id = uuid4()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="TEAMS",
@@ -630,10 +794,7 @@ async def test_a_refused_typing_indicator_does_not_cost_the_answer():
     # A real platform failure, not a bug in our own code: `show_typing` catches
     # the transport family, so a `RuntimeError` would rightly still escape.
     adapter.add_processing_indicator.side_effect = TimeoutError("teams said no")
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
 
     shown = await egress.progress.show_typing(conversation_id=conversation_id)
 
@@ -647,11 +808,8 @@ async def test_a_refused_typing_indicator_does_not_cost_the_answer():
 async def _approval_egress(adapter):
     surface = _slack_surface()
     conversation_id = uuid4()
-    link = await _ask_user_link(surface, conversation_id, _slack_event())
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    link = _answered_in_thread(surface, conversation_id, _slack_event())
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     return egress, conversation_id
 
 
@@ -814,8 +972,8 @@ async def test_a_file_that_cannot_be_read_is_not_replaced_by_a_link_card():
     """
     adapter = _delivering_adapter()
     egress, conversation_id = await _approval_egress(adapter)
-    agent_conversations.surface_conversation.return_value = SimpleNamespace(
-        id=conversation_id, user_id=uuid4(), pod_id=uuid4()
+    agent_conversations.surface_conversation.return_value = surface_conversation(
+        conversation_id=conversation_id
     )
 
     sent = await egress.send_display_resource_for_conversation(

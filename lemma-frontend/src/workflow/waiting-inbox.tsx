@@ -7,9 +7,12 @@ import { lemma } from "@/session/client";
 import { source } from "@/data";
 import type { Pod } from "@/data";
 import { CloseIcon, WorkflowIcon } from "@/ui/icons";
+import { PlaceLink } from "@/shell/place-link";
+import { askedHref, byAge, CONVERSATION_ASKS, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
+import { useConversationAsks } from "@/thread/use-conversation-asks";
 import { WaitForm } from "./form";
 import {
-    byStuckLongest, readAssignments, readWorkflows, sayStuckFor, sayWaitingOn,
+    byStuckLongest, readAssignments, readWorkflows, sayFor, sayStuckFor, sayWaitingOn,
     type Assignment,
 } from "./runs";
 import { samples } from "@/data/samples";
@@ -27,6 +30,12 @@ import { samples } from "@/data/samples";
  *  a log of things said to you, most of which are over; this is a queue of
  *  things not done. Folding the queue into the log is how the queue stops
  *  being looked at.
+ *
+ *  The same queue holds the conversations stopped on you — a question, an
+ *  approval, an agent on your computer asking permission. Nothing pushes
+ *  those or reminds you of them, by design: this list is where they wait,
+ *  and it says how long. They open in their conversation, where the card to
+ *  answer them already is.
  */
 export function WaitingInbox({ pods }: {
     /** The pods this person belongs to in the organization on screen, already
@@ -54,10 +63,14 @@ export function WaitingInbox({ pods }: {
         enabled: pods.length > 0,
         staleTime: 60_000,
     });
+    /* Under the key the rail and Home read, so the three share one request. */
+    const asking = useConversationAsks(pods);
     /* Read again on opening rather than on every return to the window: the
        queue is a request per teammate, and a focus is not somebody asking. */
     useEffect(() => {
-        if (open) void cache.refetchQueries({ queryKey: ["workflow-waiting", podKey], stale: true });
+        if (!open) return;
+        void cache.refetchQueries({ queryKey: ["workflow-waiting", podKey], stale: true });
+        void cache.refetchQueries({ queryKey: [CONVERSATION_ASKS, podKey], stale: true });
     }, [open, cache, podKey]);
 
     useEffect(() => {
@@ -87,7 +100,11 @@ export function WaitingInbox({ pods }: {
     }, [open]);
 
     const rows = queue.data?.rows ?? [];
-    const count = rows.length;
+    /* Fresh only, so this badge and the rail's count the same thing; a
+       week-old ask is folded behind "older" on Home rather than counted. */
+    const asked = byAge(asking.data ?? []).fresh;
+    const count = rows.length + asked.length;
+    const failed = queue.isError && asking.isError;
     /* Nothing owed: no control. An icon that is always there, permanently
        showing zero, is one more thing in a header that already carries seven,
        and this one has nothing to say.
@@ -104,7 +121,7 @@ export function WaitingInbox({ pods }: {
        form empties the list, and without the guard the control would unmount
        under the cursor the instant somebody finished — panel and all — rather
        than saying the queue is clear. */
-    if (!open && count === 0 && !queue.isError) return null;
+    if (!open && count === 0 && !queue.isError && !asking.isError) return null;
 
     const refresh = () => { void cache.invalidateQueries({ queryKey: ["workflow-waiting"] }); };
 
@@ -114,8 +131,8 @@ export function WaitingInbox({ pods }: {
                 ref={anchor}
                 className="icon-button wf-inbox__open"
                 data-tour="needs"
-                title={count ? count + " waiting on you" : "Workflows waiting on you"}
-                aria-label={count ? "Workflows waiting on you, " + count : "Workflows waiting on you"}
+                title={count ? count + " waiting on you" : "Waiting on you"}
+                aria-label={count ? "Waiting on you, " + count : "Waiting on you"}
                 aria-expanded={open}
                 onClick={() => setOpen((was) => !was)}
             >
@@ -127,7 +144,7 @@ export function WaitingInbox({ pods }: {
                 <div
                     className="wf-inbox__panel"
                     role="dialog"
-                    aria-label="Workflows waiting on you"
+                    aria-label="Waiting on you"
                     ref={sheet}
                     style={{ top: at.top, right: at.right }}
                 >
@@ -138,12 +155,20 @@ export function WaitingInbox({ pods }: {
                         </button>
                     </header>
 
-                    {queue.isPending && <p className="wf-quiet" role="status">Reading…</p>}
-                    {queue.isError && (
+                    {queue.isPending && asking.isPending && <p className="wf-quiet" role="status">Reading…</p>}
+                    {failed && (
                         <p className="wf-quiet" role="alert">
-                            Couldn’t load workflows waiting for your input.{" "}
-                            <button onClick={() => void queue.refetch()}>Try again</button>
+                            Couldn’t load what is waiting on you.{" "}
+                            <button onClick={() => { void queue.refetch(); void asking.refetch(); }}>Try again</button>
                         </p>
+                    )}
+                    {/* One half failing is a short list, not an empty one: say
+                        which half, and still show the other. */}
+                    {!failed && queue.isError && (
+                        <p className="wf-inbox__partial">Workflows waiting on you could not be read, so this may be short.</p>
+                    )}
+                    {!failed && asking.isError && (
+                        <p className="wf-inbox__partial">Conversations waiting on you could not be read, so this may be short.</p>
                     )}
                     {/* Partial is not failed. One pod refusing the list is a
                         permission answer about that pod, and emptying the
@@ -156,11 +181,14 @@ export function WaitingInbox({ pods }: {
                                 : queue.data?.unreadable + " queues could not be read, so this may be short."}
                         </p>
                     )}
-                    {queue.isSuccess && rows.length === 0 && (
-                        <p className="wf-quiet">No workflows need your input.</p>
+                    {queue.isSuccess && asking.isSuccess && count === 0 && (
+                        <p className="wf-quiet">Nothing is waiting on you.</p>
                     )}
 
                     <div className="wf-inbox__list">
+                        {asked.map((row) => (
+                            <AskedEntry key={row.podId + ":" + row.conversationId} row={row} onGo={() => setOpen(false)} />
+                        ))}
                         {rows.map((row) => (
                             <WaitingRow
                                 key={row.wait.id}
@@ -174,6 +202,24 @@ export function WaitingInbox({ pods }: {
                 </div>
             ), document.body)}
         </div>
+    );
+}
+
+/** A conversation stopped on you. It opens where its question or approval
+ *  card already is, rather than answering here: the card carries what the
+ *  agent wanted to do, and a one-line summary is not enough to approve on. */
+function AskedEntry({ row, onGo }: { row: AskedRow; onGo: () => void }) {
+    const waited = sayFor(Date.now() - row.sinceMs);
+    return (
+        <article className="wf-wait" data-kind={row.kind}>
+            <PlaceLink className="wf-wait__open" href={askedHref(row)} onGo={onGo}>
+                <span className="wf-wait__body">
+                    <strong>{row.title}</strong>
+                    <small>{[sayAsked(row), row.summary, row.podName].filter(Boolean).join(" · ")}</small>
+                </span>
+                <span className="wf-wait__age">{waited ? "Waiting on you for " + waited : "Waiting on you"}</span>
+            </PlaceLink>
+        </article>
     );
 }
 

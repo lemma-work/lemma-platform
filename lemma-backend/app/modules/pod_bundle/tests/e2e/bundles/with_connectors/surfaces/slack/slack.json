@@ -1,6 +1,6 @@
 {
   "name": "slack",
   "platform": "SLACK",
-  "account_id": "${slack_account}",
+  "pod_connector": "slack-shared",
   "is_enabled": true
 }

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from app.modules.function.config import function_settings
+from app.modules.function.config import start_window_seconds
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import (
     Context,
@@ -492,7 +492,7 @@ class FunctionService:
             ),
         )
 
-        function = await self.repository.get_for_update(function.id)
+        function = await self.repository.get_for_share(function.id)
         if function is None:
             raise FunctionNotFoundError(f"Function {name} not found")
 
@@ -508,6 +508,16 @@ class FunctionService:
         # Reject bad input before spending a run or sandbox lease.
         validate_input(function, input_data)
 
+        effective_mode = dispatch_mode or (
+            FunctionDispatchMode.ASYNCHRONOUS
+            if function.type == FunctionType.JOB
+            else FunctionDispatchMode.SYNCHRONOUS
+        )
+        # Only the deadline to *start*: starting replaces it with the
+        # execution deadline, so queueing does not eat the execution budget.
+        start_window = start_window_seconds(
+            asynchronous=effective_mode == FunctionDispatchMode.ASYNCHRONOUS
+        )
         run_entity = FunctionRunEntity(
             id=uuid7(),
             function_id=function.id,
@@ -516,21 +526,9 @@ class FunctionService:
             user_email=user_email,
             input_data=input_data,
             status=FunctionRunStatus.PENDING,
-            deadline_at=datetime.now(timezone.utc)
-            + timedelta(
-                seconds=(
-                    function_settings.function_job_deadline_seconds
-                    if function.type == FunctionType.JOB
-                    else function_settings.function_api_deadline_seconds
-                )
-            ),
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=start_window),
         )
         assert run_entity.id is not None
-        effective_mode = dispatch_mode or (
-            FunctionDispatchMode.ASYNCHRONOUS
-            if function.type == FunctionType.JOB
-            else FunctionDispatchMode.SYNCHRONOUS
-        )
         if effective_mode == FunctionDispatchMode.ASYNCHRONOUS:
             run_entity.job_id = function_run_job_id(run_entity.id)
         run = await self._create_run(run_entity)

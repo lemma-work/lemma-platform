@@ -23,6 +23,7 @@ Probe contract:
 
 from opentelemetry import metrics
 from fastapi import APIRouter, Request
+from sqlalchemy.exc import SQLAlchemyError
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
@@ -33,6 +34,7 @@ from app.core.infrastructure.db.migration_state import schema_migration_state
 from app.core.observability.dependency_incident import DependencyIncident
 from app.core.observability import readiness
 from app.core.observability.worker_liveness import worker_readiness_state
+from app.modules.datastore.contracts import query_role_health
 from app.core.security import supertokens_core_reachable
 from app.sandbox_health import sandbox_capability
 from app.core.infrastructure.channels.channel_service import channel_service
@@ -144,6 +146,22 @@ async def health_ready(request: Request):
             incident.record_failure(error_type="unavailable")
         return healthy
 
+    async def _datastore_roles() -> str:
+        """Bounded like the probes above, and answering for itself: a slow or
+        unreachable datastore must not reach the gather, whose failure reports
+        every required component down -- a 503 caused by a component that
+        never blocks."""
+        try:
+            return await _asyncio.wait_for(
+                query_role_health.datastore_role_state(), timeout=1.0
+            )
+        except (TimeoutError, SQLAlchemyError, OSError) as exc:
+            logger.warning(
+                "app.health_ready.datastore_roles_probe.degraded",
+                error_type=type(exc).__name__,
+            )
+            return query_role_health.UNKNOWN
+
     # Concurrent, each individually bounded and the set bounded by the
     # gather. SuperTokens is in here because `initialize_supertokens` makes
     # no network call while `verify_auth` calls the core on every
@@ -158,8 +176,9 @@ async def health_ready(request: Request):
             create_inherited_task(_probe("supertokens", supertokens_core_reachable)),
             create_inherited_task(worker_readiness_state(embedded=embedded)),
             create_inherited_task(schema_migration_state()),
+            create_inherited_task(_datastore_roles()),
         ]
-        db_ok, redis_ok, auth_ok, worker, schema = await _asyncio.wait_for(
+        db_ok, redis_ok, auth_ok, worker, schema, roles = await _asyncio.wait_for(
             _asyncio.gather(*tasks), timeout=2.0
         )
     except Exception:
@@ -168,6 +187,7 @@ async def health_ready(request: Request):
         # difference can be seen.
         logger.error("app.health_ready.probe_failed.failed", exc_info=True)
         db_ok, redis_ok, auth_ok, worker, schema = False, False, False, None, None
+        roles = None
     finally:
         for task in tasks:
             if not task.done():
@@ -180,6 +200,7 @@ async def health_ready(request: Request):
             "supertokens": readiness.dependency_state(auth_ok),
             "worker": readiness.worker_state(worker),
             "migrations": readiness.migrations_state(schema) if schema else None,
+            "datastore_roles": readiness.reported_only(roles),
         },
         instance_id=settings.lemma_runtime_instance_id,
     )

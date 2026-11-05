@@ -30,11 +30,14 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    deliver_replies,
+)
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.events.handlers import reconcile_agent_approval_now
+from app.modules.test_support.e2e.agent_work import run_approval_work
 from app.modules.agent.infrastructure.harnesses.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
@@ -161,14 +164,24 @@ async def run_scripted_agent_run(
     pod_id: UUID,
     agent_name: str | None,
     script: list[ScriptTurn] | None = None,
+    expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
+    observer_class: type[
+        SurfaceAgentRunProgressObserver
+    ] = SurfaceAgentRunProgressObserver,
 ) -> None:
     """Drive the conversation's latest RUNNING agent run through the real
     ``PydanticAIHarness`` (mock-LLM mode).
+
+    ``observer_class`` is the seam for a test about the runner surviving an
+    observer that fails part-way: a subclass, constructed here like the real one.
 
     If ``script`` is given, it is (re-)written onto conversation metadata
     before driving the run. Pass it on the first call for a flat script that
     spans an initial run + its resume run(s); omit it on a resume call to keep
     reading the script already persisted from the first call.
+
+    ``expected_status`` is FAILED for a test about what a failed run tells the
+    person; everything else expects the run to complete (or pause).
     """
     if script is not None:
         await set_mock_llm_script(
@@ -201,11 +214,14 @@ async def run_scripted_agent_run(
         user_id=user_id,
         pod_id=pod_id,
         agent_name=agent_name,
-        observer=SurfaceAgentRunProgressObserver(
+        observer=observer_class(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
             egress_factory=build_surface_egress,
         ),
     )
+
+    # The answer is the delivery row the finalize wrote; the pump sends it.
+    await deliver_replies()
 
     db_session.expire_all()
     completed = await db_session.get(AgentRunModel, run_id)
@@ -213,7 +229,7 @@ async def run_scripted_agent_run(
     # A run that paused on ask_user/request_approval also ends as COMPLETED
     # (the WAITING state lives on the conversation, not the run) — so this
     # assertion holds for both a fully-finished run and a paused one.
-    assert completed.status == AgentRunStatus.COMPLETED.value
+    assert completed.status == expected_status.value
 
 
 async def process_ingress_and_run_scripted(
@@ -221,6 +237,10 @@ async def process_ingress_and_run_scripted(
     request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
     *,
     script: list[ScriptTurn] | None = None,
+    expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
+    observer_class: type[
+        SurfaceAgentRunProgressObserver
+    ] = SurfaceAgentRunProgressObserver,
 ) -> SurfaceContext:
     """Process one inbound surface event and drive the real harness.
 
@@ -255,6 +275,8 @@ async def process_ingress_and_run_scripted(
             pod_id=context.pod_id,
             agent_name=context.agent_name,
             script=script,
+            expected_status=expected_status,
+            observer_class=observer_class,
         )
     return context
 
@@ -276,21 +298,14 @@ async def resume_latest_scripted_run(
     call-site clarity after ``handler.try_handle_interaction(...)``.
 
     Pass ``approval_id`` when the submission was an approval button. A platform
-    webhook resolves the decision under its own deadline and hands the slow half
-    - running the approved tool and starting the resume run - to a worker job
-    (``defer_reconciliation=True`` in the ingress service). These tests drive the
-    harness in-process with no worker, so without this the decision commits, no
-    resume run is ever created, and the latest run is still the COMPLETED one.
+    webhook records the decision under its own deadline with an
+    ``agent.approval.execute`` item, and a worker runs the approved tool and
+    starts the resume run. These tests drive the harness in-process with no
+    worker, so without this the decision commits, no resume run is ever
+    created, and the latest run is still the COMPLETED one.
     """
     if approval_id is not None:
-        await reconcile_agent_approval_now(
-            {
-                "conversation_id": str(conversation_id),
-                "approval_id": approval_id,
-                "pod_id": str(pod_id),
-            },
-            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-        )
+        await run_approval_work()
         db_session.expire_all()
     await run_scripted_agent_run(
         db_session,

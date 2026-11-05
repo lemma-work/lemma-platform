@@ -8,16 +8,25 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto.factory import get_secret_cipher
-from app.modules.agent_surfaces.domain.web_widgets import WebWidget, WidgetAnswer
+from app.core.infrastructure.db.integrity import violated_constraint
+from app.modules.agent_surfaces.domain.web_widgets import (
+    WebWidget,
+    WidgetAnswer,
+    WidgetNameTaken,
+)
 from app.modules.agent_surfaces.infrastructure.web_widget_models import (
     WebWidgetModel,
 )
 
 #: The most widgets one pod lists.
 MAX_WIDGETS = 100
+
+#: The index that keeps one widget name to one widget in a pod.
+_NAME_TAKEN = "uq_web_widget_pod_name"
 
 
 def _widget(row: WebWidgetModel) -> WebWidget:
@@ -31,6 +40,7 @@ def _widget(row: WebWidgetModel) -> WebWidget:
         answer=WidgetAnswer(row.answer),
         looked_after_by=row.looked_after_by,
         created_at=row.created_at,
+        host_issuer=row.host_issuer,
     )
 
 
@@ -51,7 +61,13 @@ class WebWidgetRepository:
         allowed_origins: list[str],
         answer: WidgetAnswer,
         looked_after_by: UUID | None,
+        host_issuer: str,
     ) -> WebWidget:
+        """The new widget. Raises ``WidgetNameTaken`` for a name the pod has.
+
+        Left to the unique index rather than looked up first: two requests
+        naming the same widget at once both find the name free.
+        """
         row = WebWidgetModel(
             pod_id=pod_id,
             agent_id=agent_id,
@@ -61,9 +77,16 @@ class WebWidgetRepository:
             allowed_origins=allowed_origins,
             answer=answer.value,
             looked_after_by=looked_after_by,
+            host_issuer=host_issuer,
         )
-        self.session.add(row)
-        await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                self.session.add(row)
+                await self.session.flush()
+        except IntegrityError as error:
+            if violated_constraint(error) == _NAME_TAKEN:
+                raise WidgetNameTaken(name) from None
+            raise
         return _widget(row)
 
     async def get(self, *, pod_id: UUID, widget_id: UUID) -> WebWidget | None:

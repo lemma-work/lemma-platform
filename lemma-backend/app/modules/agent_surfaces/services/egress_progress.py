@@ -16,6 +16,8 @@ run, and the answer still lands through the egress path.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
 from typing import Any
 from uuid import UUID
 
@@ -24,19 +26,18 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 
 logger = get_logger(__name__)
 
+
 # The database work around a platform call, plus the platform family itself. A
 # live-message verb that lets either escape takes the run's delivery down with
 # it: the observer's callbacks run once, and the answer is sent by the last one.
-_PROGRESS_ERRORS: tuple[type[BaseException], ...] = (
-    SQLAlchemyError,
-    *PLATFORM_TRANSPORT_ERRORS,
-)
+def _progress_errors() -> tuple[type[BaseException], ...]:
+    return (SQLAlchemyError, *platform_transport_errors())
 
 
 class SurfaceProgress:
@@ -50,8 +51,8 @@ class SurfaceProgress:
         *,
         conversation_id: UUID,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        progress_handle: ProgressHandle | None = None,
+    ) -> ProgressHandle | None:
         """Stream a live progress line on platforms with editable messages.
 
         Best-effort: returns the (possibly updated) handle and never raises, so a
@@ -83,9 +84,12 @@ class SurfaceProgress:
                     metadata=metadata,
                 )
         except Exception:
-            logger.debug(
-                "agent_surfaces.egress.progress_update_failed.diagnostic",
+            # Best-effort, but not invisible: a progress line that never
+            # updates looks like a stuck run from the person's side.
+            logger.warning(
+                "agent_surfaces.egress.progress_update_failed.degraded",
                 conversation_id=conversation_id,
+                exc_info=True,
             )
             return progress_handle
 
@@ -93,7 +97,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         text: str,
     ) -> StreamAppendResult:
         """Append streamed model text; returns the (possibly new) handle.
@@ -115,7 +119,7 @@ class SurfaceProgress:
                     text=text,
                     metadata=metadata,
                 )
-        except _PROGRESS_ERRORS:
+        except _progress_errors():
             # Debug on purpose: a dropped delta loses nothing, since the final
             # answer is delivered whole, and a dead platform would otherwise
             # warn once per flush.
@@ -130,7 +134,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         message: str,
         metadata: dict[str, Any] | None = None,
         already_streamed: bool = False,
@@ -162,7 +166,7 @@ class SurfaceProgress:
                     message=clean_message,
                     metadata=message_metadata,
                 )
-            except _PROGRESS_ERRORS:
+            except _progress_errors():
                 # Slack answers here with a timeout as readily as with a
                 # `SlackApiError`, and the stream is now in an unknown state. The
                 # caller falls back to a plain message, so what is lost without
@@ -178,7 +182,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Remove the streaming progress message at run end (best-effort)."""
         if not progress_handle:
@@ -195,9 +199,11 @@ class SurfaceProgress:
                     progress_handle=progress_handle,
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.egress.progress_clear_failed.diagnostic",
+                # A progress message left behind sits above the answer.
+                logger.warning(
+                    "agent_surfaces.egress.progress_clear_failed.degraded",
                     conversation_id=conversation_id,
+                    exc_info=True,
                 )
 
     async def show_typing(
@@ -207,11 +213,14 @@ class SurfaceProgress:
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         """The platform's own "working on it" affordance, where it has one."""
-        target = await self.delivery.resolve_egress_target(conversation_id)
-        if target is None:
-            return False
-        indicator_metadata = await self.delivery.egress_metadata(target, metadata)
         try:
+            # The target and metadata reads are inside the guard too: a
+            # database error there escaped `on_run_started` exactly as a
+            # platform error used to.
+            target = await self.delivery.resolve_egress_target(conversation_id)
+            if target is None:
+                return False
+            indicator_metadata = await self.delivery.egress_metadata(target, metadata)
             # No connection held for the platform call; see `connection_released`.
             async with connection_released(self.delivery.uow.session):
                 await target.adapter.add_processing_indicator(
@@ -219,7 +228,7 @@ class SurfaceProgress:
                     event=target.event,
                     metadata=indicator_metadata,
                 )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except _progress_errors():
             # The only verb here that was not best-effort, and the one that
             # could least afford it. `on_run_started` awaits this, and
             # `notify_run_started` turns any escape into "the observer never
@@ -233,9 +242,8 @@ class SurfaceProgress:
             # loop stops on the first `False`, so a dead platform produces two
             # of these per run rather than one every twenty seconds.
             #
-            # The platform family rather than `Exception`: this is one HTTP call
-            # to one adapter. The two verbs above catch broadly only because
-            # they predate the family existing. Anything outside it -- a
+            # The platform and database families rather than `Exception`: one
+            # target read and one HTTP call. Anything outside them -- a
             # `KeyError` on a credential dict, say -- is a bug in our own code
             # and should still be loud.
             logger.warning(

@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import cache
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
@@ -144,7 +145,7 @@ PINNED = [
     {
         "name": "agent",
         "dirs": ["app/modules/agent/tests/e2e"],
-        "workers": 1,
+        "workers": 2,
         "markers": FAST_MARKERS,
         # False now, and derived rather than declared: with the two
         # `fast_workspace` files in their own group above, nothing left in this
@@ -172,10 +173,19 @@ PINNED = [
         # This note lived only in the generated JSON, where the next
         # regeneration would have deleted it and restored the false claim
         # above it. It belongs here, in the input.
+        #
+        # RE-MEASURED 2026-10-16, flipped to 2. CI run 38897825151 against
+        # baselines 38894541423, 38885721484, 38882019643: the shard's pytest
+        # step went from ~500s at workers=1 to 299s at workers=2, with 31% of
+        # the runner's CPU still idle, and nothing in it failed. The coverage
+        # spread above no longer matters to a gate: the floor is one combined
+        # total, not a per-shard number. Do not take this to 4, or raise the
+        # packed shards: workers=4 on packed shards was tried in the same
+        # experiment and broke real tests -- Postgres "too many clients",
+        # session-worker idle waits, timing checks starved of CPU.
         "why": (
-            "MEASURED 2026-08-22: xdist coverage race disproven, but the "
-            "per-run spread is 0.4pt against a 0.2pt bar -- re-measure before "
-            "raising"
+            "MEASURED 2026-10-16: pytest ~500s -> 299s at -n 2 with 31% CPU "
+            "idle (run 38897825151); -n 4 breaks co-tenant tests"
         ),
         "bins": 1,
     },
@@ -205,7 +215,7 @@ PACKED_SHARDS = 3
 # Two, not three. Three was generalised from the one shard ever measured at it
 # -- the old `pod` shard, 94 tests of pure API work -- and it does not hold for
 # a packed bin. Each xdist worker runs its own SuperTokens container and its
-# own streaq worker subprocess, so three of them on a four-vCPU runner starve
+# own worker subprocess, so three of them on a four-vCPU runner starve
 # the async workers the tests are waiting on. It shows up as a *condition*
 # wait timing out with a generous budget rather than as a slow assert:
 # test_apply_destructive_requires_confirmation blew a 90-second wait for a
@@ -217,10 +227,14 @@ PACKED_SHARDS = 3
 # 420s, still comfortably underneath it.
 PACKED_WORKERS = 2
 
-# The catch-all shard collects these roots and ignores every directory that was
-# explicitly assigned, so a new module's e2e tests land somewhere by default
-# instead of being silently skipped.
-CATCH_ALL_ROOTS = ["app/modules", "app/core"]
+# The catch-all shard collects every e2e directory on disk that no other shard
+# owns outright, and ignores what was assigned elsewhere, so a new test file in
+# any e2e directory lands somewhere by default. It used to collect these whole
+# trees instead -- `app/modules app/core` -- which made pytest import all ~1,000
+# unit-test files just to deselect them: about 40s of collection on a CI runner,
+# on the shard that is the wall. A brand-new e2e *directory* is caught by
+# `--verify` ("collected by no shard"), which `make quality` runs.
+CATCH_ALL_TREES = ("app/modules", "app/core")
 
 # Captures the e2e directory *and* the test module inside it. It used to stop
 # at `.tests.e2e`, which threw the module away and left the packer able to
@@ -362,8 +376,12 @@ def _negated_markers(markers: str) -> set[str]:
     return set(re.findall(r"\bnot\s+(\w+)", markers))
 
 
-def _module_marks(path: Path) -> set[str]:
+@cache
+def _module_marks(path: Path) -> frozenset[str]:
     """Marker names in a module-level `pytestmark`, by AST rather than by grep.
+
+    Cached: one run asks this of the same file once per shard, and the files do
+    not change while it runs.
 
     A substring search for "workspace" matches the word in a docstring, an
     import or a fixture name, so it would call most of this suite
@@ -379,7 +397,7 @@ def _module_marks(path: Path) -> set[str]:
         for inner in ast.walk(node.value):
             if isinstance(inner, ast.Attribute):
                 marks.add(inner.attr)
-    return marks
+    return frozenset(marks)
 
 
 def _session_worker_conflict(backend: Path, markers: str) -> tuple[set[str], set[str]]:
@@ -814,10 +832,224 @@ def verify() -> int:
     return 0
 
 
+# --- The protected lane -----------------------------------------------------
+#
+# `backend-protected-e2e.yml` gates every Desktop DMG, and it ran as one serial
+# job: 21-27 minutes green, nearly an hour on a red night, most of it per-test
+# setup that does not need to happen one test after another. It is split here,
+# by the same measured-time packing as the PR lane, into a layout of its own --
+# its own file because its shards share nothing with the PR shards: one marker
+# filter (PROTECTED_MARKERS) for all of them, run serially, every shard handed
+# the prebuilt sandbox images.
+PROTECTED_OUTPUT = REPO_ROOT / ".github" / "protected-e2e-shards.json"
+
+# Shards are serial (no xdist) on purpose. These are the real-Docker, real
+# worker-process, load and crash tests, and the PR lane has already measured
+# what two of them on one four-vCPU runner does to their deadlines. Separate
+# runners each get their own four cores, so the split is across jobs.
+#
+# Seven, because that is what gets the heaviest shard's tests under ~7 minutes
+# with the fixed setup on top -- a ~10-minute wall against the 21-58 minutes
+# of the single job. More is not free: the free plan's twenty-job cap is
+# shared with every PR in the org, though this lane runs at night and on tags.
+PROTECTED_SHARDS = 7
+
+# Everything a protected shard pays before its first test: checkout, two image
+# caches restored, uv sync, `docker load` joined. Same caveat as FIXED_SECONDS.
+PROTECTED_FIXED_SECONDS = 150.0
+
+
+def _protected_testpaths(backend: Path) -> list[str]:
+    """`testpaths` from pytest.ini: what a bare `pytest` collects, which is
+    what the protected lane collected before it was split."""
+    for line in (backend / "pytest.ini").read_text().splitlines():
+        if line.startswith("testpaths"):
+            return line.split("=", 1)[1].split()
+    sys.exit("::error::no testpaths in lemma-backend/pytest.ini")
+
+
+def _resolve_test_file(backend: Path, classname: str) -> str | None:
+    """`app.modules.x.tests.e2e.test_y.TestZ` -> `app/modules/x/tests/e2e/test_y.py`.
+
+    Not limited to `tests/e2e`: the protected filter is marker-only, so it also
+    selects tests elsewhere (`test_support/perf` today).
+    """
+    parts = classname.split(".")
+    for stop in range(len(parts), 0, -1):
+        candidate = "/".join(parts[:stop]) + ".py"
+        if (backend / candidate).is_file():
+            return candidate
+    return None
+
+
+def _measure_protected(junit_files: list[Path], backend: Path) -> tuple[Counter, Counter]:
+    """Seconds and test count per test file, across one or more protected runs.
+
+    Several runs rather than one, because on any given night some of this
+    suite is red, and a red test's time is usually a 300s timeout rather than
+    what it costs. Per test: the slowest time it *passed* in, or -- if it never
+    passed in the runs given -- the slowest time it took at all. Conservative
+    both ways: a test that keeps timing out does cost the shard its timeout.
+    """
+    passed: dict[tuple[str, str], float] = {}
+    failed: dict[tuple[str, str], float] = {}
+    for path in junit_files:
+        for case in ET.parse(path).getroot().iter("testcase"):
+            file_ = _resolve_test_file(backend, case.get("classname", ""))
+            if file_ is None:
+                continue
+            key = (file_, case.get("name", ""))
+            elapsed = float(case.get("time") or 0)
+            bad = any(case.find(tag) is not None for tag in ("failure", "error"))
+            bucket = failed if bad else passed
+            bucket[key] = max(bucket.get(key, 0.0), elapsed)
+    seconds: Counter = Counter()
+    tests: Counter = Counter()
+    for key in set(passed) | set(failed):
+        seconds[key[0]] += passed.get(key, failed.get(key, 0.0))
+        tests[key[0]] += 1
+    if not seconds:
+        sys.exit("::error::no protected test cases could be placed in a file")
+    return seconds, tests
+
+
+def _download_protected_junit(run_id: str, into: Path) -> list[Path]:
+    if not shutil.which("gh"):
+        sys.exit("gh is required to download artifacts; pass --protected-junit instead")
+    listing = subprocess.run(
+        [
+            "gh", "api",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
+            "-q", ".artifacts[].name",
+        ],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    # The commit-linked evidence: one merged JUnit for the whole run.
+    names = [n for n in listing if re.fullmatch(r"backend-protected-e2e-[0-9a-f]{40}", n)]
+    if not names:
+        sys.exit(f"run {run_id} has no backend-protected-e2e-<sha> artifact")
+    target = into / run_id
+    subprocess.run(
+        ["gh", "run", "download", run_id, "-n", names[0], "-D", str(target)],
+        cwd=REPO_ROOT, check=True,
+    )
+    return sorted(target.rglob("*.xml"))
+
+
+def plan_protected(junit_files: list[Path]) -> int:
+    """Write `.github/protected-e2e-shards.json` from measured protected runs.
+
+    Units are test files, never split: a file's tests run together, in one
+    process, in their usual order, as they always have. The lightest bin is the
+    catch-all -- it collects pytest's `testpaths` and ignores every file the
+    other shards own -- so a protected test added anywhere, in a file no run has
+    measured yet, still runs somewhere by default. It pays ~40s more collection
+    for that, which is why it is the lightest.
+    """
+    backend = REPO_ROOT / "lemma-backend"
+    seconds, tests = _measure_protected(junit_files, backend)
+    bins = _pack(sorted(seconds.items()), PROTECTED_SHARDS)
+    bins.sort(key=lambda bin_: (sum(seconds[f] for f in bin_), bin_))
+    testpaths = _protected_testpaths(backend)
+    shards = []
+    for index, members in enumerate(bins):
+        if index == 0:
+            owned_elsewhere = sorted(f for other in bins[1:] for f in other)
+            args = " ".join(testpaths + [f"--ignore={f}" for f in owned_elsewhere])
+        else:
+            args = " ".join(sorted(members))
+        serial = round(sum(seconds[f] for f in members), 1)
+        shards.append({
+            "name": f"protected-{index + 1}",
+            "args": args,
+            "catch_all": index == 0,
+            "serial_seconds": serial,
+            "tests": sum(tests[f] for f in members),
+            "estimated_seconds": round(PROTECTED_FIXED_SECONDS + serial, 1),
+        })
+    payload = {
+        "_comment": "Generated by scripts/plan_e2e_shards.py --protected-run-id. "
+                    "Do not hand-edit; regenerate from Backend protected E2E runs.",
+        "markers": PROTECTED_MARKERS,
+        "measured": {
+            "serial_seconds": round(sum(seconds.values()), 1),
+            "tests": sum(tests.values()),
+            "files": len(seconds),
+            "runs": len(junit_files),
+        },
+        "shards": shards,
+    }
+    PROTECTED_OUTPUT.write_text(json.dumps(payload, indent=2) + "\n")
+    widest = max(s["estimated_seconds"] for s in shards)
+    print(f"wrote {PROTECTED_OUTPUT.relative_to(REPO_ROOT)}")
+    for shard in shards:
+        bar = "#" * round(shard["estimated_seconds"] / widest * 40)
+        print(f"  {shard['name']:<12} {shard['serial_seconds']:>7.1f}s serial "
+              f"{shard['tests']:>4d}t -> ~{shard['estimated_seconds']:>6.1f}s {bar}")
+    print(f"  {'':12} {'':>7}  predicted wall clock: ~{widest:.0f}s "
+          f"(was ~{PROTECTED_FIXED_SECONDS + sum(seconds.values()):.0f}s serial)")
+    return 0
+
+
+def verify_protected() -> int:
+    """Every test file under `testpaths` is collected by exactly one protected shard.
+
+    Structural, by the same `_collectors` rules as the PR layout. Exactly one
+    rather than at least one: every protected shard runs the same marker
+    filter, so a file collected twice runs its tests twice -- and the load and
+    crash tests in this lane are the last ones to want a co-tenant they were
+    never measured beside.
+    """
+    if not PROTECTED_OUTPUT.exists():
+        print(f"::error::{PROTECTED_OUTPUT.relative_to(REPO_ROOT)} is missing")
+        return 1
+    layout = json.loads(PROTECTED_OUTPUT.read_text())
+    if layout.get("markers") != PROTECTED_MARKERS:
+        print("::error::protected-e2e-shards.json was planned for a different "
+              "marker filter than PROTECTED_MARKERS; regenerate it")
+        return 1
+    shards = layout["shards"]
+    if sum(1 for shard in shards if shard.get("catch_all")) != 1:
+        print("::error::the protected layout needs exactly one catch-all shard")
+        return 1
+    backend = REPO_ROOT / "lemma-backend"
+    bad = 0
+    for root in _protected_testpaths(backend):
+        for path in sorted((backend / root).rglob("test_*.py")):
+            relative = path.relative_to(backend).as_posix()
+            hits = _collectors(relative, shards)
+            if len(hits) != 1:
+                bad += 1
+                print(f"::error::{relative} is collected by "
+                      f"{len(hits)} protected shards ({', '.join(hits) or 'none'})")
+    named = [
+        arg for shard in shards for arg in shard["args"].split()
+        if not arg.startswith("--") and arg.endswith(".py")
+    ]
+    for arg in named:
+        if not (backend / arg).is_file():
+            bad += 1
+            print(f"::error::protected shard names {arg}, which does not exist; "
+                  "regenerate with --protected-run-id")
+    if bad:
+        return 1
+    print(f"every test file runs in exactly one of {len(shards)} protected shards")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--run-id", help="a green 'Backend E2E' run to measure")
+    source.add_argument(
+        "--protected-run-id", action="append",
+        help="a 'Backend protected E2E' run to measure; repeat to combine runs "
+             "(writes .github/protected-e2e-shards.json)",
+    )
+    source.add_argument(
+        "--protected-junit", type=Path, action="append",
+        help="an already-downloaded protected-e2e.xml; repeatable",
+    )
     source.add_argument("--junit-dir", type=Path, help="directory of junit-*.xml")
     source.add_argument("--verify", action="store_true",
                         help="check the committed layout still runs every e2e "
@@ -831,7 +1063,20 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.verify:
-        return verify()
+        # Both layouts, and the structural one first: it needs no collection.
+        protected = verify_protected()
+        return verify() or protected
+
+    if args.protected_junit:
+        return plan_protected(args.protected_junit)
+    if args.protected_run_id:
+        with tempfile.TemporaryDirectory() as tmp:
+            files = [
+                path
+                for run_id in args.protected_run_id
+                for path in _download_protected_junit(run_id, Path(tmp))
+            ]
+            return plan_protected(files)
 
     with tempfile.TemporaryDirectory() as tmp:
         junit_dir = args.junit_dir
@@ -902,7 +1147,10 @@ def main() -> int:
     for index, bin_ in enumerate(bins):
         heaviest = max(bin_, key=measured.weight)
         name = SHARD_ALIASES.get(_module_of(heaviest), _module_of(heaviest))
-        planned.append((name, bin_, CATCH_ALL_ROOTS if index == 0 else [], None))
+        roots = _topmost(
+            d for d in on_disk_dirs if d.startswith(CATCH_ALL_TREES)
+        ) if index == 0 else []
+        planned.append((name, bin_, roots, None))
 
 
 
@@ -938,6 +1186,9 @@ def main() -> int:
             if other is not group and not other.get("overlay")
             for directory in other["dirs"]
         }
+        # A root another shard owns outright is not collected at all, rather
+        # than collected and then ignored.
+        roots = [root for root in roots if root not in claimed]
         # Reduced to its topmost entries: ignoring a directory already ignores
         # its files, and listing both makes the args longer without changing
         # what runs.

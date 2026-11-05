@@ -138,6 +138,9 @@ export function useWorkflowGraph(podId: string, name: string | null) {
 
 /** Recent runs across every workflow in the space, newest first — one
  *  request (`GET /pods/{id}/workflow-runs`) rather than one per workflow. */
+/** How many of a space's most recent runs one read brings back. */
+export const SPACE_RUNS_PAGE = 100;
+
 export function useSpaceRuns(podId: string) {
     const visible = usePaneVisible();
     return useQuery({
@@ -148,7 +151,7 @@ export function useSpaceRuns(podId: string) {
                 const { SAMPLE_WORKFLOW_RUNS, hiredHere } = await samples(podId);
                 return readRuns({ items: hiredHere(podId) ? [] : Object.values(SAMPLE_WORKFLOW_RUNS).flat() });
             }
-            return readRuns(await lemma(podId).request("GET", "/pods/" + podId + "/workflow-runs", { params: { limit: 100 } }));
+            return readRuns(await lemma(podId).request("GET", "/pods/" + podId + "/workflow-runs", { params: { limit: SPACE_RUNS_PAGE } }));
         },
         refetchInterval: (query) => (visible ? runsPollEvery(query.state.data, 15_000) : false),
     });

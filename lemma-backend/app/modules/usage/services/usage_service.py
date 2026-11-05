@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from uuid import UUID
 
-from opentelemetry import metrics
 
 from app.modules.usage.contracts import AgentRunUsage, ModelPricing
 from app.modules.usage.domain.entities import (
@@ -30,13 +29,11 @@ from app.modules.usage.domain.query_types import (
     UsageLimitScope,
 )
 from app.modules.usage.infrastructure.repositories import UsageRepository
+from app.modules.usage.services import usage_admission
 from app.modules.usage.services.pricing import UsagePricing
 from app.modules.usage.services.usage_reporting import UsageReporting
+from app.modules.usage.services.usage_metrics import record_usage_metrics
 from app.modules.usage.services.usage_context import UsageExecutionContext
-
-meter = metrics.get_meter(__name__)
-token_counter = meter.create_counter("lemma.llm.tokens")
-cost_counter = meter.create_counter("lemma.llm.cost_usd")
 
 
 class UsageService(UsagePricing, UsageReporting):
@@ -199,7 +196,10 @@ class UsageService(UsagePricing, UsageReporting):
         metadata = dict(usage_data.metadata or {})
         if provider_model_name:
             metadata["provider_model_name"] = provider_model_name
-        if pricing_missing:
+        if pricing_missing or cost_amount is None:
+            # A profile Lemma does not price (a member's own provider, an Agent
+            # Host harness) has no cost either. A bare null sums as zero in every
+            # report, so the record says its price is missing.
             metadata["pricing_missing"] = True
         record = UsageRecord(
             organization_id=ctx.organization_id,
@@ -224,7 +224,8 @@ class UsageService(UsagePricing, UsageReporting):
             metadata=metadata,
         )
         saved = await self.usage_repository.create(record)
-        self._record_usage_metrics(
+        record_usage_metrics(
+            organization_id=ctx.organization_id,
             model_name=model_name,
             usage_kind=usage_data.usage_kind,
             input_tokens=usage_data.input_tokens,
@@ -240,26 +241,6 @@ class UsageService(UsagePricing, UsageReporting):
             )
         self._collect_recorded_event(saved)
         return saved
-
-    @staticmethod
-    def _record_usage_metrics(
-        *,
-        model_name: str,
-        usage_kind: str,
-        input_tokens: int,
-        output_tokens: int,
-        cost_usd: float | None,
-    ) -> None:
-        labels = {
-            "gen_ai.request.model": model_name,
-            "operation": usage_kind,
-        }
-        if input_tokens > 0:
-            token_counter.add(input_tokens, {**labels, "gen_ai.token.type": "input"})
-        if output_tokens > 0:
-            token_counter.add(output_tokens, {**labels, "gen_ai.token.type": "output"})
-        if cost_usd:
-            cost_counter.add(cost_usd, labels)
 
     async def record_pydantic_ai_result_usage(
         self,
@@ -353,6 +334,18 @@ class UsageService(UsagePricing, UsageReporting):
                 reason="configuration",
             )
 
+    async def spent_windows(
+        self, *, organization_id: UUID | None, user_id: UUID, outside_audience: bool
+    ) -> tuple[str, ...]:
+        """``usage_admission.spent_windows``, under this service's limit port."""
+        return await usage_admission.spent_windows(
+            self.usage_repository.uow,
+            self.usage_limit_port,
+            organization_id=organization_id,
+            user_id=user_id,
+            outside_audience=outside_audience,
+        )
+
     async def get_usage_limits(
         self,
         *,
@@ -361,6 +354,8 @@ class UsageService(UsagePricing, UsageReporting):
         now: datetime | None = None,
         _limit_values: UsageLimitValues | None = None,
     ) -> UsageLimits:
+        """Each window's spend summed from the ledger, for the limits pages: they
+        report windows with no limit, which keep no running total to read."""
         now = now or datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         week_start = (now - timedelta(days=now.weekday())).replace(

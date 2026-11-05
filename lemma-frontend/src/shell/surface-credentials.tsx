@@ -3,8 +3,10 @@ import { useMutation } from "@tanstack/react-query";
 import { createThenBind, source, type Connectable, type Pod } from "@/data";
 import { Fields } from "@/connect/fields";
 import { blank, fields, payload, problems, type Values } from "@/connect/schema";
+import { ProblemLine } from "@/connect/connection-problem";
 
-/** A credential typed here, made into an account and bound to this teammate.
+/** A credential typed here, made into an account, shared into the pod as a
+ *  SHARED connector and bound to this teammate by that connector's slug.
  *
  *  A refused bind deletes the account again (`createThenBind` has why). The
  *  values stay in the form, so trying again is one click and makes one
@@ -16,7 +18,7 @@ export function SurfaceCredentials({ pod, entry, onDone }: { pod: Pod; entry: Co
     const connect = useMutation({
         mutationFn: () => createThenBind(
             () => source.createSurfaceAccount(pod.orgId, entry, payload(list, values)),
-            (id) => source.connectAccount(pod.id, entry.platform, id),
+            (id) => source.connectOwnAccount(pod.id, entry.platform, id),
             (id) => source.disconnectAccount(pod.orgId, id),
         ),
         onSuccess: () => {
@@ -32,6 +34,6 @@ export function SurfaceCredentials({ pod, entry, onDone }: { pod: Pod; entry: Co
     }}>
         <Fields list={list} values={values} problems={errors} disabled={connect.isPending} onChange={(name, value) => setValues(current => ({ ...current, [name]: value }))} />
         <button className="btn btn--primary" disabled={connect.isPending} type="submit">{connect.isPending ? "Connecting…" : "Connect"}</button>
-        {connect.isError && <p role="alert">{connect.error.message}</p>}
+        {connect.isError && <ProblemLine error={connect.error} fallback="That could not be connected." />}
     </form>;
 }

@@ -12,7 +12,7 @@ Three toolsets carry them, and only one of them is a decision:
 | --- | --- | --- |
 | `USER_INTERACTION` | `ask_user`, `display_resource`, `request_approval` | **always on** — withholding `request_approval` doesn't make an agent safer, it removes the seam where a human gets to say no |
 | `WAIT` | `wait_for` | **always on**, but *deferred* — found via `search_tools`, not in the prompt prefix |
-| `SPEECH` | `say`, `listen` | **declared** — put `"SPEECH"` in the agent's `toolsets` |
+| `SPEECH` | `say`, `listen`, `list_voices` | **declared** — put `"SPEECH"` in the agent's `toolsets`; *deferred*, found via `search_tools` |
 
 Every tool returns at least `{ success, message?, error? }` (errors are non-fatal — a
 failed tool returns `success:false` with `error`, it does not crash the run); the
@@ -78,43 +78,37 @@ and native buttons.
 
 `display_resource`, `say`, and `listen` do **not** pause — they return immediately.
 
-`message_user` does **not** pause either, and that catches people out, because it *looks*
-like asking a question. It reaches a pod member who is **not** in this conversation and
-returns straight away; their reply never arrives as a tool return. The answer comes back
-by a different route entirely — the recipient's own agent handles their reply in their own
-thread, under their own permissions, guided by the `background_instruction` the sender
-wrote, and records it with `respond_to_notification`.
+`channel_post` does **not** pause either, and that catches people out, because it
+*looks* like asking a question. It reaches a pod member who is **not** in this
+conversation and returns straight away; their answer never arrives as a tool return. It
+comes back by a different route — they answer the line in their inbox in Lemma, or tell
+their own agent, which records it with `answer_question` under their own permissions.
 
-So an agent that needs answers sends every message it needs, says who it is waiting on,
-and **ends the turn**. It must not `wait_for` them and must not poll: when the **last**
-outstanding answer is recorded, the backend starts a *fresh turn* in the asking
-conversation on its own, and the agent reads what everyone said with `check_messages`
-there. (Waiting for the last rather than the first is deliberate — an agent that
-messaged four people would otherwise replay the whole conversation four times to learn
-"three still pending" three times over.)
+So an agent that needs answers sends every message it needs (with `wants_answer`), says
+who it is waiting on, and **ends the turn**. It must not `wait_for` them and must not
+poll: when the **last** outstanding answer is recorded, the backend starts a *fresh turn*
+in the asking conversation on its own, and the agent reads what everyone said with
+`channel_read(asked_by_me=True)` there. (Waiting for the last rather than the first is
+deliberate — an agent that asked four people would otherwise replay the whole
+conversation four times to learn "three still pending" three times over.)
 
-Snoozing while you wait is *handled* rather than forbidden — an arriving answer
-resolves the pause and wakes the run early with `woke_because='ANSWERED'`
-instead of leaving it asleep. Ending the turn is still the better default,
-because every wake replays the whole conversation and a turn that simply ended
-does not. Reach for `snooze` when you have something else to wait for as well,
-not merely to sit on a question. Compare:
+An agent already in a `wait_for` for something else is not left asleep: an arriving
+answer resolves the pause and wakes the run early with `woke_because='ANSWERED'`.
+Ending the turn is still the default, because every wake replays the whole
+conversation and a turn that simply ended does not. Compare:
 
 | | Who it reaches | Pauses the run | Where the answer lands |
 | --- | --- | --- | --- |
 | `ask_user` | the person already in this conversation | yes | back in this run, as the tool's return |
-| `message_user` | any pod member, wherever they are | **no** | on the notification — a new turn starts once the last one is answered, read with `check_messages` |
+| `channel_post` | any pod member, wherever they are | **no** | on the line in their channel — a new turn starts once the last one is answered, read with `channel_read(asked_by_me=True)` |
 
 `to` takes a **pod member id, user id, or email address** — a human name does not
-resolve. `background_instruction` is what makes an answer come back at all: omit it and
-nothing does. `expects_response: false` sends a pure FYI; a request expires after 72h
-unless `expires_in_seconds` says otherwise.
+resolve. Without `wants_answer` it is news: nothing comes back.
 
-By default it reaches someone wherever they last spoke to *this* agent, falling back to
-the agent's mailbox. An agent with a reason to choose passes `channel` — `email`, `slack`,
-`teams`, `telegram` or `whatsapp` — and a channel it names is used or refused, never
-swapped for another; `list_pod_members` reports each member's `reachable_on` so the choice
-is a read rather than a guess.
+It is a line in the person's own channel in Lemma; how they hear of it — a push to the
+chat app or email they chose — is the channel's to decide, not the agent's.
+`list_pod_members` reports each member's `reachable_on` for information. `wants_answer`
+asks one person, so it is refused together with `channel_id`.
 
 `MESSAGING` is on for every top-level agent (and withheld from sub-agents); holding it is
 the whole grant. It is **deferred**, though — the tools are not in the prompt prefix, so
@@ -250,10 +244,10 @@ Name exactly one target:
 ```jsonc
 {
   "reason": "waiting for the nightly build",      // shown to the user while waiting
-  "seconds": 900,                                 // a plain gap; clamped to [30, 86400]
+  "seconds": 900,                                 // a plain gap; under 30 is rejected, over 86400 clamped
   "process_id": "abc",                            // ...or an exec_command process
   "subagent_run_id": "01f0...",                   // ...or a spawn_subagent run
-  "max_seconds": 3600,                            // ceiling for the latter two
+  "max_seconds": 3600,                            // ceiling for the latter two (default 15 min)
   "note_to_self": "post the result to #eng"       // handed back verbatim on wake
 }
 ```
@@ -266,7 +260,8 @@ write anything you need to the pod first.
 trigger-or-wait rule in `schedules-and-triggers.md`.
 
 **Waking proves nothing succeeded.** `woke_because` says which of `TIMER`,
-`TARGET_FINISHED`, `DEADLINE`, `TARGET_GONE` or `ANSWERED` ended the wait. A process
+`TARGET_FINISHED`, `DEADLINE`, `TARGET_GONE`, `TARGET_NEEDS_INPUT`,
+`TARGET_UNREADABLE`, `ANSWERED` or `CANCELLED` ended the wait. A process
 that finished may have failed, and a timer elapsing says nothing at all:
 that is all it means. An agent that treats a wake as confirmation will act on something
 that never occurred — prompt it to re-check.
@@ -277,9 +272,10 @@ Four constraints worth designing around:
   conversation, so a poll loop is the expensive way to wait. One sleep sized to the job
   beats several short ones. Below 30s the call is rejected rather than clamped — asking
   for a few seconds means the agent has mistaken this for `sleep()`.
-- **The sandbox does not survive.** The workspace container is reclaimed during the sleep,
-  so sandbox files, background processes, and the shell's cwd are gone on wake.
-  Anything needed afterwards must be written to the pod first.
+- **The sandbox may not survive a `seconds` wait.** Nothing holds it, so the workspace
+  container can be reclaimed during the sleep, and sandbox files, background processes,
+  and the shell's cwd are gone on wake. Anything needed afterwards must be written to
+  the pod first. (A `process_id` wait keeps it: the running process holds it.)
 - **24 hours, hard.** Partly because each wake replays the whole conversation, and partly
   because `reply_window_hours` is real — an agent that sleeps past a platform's reply
   window (WhatsApp's 24h rule) cannot deliver its own result on the surface it was asked
@@ -298,8 +294,9 @@ run on its own.
 modality** — only `say` when a spoken reply is genuinely wanted (e.g. the user sent a
 voice note and expects one back).
 
-**`say`** — request `{ text, output_file_path?, voice? }` → `{ success, message?, error?,
-audio_file_path }`. `output_file_path` defaults to `/me/speech/<id>.mp3`. Delivery is
+**`say`** — request `{ text, output_file_path?, language?, voice? }` → `{ success, message?, error?,
+audio_file_path }`. `voice` is a full voice name from `list_voices`; omit it and one is
+chosen for `language`. `output_file_path` defaults to `/me/speech/<id>.mp3`. Delivery is
 automatic: a native voice note on chat surfaces (OGG voice bubble on Telegram/WhatsApp,
 MP3 audio on Slack/others) and an audio player on the web app; the audio is also saved to
 the pod datastore.

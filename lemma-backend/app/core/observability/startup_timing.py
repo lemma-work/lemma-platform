@@ -64,7 +64,7 @@ async def startup_step(step: str, *, service: str) -> AsyncIterator[None]:
             )
 
 
-def finish_startup(boot_started: float) -> tuple[float, int]:
+def finish_startup(boot_started: float, *, collect: bool = True) -> tuple[float, int]:
     """Freeze the startup heap; return (startup ms, frozen object count).
 
     Modules, routes, schemas and clients live as long as the process, yet every
@@ -73,9 +73,14 @@ def finish_startup(boot_started: float) -> tuple[float, int]:
     stack, a weakref callback fired mid-collection -- and a collection's cost
     grows with what it has to walk. Call once, after startup, before serving,
     and pair it with :func:`release_startup_heap` when the lifespan ends.
+
+    ``collect=False`` freezes without the full collection first. A test process
+    starts an app per test on a heap that grows all session, and that one
+    collection was seconds of every such test's setup on a CI runner.
     """
     global _frozen_holders
-    gc.collect()
+    if collect:
+        gc.collect()
     gc.freeze()
     _frozen_holders += 1
     return round((time.monotonic() - boot_started) * 1000, 1), gc.get_freeze_count()

@@ -430,6 +430,7 @@ fn owed_commands(state: &ControlState, offer_start: bool) -> Vec<Value> {
                     mcp: state.mcp.clone(),
                     run_deadline: Utc::now() + *state.run_budget.lock().unwrap(),
                     system_prompt_delivery: None,
+                    pre_approvals: Vec::new(),
                 })
                 .unwrap(),
             })

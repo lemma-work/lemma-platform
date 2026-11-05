@@ -32,6 +32,31 @@ from app.modules.datastore.services.files.signed_url import (
 )
 
 
+#: Marks a link a workload minted with no person behind it. Without it, a link
+#: an agent minted for somebody whose account was later deleted (the row's
+#: `created_by_user_id` is nulled) would read exactly like one an agent minted
+#: on its own, and be re-checked on the agent's authority alone — wider than
+#: the intersection it was minted under. So the permissive case is the one that
+#: has to say so, and a link that says nothing needs its person.
+ACTING_ALONE = "alone:"
+
+
+def minting_workload(ctx: Context) -> str | None:
+    """Which workload minted this, and whether a person stood behind it.
+
+    A live link is re-checked on every fetch, and the check has to be the one
+    the minter was held to: the person's access, intersected with the agent's
+    when an agent acts for them (``agent:<id>``), or the workload's own when it
+    acts for nobody (``alone:agent:<id>``). The pod's default agent acts *as*
+    the person, so it is recorded as the person alone.
+    """
+    workload = ctx.workload
+    if workload is None:
+        return None
+    recorded = f"{workload.kind.value.lower()}:{workload.workload_id}"
+    return recorded if workload.for_user_id is not None else ACTING_ALONE + recorded
+
+
 class SignedLinks:
     """Public short links (``/public/s/{code}``) for one pod's datastore files."""
 
@@ -59,12 +84,23 @@ class SignedLinks:
         The returned ``{api_url}/public/s/{code}`` link needs no auth to open, expires
         after ``expires_seconds`` (clamped to the configured ceiling), and serves
         the bytes at most ``max_hits`` times over (also clamped). Authorization
-        to create one mirrors a normal file read — the read is what proves the
-        caller could have handed the bytes over anyway.
+        to create one is a normal file read -- the read is what proves the
+        caller could have handed the bytes over anyway -- and ``folder.share``
+        on the file (audit M22). A link gives the file to anyone holding it,
+        outside every grant, so it is its own permission: every person role
+        holds it, the assistant mirrors its person, and a named agent or
+        function holds it only where it was granted.
         """
         entity = await self._reader.get_file_by_path(pod_id, path, ctx.user_id, ctx=ctx)
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
+        await self._reader.authz.require_document_share(
+            user_id=ctx.user_id,
+            pod_id=entity.pod_id,
+            resource_id=entity.id,
+            resource_name=entity.path,
+            ctx=ctx,
+        )
         (
             _code,
             signed_url,
@@ -74,6 +110,7 @@ class SignedLinks:
             file=entity,
             links=self._links(),
             created_by_user_id=ctx.user_id,
+            minted_by_workload=minting_workload(ctx),
             expires_seconds=expires_seconds,
             max_hits=max_hits,
         )

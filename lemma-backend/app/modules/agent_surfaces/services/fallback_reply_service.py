@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+from app.modules.agent_surfaces.platforms.credential_checks import can_deliver
+
 from typing import Any
 from uuid import UUID
 
-from app.core.config import reveal_secret
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -16,6 +17,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceConnectorRef,
     SurfaceReplyContext,
     SurfaceReplyKind,
 )
@@ -25,6 +27,7 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
 )
+from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     has_shared_system_bot,
@@ -121,7 +124,7 @@ def private_reply_metadata(parsed: ParsedInboundSurfaceEvent) -> dict[str, str] 
 def _can_disclose_pod_access_link(surface: AgentSurfaceEntity) -> bool:
     if surface.credential_mode is not SurfaceCredentialMode.SYSTEM:
         return True
-    if surface.account_id is not None:
+    if surface.pod_connector_slug is not None:
         return True
     return not has_shared_system_bot(surface.surface_type)
 
@@ -140,7 +143,7 @@ def _reply_context(
     return SurfaceReplyContext(
         platform=SurfacePlatform(platform),
         surface_id=surface.id if surface and include_surface_id else None,
-        surface_account_id=surface.account_id if surface else None,
+        surface_connector=SurfaceConnectorRef.of(surface),
         surface_config=surface.config if surface else None,
         agent_display_name=agent_display_name,
         reply_kind=reply_kind,
@@ -148,6 +151,21 @@ def _reply_context(
         reply_metadata=reply_metadata,
         event=parsed,
     )
+
+
+def _unresolved_reply(
+    adapter: SurfacePlatformAdapterPort,
+    parsed: ParsedInboundSurfaceEvent,
+) -> tuple[tuple[str, dict[str, object]], SurfaceReplyKind]:
+    """What to tell a sender nobody resolved, and which kind of reply it is.
+
+    Where the platform can prove who the sender is (a Telegram contact share),
+    they are asked for that proof; otherwise they are pointed at signup.
+    """
+    identity_reply = adapter.unresolved_sender_reply(parsed)
+    if identity_reply is not None:
+        return identity_reply, "identity_link"
+    return (signup_message(), {}), "signup"
 
 
 def unresolved_sender_context(
@@ -162,11 +180,7 @@ def unresolved_sender_context(
         return None
     if not sender_can_be_answered(parsed):
         return None
-    identity_reply = adapter.unresolved_sender_reply(parsed)
-    message, reply_metadata = identity_reply or (signup_message(), {})
-    reply_kind: SurfaceReplyKind = (
-        "identity_link" if identity_reply is not None else "signup"
-    )
+    (message, reply_metadata), reply_kind = _unresolved_reply(adapter, parsed)
     return _reply_context(
         platform=surface.surface_type,
         surface=surface,
@@ -296,12 +310,8 @@ async def prepare_unrouted_context(
     # leave this person with no answer at all.
     built = False
     try:
-        identity_reply = adapter.unresolved_sender_reply(parsed)
-        confirmation = adapter.linked_sender_confirmation(parsed)
         reply, reply_kind = _unrouted_reply(
-            resolved_user=resolved_user,
-            identity_reply=identity_reply,
-            confirmation=confirmation,
+            adapter=adapter, parsed=parsed, resolved_user=resolved_user
         )
         logger.debug(
             "agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed",
@@ -331,15 +341,13 @@ async def prepare_unrouted_context(
 
 def _unrouted_reply(
     *,
+    adapter: SurfacePlatformAdapterPort,
+    parsed: ParsedInboundSurfaceEvent,
     resolved_user: ResolvedSurfaceUser,
-    identity_reply: tuple[str, dict[str, Any]] | None,
-    confirmation: tuple[str, dict[str, Any]] | None,
 ) -> tuple[tuple[str, dict[str, Any]], SurfaceReplyKind]:
     if resolved_user.internal_user_id is None:
-        return (
-            identity_reply or (signup_message(), {}),
-            "identity_link" if identity_reply is not None else "signup",
-        )
+        return _unresolved_reply(adapter, parsed)
+    confirmation = adapter.linked_sender_confirmation(parsed)
     if confirmation is not None:
         return confirmation, "identity_link"
     return (surface_setup_message(), {}), "surface_setup"
@@ -347,28 +355,9 @@ def _unrouted_reply(
 
 def has_delivery_credentials(
     platform: SurfacePlatform,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
 ) -> bool:
-    normalized = str(platform).upper()
-    if normalized == SurfacePlatform.WHATSAPP:
-        return bool(credentials.get("access_token"))
-    if normalized == SurfacePlatform.TELEGRAM:
-        return bool(credentials.get("bot_token"))
-    if normalized == SurfacePlatform.SLACK:
-        raw_response = credentials.get("raw_response") or {}
-        return bool(
-            credentials.get("access_token")
-            or credentials.get("bot_token")
-            or raw_response.get("access_token")
-        )
-    if normalized == SurfacePlatform.TEAMS:
-        return bool(
-            surface_settings.microsoft_bot_app_id
-            and reveal_secret(surface_settings.microsoft_bot_app_password)
-        )
-    if normalized == SurfacePlatform.RESEND:
-        return bool(credentials.get("api_key"))
-    return any(value for value in credentials.values())
+    return can_deliver(platform, credentials)
 
 
 def to_sender_alone(event: ParsedInboundSurfaceEvent) -> ParsedInboundSurfaceEvent:
@@ -378,7 +367,7 @@ def to_sender_alone(event: ParsedInboundSurfaceEvent) -> ParsedInboundSurfaceEve
     wrote. On an email thread the reply would otherwise copy everybody else on
     it -- a client among them -- with "you don't have access to this pod".
     """
-    if not event.reply_target.get("cc"):
+    if not copied_on_reply(event):
         return event
     return event.model_copy(update={"reply_target": {**event.reply_target, "cc": []}})
 
@@ -387,7 +376,7 @@ async def deliver_fallback_reply(
     *,
     adapter: SurfacePlatformAdapterPort,
     context: SurfaceReplyContext,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     event_dedup_store: SurfaceEventDedupStorePort,
 ) -> None:
     # Every fallback reply on every platform passes here, which makes it the one

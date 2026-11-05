@@ -15,6 +15,20 @@ import {
 
 type RequestParams = Record<string, string | number | boolean | undefined | null>;
 
+/** Set by the server on a response to a deprecated route or field: what was
+ *  deprecated and what to call instead (`app/core/api/deprecation.py`). */
+const DEPRECATION_HEADER = "x-lemma-deprecation";
+const warnedDeprecations = new Set<string>();
+
+/** Warn once per deprecated use, per page or process. The call succeeded; a
+ *  warning never changes that. */
+export function noteDeprecation(headers: Headers): void {
+  const message = headers.get(DEPRECATION_HEADER);
+  if (!message || warnedDeprecations.has(message)) return;
+  warnedDeprecations.add(message);
+  console.warn(`[lemma] ${message}`);
+}
+
 interface RequestOptions {
   params?: RequestParams;
   body?: unknown;
@@ -80,6 +94,98 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * The codes a pod connector refuses with when it cannot run for this caller.
+ * Each names the pod connector in `details.pod_connector`; the two a person
+ * can fix themselves carry `details.connect_url`.
+ */
+export const CONNECTION_ERROR_CODES = [
+  "CONNECTION_REQUIRED",
+  "REAUTH_REQUIRED",
+  "CONNECTOR_NEEDS_ACCOUNT",
+  "CONNECTOR_UNAVAILABLE",
+  "CONNECTION_REQUIRES_PERSON",
+] as const;
+
+export type ConnectionErrorCode = (typeof CONNECTION_ERROR_CODES)[number];
+
+function detailString(details: unknown, key: string): string | null {
+  if (!details || typeof details !== "object") return null;
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+/**
+ * A pod connector that cannot run for the caller, and where to fix it.
+ *
+ * Thrown for every code in `CONNECTION_ERROR_CODES`, whatever the status, so
+ * an app catches one class rather than reading codes:
+ *
+ * ```ts
+ * try { await client.connectors.pod.execute("gmail", "gmail_send_email", payload); }
+ * catch (error) {
+ *   if (error instanceof ConnectionRequiredError && error.connectUrl) error.connect();
+ *   else throw error;
+ * }
+ * ```
+ *
+ * `connectUrl` is null when the person reading cannot fix it themselves --
+ * a shared account only its owner can reconnect, an installation an admin
+ * turned off, a call with no member behind it.
+ */
+export class ConnectionRequiredError extends ApiError {
+  override name = "ConnectionRequiredError";
+  declare readonly code: ConnectionErrorCode;
+  /** Where to connect or reconnect: the pod's Connections page, on this connector. */
+  readonly connectUrl: string | null;
+  /** The pod connector's slug. */
+  readonly podConnector: string | null;
+  /** The catalog connector behind it, e.g. `gmail`, when the server named it. */
+  readonly connectorId: string | null;
+
+  constructor(status: number, message: string, code: ConnectionErrorCode, details?: unknown, rawResponse?: unknown) {
+    super(status, message, code, details, rawResponse);
+    this.connectUrl = detailString(details, "connect_url");
+    this.podConnector = detailString(details, "pod_connector");
+    this.connectorId = detailString(details, "connector_id");
+  }
+
+  /** Reconnecting an expired sign-in, as against connecting for the first time. */
+  get isReauth(): boolean {
+    return this.code === "REAUTH_REQUIRED";
+  }
+
+  /**
+   * Go and fix it: open `connectUrl`. Inside an embedded app the page leaves
+   * the frame for a new tab, since a pod app's frame may not navigate the
+   * window above it; elsewhere the current page goes there, and the
+   * Connections page returns the person once connected. Returns false when
+   * there is nowhere to go (no `connectUrl`, or no browser).
+   */
+  connect(options: { newTab?: boolean } = {}): boolean {
+    if (!this.connectUrl) return false;
+    const view = (globalThis as { window?: Window }).window;
+    if (!view) return false;
+    let framed = false;
+    try {
+      framed = view.top !== view;
+    } catch {
+      framed = true;
+    }
+    if (options.newTab || framed) {
+      view.open(this.connectUrl, "_blank", "noopener");
+      return true;
+    }
+    view.location.assign(this.connectUrl);
+    return true;
+  }
+}
+
+/** Whether a failure is a pod connector asking to be connected. */
+export function isConnectionRequiredError(error: unknown): error is ConnectionRequiredError {
+  return error instanceof ConnectionRequiredError;
+}
+
 /** Map an HTTP status to the most specific ApiError subclass. */
 export function apiErrorFromStatus(
   status: number,
@@ -89,6 +195,9 @@ export function apiErrorFromStatus(
   rawResponse?: unknown,
   retryAfterMsValue?: number,
 ): ApiError {
+  if (code && (CONNECTION_ERROR_CODES as readonly string[]).includes(code)) {
+    return new ConnectionRequiredError(status, message, code as ConnectionErrorCode, details, rawResponse);
+  }
   switch (status) {
     case 401: return new UnauthorizedError(status, message, code, details, rawResponse);
     case 403: return new ForbiddenError(status, message, code, details, rawResponse);
@@ -100,6 +209,22 @@ export function apiErrorFromStatus(
         ? new ServerError(status, message, code, details, rawResponse)
         : new ApiError(status, message, code, details, rawResponse);
   }
+}
+
+/** Every code in this family relays what a connector's provider answered. */
+const CONNECTOR_PROVIDER_CODE_PREFIX = "OPERATION_EXECUTION_";
+
+/**
+ * Whether a refusal says the caller's own Lemma session is gone.
+ *
+ * A 401, unless its code relays a connector's provider: a third party refusing
+ * the connected account's API key is not this session ending, and signing
+ * somebody out over it sends a person who is signed in to the sign-in page.
+ * The server answers that refusal with 424 now; a server from before the
+ * change answered 401, and this is what keeps this SDK from trusting it.
+ */
+export function isSessionRejection(status: number, code?: string): boolean {
+  return status === 401 && !code?.startsWith(CONNECTOR_PROVIDER_CODE_PREFIX);
 }
 
 export class HttpClient {
@@ -220,6 +345,17 @@ export class HttpClient {
     return error;
   }
 
+  /** The error a refused response becomes, once the session has been told
+   *  whether it was the one refused. The body has to be read first: the code
+   *  in it is what tells a dead session from a connector's rejected key. */
+  private async failure(response: Response): Promise<ApiError> {
+    const error = await this.parseError(response);
+    if (isSessionRejection(error.statusCode, error.code)) {
+      this.auth.markUnauthenticated();
+    }
+    return error;
+  }
+
   private getRequestBody(options: RequestOptions): BodyInit | undefined {
     if (options.body === undefined) {
       return undefined;
@@ -263,16 +399,22 @@ export class HttpClient {
     for (let attempt = 0; ; attempt++) {
       const response = await this.fetchWithTimeout(url, init, options.signal);
 
-      // Only 401 means the session is gone — 403 is a permission/RLS error, not an auth failure
+      // A framed app holds a short-lived token from the view around it; when
+      // the session is refused, ask that view once for another before giving
+      // up on it. A connector's rejected key is not the session (see
+      // `isSessionRejection`), so it is thrown as it came.
       if (response.status === 401) {
-        // An app framed in an AI tool holds a short-lived token from the view
-        // around it; ask that view once for another before giving up on it.
-        if (!renewed && (await this.auth.renewEmbeddedToken())) {
+        const error = await this.parseError(response);
+        const sessionGone = isSessionRejection(error.statusCode, error.code);
+        if (sessionGone && !renewed && (await this.auth.renewEmbeddedToken())) {
           renewed = true;
           init = this.buildRequestInit(method, options);
           continue;
         }
-        this.auth.markUnauthenticated();
+        if (sessionGone) {
+          this.auth.markUnauthenticated();
+        }
+        throw error;
       }
 
       const retryDelay = retryDelayForStatus(
@@ -288,8 +430,9 @@ export class HttpClient {
       }
 
       if (!response.ok) {
-        throw await this.parseError(response);
+        throw await this.failure(response);
       }
+      noteDeprecation(response.headers);
 
       if (response.status === 204) {
         return undefined as unknown as T;
@@ -352,12 +495,8 @@ export class HttpClient {
       );
     }
 
-    if (response.status === 401) {
-      this.auth.markUnauthenticated();
-    }
-
     if (!response.ok) {
-      throw await this.parseError(response);
+      throw await this.failure(response);
     }
 
     return response;
@@ -398,12 +537,8 @@ export class HttpClient {
     }
     const response = await this.fetchWithTimeout(url, init);
 
-    if (response.status === 401) {
-      this.auth.markUnauthenticated();
-    }
-
     if (!response.ok) {
-      throw await this.parseError(response);
+      throw await this.failure(response);
     }
 
     return {

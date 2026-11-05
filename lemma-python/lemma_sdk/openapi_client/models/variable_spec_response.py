@@ -17,11 +17,6 @@ class VariableSpecResponse:
     Attributes:
         kind (str):
         name (str):
-        connector (None | str | Unset): For a connector account variable, the connector the account must belong to (e.g.
-            'slack'), so the importer can connect the right connector. Null for non-connector variables.
-        connector_kind (None | str | Unset): For a connector account variable, which of the connector's kinds the source
-            install used ('composio', 'http', 'mcp', 'sql'), so the importer selects an account of the same kind. Null for
-            non-connector variables.
         default (None | str | Unset):
         description (None | str | Unset):
         required (bool | Unset):  Default: False.
@@ -29,8 +24,6 @@ class VariableSpecResponse:
 
     kind: str
     name: str
-    connector: None | str | Unset = UNSET
-    connector_kind: None | str | Unset = UNSET
     default: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
     required: bool | Unset = False
@@ -40,18 +33,6 @@ class VariableSpecResponse:
         kind = self.kind
 
         name = self.name
-
-        connector: None | str | Unset
-        if isinstance(self.connector, Unset):
-            connector = UNSET
-        else:
-            connector = self.connector
-
-        connector_kind: None | str | Unset
-        if isinstance(self.connector_kind, Unset):
-            connector_kind = UNSET
-        else:
-            connector_kind = self.connector_kind
 
         default: None | str | Unset
         if isinstance(self.default, Unset):
@@ -75,10 +56,6 @@ class VariableSpecResponse:
                 "name": name,
             }
         )
-        if connector is not UNSET:
-            field_dict["connector"] = connector
-        if connector_kind is not UNSET:
-            field_dict["connector_kind"] = connector_kind
         if default is not UNSET:
             field_dict["default"] = default
         if description is not UNSET:
@@ -94,24 +71,6 @@ class VariableSpecResponse:
         kind = d.pop("kind")
 
         name = d.pop("name")
-
-        def _parse_connector(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        connector = _parse_connector(d.pop("connector", UNSET))
-
-        def _parse_connector_kind(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        connector_kind = _parse_connector_kind(d.pop("connector_kind", UNSET))
 
         def _parse_default(data: object) -> None | str | Unset:
             if data is None:
@@ -136,8 +95,6 @@ class VariableSpecResponse:
         variable_spec_response = cls(
             kind=kind,
             name=name,
-            connector=connector,
-            connector_kind=connector_kind,
             default=default,
             description=description,
             required=required,

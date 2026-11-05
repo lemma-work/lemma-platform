@@ -5,21 +5,20 @@ from datetime import datetime, timezone
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
 from starlette.datastructures import QueryParams
 
 from app.modules.agent.api.controllers import conversation_controller
+from app.modules.agent.api.schemas import SendMessageRequest
 from app.modules.agent.api.controllers.conversation_page_token import (
     encode_conversation_page_token,
     parse_conversation_page_token,
 )
 from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
-    append_message,
-    retry_failed_run,
     send_message,
     stream_conversation,
 )
@@ -86,12 +85,6 @@ class _ConversationService:
         self.called = False
 
     async def send_from_lemma(self, **kwargs):
-        self.called = True
-        if self.exc is not None:
-            raise self.exc
-        return self.result
-
-    async def retry_failed_run(self, **kwargs):
         self.called = True
         if self.exc is not None:
             raise self.exc
@@ -272,7 +265,7 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
     response = await send_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="say ok", metadata=None),
+        data=SendMessageRequest(content="say ok"),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
         request=SimpleNamespace(),
@@ -281,106 +274,6 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
 
     assert response.media_type == "text/event-stream"
     assert service.called is True
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_run_returns_typed_start_response(
-    monkeypatch,
-) -> None:
-    result = AgentRunStartResult(
-        conversation_id=uuid4(),
-        agent_run_id=uuid4(),
-        started_new_run=True,
-    )
-    service = _ConversationService(result)
-    uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller,
-        "_build_conversation_retry_service",
-        lambda uow: service,
-    )
-    monkeypatch.setattr(
-        "app.core.authorization.scope.resolve_pod_context",
-        AsyncMock(return_value=allow_all_context()),
-    )
-
-    response = await retry_failed_run(
-        pod_id=uuid4(),
-        conversation_id=result.conversation_id,
-        user=SimpleNamespace(id=uuid4()),
-        request=SimpleNamespace(),
-        uow_factory=uow_factory,
-    )
-
-    assert response.conversation_id == result.conversation_id
-    assert response.agent_run_id == result.agent_run_id
-    assert response.started_new_run is True
-    assert service.called is True
-
-
-@pytest.mark.asyncio
-async def test_append_message_returns_typed_response_without_streaming(
-    monkeypatch,
-) -> None:
-    result = AgentRunStartResult(
-        conversation_id=uuid4(),
-        agent_run_id=uuid4(),
-        started_new_run=True,
-    )
-    service = _ConversationService(result)
-    uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
-    monkeypatch.setattr(
-        "app.core.authorization.scope.resolve_pod_context",
-        AsyncMock(return_value=allow_all_context()),
-    )
-
-    response = await append_message(
-        pod_id=uuid4(),
-        conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="say ok", metadata=None),
-        user=SimpleNamespace(id=uuid4()),
-        request=SimpleNamespace(),
-        uow_factory=uow_factory,
-    )
-
-    assert response.conversation_id == result.conversation_id
-    assert response.agent_run_id == result.agent_run_id
-    assert response.started_new_run is True
-    assert service.called is True
-
-
-@pytest.mark.asyncio
-async def test_append_message_reports_joining_an_active_run(monkeypatch) -> None:
-    active_run_id = uuid4()
-    result = AgentRunStartResult(
-        conversation_id=uuid4(),
-        agent_run_id=active_run_id,
-        started_new_run=False,
-    )
-    service = _ConversationService(result)
-    uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
-    monkeypatch.setattr(
-        "app.core.authorization.scope.resolve_pod_context",
-        AsyncMock(return_value=allow_all_context()),
-    )
-
-    response = await append_message(
-        pod_id=uuid4(),
-        conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="steer this run", metadata=None),
-        user=SimpleNamespace(id=uuid4()),
-        request=SimpleNamespace(),
-        uow_factory=uow_factory,
-    )
-
-    assert response.agent_run_id == active_run_id
-    assert response.started_new_run is False
 
 
 def _agent_run(*, status: AgentRunStatus, error: str | None = None) -> AgentRun:
@@ -493,7 +386,7 @@ async def test_send_message_encodes_a_dead_subscription_as_stream_error(
     response = await send_message(
         pod_id=uuid4(),
         conversation_id=result.conversation_id,
-        data=SimpleNamespace(content="say ok", metadata=None),
+        data=SendMessageRequest(content="say ok"),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
         request=SimpleNamespace(),
@@ -533,7 +426,7 @@ async def test_send_message_raises_usage_limit_before_stream_starts(
         await send_message(
             pod_id=uuid4(),
             conversation_id=uuid4(),
-            data=SimpleNamespace(content="say ok", metadata=None),
+            data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=channel_service,
             request=SimpleNamespace(),
@@ -564,7 +457,7 @@ async def test_send_message_cancellation_releases_pubsub_subscription(
         await send_message(
             pod_id=uuid4(),
             conversation_id=uuid4(),
-            data=SimpleNamespace(content="say ok", metadata=None),
+            data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=channel_service,
             request=SimpleNamespace(),
@@ -601,7 +494,7 @@ class TestTheStreamSaysWhetherTheMessageStartedARun:
         response = await send_message(
             pod_id=uuid4(),
             conversation_id=result.conversation_id,
-            data=SimpleNamespace(content="say ok", metadata=None),
+            data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=_ChannelService(_empty_iterator()),
             request=SimpleNamespace(),
@@ -615,14 +508,14 @@ class TestTheStreamSaysWhetherTheMessageStartedARun:
         payload = await self._first_frame(monkeypatch, started_new_run=True)
 
         assert payload["type"] == "status"
-        assert payload["data"] == {"started_new_run": True}
+        assert payload["data"] == {"started_new_run": True, "deduplicated": False}
 
     @pytest.mark.asyncio
     async def test_a_message_that_joined_one_says_so(self, monkeypatch) -> None:
         payload = await self._first_frame(monkeypatch, started_new_run=False)
 
         assert payload["type"] == "status"
-        assert payload["data"] == {"started_new_run": False}
+        assert payload["data"] == {"started_new_run": False, "deduplicated": False}
 
 
 class TestASilentStreamStillSendsSomething:
@@ -654,6 +547,35 @@ class TestASilentStreamStillSendsSomething:
         gate.set()
         assert await anext(stream) == "data: {}\n\n"
         await stream.aclose()
+
+    @pytest.mark.asyncio
+    async def test_an_ending_lost_in_a_reconnect_still_ends_the_stream(
+        self,
+    ) -> None:
+        """The run finished while the subscription was reconnecting, so its
+        `completed` was never heard. The idle check reads the run instead of
+        sending keepalives forever."""
+        from app.modules.agent.api.controllers.shared import (
+            KEEPALIVE_FRAME,
+            with_keepalive,
+        )
+
+        checks = 0
+
+        async def ended() -> str | None:
+            nonlocal checks
+            checks += 1
+            return "data: completed\n\n" if checks > 1 else None
+
+        stream = with_keepalive(
+            self._slow_then_done(asyncio.Event()),
+            interval_seconds=0.01,
+            on_idle=ended,
+        )
+        assert [frame async for frame in stream] == [
+            KEEPALIVE_FRAME,
+            "data: completed\n\n",
+        ]
 
     @pytest.mark.asyncio
     async def test_a_busy_stream_gets_no_keepalives(self) -> None:
@@ -703,7 +625,12 @@ def test_conversation_page_token_round_trips_both_sort_keys() -> None:
         "not base64 at all!",
         # Well-formed, but a naive timestamp is no position in a tz-aware order.
         encode_conversation_page_token(
-            ConversationListCursor(last_activity_at=datetime(2026, 9, 25), id=uuid4())
+            ConversationListCursor(
+                last_activity_at=datetime(2026, 9, 25),
+                # Fixed: the token is the test's id, and pytest-xdist workers
+                # must all collect the same ids.
+                id=UUID("00000000-0000-4000-8000-000000000001"),
+            )
         ),
     ],
 )

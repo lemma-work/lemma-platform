@@ -80,8 +80,10 @@ def _workspace_tool_failure(
     completed: bool = False,
     process_id: str | None = None,
 ) -> ExecCommandResult:
-    logger.debug(
-        "agent.workspace_cli.workspace_cli_s_s.diagnostic",
+    # Warning, not debug: the agent is told the call failed, and at the
+    # production log level a debug line is the same as no line at all.
+    logger.warning(
+        "agent.workspace_cli.tool_failed.degraded",
         operation=operation,
         exc_info=exc,
     )
@@ -102,8 +104,10 @@ def _workspace_tool_failure(
 def _python_workspace_tool_failure(
     exc: Exception, *, operation: str
 ) -> PythonExecutionResult:
-    logger.debug(
-        "agent.workspace_cli.workspace_cli_s_s.diagnostic",
+    # Warning, not debug: the agent is told the call failed, and at the
+    # production log level a debug line is the same as no line at all.
+    logger.warning(
+        "agent.workspace_cli.tool_failed.degraded",
         operation=operation,
         exc_info=exc,
     )

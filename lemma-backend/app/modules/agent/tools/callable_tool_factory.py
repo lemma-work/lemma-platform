@@ -25,6 +25,10 @@ from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent
+from app.modules.agent.infrastructure.mcp import (
+    MAX_LOCAL_TOOL_NAME_LENGTH,
+    resource_tool_name,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
@@ -120,6 +124,35 @@ def _schema_preview(schema: dict[str, Any] | None) -> str:
     )
 
 
+_STILL_RUNNING = frozenset({FunctionRunStatus.PENDING, FunctionRunStatus.RUNNING})
+
+
+def function_tool_result(function_name: str, run: FunctionRunEntity) -> dict[str, Any]:
+    """What a function tool call returns, given where its run got to.
+
+    A JOB run still going when the wait ran out is not a failure. It used to be
+    reported as "Function X failed", and the model's reasonable answer to a
+    failure is to run it again -- repeating whatever the function does, while
+    the first run carried on doing it.
+    """
+    if run.status in _STILL_RUNNING:
+        return {
+            "run_id": str(run.id),
+            "status": run.status.value,
+            "still_running": True,
+            "note": (
+                f"`{function_name}` is still running after "
+                f"{_SUBAGENT_TOOL_TIMEOUT_SECONDS // 60} minutes. It has not "
+                "failed -- do not run it again, which would repeat what it "
+                "does. Check its result later with `lemma functions runs get "
+                f"{function_name} {run.id}`, or tell the person it is running."
+            ),
+        }
+    if run.status != FunctionRunStatus.COMPLETED:
+        raise RuntimeError(run.error or f"Function {function_name} failed")
+    return bounded_tool_payload(run.output_data or {}, what="function output")
+
+
 class AgentCallableToolFactory:
     """Creates dynamic tools configured on an Agent."""
 
@@ -184,7 +217,7 @@ class AgentCallableToolFactory:
         # AgentToolset.SUBAGENTS enum and resolved by RunToolAssembler — not
         # appended here — so it is opt-in for user agents and gated to top-level
         # conversations.
-        return [FunctionToolset[BaseAgentContext](tools=tools)]
+        return [FunctionToolset[BaseAgentContext](tools=distinct_tool_names(tools))]
 
     async def load_grant_summary(
         self, *, pod_id: UUID, agent_id: UUID
@@ -251,7 +284,7 @@ class AgentCallableToolFactory:
     ) -> Tool:
         schema = inline_schema(normalize_json_schema(function.input_schema))
         description = self._build_function_description(function)
-        function_name = f"function_{function.name}"
+        function_name = resource_tool_name("function_", function.name)
         parent_agent_id = parent_agent.id
         parent_agent_name = parent_agent.name
 
@@ -294,9 +327,7 @@ class AgentCallableToolFactory:
             ):
                 run = await self._await_function_run(run.id)
 
-            if run.status != FunctionRunStatus.COMPLETED:
-                raise RuntimeError(run.error or f"Function {function.name} failed")
-            return bounded_tool_payload(run.output_data or {}, what="function output")
+            return function_tool_result(function.name, run)
 
         return Tool(
             _run_function,
@@ -324,7 +355,7 @@ class AgentCallableToolFactory:
             else _single_string_input_schema()
         )
         description = self._build_agent_description(agent)
-        agent_tool_name = f"agent_{agent.name}"
+        agent_tool_name = resource_tool_name("agent_", agent.name)
 
         # See _build_function_tool: model arguments arrive as flat kwargs, so
         # collect them via **request rather than a single `request` parameter.
@@ -365,9 +396,9 @@ class AgentCallableToolFactory:
                     "run_id": str(handle.run_id),
                     "status": result.get("status"),
                     "note": (
-                        "Sub-agent still running; poll query_subagents "
-                        "(mode='messages') or interact_subagent (action='await') "
-                        "to continue."
+                        "Sub-agent still running. Call `wait_for` with "
+                        "`subagent_run_id` set to this run_id and end your turn; "
+                        "you wake with its result."
                     ),
                 }
             output = result.get("output")
@@ -479,3 +510,25 @@ class AgentCallableToolFactory:
             takes_ctx=True,
             is_async=True,
         )
+
+
+def distinct_tool_names(tools: list[Tool]) -> list[Tool]:
+    """The same tools, no two sharing a name.
+
+    `resource_tool_name` keeps a valid name as it is and gives any other a
+    digest suffix, so a resource literally named like another's sanitized form
+    can land on the same tool name. A toolset refuses two tools of one name,
+    and that refusal failed the whole run before it listed anything. A later
+    duplicate takes a counter instead, in grant order, so the name is the same
+    from turn to turn.
+    """
+    seen: set[str] = set()
+    for tool in tools:
+        name, counter = tool.name, 2
+        while name in seen:
+            suffix = f"_{counter}"
+            name = tool.name[: MAX_LOCAL_TOOL_NAME_LENGTH - len(suffix)] + suffix
+            counter += 1
+        tool.name = name
+        seen.add(name)
+    return tools

@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     FakeComposioServer,
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.test_support.e2e.worker_hold import worker_held
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
 
@@ -63,9 +64,13 @@ db_manager = e2e_fixtures.db_manager
 test_app = e2e_fixtures.test_app
 async_client = e2e_fixtures.async_client
 e2e_process_clients = e2e_fixtures.e2e_process_clients
-fixed_test_user = e2e_fixtures.fixed_test_user
+# One signed-up user and organization per module, reset to their snapshot
+# before each test -- see `module_identity`. A module whose tests need their
+# own identity rebinds these two names to `fresh_test_user`/`fresh_test_org`.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
 authenticated_client = e2e_fixtures.authenticated_client
-fixed_test_org = e2e_fixtures.fixed_test_org
+fixed_test_org = e2e_fixtures.module_test_org
 db_session = e2e_fixtures.db_session
 scenario = e2e_fixtures.scenario
 
@@ -94,6 +99,26 @@ def public_web_switched_on(monkeypatch):
 
     monkeypatch.setattr(public_web_settings, "public_web_enabled", True)
     monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", False)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def a_fresh_visitor_address():
+    """Every request in a shard comes from one test client address, so the
+    per-address window on starting web chats -- an abuse limit for one
+    browser, which no journey here is about -- would be spent by whichever
+    tests ran first and refuse the next. Each test starts it afresh; the
+    limiter's own unit tests cover the window."""
+    from redis.exceptions import RedisError
+
+    from app.core.infrastructure.redis.client import get_redis
+
+    try:
+        client = get_redis()
+        async for key in client.scan_iter(match="web:sessions:addr:*"):
+            await client.delete(key)
+    except RedisError:
+        pass
+    yield
 
 
 # Set before anything imports settings, so every reader sees it — including the
@@ -240,11 +265,24 @@ async def fake_composio_server():
         await server.stop()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="module")
 async def worker(
     e2e_settings, sandbox_reachable_backend, fake_composio_server, request
 ):
     """Surface shard's production worker with a hermetic Composio transport.
+
+    Module-scoped: a worker runs every due work item in the session's
+    database, so one left running after its module would race the in-process
+    tests that come after it for their ingest and delivery items -- sending a
+    reply twice, or taking a pump item a test is driving by hand.
+
+    The session's worker is held for as long as this one runs. Both claim from
+    the same work table, and the session worker has none of the env below:
+    when it won a Teams ingest it refused the fake Bot Framework serviceUrl
+    (no ``MICROSOFT_BOT_SERVICE_EXTRA_HOST``) and failed the item, so the
+    journey timed out on a reply its own worker never saw. Which tests that hit
+    depended on whether anything earlier in the shard had started the session
+    worker -- the agent modules do.
 
     Default e2e mode uses the deterministic FunctionModel token source. When
     ``E2E_LLM_MODE=real`` is set, the existing system:lemma helper gates on the
@@ -259,16 +297,20 @@ async def worker(
     if key:
         settings.lemma_openai_api_key = key
     try:
-        async with production_worker_process(
-            e2e_settings,
-            log_prefix="lemma_system_lemma_surface_worker",
-            extra_env={
-                "COMPOSIO_API_KEY": "test",
-                "COMPOSIO_BASE_URL": fake_composio_server.base_url,
-                "MICROSOFT_BOT_APP_ID": "teams-app-id",
-                "MICROSOFT_BOT_APP_PASSWORD": "teams-app-secret",
-            },
-        ) as process:
+        async with (
+            worker_held(),
+            production_worker_process(
+                e2e_settings,
+                log_prefix="lemma_system_lemma_surface_worker",
+                extra_env={
+                    "COMPOSIO_API_KEY": "test",
+                    "COMPOSIO_BASE_URL": fake_composio_server.base_url,
+                    "MICROSOFT_BOT_APP_ID": "teams-app-id",
+                    "MICROSOFT_BOT_APP_PASSWORD": "teams-app-secret",
+                    "MICROSOFT_BOT_SERVICE_EXTRA_HOST": "127.0.0.1",
+                },
+            ) as process,
+        ):
             yield process
             if request.session.testsfailed:
                 # The worker is a subprocess, so pytest cannot otherwise attach

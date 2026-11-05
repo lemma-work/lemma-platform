@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from uuid import uuid4
 
 import pytest
@@ -123,7 +123,7 @@ async def test_a_checked_answer_comes_back_metered_to_the_caller() -> None:
     )
 
     assert result.answers == GOOD
-    assert limiter.keys == [f"org:{ORG}"]
+    assert limiter.keys == [f"org:{ORG}:background"]
     context = metering.contexts[0]
     assert (context.user_id, context.organization_id, context.pod_id) == (
         CALLER.user_id,
@@ -204,7 +204,22 @@ async def test_a_person_without_an_organization_is_limited_on_their_own() -> Non
 
     await _service(_Provider(GOOD), limiter=limiter).decide(REQUEST, caller)
 
-    assert limiter.keys == [f"user:{caller.user_id}"]
+    assert limiter.keys == [f"user:{caller.user_id}:background"]
+
+
+async def test_live_calls_have_an_allowance_of_their_own() -> None:
+    """A schedule's backlog of background decisions must not use up the
+    minute's allowance for someone waiting on a call."""
+    limiter = _Limiter()
+    service = _service(_Provider(GOOD), limiter=limiter)
+
+    await service.decide(REQUEST, CALLER)
+    await service.decide(replace(REQUEST, priority="interactive"), CALLER)
+
+    assert limiter.keys == [
+        f"org:{CALLER.organization_id}:background",
+        f"org:{CALLER.organization_id}:interactive",
+    ]
 
 
 async def test_a_spent_budget_survives_a_failed_usage_checkpoint() -> None:
@@ -254,3 +269,45 @@ async def test_any_other_double_failure_is_retryable() -> None:
     with pytest.raises(DecisionUnavailableError) as raised:
         await service.decide(REQUEST, CALLER)
     assert raised.value.reason == "provider_error"
+
+
+class _TooManyClients(Exception):
+    sqlstate = "53300"
+
+
+async def test_lemmas_database_failing_the_usage_checkpoint_is_not_the_provider() -> (
+    None
+):
+    """The provider answered, or failed, and the usage checkpoint could not
+    reach Lemma's database: that is the database being unavailable -- retried
+    by the caller's work item -- never "the provider did not answer"."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.core.infrastructure.db.transient_errors import is_database_unavailable
+
+    down = OperationalError("INSERT", {}, _TooManyClients("too many clients"))
+
+    @asynccontextmanager
+    async def failing_checkpoint(_: UsageExecutionContext) -> AsyncIterator[object]:
+        try:
+            yield object()
+        except DecisionUnavailableError as failure:
+            raise BaseExceptionGroup(
+                "Execution and usage finalization failed", [failure, down]
+            ) from None
+        raise down
+
+    for provider in (
+        _Provider(GOOD),
+        _Provider(raises=DecisionUnavailableError("transport")),
+    ):
+        service = DecisionService(
+            settings=DecisionsSettings(),
+            provider=lambda _, provider=provider: provider,
+            limiter=_Limiter(),
+            metering=failing_checkpoint,
+        )
+        with pytest.raises(BaseException) as raised:
+            await service.decide(REQUEST, CALLER)
+        assert not isinstance(raised.value, DecisionUnavailableError)
+        assert is_database_unavailable(raised.value)

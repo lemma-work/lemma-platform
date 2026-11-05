@@ -11,5 +11,6 @@ export type CreateAnthropicCompatibleRuntimeProfileRequest = {
     model_names?: Array<string>;
     model_settings?: Record<string, any>;
     name: string;
+    reasoning_model_names?: Array<string>;
     source?: string;
 };

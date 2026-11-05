@@ -16,6 +16,7 @@ import pytest
 
 from app.core.observability import connection_scope
 from app.core.observability.connection_scope import ConnectionScopeMonitor
+from app.modules.test_support import source_tree
 
 
 class _Record:
@@ -311,7 +312,7 @@ def test_whatever_starts_the_monitor_also_stops_it():
 
     root = Path(__file__).resolve().parents[3]
     offenders: list[str] = []
-    for path in root.rglob("*.py"):
+    for path in source_tree.python_files(root):
         if "tests" in path.parts or "test_support" in path.parts:
             continue
         if path.name == "connection_scope.py":
@@ -319,7 +320,7 @@ def test_whatever_starts_the_monitor_also_stops_it():
             # which is the wiring, not a service leaving one running.
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            tree = source_tree.tree(path)
         except SyntaxError, UnicodeDecodeError:  # pragma: no cover
             continue
         called = {

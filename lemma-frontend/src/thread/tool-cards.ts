@@ -32,7 +32,8 @@ export type ToolCard =
     | FileRead
     | FileChange
     | FileSearch
-    | SubTask;
+    | SubTask
+    | TeammateAsk;
 
 /** A paused `browser_sign_in`: the run is stopped until somebody goes and signs
  *  in to a site, in the agent's own browser. */
@@ -272,21 +273,95 @@ export interface SubTask {
     error: string;
 }
 
+/** One `ask_teammate`: a request put to another teammate, as the person or
+ *  over a connection, and what came of it. A quick answer lands on the card; a
+ *  slow one arrives later as a message of its own, and the card says that is
+ *  what it is waiting for. */
+export interface TeammateAsk {
+    kind: "ask";
+    /** Its name once the call returns; what the agent typed until then. */
+    teammate: string;
+    /** Where its side of the request lives, for "Open its conversation". */
+    podId: string;
+    conversationId: string;
+    /** AS_PERSON: it worked with the person's own access there, in a
+     *  conversation of theirs. LINK: with what that teammate shared, in a
+     *  conversation that belongs to whoever looks after the connection. Empty
+     *  while the call runs, or when the server did not say. */
+    askedAs: "AS_PERSON" | "LINK" | "";
+    request: string;
+    /** ANSWERED, WORKING, WAITING, UNFINISHED or DISCONNECTED. Empty while the
+     *  call runs. */
+    status: string;
+    answer: string;
+    /** Stopped for the person's OK before anything was sent. */
+    needsApproval: boolean;
+    pending: boolean;
+    failed: boolean;
+    /** Why it was not asked at all: the server's refusal, which is written
+     *  for the person as much as the model. */
+    error: string;
+}
+
+/** How an ask card reads: the word on its status, and the line the app says
+ *  about where it stands. Never the tool's `message`, which tells the model
+ *  what to do next ("end your turn"), and never a run's raw error. */
+export function askCardView(ask: TeammateAsk): {
+    status: string;
+    tone?: "bad" | "wait" | "ok";
+    line: string;
+    /** Whether the other side is the person's own conversation, to open. */
+    linkable: boolean;
+} {
+    const linkable = ask.askedAs === "AS_PERSON" && Boolean(ask.podId && ask.conversationId);
+    const name = ask.teammate || "The other teammate";
+    if (ask.pending) return { status: "asking", tone: "wait", line: "", linkable: false };
+    if (ask.needsApproval) return { status: "needs your OK", tone: "wait", line: "", linkable: false };
+    if (ask.failed) return { status: "not asked", tone: "bad", line: "", linkable: false };
+    switch (ask.status) {
+        case "ANSWERED":
+            /* A run that finished without writing anything comes back as
+               ANSWERED with no answer: say that, rather than an empty card. */
+            return ask.answer
+                ? { status: "answered", tone: "ok", line: "", linkable }
+                : { status: "no answer", line: name + " finished without writing an answer.", linkable };
+        case "WORKING":
+            return { status: "working", tone: "wait", line: name + " is working on it. Its answer will appear in this conversation.", linkable };
+        case "WAITING":
+            return ask.askedAs === "LINK"
+                ? { status: "waiting", tone: "wait", line: name + " is waiting on whoever looks after its connection. Its answer will appear here once they reply.", linkable }
+                : { status: "waiting on you", tone: "wait", line: name + " needs something from you in its conversation first.", linkable };
+        case "UNFINISHED":
+            return { status: "couldn’t finish", tone: "bad", line: name + " couldn’t finish this request.", linkable };
+        case "DISCONNECTED":
+            return { status: "disconnected", tone: "bad", line: name + " was disconnected before it answered. Someone needs to connect the two teammates again.", linkable: false };
+        default:
+            return { status: "", line: "", linkable };
+    }
+}
+
 /** One `run_connector_operation`. */
 export interface ConnectorRun {
     kind: "connector";
-    /** The install, by its auth-config name — `gmail`, `outlook`. */
+    /** The pod connector, by its slug — `gmail`, `support-inbox`. Whose
+     *  account the call ran as was the connector's decision, so the card has
+     *  no account to name. */
     connector: string;
     /** The operation, verbatim: it is an identifier a reader may need to match
      *  against the connector's own list. */
     operation: string;
-    account: string;
     params: { name: string; value: string }[];
     /** Where a file result was asked to land in the pod. */
     savedTo: string;
     pending: boolean;
     failed: boolean;
     error: string;
+    /** The refusal's code — CONNECTION_REQUIRED, REAUTH_REQUIRED, … — when
+     *  the connector could not run for this person. */
+    code: string;
+    /** Where to connect or reconnect the account it needed, when the person
+     *  reading can. */
+    connectUrl: string;
     /** What came back, as one line. The result is arbitrary provider JSON, so
      *  it is described rather than printed. */
     summary: string;
@@ -698,11 +773,11 @@ function sourcesCard(tool: string, args: unknown, result: unknown, answered: boo
 
 function connectorCard(args: unknown, result: unknown, answered: boolean): ConnectorRun | null {
     const record = asRecord(args);
-    const connector = asString(record.auth_config);
+    const connector = asString(record.connector);
     const operation = asString(record.operation);
     if (!connector || !operation) return null;
 
-    const params = Object.entries(asRecord(record.arguments))
+    const params = Object.entries(asRecord(record.payload))
         .map(([name, value]) => ({ name, value: describe(value) }))
         .filter((param) => param.value !== "")
         .slice(0, 5);
@@ -717,12 +792,13 @@ function connectorCard(args: unknown, result: unknown, answered: boolean): Conne
         kind: "connector",
         connector,
         operation,
-        account: asString(record.account_id),
         params,
         savedTo: asString(record.output_path),
         pending: !answered,
         failed: Boolean(error),
         error: message || error,
+        code: answered ? asString(resultField(result, "code")) : "",
+        connectUrl: answered ? asString(resultField(result, "connect_url")) : "",
         summary: error ? "" : describe(resultField(result, "result")),
     };
 }
@@ -1250,6 +1326,45 @@ function taskCard(args: unknown, result: unknown, answered: boolean): SubTask | 
     };
 }
 
+/** A pydantic tool return can arrive serialised; read it either way. */
+function parsedRecord(result: unknown): unknown {
+    if (typeof result !== "string") return result;
+    try {
+        return JSON.parse(result);
+    } catch {
+        return {};
+    }
+}
+
+function askedAsOf(value: unknown): TeammateAsk["askedAs"] {
+    return value === "AS_PERSON" || value === "LINK" ? value : "";
+}
+
+function askCard(args: unknown, result: unknown, answered: boolean): TeammateAsk | null {
+    const record = asRecord(args);
+    const request = asString(record.request);
+    if (!request) return null;
+    const out = answered ? parsedRecord(result) : undefined;
+    const needsApproval = resultField(out, "needs_approval") === true;
+    const failure = failureOf(out, answered);
+    return {
+        kind: "ask",
+        teammate: asString(resultField(out, "teammate_name")) || asString(record.teammate),
+        podId: asString(resultField(out, "teammate")),
+        conversationId: asString(resultField(out, "conversation_id")),
+        askedAs: askedAsOf(resultField(out, "asked_as")),
+        request,
+        status: asString(resultField(out, "status")),
+        answer: asString(resultField(out, "answer")),
+        needsApproval,
+        pending: !answered,
+        /* Waiting for the person's OK is a step in a working flow, not a
+           failure; the approval card beside it is where it gets answered. */
+        failed: failure.failed && !needsApproval,
+        error: needsApproval ? "" : failure.error,
+    };
+}
+
 /** The one entry point: a tool call, and the card it deserves — or `null`,
  *  which is the existing grey note and has to stay reachable for every one of
  *  the thirty-odd tools nothing here claims. */
@@ -1320,6 +1435,8 @@ export function parseToolCard({
             return searchCard("grep", args, result, answered, toolTitle(metadata));
         case "task":
             return taskCard(args, result, answered);
+        case "ask_teammate":
+            return askCard(args, result, answered);
         default:
             return null;
     }

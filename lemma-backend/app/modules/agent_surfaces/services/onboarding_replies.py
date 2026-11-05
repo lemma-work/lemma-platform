@@ -118,12 +118,16 @@ async def say_privately(
 
 #: What "done" sounds like. Both completion paths used to say nothing at all:
 #: the only sign of success was the replayed request coming back answered, and
-#: `replay_onboarding` has several raises that dead-letter after their retries
+#: the replay (`prepare_onboarding_replay`) has several raises that go dead
 #: -- so a failure there left somebody who had just proved their email with no
 #: acknowledgement and no answer, and nothing to tell that apart from being
 #: ignored. The confirmation is cheap and it is sent before the replay, so the
 #: flow is never silent even when the replay is.
 READY_MESSAGE = "You're all set. Picking up your message now."
+#: The org's own number has no workspace to set up and nothing to pick up: the
+#: binding is the whole outcome, and the pod's membership answers what comes
+#: next.
+VERIFIED_HERE = "Thanks, you're verified on this number. Send your message again."
 
 
 def ready_message(invited_pod_name: str | None = None) -> str:

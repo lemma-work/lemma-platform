@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import organizations, pods
+from lemma_sdk import errors as organizations_errors
 
 runner = CliRunner()
 
@@ -76,6 +79,7 @@ def test_orgs_list_json_output(monkeypatch):
 # ---------------------------------------------------------------------------
 
 POD_UUID = "11111111-1111-1111-1111-111111111111"
+ORG_UUID = "99999999-9999-9999-9999-999999999999"
 
 
 class FakePods:
@@ -93,12 +97,15 @@ class FakePods:
         return {"id": pod_id, "name": "my-pod"}
 
 
-def _make_pods_run(fake_pods_obj):
+def _make_pods_run(fake_pods_obj, orgs=None):
     def fake_run_with_client(ctx, fn):
-        client = SimpleNamespace(pods=fake_pods_obj)
+        client = SimpleNamespace(pods=fake_pods_obj, orgs=orgs)
         state = SimpleNamespace(
             config={
-                "defaults": {"org_id": "org-1", "pod_id": None},
+                "defaults": {
+                    "org_id": ORG_UUID,
+                    "pod_id": None,
+                },
                 "_runtime": {"pod": POD_UUID},
             },
             output="pretty",
@@ -128,13 +135,35 @@ def test_pods_get_dispatches_api(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_pods_list_json_output(monkeypatch):
-    fake_pods_obj = FakePods()
-    monkeypatch.setattr(pods, "run_with_client", _make_pods_run(fake_pods_obj))
+class SlugOrgs:
+    """Knows one org, by id or by its slug `acme`."""
 
-    result = runner.invoke(app, ["--json", "pods", "list"])
+    def get(self, org):
+        raise organizations_errors.LemmaNotFoundError(404, "not an id")
+
+    def list(self, *, limit=100, page_token=None):
+        return {"items": [{"id": ORG_UUID, "slug": "acme", "name": "Acme"}]}
+
+
+@pytest.mark.parametrize(
+    "org_flag",
+    [
+        [],
+        # `--org acme` names the org as `lemma orgs` shows it; the API takes
+        # its id, and a slug sent as-is was refused as a badly formed UUID.
+        ["--org", "acme"],
+    ],
+)
+def test_pods_list_json_output(monkeypatch, org_flag):
+    fake_pods_obj = FakePods()
+    monkeypatch.setattr(
+        pods, "run_with_client", _make_pods_run(fake_pods_obj, orgs=SlugOrgs())
+    )
+
+    result = runner.invoke(app, ["--json", "pods", "list", *org_flag])
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert "items" in payload
     assert any(item["id"] == POD_UUID for item in payload["items"])
+    assert fake_pods_obj._calls["list"]["org_id"] == ORG_UUID

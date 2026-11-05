@@ -353,12 +353,10 @@ function Composer({ podId, path, members, bots, anchor, parentId, autoFocus, pla
                Best effort: the comment stands whether or not a notice went. */
             if (source.label === "live") {
                 for (const person of named.filter((one) => one.kind === "person")) {
-                    void lemma(podId).notifications.send({
-                        recipient: person.key,
-                        title: "You were mentioned on " + docTitle(path),
-                        body: body.trim(),
-                        expects_response: false,
-                    } as never).catch(() => undefined);
+                    void lemma(podId).channels.notify(podId, {
+                        to: person.key,
+                        text: "You were mentioned on " + docTitle(path) + ":\n\n" + body.trim(),
+                    }).catch(() => undefined);
                 }
             }
             return row;

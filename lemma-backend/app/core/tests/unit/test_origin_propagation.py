@@ -1,9 +1,9 @@
 """Origin has to survive the two hops that separate work from its own events.
 
 ``DomainEvent.origin`` is read from a contextvar at construction, and the events
-that matter most are constructed far from where the work arrived: in a streaq
-task minutes later, or in a consumer in another process. Both hops therefore
-carry origin explicitly, and this file holds them honest.
+that matter most are constructed far from where the work arrived: in a work
+item minutes later, or while handling another event. Both hops therefore carry
+origin explicitly, and this file holds them honest.
 
 Without this, every schedule, trigger, import and surface message produces
 events with a null origin -- and three catalog entries are origin-pinned, so
@@ -13,16 +13,10 @@ on every occurrence.
 
 from __future__ import annotations
 
-import json
-from uuid import uuid4
 
 import pytest
 
 from app.core.domain.events import DomainEvent
-from app.core.infrastructure.jobs.streaq_job_queue import (
-    SharedStreaqJobQueue,
-    _OpenClients,
-)
 from app.core.origin import (
     Origin,
     OriginKind,
@@ -32,18 +26,10 @@ from app.core.origin import (
     origin_scope,
     resolve_client_identity,
 )
-from app.core.request_context import bind_request_context
-from app.core.tests.unit.test_job_observability import _Worker
 
 
 class _Thing(DomainEvent):
     event_type: str = "thing.happened"
-
-
-def _connected_queue(worker: _Worker) -> SharedStreaqJobQueue:
-    queue = SharedStreaqJobQueue(lambda: worker)  # type: ignore[arg-type]
-    queue._clients = _OpenClients(primary=worker, lanes={})  # type: ignore[arg-type]
-    return queue
 
 
 # -- the contextvar itself ------------------------------------------------
@@ -75,38 +61,7 @@ def test_a_platform_the_origin_does_not_recognise_is_dropped_not_carried() -> No
     assert Origin(OriginKind.SURFACE, platform="slack").platform == "slack"
 
 
-# -- hop one: enqueue -> streaq task --------------------------------------
-
-
-async def test_enqueue_carries_origin_on_the_sidecar() -> None:
-    worker = _Worker()
-    queue = _connected_queue(worker)
-
-    with origin_scope(Origin(OriginKind.SURFACE, platform="slack")):
-        await queue.enqueue("process_thing", _job_id="job-1", thing_id="t1")
-
-    _, raw, _ = worker.redis.set_calls[0]
-    stored = json.loads(raw)
-    assert stored["origin"] == "SURFACE"
-    assert stored["origin_platform"] == "slack"
-
-
-async def test_enqueue_without_an_origin_adds_no_keys() -> None:
-    """Absent origin must stay absent rather than becoming a string 'None' that
-    then fails to parse on the other side.
-
-    A request context is bound only so a sidecar gets written at all -- with
-    nothing to inherit, `enqueue` skips the write entirely.
-    """
-    worker = _Worker()
-    queue = _connected_queue(worker)
-    with bind_request_context(request_id="request-1", correlation_id=uuid4()):
-        await queue.enqueue("process_thing", _job_id="job-2", thing_id="t2")
-
-    _, raw, _ = worker.redis.set_calls[0]
-    stored = json.loads(raw)
-    assert "origin" not in stored
-    assert "origin_platform" not in stored
+# -- hop one: a payload that carried origin rebuilds it ---------------------
 
 
 def test_the_job_side_rebuilds_what_enqueue_stored() -> None:

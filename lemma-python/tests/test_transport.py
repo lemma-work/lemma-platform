@@ -4,6 +4,7 @@ retry + error-mapping + timeout paths against fakes (no live backend, no sleeps)
 from __future__ import annotations
 
 import json
+import warnings
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,6 +14,7 @@ import pytest
 from lemma_sdk.errors import (
     LemmaAuthError,
     LemmaConnectionError,
+    LemmaDeprecationWarning,
     LemmaNotFoundError,
     LemmaRateLimitError,
     LemmaServerError,
@@ -521,6 +523,89 @@ def test_no_latest_cli_header_suggests_nothing(monkeypatch: pytest.MonkeyPatch):
     endpoint = FakeEndpoint([FakeResponse(200, parsed={"ok": True})])
     transport.call(endpoint)
     assert suggested_cli_version() is None
+
+
+# --- the server's deprecation notice ------------------------------------------
+
+
+@pytest.fixture
+def _fresh_deprecations(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("lemma_sdk.transport._warned_deprecations", set())
+
+
+def _deprecated(message: str, *, status: int = 200) -> FakeResponse:
+    return FakeResponse(
+        status,
+        parsed={"ok": 1},
+        content=b'{"message": "nope"}',
+        headers=httpx.Headers({"X-Lemma-Deprecation": message, "Deprecation": "true"}),
+    )
+
+
+def test_a_deprecation_header_warns_once_per_message(_fresh_deprecations: None):
+    """A loop calling a deprecated route must not print a warning per call;
+    a second, different deprecated use still gets its own."""
+    transport = make_transport()
+    endpoint = FakeEndpoint(
+        [_deprecated("a is deprecated: b"), _deprecated("a is deprecated: b")]
+        + [_deprecated("c is deprecated: d")]
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(3):
+            assert transport.call(endpoint) == {"ok": 1}
+
+    assert [(w.category, str(w.message)) for w in caught] == [
+        (LemmaDeprecationWarning, "a is deprecated: b"),
+        (LemmaDeprecationWarning, "c is deprecated: d"),
+    ]
+
+
+def test_a_deprecation_notice_on_a_raw_request_warns(
+    _fresh_deprecations: None, monkeypatch: pytest.MonkeyPatch
+):
+    transport = make_transport()
+    client = FakeHttpxClient(
+        [
+            FakeHttpxResponse(
+                200,
+                json_body={"ok": True},
+                headers={"x-lemma-deprecation": "x is deprecated: y"},
+            )
+        ]
+    )
+    _patch_httpx(transport, client, monkeypatch)
+
+    with pytest.warns(LemmaDeprecationWarning, match="x is deprecated: y"):
+        assert transport.request("GET", "/x") == {"ok": True}
+
+
+def test_a_deprecation_notice_never_changes_the_outcome(_fresh_deprecations: None):
+    """The call succeeded or failed on its own terms; the notice only adds a
+    warning. Headers of any shape, or none, are not an error."""
+    transport = make_transport()
+    odd_headers = [None, {}, SimpleNamespace(), httpx.Headers({"Deprecation": "true"})]
+    endpoint = FakeEndpoint(
+        [FakeResponse(200, parsed={"ok": 1}, headers=h) for h in odd_headers]  # type: ignore[arg-type]
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in odd_headers:
+            assert transport.call(endpoint) == {"ok": 1}
+    assert caught == []
+
+    # A refused call still raises its typed error, with the warning beside it.
+    failing = FakeEndpoint([_deprecated("e is deprecated: f", status=404)])
+    with pytest.warns(LemmaDeprecationWarning), pytest.raises(LemmaNotFoundError):
+        transport.call(failing)
+
+
+def test_the_deprecation_warning_is_a_user_warning():
+    """Python hides DeprecationWarning outside __main__; the code calling a
+    deprecated route is a pod function or an agent's script, which must see it."""
+    assert issubclass(LemmaDeprecationWarning, UserWarning)
+    assert not issubclass(LemmaDeprecationWarning, DeprecationWarning)
 
 
 # --- X-Lemma-Client ----------------------------------------------------------

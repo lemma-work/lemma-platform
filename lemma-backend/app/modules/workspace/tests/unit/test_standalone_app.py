@@ -7,8 +7,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from anyio import TASK_STATUS_IGNORED, sleep_forever
-from anyio.abc import TaskStatus
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -18,8 +16,26 @@ from app.standalone import EmbeddedApp, build_standalone_app  # noqa: E402
 standalone_app = importlib.import_module("standalone_app")
 
 
+def _fake_worker(monkeypatch, events: list[str]) -> None:
+    """The embedded work runtime, recorded: it starts after the API and stops first."""
+
+    @asynccontextmanager
+    async def worker_services(modules, **kwargs) -> AsyncIterator[None]:
+        assert kwargs == {"service_name": "lemma-api", "embedded": True}
+        assert modules
+        events.append("worker-started")
+        yield
+        events.append("worker-stopped")
+
+    monkeypatch.setattr(
+        "app.core.infrastructure.work.process.worker_services", worker_services
+    )
+
+
 @pytest.mark.asyncio
-async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) -> None:
+async def test_standalone_lifespan_starts_api_then_the_embedded_worker(
+    monkeypatch,
+) -> None:
     events: list[str] = []
 
     @asynccontextmanager
@@ -30,24 +46,8 @@ async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) 
         events.append("api-stopped")
 
     api_app = FastAPI(lifespan=api_lifespan)
-
     monkeypatch.setattr(standalone_app, "create_api_app", lambda: api_app)
-
-    class FakeWorker:
-        async def run_async(
-            self,
-            *,
-            task_status: TaskStatus[None] = TASK_STATUS_IGNORED,
-        ) -> None:
-            task_status.started()
-            await sleep_forever()
-
-    # The scheduler + worker assembly lives in app.standalone now (shared with
-    # the cloud standalone app), so patch it there. _prepare_embedded_worker
-    # takes the worker as an argument now.
-    monkeypatch.setattr(
-        "app.standalone._prepare_embedded_worker", lambda worker: FakeWorker()
-    )
+    _fake_worker(monkeypatch, events)
 
     app = standalone_app.create_standalone_app()
     assert app.state.embedded_worker is True
@@ -62,6 +62,8 @@ async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) 
     assert response.status_code == 404
     assert events == [
         "api-started",
+        "worker-started",
+        "worker-stopped",
         "api-stopped",
     ]
 
@@ -95,22 +97,9 @@ async def test_standalone_owns_mounted_app_lifespan(monkeypatch) -> None:
     async def ping() -> dict[str, str]:
         return {"status": "ok"}
 
-    class FakeWorker:
-        async def run_async(
-            self,
-            *,
-            task_status: TaskStatus[None] = TASK_STATUS_IGNORED,
-        ) -> None:
-            task_status.started()
-            await sleep_forever()
-
-    monkeypatch.setattr(
-        "app.standalone._prepare_embedded_worker", lambda worker: FakeWorker()
-    )
-
+    _fake_worker(monkeypatch, events)
     app = build_standalone_app(
         api_app,
-        object(),
         embedded_apps=(EmbeddedApp("/internal/manager", embedded_app),),
     )
 
@@ -126,6 +115,8 @@ async def test_standalone_owns_mounted_app_lifespan(monkeypatch) -> None:
     assert events == [
         "api-started",
         "embedded-started",
+        "worker-started",
+        "worker-stopped",
         "embedded-stopped",
         "api-stopped",
     ]

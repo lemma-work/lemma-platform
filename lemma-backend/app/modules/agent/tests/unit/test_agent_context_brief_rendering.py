@@ -11,21 +11,17 @@ import pytest
 
 from app.modules.agent.services import agent_self_brief as self_mod
 from app.modules.agent.services import brief_lines
+from app.modules.datastore.domain.datastore_entities import (
+    ColumnSchema,
+    DatastoreDataType,
+    ForeignKeySpec,
+)
 
 pytestmark = pytest.mark.unit
 
 
 def _column(name, type_, **kwargs):
-    return SimpleNamespace(
-        name=name,
-        type=type_,
-        required=kwargs.get("required", False),
-        unique=kwargs.get("unique", False),
-        system=kwargs.get("system", False),
-        auto=kwargs.get("auto", False),
-        description=kwargs.get("description"),
-        foreign_key=kwargs.get("foreign_key"),
-    )
+    return ColumnSchema(name=name, type=DatastoreDataType(type_), **kwargs)
 
 
 class TestCompactTableSchema:
@@ -91,7 +87,7 @@ class TestAColumnCarriesWhatAWriteNeeds:
 
     def test_a_foreign_key_names_what_it_points_at(self):
         spec = brief_lines.column_spec(
-            _column("pod_id", "UUID", foreign_key=SimpleNamespace(references="pods.id"))
+            _column("pod_id", "UUID", foreign_key=ForeignKeySpec(references="pods.id"))
         )
         assert "pods.id" in spec
 
@@ -123,17 +119,27 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
     SCHEDULED = {"started_by": "SCHEDULE", "schedule_name": "daily-invoices"}
 
     def test_a_scheduled_firing_is_told_nobody_is_watching(self):
-        framed = brief_lines.with_run_framing(
-            "BRIEF", conversation=SimpleNamespace(metadata=self.SCHEDULED)
-        )
+        framed = brief_lines.run_framing(SimpleNamespace(metadata=self.SCHEDULED))
         assert "daily-invoices" in framed
         assert "Assume nobody is watching" in framed
 
+    def test_the_run_says_where_it_was_asked_from_its_own_platform(self):
+        """The conversation was last heard on WhatsApp; this run was asked in
+        Lemma, and its framing must not say it arrived from WhatsApp."""
+        heard = SimpleNamespace(metadata={"surface_platform": "WHATSAPP"})
+
+        in_lemma = brief_lines.run_framing(heard, run_source="user_message")
+        on_whatsapp = brief_lines.run_framing(
+            heard, run_source="user_message", platform="WHATSAPP"
+        )
+
+        assert "whatsapp" not in in_lemma.lower()
+        assert "This arrived from whatsapp" in on_whatsapp
+
     def test_a_person_typing_into_a_scheduled_conversation_is_not_ignored(self):
         """``started_by`` stays on the conversation; a person may return to it."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="user_message",
         )
         assert "Assume nobody is watching" not in framed
@@ -148,9 +154,8 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         responded was told nothing had come from a person — so it would carry on
         as though unattended and file its answer away from them.
         """
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="approval_resume",
         )
         assert "Assume nobody is watching" not in framed
@@ -158,18 +163,16 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
 
     def test_an_approval_resume_says_so_outside_a_schedule_too(self):
         """Most approvals happen in an ordinary conversation."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata={}),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata={}),
             run_source="approval_resume",
         )
         assert "A person answered what you were waiting on" in framed
 
     def test_a_snooze_resume_is_a_timer_not_a_person(self):
         """The other resume: nobody pressed anything, a clock came due."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="wait_resume",
         )
         assert "Assume nobody is watching" in framed
@@ -181,23 +184,20 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         there, and claiming otherwise is the failure that costs somebody an
         answer. This is the shape that would have caught `approval_resume`.
         """
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+        framed = brief_lines.run_framing(
+            SimpleNamespace(metadata=self.SCHEDULED),
             run_source="some_future_human_action",
         )
         assert "Assume nobody is watching" not in framed
 
     def test_the_unattended_wording_does_not_claim_the_reply_vanishes(self):
         """Replies are persisted. Nobody reading it *now* is the honest claim."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF", conversation=SimpleNamespace(metadata=self.SCHEDULED)
-        )
+        framed = brief_lines.run_framing(SimpleNamespace(metadata=self.SCHEDULED))
         assert "still saved to this conversation" in framed
 
     def test_a_surface_run_is_told_where_the_person_is(self):
         conversation = SimpleNamespace(metadata={"surface_platform": "SLACK"})
-        framed = brief_lines.with_run_framing("BRIEF", conversation=conversation)
+        framed = brief_lines.run_framing(conversation, platform="SLACK")
         assert "arrived from slack" in framed
 
     def test_an_unmarked_run_is_told_its_budget_and_nothing_guessed_at(self):
@@ -210,9 +210,9 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         """
         conversation = SimpleNamespace(metadata={})
 
-        framing = brief_lines.with_run_framing("BRIEF", conversation=conversation)
+        framing = brief_lines.run_framing(conversation)
 
-        assert framing.startswith("BRIEF")
+        assert framing.startswith("## This run")
         assert "steps" in framing and "minutes" in framing
         # The number never travels alone. Stated bare, a ceiling reads as a
         # target and the run hurries to fit it; the limit is only there for a
@@ -229,17 +229,15 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
     def test_an_unattended_run_is_told_to_take_the_time_it_needs(self):
         conversation = SimpleNamespace(metadata={"started_by": "SCHEDULE"})
 
-        framing = brief_lines.with_run_framing(
-            "BRIEF", conversation=conversation, run_source="wait_resume"
-        )
+        framing = brief_lines.run_framing(conversation, run_source="wait_resume")
 
         assert "Take the time the work needs" in framing
         assert "A person is waiting" not in framing
 
     def test_a_conversation_with_no_metadata_at_all_is_safe(self):
-        framing = brief_lines.with_run_framing("BRIEF", conversation=SimpleNamespace())
+        framing = brief_lines.run_framing(SimpleNamespace())
 
-        assert framing.startswith("BRIEF")
+        assert framing.startswith("## This run")
         assert "nobody is watching" not in framing.lower()
 
 
@@ -294,3 +292,36 @@ class TestAScheduleReadsLikeAJob:
         """A paused job is not standing work, and acting on one is a mistake."""
         line = self_mod.schedule_line(self._summary(is_active=False))
         assert "(paused)" in line
+
+
+class TestAColumnSaysWhatItWillAccept:
+    """The brief dropped a TEXT column's length and an ENUM's values, and
+    nothing said a column called `check` needs quoting -- so the agent learned
+    each from a refused write or a SQL syntax error."""
+
+    def test_a_bounded_text_column_shows_its_length(self):
+        spec = brief_lines.column_spec(_column("title", "TEXT", max_length=500))
+        assert spec == "title:VARCHAR(500)"
+
+    def test_an_enum_lists_its_values(self):
+        spec = brief_lines.column_spec(
+            _column("status", "ENUM", options=["open", "held", "closed"])
+        )
+        assert spec == "status:ENUM[open|held|closed]"
+
+    def test_a_long_enum_is_cut_and_says_how_much(self):
+        spec = brief_lines.column_spec(
+            _column("code", "ENUM", options=[f"c{i}" for i in range(20)])
+        )
+        assert "…+8" in spec
+
+    def test_a_default_is_shown(self):
+        spec = brief_lines.column_spec(
+            _column("status", "ENUM", options=["open", "held"], default="open")
+        )
+        assert "default=open" in spec
+
+    def test_a_name_sql_cannot_read_unquoted_is_shown_quoted(self):
+        assert brief_lines.column_spec(_column("check", "TEXT")).startswith('"check":')
+        assert brief_lines.column_spec(_column("Order", "TEXT")).startswith('"Order":')
+        assert brief_lines.column_spec(_column("amount", "FLOAT")) == "amount:FLOAT"

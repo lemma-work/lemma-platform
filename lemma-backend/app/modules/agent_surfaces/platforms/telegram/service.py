@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
+from app.modules.agent_surfaces.domain.reply_targets import (
+    TelegramReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
+import hashlib
+import hmac
+
 from typing import Any
 
-import httpx
 from redis.exceptions import RedisError
 from pydantic_ai.tools import RunContext
 
@@ -25,27 +36,36 @@ from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
     resolve_attachment_name_and_mime,
 )
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
-    put_callback_token,
+    retry_keyboard,
+)
+from app.modules.agent_surfaces.platforms.telegram.choice_cards import (
+    render_choices,
+    render_decision,
 )
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TelegramSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
-from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
-from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.delivery import (
+    RetryPolicy,
+    note_partial_delivery,
+    with_retry,
+)
+from app.modules.agent_surfaces.platforms.rendering import chunk_text, utf16_length
 from app.modules.agent_surfaces.platforms.common import (
-    PLATFORM_TRANSPORT_ERRORS,
+    platform_transport_errors,
     assert_safe_api_base,
 )
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
     TelegramClient,
-    classify_telegram_error,
+    classify_telegram_send_error,
     telegram_retry_after,
 )
 from app.modules.agent_surfaces.platforms.telegram.message_experience import (
     acknowledge_interaction as acknowledge_telegram_interaction,
     end_progress as end_telegram_progress,
+    first_message_id,
     reply_parameters as telegram_reply_parameters,
     send_chunk,
     stream_progress as stream_telegram_progress,
@@ -53,8 +73,12 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
 from app.modules.agent_surfaces.platforms.telegram.models import (
     TelegramFileAttachment,
 )
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    TelegramCredentials,
+)
+from app.modules.agent_surfaces.caches import TELEGRAM_BOT_INFO, surface_caches
 from app.core.log.log import get_logger
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
@@ -63,30 +87,35 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 
 logger = get_logger(__name__)
 
-# Sentinel callback value meaning "the user wants to type a free-text answer";
-# the tap resolves to no answer so their next typed message resumes the run.
-_OTHER_CALLBACK_VALUE = "__lemma_other__"
 
-# Shared Redis cache: bot_token → getMe result dict (username + id), so mention
-# verification doesn't hit the Telegram API on every message and is shared across
-# replicas. Redis unavailable -> refetch (never fails).
-_bot_info_cache: RedisJsonCache | None = None
+def _bot_cache_key(bot_token: str) -> str:
+    """A keyed fingerprint of the token, never the token itself.
+
+    A Redis key is visible to SCAN, MONITOR, the slow log and every RDB dump,
+    and a bot token in one is a credential anyone with that access can use.
+    The token is the HMAC key, so the fingerprint identifies the bot without
+    being reversible to it -- the same scheme as the native receivers' leases.
+    """
+    return hmac.new(
+        bot_token.encode("utf-8"), b"telegram:getMe", hashlib.sha256
+    ).hexdigest()[:32]
 
 
 def _get_bot_info_cache() -> RedisJsonCache:
-    global _bot_info_cache
-    if _bot_info_cache is None or _bot_info_cache._redis_url != settings.redis_url:
-        _bot_info_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:telegram-bot",
-            ttl_seconds=3600,
-        )
-    return _bot_info_cache
+    """Bot → getMe result (username and id), shared across replicas so mention
+    checks do not ask Telegram on every message. Redis down -> refetch."""
+    return surface_caches.get(TELEGRAM_BOT_INFO)
 
 
 class TelegramPlatformService:
-    def __init__(self, credentials: dict[str, Any]):
-        self.credentials = credentials
+    def __init__(
+        self,
+        credentials: CredentialsLike,
+        *,
+        bot_info_cache: RedisJsonCache | None = None,
+    ):
+        self.credentials = TelegramCredentials.of(credentials)
+        self._bot_info_cache = bot_info_cache
         self._client = TelegramClient.from_credentials(credentials)
         self._bot_token = self._client._bot_token
         self._retry_policy = RetryPolicy()
@@ -96,9 +125,10 @@ class TelegramPlatformService:
         token = self._bot_token
         if not token:
             return None
-        cache = _get_bot_info_cache()
+        cache = self._bot_info_cache or _get_bot_info_cache()
+        cache_key = _bot_cache_key(token)
         try:
-            cached = await cache.get_json(token)
+            cached = await cache.get_json(cache_key)
         except RedisError, OSError, TimeoutError, ValueError:
             cached = None
         if cached:
@@ -108,7 +138,7 @@ class TelegramPlatformService:
             info = (result.get("result") or {}) if isinstance(result, dict) else {}
             if info:
                 try:
-                    await cache.set_json(token, info)
+                    await cache.set_json(cache_key, info)
                 except RedisError, OSError, TimeoutError, TypeError:
                     # Caching `getMe` saves a round-trip, nothing more; `info`
                     # is returned below whether or not the write lands.
@@ -150,7 +180,7 @@ class TelegramPlatformService:
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
         """Send an assistant reply, rendered safely as MarkdownV2.
 
         The message is rendered to MarkdownV2 and split under Telegram's 4096
@@ -158,30 +188,34 @@ class TelegramPlatformService:
         failures. If MarkdownV2 fails to parse (``can't parse entities``) the
         chunk is retried once as plain text so a formatting edge case never
         drops the user's reply.
+
+        Returns the id of the first message sent -- the one any keyboard rides
+        on -- when Telegram named it.
         """
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         thread_id = self._message_thread_id(event)
         reply_parameters = telegram_reply_parameters(event)
         reply_markup = (metadata or {}).get("reply_markup")
         retry_action = (metadata or {}).get("retry_action") is True
         if retry_action and not isinstance(reply_markup, dict):
-            retry_token = await put_callback_token({"action": "retry"})
-            reply_markup = {
-                "inline_keyboard": [
-                    [{"text": "Try again", "callback_data": retry_token}]
-                ]
-            }
+            reply_markup = await retry_keyboard()
 
         # `chunk_text("")` is `[]`, and the `or [message or ""]` this replaces
         # made that one empty chunk: a blank bubble, and for an approval one
         # with no words and no buttons.
-        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT)
+        raw_chunks = chunk_text(
+            message, limit=TELEGRAM_MESSAGE_LIMIT, length=utf16_length
+        )
         if not raw_chunks:
             logger.warning(
                 "agent_surfaces.telegram.empty_message_not_sent",
                 has_reply_markup=isinstance(reply_markup, dict),
             )
-            return
+            return None
+        sent: list[dict[str, object]] = []
         for index, raw_chunk in enumerate(raw_chunks):
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id is not None:
@@ -192,11 +226,12 @@ class TelegramPlatformService:
             if index == 0 and isinstance(reply_markup, dict):
                 payload["reply_markup"] = reply_markup
             try:
-                await self._send_chunk(payload, raw_chunk)
-            except PLATFORM_TRANSPORT_ERRORS:
+                sent.append(await self._send_chunk(payload, raw_chunk))
+            except platform_transport_errors():
                 if index:
                     # Earlier chunks are already in the chat. The caller only
                     # sees "not delivered", so say what actually happened.
+                    note_partial_delivery()
                     logger.warning(
                         "agent_surfaces.telegram.message_partially_delivered.degraded",
                         sent_chunks=index,
@@ -204,6 +239,7 @@ class TelegramPlatformService:
                         exc_info=True,
                     )
                 raise
+        return first_message_id(sent)
 
     async def _render_choices(
         self,
@@ -211,74 +247,9 @@ class TelegramPlatformService:
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool | PartDelivery:
-        """Render ask_user questions as native inline keyboards.
-
-        One message per question; each option is a button whose ``callback_data``
-        is a short token resolving to ``{callback_id, header, value}`` (Telegram
-        caps callback_data at 64 bytes). A trailing "Other" button lets the user
-        type a free-text answer instead. Returns ``False`` (caller falls back to
-        formatted text) when there is no chat target or any question is
-        multi-select (not expressible as a single-tap keyboard).
-        """
+        """Ask the questions as inline keyboards; see ``choice_cards``."""
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        if not chat_id:
-            return False
-        if any(q.multi_select for q in question_plan.questions):
-            return False
-        for index, question in enumerate(question_plan.questions):
-            rows: list[list[dict[str, str]]] = []
-            for option in question.options:
-                token = await put_callback_token(
-                    {
-                        "callback_id": question_plan.callback_id,
-                        "header": question.header,
-                        "value": option.label,
-                    }
-                )
-                text = f"⭐ {option.label}" if option.recommended else option.label
-                rows.append([{"text": text[:64], "callback_data": token}])
-            other_token = await put_callback_token(
-                {
-                    "callback_id": question_plan.callback_id,
-                    "header": question.header,
-                    "value": _OTHER_CALLBACK_VALUE,
-                }
-            )
-            rows.append(
-                [{"text": "✏️ Other (type a reply)", "callback_data": other_token}]
-            )
-            try:
-                await self.send_message(
-                    event,
-                    outbound.question_with_option_notes(question),
-                    metadata={"reply_markup": {"inline_keyboard": rows}},
-                )
-            except PLATFORM_TRANSPORT_ERRORS:
-                if not index:
-                    # Nothing went out: the caller's fallback sends every
-                    # question as text, and none of them is a duplicate.
-                    raise
-                # The earlier questions are already in the chat with buttons.
-                # Raising made the caller resend all of them as text, so the
-                # first question appeared twice. Ask only what is left.
-                logger.warning(
-                    "agent_surfaces.telegram.questions_partially_delivered.degraded",
-                    sent_questions=index,
-                    total_questions=len(question_plan.questions),
-                    exc_info=True,
-                )
-                await self.send_message(
-                    event,
-                    question_plan.model_copy(
-                        update={"questions": question_plan.questions[index:]}
-                    ).to_plain_text(),
-                )
-                # Delivered, but not all of it as controls: reporting True says
-                # every question is tappable, and nothing then accepts a typed
-                # answer to the ones that arrived as words.
-                return PartDelivery.DEGRADED
-        return True
+        return await render_choices(self.send_message, event, question_plan)
 
     async def _render_decision(
         self,
@@ -286,39 +257,14 @@ class TelegramPlatformService:
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        """Render a request_approval prompt as an inline keyboard.
-
-        One message with Approve/Deny (and optionally Approve-for-session)
-        buttons; each button's ``callback_data`` is a short token resolving to
-        ``{callback_id, decision}`` (Telegram caps callback_data at 64 bytes).
-        """
+        """Ask for the decision as an inline keyboard; see ``choice_cards``."""
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        if not chat_id:
-            return False
-        rows: list[list[dict[str, str]]] = []
-        for button in approval_plan.buttons:
-            token = await put_callback_token(
-                {
-                    "callback_id": approval_plan.callback_id,
-                    "decision": button.decision,
-                }
-            )
-            rows.append([{"text": button.label[:64], "callback_data": token}])
-        body_lines = [approval_plan.title]
-        if approval_plan.reason:
-            body_lines.append(approval_plan.reason)
-        if approval_plan.action_summary:
-            body_lines.append(f"Action: {approval_plan.action_summary}")
-        await self.send_message(
-            event,
-            "\n\n".join(body_lines),
-            metadata={"reply_markup": {"inline_keyboard": rows}},
-        )
-        return True
+        return await render_decision(self.send_message, event, approval_plan)
 
-    async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:
-        await send_chunk(self._call_with_retry, payload, raw_text)
+    async def _send_chunk(
+        self, payload: dict[str, Any], raw_text: str
+    ) -> dict[str, object]:
+        return await send_chunk(self._call_with_retry, payload, raw_text)
 
     async def acknowledge_interaction(
         self,
@@ -342,13 +288,13 @@ class TelegramPlatformService:
         return await with_retry(
             lambda: self._client.call(method, payload),
             policy=self._retry_policy,
-            classify=classify_telegram_error,
+            classify=classify_telegram_send_error,
             retry_after=telegram_retry_after,
         )
 
     @staticmethod
     def _message_thread_id(event: ParsedInboundSurfaceEvent) -> int | None:
-        raw = event.reply_target.get("message_thread_id")
+        raw = reply_target_as(event, TelegramReplyTarget).message_thread_id
         if raw in (None, "", "0", 0):
             raw = event.metadata.get("message_thread_id")
         if raw in (None, "", "0", 0):
@@ -371,7 +317,10 @@ class TelegramPlatformService:
         name it.
         """
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         reply_parameters = telegram_reply_parameters(event)
 
         payload: dict[str, Any] = {
@@ -460,7 +409,10 @@ class TelegramPlatformService:
         self, event: ParsedInboundSurfaceEvent, caption: str | None
     ) -> dict[str, Any] | None:
         """The form fields an upload carries, or ``None`` when there is no chat."""
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         if not chat_id:
             return None
         data: dict[str, Any] = {"chat_id": chat_id}
@@ -477,7 +429,10 @@ class TelegramPlatformService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         del metadata
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        chat_id = (
+            reply_target_as(event, TelegramReplyTarget).chat_id
+            or event.external_channel_id
+        )
         payload: dict[str, Any] = {"chat_id": chat_id, "action": "typing"}
         thread_id = self._message_thread_id(event)
         if thread_id is not None:
@@ -492,8 +447,8 @@ class TelegramPlatformService:
         self,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        progress_handle: ProgressHandle | None = None,
+    ) -> ProgressHandle | None:
         return await stream_telegram_progress(
             self._call_with_retry,
             event,
@@ -505,7 +460,7 @@ class TelegramPlatformService:
     async def end_progress(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         await end_telegram_progress(self._client, event, progress_handle)
 
@@ -523,7 +478,7 @@ class TelegramPlatformService:
         file_id = str(attachment.get("file_id") or attachment.get("id") or "").strip()
         if not self._bot_token or not file_id:
             return None
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with outbound_http(60.0) as client:
             metadata_response = await client.post(
                 f"{self._client.base_url}/getFile",
                 json={"file_id": file_id},

@@ -4,15 +4,25 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.errors import (
+    OrganizationDefaultConflictError,
+    RuntimeProfileConflictError,
+    RuntimeProfileNameTakenError,
+    RuntimeProfileNotFoundError,
+    RuntimeProfileUnreadableError,
+)
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
+    RuntimeCredentials,
     RuntimeProfileStatus,
     reveal_credentials,
 )
@@ -20,9 +30,37 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentRuntimeProfileModel,
 )
 from app.modules.connectors.contracts import SecretEncryptionPort
+from app.modules.identity.contracts.profiles import user_profile
 
 
 logger = get_logger(__name__)
+
+#: The index that keeps at most one organization default (``runtime_models``).
+_ORGANIZATION_DEFAULT_INDEX = "uq_agent_runtime_profile_org_default"
+
+_CREDENTIALS: TypeAdapter[RuntimeCredentials | None] = TypeAdapter(
+    RuntimeCredentials | None
+)
+
+
+def _error_locations(error: ValidationError) -> list[str]:
+    return [".".join(str(part) for part in item["loc"]) for item in error.errors()]
+
+
+def _log_unreadable(
+    instance: AgentRuntimeProfileModel, error: ValidationError, *, organization_id: UUID
+) -> None:
+    # Where it failed, never what it read: a validation error's message and
+    # traceback quote the input, and for this row the input can be a
+    # decrypted key.
+    logger.warning(
+        "agent.runtime_profile.unreadable.skipped",
+        profile_id=str(instance.id),
+        organization_id=str(organization_id),
+        error_type=type(error).__name__,
+        error_locations=_error_locations(error),
+    )
+
 
 # Rows written for the retired local daemon still carry its per-tool protocols
 # (CODEX_APP_SERVER, CLAUDE_CODE, …). They can never execute again, and
@@ -58,9 +96,29 @@ class AgentRuntimeProfileRepository:
         return None
 
     def _to_entity(self, instance: AgentRuntimeProfileModel) -> AgentRuntimeProfile:
-        data = instance.to_entity().model_dump(mode="json")
-        data["credentials"] = self.encryption.decrypt_json(instance.credentials)
-        return AgentRuntimeProfile.model_validate(data)
+        # The row is validated before the decrypted key is anywhere near it, so
+        # a row that fails validation fails with nothing secret in its error.
+        # The key is then checked on its own and attached.
+        entity = AgentRuntimeProfile.model_validate(
+            instance.to_entity().model_dump(mode="json", exclude={"credentials"})
+        )
+        decrypted = self.encryption.decrypt_json(instance.credentials)
+        credentials = (
+            _CREDENTIALS.validate_python(decrypted) if decrypted is not None else None
+        )
+        return entity.model_copy(update={"credentials": credentials})
+
+    def _readable(self, instance: AgentRuntimeProfileModel) -> AgentRuntimeProfile:
+        """One row as an entity, or the typed refusal when it no longer validates.
+
+        For reads that name a single profile. The listing skips such a row
+        instead (`get_visible`), because there one row must not cost the rest.
+        """
+        try:
+            return self._to_entity(instance)
+        except ValidationError as error:
+            _log_unreadable(instance, error, organization_id=instance.organization_id)
+            raise RuntimeProfileUnreadableError() from None
 
     def _apply_entity(
         self,
@@ -97,6 +155,10 @@ class AgentRuntimeProfileRepository:
     def _to_model(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfileModel:
         return self._apply_entity(
             AgentRuntimeProfileModel(
+                # The id the caller built the entity with is the row's id: one
+                # assigned here instead would leave the caller holding an id
+                # that names nothing.
+                id=UUID(entity.id),
                 organization_id=entity.organization_id,
                 user_id=entity.user_id,
                 harness_id=entity.harness_id,
@@ -113,26 +175,45 @@ class AgentRuntimeProfileRepository:
     async def create(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfile:
         instance = self._to_model(entity)
         self.session.add(instance)
-        await self._flush_unique(entity.name)
+        await self._flush_unique(entity.name, profile_id=None)
         return self._to_entity(instance)
 
-    async def _flush_unique(self, name: str) -> None:
-        """Flush, mapping a name collision to the controller's 409."""
-        from sqlalchemy.exc import IntegrityError
-
+    async def _flush_unique(self, name: str, *, profile_id: str | None) -> None:
+        """Flush, mapping a name collision and a lost race to their 409s."""
         try:
             await self.session.flush()
         except IntegrityError as exc:
-            raise RuntimeError(
-                f"Runtime profile named {name!r} already exists"
-            ) from exc
+            if _ORGANIZATION_DEFAULT_INDEX in str(exc.orig):
+                raise OrganizationDefaultConflictError() from exc
+            raise RuntimeProfileNameTakenError(name) from exc
+        except StaleDataError as exc:
+            # The UPDATE matched no row at the version this edit read: another
+            # write committed in between.
+            logger.warning(
+                "agent.runtime_profile.concurrent_edit.refused",
+                profile_id=profile_id,
+            )
+            raise RuntimeProfileConflictError() from exc
 
     async def update(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfile:
-        instance = await self._load(profile_id=entity.id)
+        """Write ``entity`` over its row, unless the row moved since it was read.
+
+        ``entity.version`` is the version its read saw. A row already past it
+        is refused here; one that moves between this check and the flush is
+        refused by the mapper's ``version_id_col``. Either way the caller gets
+        `RuntimeProfileConflictError`, never a silent overwrite.
+        """
+        instance = await self._load(profile_id=entity.id, include_disabled=True)
         if instance is None:
-            raise RuntimeError(f"Runtime profile {entity.id!r} no longer exists")
+            raise RuntimeProfileNotFoundError()
+        if instance.version != entity.version:
+            logger.warning(
+                "agent.runtime_profile.concurrent_edit.refused",
+                profile_id=entity.id,
+            )
+            raise RuntimeProfileConflictError()
         self._apply_entity(instance, entity)
-        await self._flush_unique(entity.name)
+        await self._flush_unique(entity.name, profile_id=entity.id)
         return self._to_entity(instance)
 
     async def set_status(
@@ -156,8 +237,8 @@ class AgentRuntimeProfileRepository:
         instance.status = status.value
         # Restoring can collide: another profile may have taken this name while
         # this one sat archived.
-        await self._flush_unique(instance.name)
-        return self._to_entity(instance)
+        await self._flush_unique(instance.name, profile_id=profile_id)
+        return self._readable(instance)
 
     async def _load(
         self,
@@ -200,6 +281,28 @@ class AgentRuntimeProfileRepository:
         result = await self.session.execute(stmt.limit(1))
         return result.scalar_one_or_none()
 
+    async def get_personal_by_id(
+        self, *, profile_id: str, organization_id: UUID
+    ) -> AgentRuntimeProfile | None:
+        """A member's active personal profile, whoever is asking.
+
+        Only for saying *whose* it is when someone else's turn reaches it; it
+        must never be what a run resolves to.
+        """
+        instance = await self._load(
+            profile_id=profile_id, organization_id=organization_id
+        )
+        if instance is None or instance.scope != RuntimeProfileScope.PERSONAL.value:
+            return None
+        return self._readable(instance)
+
+    async def owner_first_name(self, user_id: UUID) -> str | None:
+        """The name a teammate knows this profile's owner by, when there is one."""
+        profile = await user_profile(self.session, user_id)
+        if profile is None:
+            return None
+        return (profile.first_name or "").strip() or None
+
     async def get_visible(
         self,
         *,
@@ -235,13 +338,7 @@ class AgentRuntimeProfileRepository:
             try:
                 profiles.append(self._to_entity(instance))
             except ValidationError as error:
-                logger.warning(
-                    "agent.runtime_profile.unreadable.skipped",
-                    profile_id=str(instance.id),
-                    organization_id=str(organization_id),
-                    error=str(error),
-                    exc_info=True,
-                )
+                _log_unreadable(instance, error, organization_id=organization_id)
         return profiles
 
     async def get_visible_by_id(
@@ -258,4 +355,4 @@ class AgentRuntimeProfileRepository:
             user_id=user_id,
             include_disabled=include_disabled,
         )
-        return self._to_entity(instance) if instance else None
+        return self._readable(instance) if instance else None

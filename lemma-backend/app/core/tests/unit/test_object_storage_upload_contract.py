@@ -27,6 +27,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from app.modules.test_support import source_tree
 
 #: The ``app`` package itself: this file sits at ``app/core/tests/unit/``.
 APP_ROOT = Path(__file__).resolve().parents[3]
@@ -61,11 +62,11 @@ def _literal_int(node: ast.AST) -> int | None:
 def _upload_calls() -> list[tuple[Path, int, ast.Call]]:
     """Every ``*.put_async(...)`` call in the app, with its location."""
     found: list[tuple[Path, int, ast.Call]] = []
-    for path in sorted(APP_ROOT.rglob("*.py")):
+    for path in source_tree.python_files(APP_ROOT):
         if "/tests/" in path.as_posix():
             continue
         try:
-            tree = ast.parse(path.read_text())
+            tree = source_tree.tree(path)
         except SyntaxError:  # pragma: no cover - a parse failure is its own test
             continue
         for node in ast.walk(tree):

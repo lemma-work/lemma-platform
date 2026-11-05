@@ -24,9 +24,11 @@ its own entry and its own TTL, for the reason above.
 from __future__ import annotations
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.authorization.context import ResourceType
+from pydantic import BaseModel, ValidationError
+
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.core.config import settings
@@ -43,13 +45,15 @@ from app.modules.agent.infrastructure.context_brief_repository import (
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
+from app.modules.agent.services.granted_resources_brief import GrantedResourcesBrief
 from app.modules.agent.services.brief_lines import (
     MAX_RESOURCES as _MAX_RESOURCES,
+    call_brief,
     more_note,
     table_line,
     top_level_file_entries,
+    run_framing,
     user_lines,
-    with_run_framing,
 )
 from app.modules.agent.services.agent_self_brief import (
     AgentSelfBriefBuilder,
@@ -62,6 +66,7 @@ from app.modules.datastore.contracts.agent_tools import (
 )
 from app.modules.function.contracts import agent_tools as function_tools
 from app.modules.pod.contracts.directory import list_pod_members
+from app.modules.agent.services.askable_pods_brief import askable_pod_lines
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.services.brief_seams import (
     AuthorizationFactory,
@@ -107,10 +112,39 @@ def _get_brief_cache() -> RedisJsonCache | None:
     if _brief_cache is None or _brief_cache._ttl_seconds != ttl:
         _brief_cache = RedisJsonCache(
             redis_url=settings.redis_url,
-            key_prefix="agent:context-brief",
+            # Versioned: an entry is now the two halves below, and an entry
+            # in the old one-string shape must read as a miss, not a brief.
+            key_prefix="agent:context-brief:v2",
             ttl_seconds=ttl,
         )
     return _brief_cache
+
+
+class _Inventory(BaseModel):
+    """What the cache holds: the brief, split by how often each half changes.
+
+    ``files`` is the top-level file listing, which ordinary work changes -- an
+    upload, a report the agent saved -- so it goes in the run's context part
+    rather than the system prompt. Everything in ``stable`` changes only when
+    somebody reshapes the pod.
+    """
+
+    stable: str
+    files: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ContextBrief:
+    """The runtime brief in its two halves.
+
+    ``stable`` is appended to the system prompt and holds for the conversation;
+    ``per_run`` -- what started this run, the file listing, memory -- changes
+    between runs, and rides in the run's context part instead. Kept apart
+    because a changed byte in the system prompt re-reads the whole history.
+    """
+
+    stable: str
+    per_run: str
 
 
 def _cache_suffix(key: _BriefKey) -> str:
@@ -145,12 +179,22 @@ async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
 
 
 def _member_line(member) -> str:
-    """One person, with the id `message_user` actually takes."""
+    """One person, with the id `channel_post` actually takes."""
     who = member.name or member.email or "(unnamed)"
     email = f" <{member.email}>" if member.name and member.email else ""
     role = f" — {member.role}" if member.role else ""
     you = " — this is the person you are talking to" if member.is_you else ""
     return f"- {who}{email}{role}{you} (to: {member.to})"
+
+
+def _decoded(raw: str | None) -> _Inventory | None:
+    """A cache entry, or None when there is none or it is not this shape."""
+    if raw is None:
+        return None
+    try:
+        return _Inventory.model_validate_json(raw)
+    except ValidationError:
+        return None
 
 
 class AgentContextBriefBuilder:
@@ -193,14 +237,15 @@ class AgentContextBriefBuilder:
         pod_id: UUID,
         toolsets: Collection[AgentToolset] = (),
         run_source: str | None = None,
-    ) -> str:
+        platform: str | None = None,
+    ) -> ContextBrief:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
         # thing the conversation contributes, so it is resolved into the key.
         is_default = agent.kind is AgentKind.POD_DEFAULT
         with run_phase("context_brief") as span:
             key: _BriefKey = (agent.id, pod_id, user_id, is_default)
-            cached = await _get_cached_brief(key)
+            cached = _decoded(await _get_cached_brief(key))
             span.set_attribute("lemma.cache_hit", cached is not None)
             if cached is None:
                 cached = await self._build_uncached(
@@ -212,41 +257,55 @@ class AgentContextBriefBuilder:
                 )
             # Outside the cache, and for the same reason memory is: this varies
             # per conversation, and the cache is deliberately not keyed by one.
-            # Ahead of memory only so the volatile-most section still ends the
-            # brief.
-            brief = with_run_framing(
-                cached, conversation=conversation, run_source=run_source
+            memory = await self._memory_section(
+                agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
             )
-            return await self._with_memory(
-                brief, agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
+            asks: list[str] = []
+            if is_default:
+                # Per conversation too: which other pods this thread may ask,
+                # and how, depends on who reads it and whether anyone is here.
+                asks = await askable_pod_lines(
+                    self.uow_factory,
+                    self._repo_factory(),
+                    conversation=conversation,
+                    pod_id=pod_id,
+                    user_id=user_id,
+                )
+            per_run = (
+                run_framing(conversation, run_source=run_source, platform=platform),
+                call_brief(conversation),
+                "\n".join(asks),
+                cached.files,
+                memory,
+            )
+            return ContextBrief(
+                stable=cached.stable,
+                per_run="\n\n".join(part.strip() for part in per_run if part.strip()),
             )
 
-    async def _with_memory(
+    async def _memory_section(
         self,
-        inventory: str,
         *,
         agent: Agent,
         pod_id: UUID,
         user_id: UUID,
         toolsets: Collection[AgentToolset],
     ) -> str:
-        """Append the memory section, which is cached and invalidated apart.
+        """The memory section, which is cached and invalidated apart.
 
         Outside the inventory cache above, not inside it: memory changes when
         this agent writes a fact mid-conversation, and baking it into a 60s
         entry is exactly how an agent ends up unable to recall what it just
-        learned. Appended last for the same reason -- the volatile part belongs
-        after the stable one, so everything before it stays cacheable.
+        learned.
 
         Gated on the same predicate the prompt fragment uses: an agent with no
         way to reach a pod file is never shown folders it cannot write to.
         """
         if not memory_is_active(toolsets):
-            return inventory
-        section = await AgentMemoryBriefBuilder(self.uow_factory).build(
+            return ""
+        return await AgentMemoryBriefBuilder(self.uow_factory).build(
             agent=agent, pod_id=pod_id, user_id=user_id
         )
-        return f"{inventory}\n{section}" if section else inventory
 
     async def _build_uncached(
         self,
@@ -256,7 +315,7 @@ class AgentContextBriefBuilder:
         is_default: bool,
         user_id: UUID,
         pod_id: UUID,
-    ) -> str:
+    ) -> _Inventory:
         # uow 1: plain identity reads (no authorization context needed).
         async with self.uow_factory() as uow:
             repo = self._repo_factory()(uow)
@@ -287,18 +346,22 @@ class AgentContextBriefBuilder:
             )
         )
 
+        files: list[str] = []
         if is_default:
             lines.extend(await self._pod_inventory(pod_id=pod_id, user_id=user_id))
+            files = await self._file_lines(pod_id=pod_id, user_id=user_id)
         else:
             lines.extend(
-                await self._granted_resources(
-                    agent=agent, pod_id=pod_id, user_id=user_id
-                )
+                await GrantedResourcesBrief(
+                    self.uow_factory,
+                    repository=self._repo_factory(),
+                    authorization=self._authz_factory(),
+                ).lines(agent=agent, pod_id=pod_id, user_id=user_id)
             )
 
-        brief = "\n".join(lines)
-        await _set_cached_brief(key, brief)
-        return brief
+        inventory = _Inventory(stable="\n".join(lines), files="\n".join(files))
+        await _set_cached_brief(key, inventory.model_dump_json())
+        return inventory
 
     async def _pod_inventory(self, *, pod_id: UUID, user_id: UUID) -> list[str]:
         """Everything in this pod, one section per kind of resource.
@@ -313,7 +376,6 @@ class AgentContextBriefBuilder:
         lines.extend(await self._people_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._workflow_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._function_lines(pod_id=pod_id))
-        lines.extend(await self._file_lines(pod_id=pod_id, user_id=user_id))
         return lines
 
     async def _table_lines(self, *, pod_id: UUID, user_id: UUID) -> list[str]:
@@ -366,7 +428,7 @@ class AgentContextBriefBuilder:
 
         Absent from the brief entirely until now, which is why the messaging
         fragment has to open by telling the agent to go and find out who it is
-        talking about: `message_user` takes an id, and an agent told "ask Priya"
+        talking about: `channel_post` takes an id, and an agent told "ask Priya"
         had no way to turn that into one without a tool call.
 
         The contract runs under this user's own authority, so an agent can never
@@ -388,7 +450,7 @@ class AgentContextBriefBuilder:
         lines = [
             "\n## People here",
             (
-                "- Pass the `to` value verbatim to `message_user`; a name will "
+                "- Pass the `to` value verbatim to `channel_post`; a name will "
                 "not resolve."
             ),
             *(_member_line(member) for member in directory.members),
@@ -477,89 +539,3 @@ class AgentContextBriefBuilder:
             if entries
             else []
         )
-
-    async def _granted_resources(
-        self, *, agent: Agent, pod_id: UUID, user_id: UUID
-    ) -> list[str]:
-        # uow 1: grants + name resolution (plain queries).
-        async with self.uow_factory() as uow:
-            repo = self._repo_factory()(uow)
-            rows = await repo.get_agent_grants(pod_id=pod_id, agent_id=agent.id)
-            if not rows:
-                return [
-                    "\n## Granted Resources",
-                    (
-                        "- (none) — you have no resource grants yet. If a tool returns "
-                        "a permission error (403), call request_approval so the user "
-                        "can grant access or run it for you."
-                    ),
-                ]
-
-            refs: list[tuple[ResourceType, UUID]] = []
-            perms_by_ref: dict[tuple[str, UUID], set[str]] = {}
-            for resource_type, resource_id, permission_id in rows:
-                try:
-                    ref_type = ResourceType(resource_type)
-                except ValueError:
-                    continue
-                refs.append((ref_type, resource_id))
-                perms_by_ref.setdefault((resource_type, resource_id), set()).add(
-                    permission_id
-                )
-            names = await repo.resolve_resource_names(pod_id=pod_id, refs=refs)
-
-        # Granted table schemas (resolve names -> column summaries).
-        granted_table_names = {
-            names.get((ResourceType.DATASTORE_TABLE, rid))
-            for (rtype, rid) in {(r[0], r[1]) for r in rows}
-            if rtype == "datastore_table"
-        }
-        granted_table_names.discard(None)
-
-        # uow 2: table schema summaries (datastore read needs ctx). Render the
-        # rows (lazy column access) before the uow closes.
-        table_summaries: dict[str, str] = {}
-        if granted_table_names:
-            async with self.uow_factory() as uow:
-                ctx = await self._authz_factory()(uow).build_user_context(
-                    user_id=user_id, pod_id=pod_id
-                )
-                token = set_current_context(ctx)
-                try:
-                    tables, _ = await build_table_service(uow).list_tables(
-                        pod_id, ctx, limit=_MAX_TABLES
-                    )
-                    for table in tables:
-                        if table.table_name in granted_table_names:
-                            table_summaries[table.table_name] = table_line(table)
-                finally:
-                    reset_current_context(token)
-
-        lines = [
-            "\n## Granted Resources",
-            (
-                "Resource grants below; the invoking user's permissions and "
-                "approval gates also apply. Describe tables for column descriptions."
-            ),
-        ]
-        granted = list(perms_by_ref.items())
-        # Omitted grants must not be mistaken for absent access.
-        lines.extend(
-            more_note(
-                min(len(granted), _MAX_RESOURCES), len(granted), "granted resources"
-            )
-        )
-        for (resource_type, resource_id), perms in granted[:_MAX_RESOURCES]:
-            try:
-                ref_type = ResourceType(resource_type)
-            except ValueError:
-                continue
-            name = names.get((ref_type, resource_id))
-            if name is None:
-                continue
-            perm_list = ", ".join(sorted(perms))
-            if resource_type == "datastore_table" and name in table_summaries:
-                lines.append(f"{table_summaries[name]}  (grants: {perm_list})")
-            else:
-                lines.append(f"- {resource_type}: {name}  (grants: {perm_list})")
-        return lines

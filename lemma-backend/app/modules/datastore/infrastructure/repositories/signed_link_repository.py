@@ -5,7 +5,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, insert, literal, select, tuple_, update
+from sqlalchemy import (
+    String,
+    delete,
+    func,
+    insert,
+    literal,
+    select,
+    true,
+    tuple_,
+    update,
+)
 
 from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.permissions import Permissions
@@ -24,6 +34,16 @@ from app.modules.datastore.infrastructure.models.datastore_models import (
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
 )
+
+
+def _minted_by_or_administered(ctx: Context):
+    """Links the caller minted -- or, for a person who administers the pod,
+    every link in it. A public link hands a file to anyone holding it; the
+    people who answer for the pod must be able to see and withdraw all of them,
+    not only their own, or a departed member's links outlive their access."""
+    if ctx.has_permission(Permissions.POD_MEMBER_MANAGE) and not ctx.is_delegated:
+        return true()
+    return DatastoreSignedLink.created_by_user_id == ctx.user_id
 
 
 class SignedLinkRepository(DatastoreRepositoryBase):
@@ -55,6 +75,9 @@ class SignedLinkRepository(DatastoreRepositoryBase):
             literal(entity.code).label("code"),
             literal(entity.pod_id).label("pod_id"),
             literal(entity.created_by_user_id).label("created_by_user_id"),
+            literal(entity.minted_by_workload, type_=String(80)).label(
+                "minted_by_workload"
+            ),
             literal(entity.path).label("path"),
             literal(entity.object_key).label("object_key"),
             literal(entity.content_type).label("content_type"),
@@ -76,6 +99,7 @@ class SignedLinkRepository(DatastoreRepositoryBase):
                     "code",
                     "pod_id",
                     "created_by_user_id",
+                    "minted_by_workload",
                     "path",
                     "object_key",
                     "content_type",
@@ -185,7 +209,7 @@ class SignedLinkRepository(DatastoreRepositoryBase):
         """
         stmt = select(DatastoreSignedLink).where(
             DatastoreSignedLink.pod_id == pod_id,
-            DatastoreSignedLink.created_by_user_id == ctx.user_id,
+            _minted_by_or_administered(ctx),
             self._readable_file_exists(ctx, pod_id),
         )
         if not include_dead:
@@ -219,7 +243,7 @@ class SignedLinkRepository(DatastoreRepositoryBase):
                 .where(
                     DatastoreSignedLink.code == code,
                     DatastoreSignedLink.pod_id == pod_id,
-                    DatastoreSignedLink.created_by_user_id == ctx.user_id,
+                    _minted_by_or_administered(ctx),
                     self._readable_file_exists(ctx, pod_id),
                 )
                 .limit(1)

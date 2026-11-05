@@ -9,6 +9,7 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.connector_plan import ConnectorPlan
     from ..models.plan_step_response import PlanStepResponse
     from ..models.variable_spec_response import VariableSpecResponse
 
@@ -22,6 +23,10 @@ class ImportPlanResponse:
     Attributes:
         format_version (int):
         bundle_name (None | str | Unset):
+        connectors (list[ConnectorPlan] | Unset): The bundle's pod connectors, each with the importing org's
+            installations of its catalog connector, whether one can be created, and (SHARED) your own accounts you could
+            share. NEEDS_INSTALLATION and CONFLICT block the apply until resolved; NEEDS_ACCOUNT imports, waiting for an
+            account.
         has_destructive_steps (bool | Unset):  Default: False.
         steps (list[PlanStepResponse] | Unset):
         variables (list[VariableSpecResponse] | Unset):
@@ -30,6 +35,7 @@ class ImportPlanResponse:
 
     format_version: int
     bundle_name: None | str | Unset = UNSET
+    connectors: list[ConnectorPlan] | Unset = UNSET
     has_destructive_steps: bool | Unset = False
     steps: list[PlanStepResponse] | Unset = UNSET
     variables: list[VariableSpecResponse] | Unset = UNSET
@@ -44,6 +50,13 @@ class ImportPlanResponse:
             bundle_name = UNSET
         else:
             bundle_name = self.bundle_name
+
+        connectors: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.connectors, Unset):
+            connectors = []
+            for connectors_item_data in self.connectors:
+                connectors_item = connectors_item_data.to_dict()
+                connectors.append(connectors_item)
 
         has_destructive_steps = self.has_destructive_steps
 
@@ -74,6 +87,8 @@ class ImportPlanResponse:
         )
         if bundle_name is not UNSET:
             field_dict["bundle_name"] = bundle_name
+        if connectors is not UNSET:
+            field_dict["connectors"] = connectors
         if has_destructive_steps is not UNSET:
             field_dict["has_destructive_steps"] = has_destructive_steps
         if steps is not UNSET:
@@ -87,6 +102,7 @@ class ImportPlanResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.connector_plan import ConnectorPlan
         from ..models.plan_step_response import PlanStepResponse
         from ..models.variable_spec_response import VariableSpecResponse
 
@@ -101,6 +117,15 @@ class ImportPlanResponse:
             return cast(None | str | Unset, data)
 
         bundle_name = _parse_bundle_name(d.pop("bundle_name", UNSET))
+
+        _connectors = d.pop("connectors", UNSET)
+        connectors: list[ConnectorPlan] | Unset = UNSET
+        if _connectors is not UNSET:
+            connectors = []
+            for connectors_item_data in _connectors:
+                connectors_item = ConnectorPlan.from_dict(connectors_item_data)
+
+                connectors.append(connectors_item)
 
         has_destructive_steps = d.pop("has_destructive_steps", UNSET)
 
@@ -127,6 +152,7 @@ class ImportPlanResponse:
         import_plan_response = cls(
             format_version=format_version,
             bundle_name=bundle_name,
+            connectors=connectors,
             has_destructive_steps=has_destructive_steps,
             steps=steps,
             variables=variables,

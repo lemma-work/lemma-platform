@@ -4,6 +4,7 @@ import type { UserResponse } from "lemma-sdk";
 import {
     changes, displayName, draftOf, hasChanges, isTimezone, localTimezone, problems, timezones,
 } from "../src/session/profile-edit.ts";
+import { needsTimezoneSync } from "../src/session/first-profile.ts";
 
 function user(over: Partial<UserResponse> = {}): UserResponse {
     return {
@@ -17,18 +18,9 @@ test("a profile with nothing filled in is a form with nothing in it, not undefin
 
     assert.deepEqual(draft, {
         first_name: "", last_name: "", timezone: "", country: "",
-        mobile_number: "", telegram_username: "", date_of_birth: "",
+        mobile_number: "", date_of_birth: "",
     });
     assert.deepEqual(draftOf(null), draftOf(undefined));
-});
-
-test("a telegram handle is held without its @, however it was typed", () => {
-    // It is shown and typed with one and stored without; normalising on the way
-    // in is what stops "@sam" and "sam" reading as a change every time.
-    assert.equal(draftOf(user({ telegram_username: "@sam" })).telegram_username, "sam");
-    const before = draftOf(user({ telegram_username: "sam" }));
-    assert.equal(hasChanges(before, { ...before, telegram_username: "@sam" }), false);
-    assert.equal(hasChanges(before, { ...before, telegram_username: "@@sam" }), false);
 });
 
 test("only what changed is sent", () => {
@@ -49,6 +41,12 @@ test("a field emptied on purpose is sent as null, not left out", () => {
     const after = { ...before, mobile_number: "" };
 
     assert.deepEqual(changes(before, after), { mobile_number: null });
+});
+
+test("clearing a timezone stays distinct from a timezone never set", () => {
+    const before = draftOf(user({ timezone: "Europe/Berlin" }));
+    assert.deepEqual(changes(before, { ...before, timezone: "" }), { timezone: "" });
+    assert.equal(needsTimezoneSync(user({ timezone: "" }), { dialogOpen: false }), false);
 });
 
 test("whitespace is not an edit", () => {

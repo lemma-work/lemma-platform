@@ -168,6 +168,7 @@ export function Transcript({
                             outsiders={outsiders}
                             dockedId={dockedId}
                             runEnded={runEnded}
+                            resumesOnAnswer={state === "waiting"}
                             onOpenApp={onOpenApp}
                             onOpenFile={onOpenFile}
                             onOpenTable={onOpenTable}

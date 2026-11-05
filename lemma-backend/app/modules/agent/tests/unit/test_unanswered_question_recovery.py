@@ -186,3 +186,57 @@ class TestWhenTheConversationIsStillWaiting:
         answers = " ".join(str(part.content) for part in _tool_returns(history))
         assert "window" in answers
         assert "did not answer" not in answers
+
+
+class TestWhenTheyTypeWhileTheAnswerIsStillComing:
+    """Approved, and the person types while the approved tool runs: their
+    message is stored before the return the tool writes when it finishes. It
+    did not end the call's turn, so it must not hide the return."""
+
+    def _messages(self) -> list[Message]:
+        return [
+            _msg(1, MessageRole.USER, MessageKind.TEXT, text="delete the old rows"),
+            _msg(
+                2,
+                MessageRole.ASSISTANT,
+                MessageKind.TOOL_CALL,
+                tool_name="request_approval",
+                tool_call_id="a1",
+                tool_args={"tool_name": "pod_write_record", "args": {}},
+            ),
+            Message.create(
+                conversation_id=CONVERSATION_ID,
+                sequence=3,
+                agent_run_id=RUN_ID,
+                role=MessageRole.USER,
+                kind=MessageKind.TEXT,
+                text="and then the new ones",
+                metadata={"during_active_run": True},
+            ),
+            _msg(
+                4,
+                MessageRole.TOOL,
+                MessageKind.TOOL_RETURN,
+                tool_name="request_approval",
+                tool_call_id="a1",
+                tool_result={"success": True, "executed": True},
+            ),
+        ]
+
+    def test_the_approved_result_is_paired_with_its_call(self) -> None:
+        history, _prompt = history_and_prompt(self._messages())
+
+        (returned,) = _tool_returns(history)
+        assert returned.tool_call_id == "a1"
+        assert returned.content == {"success": True, "executed": True}
+
+    def test_their_message_follows_the_result(self) -> None:
+        history, _prompt = history_and_prompt(self._messages())
+
+        kinds = [
+            type(part).__name__
+            for message in history
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+        ]
+        assert kinds[-2:] == ["ToolReturnPart", "UserPromptPart"]

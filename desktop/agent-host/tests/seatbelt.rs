@@ -409,7 +409,9 @@ async fn the_exec_server_runs_confined() {
             folders: sandbox.home.join("no-folders.json"),
             roots: sandbox.home.join("agent-host-data/conversation-roots.json"),
             target: uuid::Uuid::from_u128(1),
+            bundled_cli: Vec::new(),
         },
+        None,
     );
     relay.set_enabled(true);
     let opened = op(
@@ -497,7 +499,9 @@ async fn the_cli_lemma_names_is_first_on_path_under_the_profile() {
             folders: sandbox.home.join("no-folders.json"),
             roots: sandbox.home.join("agent-host-data/conversation-roots.json"),
             target: uuid::Uuid::from_u128(1),
+            bundled_cli: Vec::new(),
         },
+        None,
     );
     relay.set_enabled(true);
     op(

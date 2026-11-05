@@ -1,9 +1,11 @@
+from dataclasses import dataclass
 from enum import Enum
 from html import unescape
 from html.parser import HTMLParser
 from typing import List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
+import httpx
 from pydantic import BaseModel
 
 from app.core.config import reveal_secret, settings
@@ -48,6 +50,23 @@ class SearchResult(BaseModel):
     duration: Optional[str] = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderAnswer:
+    """What one provider returned, and anything the caller should be told."""
+
+    results: List[SearchResult]
+    note: Optional[str] = None
+
+
+class SearchRefused(RuntimeError):
+    """The provider declined to answer -- a bot check, an overload -- rather
+    than answering "nothing".
+
+    Its own type because the two lead to opposite decisions: an empty answer
+    says the query found nothing, a refusal says nothing was looked at.
+    """
+
+
 class AvailableSearchEngines(str, Enum):
     DUCKDUCKGO = "duckduckgo"
     SEARXNG = "searxng"
@@ -84,6 +103,15 @@ class BaseSearchClient:
     # lacks is how a "videos" query quietly becomes a page of blog posts.
     supported_verticals: frozenset[SearchVertical] = frozenset({SearchVertical.WEB})
 
+    def __init__(self, http: httpx.AsyncClient | None = None) -> None:
+        # Injectable so a provider's refusal can be tested with the response
+        # it actually sends, rather than by replacing the provider.
+        self._http = http
+
+    @property
+    def http(self) -> httpx.AsyncClient:
+        return self._http or get_shared_http_client()
+
     def is_available(self) -> bool:
         return True
 
@@ -97,7 +125,7 @@ class BaseSearchClient:
         *,
         vertical: SearchVertical = SearchVertical.WEB,
         freshness: Optional[SearchFreshness] = None,
-    ) -> List[SearchResult]:
+    ) -> ProviderAnswer:
         raise NotImplementedError
 
 
@@ -176,6 +204,22 @@ class DuckDuckGoHTMLParser(HTMLParser):
         return url
 
 
+#: What DuckDuckGo's bot check carries and its results page does not.
+_DUCKDUCKGO_CHALLENGE_MARKERS = ("anomaly-modal", "anomaly.js", "challenge-form")
+
+
+def _is_duckduckgo_challenge(response: httpx.Response) -> bool:
+    """A refusal rather than an empty answer.
+
+    A real results page is a 200; the bot check has been a 202, and on a 200
+    it carries its own markup. A no-results page has neither.
+    """
+    if response.status_code != 200:
+        return True
+    body = response.text
+    return any(marker in body for marker in _DUCKDUCKGO_CHALLENGE_MARKERS)
+
+
 class DuckDuckGoSearchClient(BaseSearchClient):
     source = "duckduckgo"
     # Web only: this scrapes the HTML endpoint, and the vertical pages are not
@@ -189,9 +233,9 @@ class DuckDuckGoSearchClient(BaseSearchClient):
         *,
         vertical: SearchVertical = SearchVertical.WEB,
         freshness: Optional[SearchFreshness] = None,
-    ) -> List[SearchResult]:
+    ) -> ProviderAnswer:
         del vertical, freshness  # unsupported; the caller was told already
-        response = await get_shared_http_client().post(
+        response = await self.http.post(
             "https://html.duckduckgo.com/html/",
             data={"q": query},
             headers={"User-Agent": "lemma-local-web-search/1.0"},
@@ -201,15 +245,41 @@ class DuckDuckGoSearchClient(BaseSearchClient):
 
         parser = DuckDuckGoHTMLParser()
         parser.feed(response.text)
-        return [
-            SearchResult(
-                title=item["title"],
-                url=item["url"],
-                snippet=item.get("snippet", ""),
-                source=self.source,
+        if not parser.results and _is_duckduckgo_challenge(response):
+            # The bot check comes back as a 2xx with no result markup, so
+            # `raise_for_status` passes it and it parsed as "nothing exists".
+            raise SearchRefused(
+                "DuckDuckGo refused this search with a bot check "
+                f"(HTTP {response.status_code}), so nothing was looked at. "
+                "Wait a little and search again, or ask the person to "
+                "configure a search provider with an API key."
             )
-            for item in parser.results[:max_results]
-        ]
+        return ProviderAnswer(
+            [
+                SearchResult(
+                    title=item["title"],
+                    url=item["url"],
+                    snippet=item.get("snippet", ""),
+                    source=self.source,
+                )
+                for item in parser.results[:max_results]
+            ]
+        )
+
+
+def _unresponsive_engines(payload: dict[str, object]) -> list[str]:
+    """SearXNG's own account of the engines that failed, as `name (reason)`."""
+    entries = payload.get("unresponsive_engines")
+    if not isinstance(entries, list):
+        return []
+    named: list[str] = []
+    for entry in entries:
+        # JSON from SearXNG: each entry is `[engine, reason]`.
+        parts = [str(part) for part in entry] if isinstance(entry, list) else []
+        if parts:
+            reason = f" ({parts[1]})" if len(parts) > 1 and parts[1] else ""
+            named.append(f"{parts[0]}{reason}")
+    return named
 
 
 class SearXNGSearchClient(BaseSearchClient):
@@ -237,7 +307,8 @@ class SearXNGSearchClient(BaseSearchClient):
         SearchFreshness.YEAR: "year",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, http: httpx.AsyncClient | None = None) -> None:
+        super().__init__(http)
         self.base_url = (settings.searxng_url or "").strip().rstrip("/")
 
     def is_available(self) -> bool:
@@ -250,7 +321,7 @@ class SearXNGSearchClient(BaseSearchClient):
         *,
         vertical: SearchVertical = SearchVertical.WEB,
         freshness: Optional[SearchFreshness] = None,
-    ) -> List[SearchResult]:
+    ) -> ProviderAnswer:
         if not self.base_url:
             raise ValueError("SEARXNG_URL is not set")
         params: dict[str, object] = {
@@ -261,33 +332,51 @@ class SearXNGSearchClient(BaseSearchClient):
         }
         if freshness is not None:
             params["time_range"] = self._TIME_RANGE[freshness]
-        response = await get_shared_http_client().get(
+        response = await self.http.get(
             f"{self.base_url}/search",
             params=params,
             headers={"Accept": "application/json"},
             timeout=15,
         )
         response.raise_for_status()
-        raw_results = response.json().get("results", [])
+        payload = response.json()
+        raw_results = payload.get("results", [])
+        unresponsive = _unresponsive_engines(payload)
+        if not raw_results and unresponsive:
+            raise SearchRefused(
+                "SearXNG found nothing because the engines behind it did not "
+                f"answer ({', '.join(unresponsive)}), so nothing was looked "
+                "at. Search again in a little while."
+            )
         sorted_results = sorted(
             raw_results,
             key=lambda item: float(item.get("score", 0) or 0),
             reverse=True,
         )
-        return [
-            SearchResult(
-                title=str(item.get("title", "")),
-                url=str(item.get("url", "")),
-                snippet=str(item.get("content", "")),
-                source=self.source,
-                score=float(item["score"]) if item.get("score") is not None else None,
-                published_at=item.get("publishedDate"),
-                thumbnail_url=item.get("thumbnail") or item.get("thumbnail_src"),
-                image_url=item.get("img_src"),
-                duration=item.get("length"),
-            )
-            for item in sorted_results[:max_results]
-        ]
+        return ProviderAnswer(
+            [
+                SearchResult(
+                    title=str(item.get("title", "")),
+                    url=str(item.get("url", "")),
+                    snippet=str(item.get("content", "")),
+                    source=self.source,
+                    score=(
+                        float(item["score"]) if item.get("score") is not None else None
+                    ),
+                    published_at=item.get("publishedDate"),
+                    thumbnail_url=item.get("thumbnail") or item.get("thumbnail_src"),
+                    image_url=item.get("img_src"),
+                    duration=item.get("length"),
+                )
+                for item in sorted_results[:max_results]
+            ],
+            note=(
+                "Some search engines did not answer "
+                f"({', '.join(unresponsive)}); these results may be incomplete."
+                if unresponsive
+                else None
+            ),
+        )
 
 
 class BraveSearchClient(BaseSearchClient):
@@ -316,7 +405,8 @@ class BraveSearchClient(BaseSearchClient):
         SearchFreshness.YEAR: "py",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, http: httpx.AsyncClient | None = None) -> None:
+        super().__init__(http)
         self.api_key = (reveal_secret(settings.brave_search_api_key) or "").strip()
 
     def is_available(self) -> bool:
@@ -329,7 +419,7 @@ class BraveSearchClient(BaseSearchClient):
         *,
         vertical: SearchVertical = SearchVertical.WEB,
         freshness: Optional[SearchFreshness] = None,
-    ) -> List[SearchResult]:
+    ) -> ProviderAnswer:
         if not self.api_key:
             raise ValueError("BRAVE_SEARCH_API_KEY is not set")
         params: dict[str, object] = {
@@ -338,7 +428,7 @@ class BraveSearchClient(BaseSearchClient):
         }
         if freshness is not None:
             params["freshness"] = self._FRESHNESS[freshness]
-        response = await get_shared_http_client().get(
+        response = await self.http.get(
             self._ENDPOINTS[vertical],
             params=params,
             headers={
@@ -355,7 +445,9 @@ class BraveSearchClient(BaseSearchClient):
             if vertical is SearchVertical.WEB
             else payload.get("results", [])
         )
-        return [self._to_result(item, vertical) for item in raw_results[:max_results]]
+        return ProviderAnswer(
+            [self._to_result(item, vertical) for item in raw_results[:max_results]]
+        )
 
     def _to_result(self, item: dict, vertical: SearchVertical) -> SearchResult:
         thumbnail = item.get("thumbnail")
@@ -476,10 +568,11 @@ class SearchClient:
         effective_query = apply_domain_operators(
             query, include_domains=include_domains, exclude_domains=exclude_domains
         )
-        results = await client.search(
+        answer = await client.search(
             effective_query,
             max_results,
             vertical=effective_vertical,
             freshness=freshness,
         )
-        return results, note
+        notes = [text for text in (note, answer.note) if text]
+        return answer.results, " ".join(notes) or None

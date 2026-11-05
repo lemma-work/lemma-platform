@@ -21,7 +21,6 @@ export type UserResponse = {
     last_name?: (string | null);
     mobile_number?: (string | null);
     mobile_verified_at?: (string | null);
-    telegram_username?: (string | null);
     timezone?: (string | null);
     updated_at: string;
 };

@@ -14,6 +14,7 @@ from ..models.schedule_type import ScheduleType
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.listening_response import ListeningResponse
     from ..models.schedule_detail_response_config import ScheduleDetailResponseConfig
     from ..models.schedule_detail_response_filter_output_schema_type_0 import (
         ScheduleDetailResponseFilterOutputSchemaType0,
@@ -28,7 +29,6 @@ class ScheduleDetailResponse:
     """Schedule detail response.
 
     Attributes:
-        account_id (None | UUID):
         agent_id (None | UUID):
         config (ScheduleDetailResponseConfig):
         connector_trigger_id (None | str):
@@ -47,6 +47,7 @@ class ScheduleDetailResponse:
         user_id (UUID):
         visibility (str):
         workflow_id (None | UUID):
+        account_id (None | Unset | UUID): Deprecated and always null; see `pod_connector`.
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
@@ -56,10 +57,19 @@ class ScheduleDetailResponse:
         last_fire_status (None | ScheduleFireStatus | Unset):
         last_fired_at (datetime.datetime | None | Unset):
         last_run_id (None | str | Unset):
+        listening (ListeningResponse | None | Unset): For a schedule on an MCP server's event: whether it is still
+            hearing from the server. Absent for every other schedule.
+        next_fire_at (datetime.datetime | None | Unset): TIME schedules: the next instant it fires, in UTC. Absent while
+            paused, after a one-time schedule has fired, and for other types.
+        next_fire_at_local (None | str | Unset): `next_fire_at` read in the schedule's `config.timezone` (UTC when it
+            sets none), as an ISO 8601 time with its offset.
+        paused_reason (None | str | Unset): Why the platform paused this schedule: `fire_cap` (it fired more than its
+            daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system
+            reason. Absent while it runs, or when a person paused it. Reactivating clears it.
+        pod_connector (None | str | Unset): The pod connector it listens through, by slug.
         workflow_name (None | str | Unset):
     """
 
-    account_id: None | UUID
     agent_id: None | UUID
     config: ScheduleDetailResponseConfig
     connector_trigger_id: None | str
@@ -77,6 +87,7 @@ class ScheduleDetailResponse:
     user_id: UUID
     visibility: str
     workflow_id: None | UUID
+    account_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
     consecutive_failures: int | Unset = 0
@@ -86,19 +97,19 @@ class ScheduleDetailResponse:
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
     last_fired_at: datetime.datetime | None | Unset = UNSET
     last_run_id: None | str | Unset = UNSET
+    listening: ListeningResponse | None | Unset = UNSET
+    next_fire_at: datetime.datetime | None | Unset = UNSET
+    next_fire_at_local: None | str | Unset = UNSET
+    paused_reason: None | str | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.listening_response import ListeningResponse
         from ..models.schedule_detail_response_filter_output_schema_type_0 import (
             ScheduleDetailResponseFilterOutputSchemaType0,
         )
-
-        account_id: None | str
-        if isinstance(self.account_id, UUID):
-            account_id = str(self.account_id)
-        else:
-            account_id = self.account_id
 
         agent_id: None | str
         if isinstance(self.agent_id, UUID):
@@ -155,6 +166,14 @@ class ScheduleDetailResponse:
         else:
             workflow_id = self.workflow_id
 
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
+
         agent_name: None | str | Unset
         if isinstance(self.agent_name, Unset):
             agent_name = UNSET
@@ -203,6 +222,40 @@ class ScheduleDetailResponse:
         else:
             last_run_id = self.last_run_id
 
+        listening: dict[str, Any] | None | Unset
+        if isinstance(self.listening, Unset):
+            listening = UNSET
+        elif isinstance(self.listening, ListeningResponse):
+            listening = self.listening.to_dict()
+        else:
+            listening = self.listening
+
+        next_fire_at: None | str | Unset
+        if isinstance(self.next_fire_at, Unset):
+            next_fire_at = UNSET
+        elif isinstance(self.next_fire_at, datetime.datetime):
+            next_fire_at = self.next_fire_at.isoformat()
+        else:
+            next_fire_at = self.next_fire_at
+
+        next_fire_at_local: None | str | Unset
+        if isinstance(self.next_fire_at_local, Unset):
+            next_fire_at_local = UNSET
+        else:
+            next_fire_at_local = self.next_fire_at_local
+
+        paused_reason: None | str | Unset
+        if isinstance(self.paused_reason, Unset):
+            paused_reason = UNSET
+        else:
+            paused_reason = self.paused_reason
+
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
+
         workflow_name: None | str | Unset
         if isinstance(self.workflow_name, Unset):
             workflow_name = UNSET
@@ -213,7 +266,6 @@ class ScheduleDetailResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "account_id": account_id,
                 "agent_id": agent_id,
                 "config": config,
                 "connector_trigger_id": connector_trigger_id,
@@ -233,6 +285,8 @@ class ScheduleDetailResponse:
                 "workflow_id": workflow_id,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if agent_name is not UNSET:
             field_dict["agent_name"] = agent_name
         if allowed_actions is not UNSET:
@@ -251,6 +305,16 @@ class ScheduleDetailResponse:
             field_dict["last_fired_at"] = last_fired_at
         if last_run_id is not UNSET:
             field_dict["last_run_id"] = last_run_id
+        if listening is not UNSET:
+            field_dict["listening"] = listening
+        if next_fire_at is not UNSET:
+            field_dict["next_fire_at"] = next_fire_at
+        if next_fire_at_local is not UNSET:
+            field_dict["next_fire_at_local"] = next_fire_at_local
+        if paused_reason is not UNSET:
+            field_dict["paused_reason"] = paused_reason
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
         if workflow_name is not UNSET:
             field_dict["workflow_name"] = workflow_name
 
@@ -258,6 +322,7 @@ class ScheduleDetailResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.listening_response import ListeningResponse
         from ..models.schedule_detail_response_config import (
             ScheduleDetailResponseConfig,
         )
@@ -266,21 +331,6 @@ class ScheduleDetailResponse:
         )
 
         d = dict(src_dict)
-
-        def _parse_account_id(data: object) -> None | UUID:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                account_id_type_0 = UUID(data)
-
-                return account_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | UUID, data)
-
-        account_id = _parse_account_id(d.pop("account_id"))
 
         def _parse_agent_id(data: object) -> None | UUID:
             if data is None:
@@ -391,6 +441,23 @@ class ScheduleDetailResponse:
 
         workflow_id = _parse_workflow_id(d.pop("workflow_id"))
 
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
+
         def _parse_agent_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -467,6 +534,69 @@ class ScheduleDetailResponse:
 
         last_run_id = _parse_last_run_id(d.pop("last_run_id", UNSET))
 
+        def _parse_listening(data: object) -> ListeningResponse | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                listening_type_0 = ListeningResponse.from_dict(data)
+
+                return listening_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(ListeningResponse | None | Unset, data)
+
+        listening = _parse_listening(d.pop("listening", UNSET))
+
+        def _parse_next_fire_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                next_fire_at_type_0 = isoparse(data)
+
+                return next_fire_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        next_fire_at = _parse_next_fire_at(d.pop("next_fire_at", UNSET))
+
+        def _parse_next_fire_at_local(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        next_fire_at_local = _parse_next_fire_at_local(
+            d.pop("next_fire_at_local", UNSET)
+        )
+
+        def _parse_paused_reason(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        paused_reason = _parse_paused_reason(d.pop("paused_reason", UNSET))
+
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
+
         def _parse_workflow_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -477,7 +607,6 @@ class ScheduleDetailResponse:
         workflow_name = _parse_workflow_name(d.pop("workflow_name", UNSET))
 
         schedule_detail_response = cls(
-            account_id=account_id,
             agent_id=agent_id,
             config=config,
             connector_trigger_id=connector_trigger_id,
@@ -495,6 +624,7 @@ class ScheduleDetailResponse:
             user_id=user_id,
             visibility=visibility,
             workflow_id=workflow_id,
+            account_id=account_id,
             agent_name=agent_name,
             allowed_actions=allowed_actions,
             consecutive_failures=consecutive_failures,
@@ -504,6 +634,11 @@ class ScheduleDetailResponse:
             last_fire_status=last_fire_status,
             last_fired_at=last_fired_at,
             last_run_id=last_run_id,
+            listening=listening,
+            next_fire_at=next_fire_at,
+            next_fire_at_local=next_fire_at_local,
+            paused_reason=paused_reason,
+            pod_connector=pod_connector,
             workflow_name=workflow_name,
         )
 

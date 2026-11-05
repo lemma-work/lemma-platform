@@ -22,14 +22,9 @@ async def web_search(
     Use it for current information, news, and finding online assets. Query with
     specific keywords rather than questions.
     """
-    try:
-        return await web_search_internal(ctx.deps, request)
-    except Exception as e:
-        logger.warning("agent.web_search.failed.degraded", exc_info=True)
-        return WebSearchResponse(
-            success=False,
-            error=f"Web search failed: {e}",
-        )
+    # No handler here: `search_web` turns every failure into a result with its
+    # reason, so one wrapped around it only ever caught what it already had.
+    return await web_search_internal(ctx.deps, request)
 
 
 async def web_fetch(
@@ -47,8 +42,10 @@ async def web_fetch(
     Then work with the files: `exec_command` to grep or read them, and
     `view_image` for a screenshot. Both take the workspace path you were given.
     `pod_view_document_pages` takes a path *in the pod*, so it only works on a
-    captured PDF after you have uploaded it. This is the right way to read
-    anything longer than a search snippet.
+    captured PDF after you have uploaded it. If you have no `exec_command`,
+    each page's text comes back in its `content` instead, clipped to a budget.
+    JSON and plain-text URLs are saved as they came. This is the right way to
+    read anything longer than a search snippet.
     """
     try:
         return await web_fetch_internal(ctx.deps, request)

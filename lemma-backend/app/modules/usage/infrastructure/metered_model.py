@@ -29,8 +29,8 @@ from app.modules.usage.domain.errors import (
 )
 from app.modules.usage.infrastructure.provider_retries import (
     MAX_PROVIDER_ATTEMPTS,
-    PROVIDER_ERRORS,
     is_harness_owned_drop,
+    provider_errors,
     retry_delay,
     confirmed_rejection,
 )
@@ -100,7 +100,7 @@ class MeteredModel(WrapperModel):
                     if response.state == "complete":
                         dispatch.usage = response.usage
                     return response
-            except PROVIDER_ERRORS as exc:
+            except provider_errors() as exc:
                 if dispatch is None or dispatch.provider_error is not exc:
                     raise
                 await _retry_or_raise(exc, attempt)
@@ -133,7 +133,7 @@ class MeteredModel(WrapperModel):
                     if stream.get().state == "complete":
                         dispatch.usage = stream.usage
                 return
-            except PROVIDER_ERRORS as exc:
+            except provider_errors() as exc:
                 # Once the caller has the stream, only the harness can replace its
                 # partial output and resume history without repeating tool effects.
                 #
@@ -199,7 +199,7 @@ class MeteredModel(WrapperModel):
         dispatch = Dispatch(effective, request_id, occurred_at, parameters)
         try:
             yield dispatch
-        except PROVIDER_ERRORS as exc:
+        except provider_errors() as exc:
             dispatch.provider_error = exc
             dispatch.rejected = confirmed_rejection(exc)
             raise

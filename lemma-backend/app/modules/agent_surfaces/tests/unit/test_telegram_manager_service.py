@@ -6,11 +6,11 @@ from unittest.mock import ANY, AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from redis.asyncio import Redis
+import fakeredis
 from sqlalchemy.exc import IntegrityError
 
-from app.core.config import settings
 from app.core.domain.errors import DomainError
+from app.modules.agent_surfaces.domain.credentials import TelegramCredentials
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfaceCredentialMode,
@@ -38,7 +38,7 @@ from app.modules.agent_surfaces.platforms.telegram.client import TelegramApiErro
 pytestmark = pytest.mark.unit
 
 
-async def _telegram_cannot_be_asked(credentials: dict[str, str]) -> str | None:
+async def _telegram_cannot_be_asked(credentials: TelegramCredentials) -> str | None:
     """The lookup these tests inject: nothing here dials Telegram.
 
     "Could not be asked" is the branch that falls back to the configured
@@ -234,7 +234,7 @@ async def test_launch_url_names_the_bot_telegram_reports_not_the_configured_one(
     renamed in BotFather, or left behind by a rotated token — and then the link
     opens nothing, halfway through somebody making a bot."""
 
-    async def _telegram_says(credentials: dict[str, str]) -> str | None:
+    async def _telegram_says(credentials: TelegramCredentials) -> str | None:
         return "the_real_manager_bot"
 
     service = _service(_Store(), bot_username_lookup=_telegram_says)
@@ -333,9 +333,11 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
         setup_id=setup.setup_id,
         telegram_user_id=77,
     )
-    account_id = uuid4()
+    pod_connector_slug = "telegram-surface-bot"
     surface_id = uuid4()
-    service._persist_managed_bot = AsyncMock(return_value=(account_id, surface_id))
+    service._persist_managed_bot = AsyncMock(
+        return_value=(pod_connector_slug, surface_id)
+    )
     service._configure_managed_bot = AsyncMock()
 
     async def _call(method, payload):
@@ -359,7 +361,7 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
     saved = await store.get(setup.setup_id)
     assert saved is not None
     assert saved.status is TelegramManagedBotSetupStatus.COMPLETE
-    assert saved.account_id == account_id
+    assert saved.pod_connector_slug == pod_connector_slug
     assert saved.surface_id == surface_id
     assert saved.bot_username == "surface_bot"
     service._persist_managed_bot.assert_awaited_once()
@@ -430,7 +432,7 @@ async def test_concurrent_created_updates_provision_once_and_finish_complete():
             }
         }
     )
-    account_id = uuid4()
+    pod_connector_slug = "telegram-surface-bot"
     surface_id = uuid4()
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -439,7 +441,7 @@ async def test_concurrent_created_updates_provision_once_and_finish_complete():
         del kwargs
         entered.set()
         await release.wait()
-        return account_id, surface_id
+        return pod_connector_slug, surface_id
 
     service._persist_managed_bot = AsyncMock(side_effect=_persist)
     service._configure_managed_bot = AsyncMock()
@@ -489,9 +491,11 @@ async def test_transient_failures_can_replay_same_bot():
             }
         }
     )
-    account_id = uuid4()
+    pod_connector_slug = "telegram-surface-bot"
     surface_id = uuid4()
-    service._persist_managed_bot = AsyncMock(return_value=(account_id, surface_id))
+    service._persist_managed_bot = AsyncMock(
+        return_value=(pod_connector_slug, surface_id)
+    )
     service._configure_managed_bot = AsyncMock()
     service._client.call = AsyncMock(
         side_effect=TelegramApiError(
@@ -537,7 +541,9 @@ async def test_transient_failures_can_replay_same_bot():
     assert interrupted.status is TelegramManagedBotSetupStatus.PROVISIONING
     assert 21 not in store.processed_updates
 
-    service._persist_managed_bot = AsyncMock(return_value=(account_id, surface_id))
+    service._persist_managed_bot = AsyncMock(
+        return_value=(pod_connector_slug, surface_id)
+    )
     await service.handle_update(update)
 
     completed = await store.get(setup.setup_id)
@@ -630,85 +636,78 @@ async def test_target_is_reserved_while_setup_is_active():
 
 @pytest.mark.asyncio
 async def test_redis_store_enforces_atomic_state_and_claims():
-    store = TelegramManagedBotSetupStore(ttl_seconds=60)
+    # In-memory, with Lua: the claims are scripts, and a stand-in that did not
+    # run them would prove only itself.
+    store = TelegramManagedBotSetupStore(
+        redis=fakeredis.FakeAsyncRedis(decode_responses=True),
+        ttl_seconds=60,
+    )
     service = _service(store)  # type: ignore[arg-type]
     setup = await _start(service)
     telegram_user_id = setup.request_id + 3_000_000_000
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
 
-    try:
-        with pytest.raises(TelegramManagedBotSetupAlreadyInProgressError):
-            await _start(service, pod_id=setup.pod_id)
-        assert await store.get(setup.setup_id) is not None
-        reserved = await store.get_by_target(setup.pod_id, setup.surface_name)
-        assert reserved is not None
-        assert reserved.setup_id == setup.setup_id
-        assert await store.bind_telegram_user(
+    with pytest.raises(TelegramManagedBotSetupAlreadyInProgressError):
+        await _start(service, pod_id=setup.pod_id)
+    assert await store.get(setup.setup_id) is not None
+    reserved = await store.get_by_target(setup.pod_id, setup.surface_name)
+    assert reserved is not None
+    assert reserved.setup_id == setup.setup_id
+    assert await store.bind_telegram_user(
+        setup_id=setup.setup_id,
+        telegram_user_id=telegram_user_id,
+    )
+    setup.telegram_user_id = telegram_user_id
+    setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
+    assert await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.PENDING},
+    )
+    assert not await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.PENDING},
+    )
+
+    assert (
+        await store.claim_provisioning(
             setup_id=setup.setup_id,
-            telegram_user_id=telegram_user_id,
+            bot_id=1234,
+            owner="owner-a",
         )
-        setup.telegram_user_id = telegram_user_id
-        setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
-        assert await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.PENDING},
-        )
-        assert not await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.PENDING},
-        )
-
-        assert (
-            await store.claim_provisioning(
-                setup_id=setup.setup_id,
-                bot_id=1234,
-                owner="owner-a",
-            )
-            is TelegramManagedBotProvisioningClaim.ACQUIRED
-        )
-        assert (
-            await store.claim_provisioning(
-                setup_id=setup.setup_id,
-                bot_id=1234,
-                owner="owner-b",
-            )
-            is TelegramManagedBotProvisioningClaim.IN_PROGRESS
-        )
-        assert (
-            await store.claim_provisioning(
-                setup_id=setup.setup_id,
-                bot_id=9999,
-                owner="owner-c",
-            )
-            is TelegramManagedBotProvisioningClaim.BOT_CONFLICT
-        )
-        setup.status = TelegramManagedBotSetupStatus.PROVISIONING
-        assert not await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
+        is TelegramManagedBotProvisioningClaim.ACQUIRED
+    )
+    assert (
+        await store.claim_provisioning(
+            setup_id=setup.setup_id,
+            bot_id=1234,
             owner="owner-b",
         )
-        assert await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
-            owner="owner-a",
-        )
-        await store.release_provisioning_lease(
+        is TelegramManagedBotProvisioningClaim.IN_PROGRESS
+    )
+    assert (
+        await store.claim_provisioning(
             setup_id=setup.setup_id,
-            owner="owner-a",
+            bot_id=9999,
+            owner="owner-c",
         )
-        await store.release_reservations(setup)
-        assert await store.get_by_telegram_user_id(telegram_user_id) is None
-    finally:
-        await redis.delete(
-            store._setup_key(setup.setup_id),
-            store._request_key(setup.request_id),
-            store._target_key(setup.pod_id, setup.surface_name),
-            store._telegram_user_key(telegram_user_id),
-            store._bot_key(setup.setup_id),
-            store._provisioning_key(setup.setup_id),
-        )
-        await redis.aclose()
+        is TelegramManagedBotProvisioningClaim.BOT_CONFLICT
+    )
+    setup.status = TelegramManagedBotSetupStatus.PROVISIONING
+    assert not await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
+        owner="owner-b",
+    )
+    assert await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
+        owner="owner-a",
+    )
+    await store.release_provisioning_lease(
+        setup_id=setup.setup_id,
+        owner="owner-a",
+    )
+    await store.release_reservations(setup)
+    assert await store.get_by_telegram_user_id(telegram_user_id) is None
 
 
 @pytest.mark.asyncio
@@ -909,28 +908,45 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
         "app.modules.agent_surfaces.composition.build_surface_service",
         lambda _: surface_service,
     )
+    shared = AsyncMock(return_value="telegram-surface-bot")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.managed_bot_persistence."
+        "share_own_account_as_pod_connector",
+        shared,
+    )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.managed_bot_identity."
         "ExternalSurfaceUserRepository",
         lambda _: external_users,
     )
 
-    persisted_account_id, persisted_surface_id = await service._persist_managed_bot(
+    persisted_slug, persisted_surface_id = await service._persist_managed_bot(
         setup=setup,
         bot_id=1234,
         bot_username="surface_bot",
         bot_token="child-token",
     )
 
-    assert persisted_account_id == account_id
+    assert persisted_slug == "telegram-surface-bot"
     assert persisted_surface_id == surface_id
+    # The bot is the setter-up's own account, shared into the pod by their
+    # own action, and the surface runs as that connector.
+    assert shared.await_args.kwargs["account_id"] == account_id
+    assert shared.await_args.kwargs["owner_user_id"] == setup.user_id
+    assert (
+        surface_service.create_surface.await_args.kwargs["pod_connector_slug"]
+        == "telegram-surface-bot"
+    )
     auth_config = auth_configs.create.await_args.args[0]
     assert auth_config.connector_id == "telegram"
     assert auth_config.organization_id == setup.organization_id
     assert auth_config.name == "telegram"
     assert accounts.create.await_args.args[0].credentials.bot_token == "child-token"
-    assert external_users.upsert.await_args.kwargs["external_user_id"] == "77"
-    assert external_users.upsert.await_args.kwargs["resolved_user_id"] == setup.user_id
+    # Opening the setup link proves nothing about who opened it, so the
+    # creator's Telegram account is not bound to the user here: they are
+    # recognised once they share a contact matching a verified number.
+    external_users.get_by_identity.assert_awaited_once()
+    external_users.upsert.assert_not_awaited()
     uow.commit.assert_awaited_once()
 
 
@@ -978,7 +994,9 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         id=surface_id,
         surface_type=SurfacePlatform.TELEGRAM,
         credential_mode=SurfaceCredentialMode.CUSTOM,
-        account_id=account_id if surface_account_matches else uuid4(),
+        pod_connector_slug=(
+            "telegram-surface-bot" if surface_account_matches else "another-bot"
+        ),
         is_active=False,
     )
     surface_service = SimpleNamespace(
@@ -1007,6 +1025,12 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         "app.modules.agent_surfaces.composition.build_surface_service",
         lambda _: surface_service,
     )
+    shared = AsyncMock(return_value="telegram-surface-bot")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.managed_bot_persistence."
+        "share_own_account_as_pod_connector",
+        shared,
+    )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.managed_bot_identity."
         "ExternalSurfaceUserRepository",
@@ -1031,7 +1055,7 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         bot_username="surface_bot",
         bot_token="child-token",
     )
-    assert result == (account_id, surface_id)
+    assert result == ("telegram-surface-bot", surface_id)
     assert account.credentials.model_dump() == {"bot_token": "child-token"}
     assert account.display_name == "@surface_bot"
     accounts.update.assert_awaited_once_with(account)
@@ -1040,5 +1064,5 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         surface_id=surface_id,
         is_active=True,
     )
-    external_users.upsert.assert_awaited_once()
+    external_users.upsert.assert_not_awaited()
     uow.commit.assert_awaited_once()

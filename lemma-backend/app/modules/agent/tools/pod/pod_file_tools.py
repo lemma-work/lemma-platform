@@ -21,13 +21,12 @@ from app.modules.datastore.contracts.agent_tools import (
     build_file_app_url,
     build_object_url,
 )
-from app.modules.agent.config import agent_settings
-from app.modules.agent.domain.agent_memory_paths import agent_memory_paths_for_name
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
+from app.modules.agent.tools.pod.memory_write_feedback import memory_write_warning
 from app.modules.agent.tools.pod.models import (
     FileEdit,
     GetFileUrlRequest,
@@ -67,9 +66,9 @@ async def _after_memory_write(
     section so a fact written this turn is in the brief on the next one rather
     than up to a TTL later -- this is the reliable half of that invalidation,
     inline and in-process; the stream subscriber covers writers that never
-    reach here. Second, tell the agent when it has written an auto-loaded index
-    past the point where the prompt will carry all of it, which is the one
-    thing the read-side truncation cannot say back to whoever caused it.
+    reach here. Second, tell the agent when it has written a memory index or
+    file past the size worth reading back, which is the one thing the
+    read-side truncation cannot say back to whoever caused it.
 
     Returns extra keys to merge into the tool result -- empty for the ordinary
     write, which is almost all of them.
@@ -78,26 +77,15 @@ async def _after_memory_write(
     await invalidate_memory_brief(
         pod_id=services.ctx.pod_id, path=stored_path, user_id=user_id
     )
-    # From the run context, not `services.ctx`: that one is the authorization
-    # context, which knows the principal but not the agent's name.
-    paths = agent_memory_paths_for_name(agent_name)
-    indexes = {
-        paths.pod_index,
-        paths.pod_agent_index,
-        paths.personal_index,
-        paths.personal_agent_index,
-    }
-    limit = agent_settings.agent_memory_index_max_chars
-    if to_me_path(stored_path, user_id) not in indexes or content_length <= limit:
-        return {}
-    return {
-        "warning": (
-            f"This index is {content_length} characters; only the first {limit} "
-            "reach your Runtime Context, and the rest is truncated on every "
-            "run. Move the detail into a topic file and leave a one-line "
-            "pointer here."
-        )
-    }
+    # The agent's name comes from the run context, not `services.ctx`: that one
+    # is the authorization context, which knows the principal but not the agent.
+    warning = memory_write_warning(
+        stored_path,
+        user_id=user_id,
+        agent_name=agent_name,
+        content_length=content_length,
+    )
+    return {"warning": warning} if warning else {}
 
 
 class _StoredFile(Protocol):

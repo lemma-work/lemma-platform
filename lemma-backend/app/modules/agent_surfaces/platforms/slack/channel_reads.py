@@ -5,10 +5,13 @@ paged, budgeted and best-effort throughout, which is what separates it from
 the sending half where a failure is the agent's problem to report.
 """
 
-from typing import Any
+import asyncio
+from collections.abc import Awaitable, Callable
+from functools import partial
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.tools import RunContext
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -23,6 +26,8 @@ from app.modules.agent.contracts.surface_prompts import (
     background_channel_context_note,
 )
 from app.modules.agent_surfaces.platforms.common import (
+    platform_transport_errors,
+    UnsafeApiBaseError,
     channel_author_label,
     payload_first,
     payload_text,
@@ -40,6 +45,10 @@ from app.modules.agent_surfaces.platforms.slack.models import (
     SlackSearchChannelMessagesResult,
 )
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from slack_sdk.errors import SlackApiError
+    from slack_sdk.web.async_client import AsyncWebClient
 
 logger = get_logger(__name__)
 
@@ -98,6 +107,57 @@ def _next_cursor(response: Any) -> str | None:
     )
 
 
+async def _display_name(client: AsyncWebClient, user_id: str) -> str | None:
+    """A Slack user's shown name, or None when Slack will not say."""
+    try:
+        response = await client.users_info(user=user_id)
+    except (slack_api_error(), *platform_transport_errors()):
+        logger.debug(
+            "agent_surfaces.service.slack_get_user_display_name.observed",
+            user_id=user_id,
+        )
+        return None
+    profile = (response.get("user") or {}).get("profile") or {}
+    name = str(profile.get("display_name") or profile.get("real_name") or "")
+    return name.strip() or None
+
+
+def _unnamed_authors(messages: list[SurfaceContextMessage]) -> list[str]:
+    """The people whose lines still show a bare Slack id, apps left out."""
+    return sorted(
+        {
+            message.author_external_id
+            for message in messages
+            if message.author_external_id
+            and message.author == message.author_external_id
+            and not message.from_bot
+        }
+    )
+
+
+async def name_authors(
+    messages: list[SurfaceContextMessage],
+    *,
+    lookup: Callable[[str], Awaitable[str | None]],
+) -> list[SurfaceContextMessage]:
+    """Put a name on the lines whose author is still a bare Slack id.
+
+    A message carries its author's profile only some of the time, and a roster
+    that reads ``"U0ABC123" is in this pod`` is nothing a model can match to the
+    people in the thread. One lookup per person still unnamed, at most a
+    window's worth; one that finds nothing leaves the id, no worse than before.
+    """
+    ordered = _unnamed_authors(messages)
+    found = await asyncio.gather(*(lookup(user_id) for user_id in ordered))
+    names = {user_id: name for user_id, name in zip(ordered, found) if name}
+    return [
+        message.model_copy(update={"author": names[message.author]})
+        if message.author in names and message.author == message.author_external_id
+        else message
+        for message in messages
+    ]
+
+
 def _context_messages(
     raw: list[Any], *, current_ts: str, home_team: str = ""
 ) -> list[SurfaceContextMessage]:
@@ -105,7 +165,16 @@ def _context_messages(
 
     A message from another workspace -- a Slack Connect channel's other company
     -- is marked ``outside_pod``, the same mark the pod's own group log puts on
-    a stranger's line, so a member's run can leave it out.
+    a stranger's line, so a member's run can leave it out. That mark is the only
+    one Slack makes, and it says nothing about somebody in the pod's own
+    workspace, so the sender's id is kept beside the name: the roster a member's
+    run is handed asks the pod whether that id is one of its own people
+    (``services/live_group_roster.pod_members_in_lines``).
+
+    The author is the name the message carries (``user_profile``) where it has
+    one, and the bare id otherwise -- ``name_authors`` then asks Slack for the
+    rest. A message an app posted, the bot's own
+    answers among them, is marked as one: it is nobody to put on a roster.
     """
     out: list[SurfaceContextMessage] = []
     for item in raw:
@@ -116,12 +185,23 @@ def _context_messages(
         if not text or (current_ts and ts == current_ts):
             continue
         theirs = (payload_text(item, "user_team") or payload_text(item, "team")).strip()
+        profile = item.get("user_profile")
+        shown = (
+            payload_first(profile, "display_name", "real_name").strip()
+            if isinstance(profile, dict)
+            else ""
+        )
         out.append(
             SurfaceContextMessage(
-                author=payload_first(item, "user", "username").strip() or None,
+                author=shown or payload_first(item, "user", "username").strip() or None,
+                author_external_id=payload_text(item, "user").strip() or None,
                 text=text,
                 ts=ts or None,
                 outside_pod=bool(home_team and theirs and theirs != home_team),
+                from_bot=bool(
+                    payload_text(item, "bot_id")
+                    or payload_text(item, "subtype") == "bot_message"
+                ),
             )
         )
     return out
@@ -176,7 +256,7 @@ class SlackChannelReadsMixin:
                     limit=200,
                     cursor=cursor,
                 )
-            except SlackApiError as exc:
+            except slack_api_error() as exc:
                 if not _retryable_without_private_channels(exc, channel_types):
                     raise
                 channel_types = "public_channel"
@@ -259,11 +339,28 @@ class SlackChannelReadsMixin:
                 "agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic"
             )
             return []
-        return _context_messages(
+        messages = _context_messages(
             raw[-limit:],
             current_ts=str(event.external_message_id or ""),
             home_team=str(event.tenant_id or ""),
         )
+        if not _unnamed_authors(messages):
+            return messages
+        try:
+            client = await build_slack_client(self.credentials)
+            return await name_authors(messages, lookup=partial(_display_name, client))
+        except (
+            slack_api_error(),
+            UnsafeApiBaseError,
+            *platform_transport_errors(),
+        ) as exc:
+            # Naming is a nicety on history already in hand; losing it is no
+            # reason to lose the history.
+            logger.warning(
+                "agent_surfaces.service.slack_name_authors_failed.degraded",
+                error_type=type(exc).__name__,
+            )
+            return messages
 
     async def _recent_messages(
         self, *, channel: str, thread_ts: Any, limit: int

@@ -1,8 +1,10 @@
 //! The host-to-sandbox tunnel's protocol, with TCP standing in for vsock.
 
-use crate::sandbox_tunnel::{requested_port, serve_tunnel};
+use crate::sandbox_tunnel::{copy_until_eof, requested_port, serve_tunnel};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
+use std::os::unix::net::UnixStream;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -147,4 +149,41 @@ fn a_sandbox_that_closes_first_reaches_the_host_as_eof() {
     assert_eq!(received, b"ok\nbye");
     drop(host);
     served.join().unwrap();
+}
+
+/// The relay's copy ends when its peer half-closes, even when the shutdown
+/// lands just as the copy goes to sleep waiting for bytes. On macOS a blocking
+/// `recv` loses that race roughly once in ten thousand tries and sleeps
+/// forever -- the same race left the loopback relay's tests hanging in CI --
+/// so this runs it often enough that a copy built on a blocking read fails.
+#[test]
+fn a_half_close_racing_the_relays_read_still_ends_its_copy() {
+    const RACERS: usize = 8;
+    const RACES: usize = 16_000;
+    let racers: Vec<_> = (0..RACERS)
+        .map(|_| {
+            thread::spawn(|| {
+                let mut missed = 0;
+                for _ in 0..RACES {
+                    let (mut relayed, peer) = UnixStream::pair().unwrap();
+                    let (ended, copy_ended) = mpsc::channel();
+                    let copy = thread::spawn(move || {
+                        let _ = copy_until_eof(&mut relayed, &mut std::io::sink());
+                        let _ = ended.send(());
+                    });
+                    peer.shutdown(Shutdown::Write).unwrap();
+                    if copy_ended.recv_timeout(Duration::from_secs(10)).is_err() {
+                        missed += 1;
+                    }
+                    // Closing always wakes it, so a missed shutdown cannot
+                    // leave the copy behind.
+                    drop(peer);
+                    copy.join().unwrap();
+                }
+                missed
+            })
+        })
+        .collect();
+    let missed: usize = racers.into_iter().map(|racer| racer.join().unwrap()).sum();
+    assert_eq!(missed, 0, "the copy slept through {missed} half-closes");
 }

@@ -49,6 +49,17 @@
     overscroll-behavior-x: contain;
     scroll-behavior: smooth;
 }
+/* The deck on a page of its own: the cards wrap instead of travelling, so
+   every one is on screen at once and nothing needs an arrow to reach. */
+.skill-hand--grid .skill-track {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--card-w), 1fr));
+    overflow: visible;
+    scroll-snap-type: none;
+}
+.skill-hand--grid .skill-card {
+    flex: none;
+}
 .skill-card {
     /* The shadow belongs to the card, not to its faces. It was on `__face`,
        and there are two of those — the rear rotated 180deg, so its shadow was

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.modules.pod_bundle.infrastructure.publish_lock import (
     PublishConcurrencyLock,
+    publish_lock_key,
 )
 
 
@@ -30,34 +31,18 @@ async def test_account_repository_lock_is_case_insensitive_and_owner_safe():
     account_id, first_owner, second_owner = uuid4(), uuid4(), uuid4()
 
     assert await lock.acquire(
-        account_id=account_id,
-        repo_name="My-Repo",
-        owner=first_owner,
+        key=publish_lock_key(account_id, "My-Repo"), owner=first_owner
     )
     assert not await lock.acquire(
-        account_id=account_id,
-        repo_name="my-repo",
-        owner=second_owner,
+        key=publish_lock_key(account_id, "my-repo"), owner=second_owner
     )
 
-    await lock.release(
-        account_id=account_id,
-        repo_name="MY-REPO",
-        owner=second_owner,
-    )
+    await lock.release(key=publish_lock_key(account_id, "MY-REPO"), owner=second_owner)
     assert not await lock.acquire(
-        account_id=account_id,
-        repo_name="my-repo",
-        owner=second_owner,
+        key=publish_lock_key(account_id, "my-repo"), owner=second_owner
     )
 
-    await lock.release(
-        account_id=account_id,
-        repo_name="my-repo",
-        owner=first_owner,
-    )
+    await lock.release(key=publish_lock_key(account_id, "my-repo"), owner=first_owner)
     assert await lock.acquire(
-        account_id=account_id,
-        repo_name="my-repo",
-        owner=second_owner,
+        key=publish_lock_key(account_id, "my-repo"), owner=second_owner
     )

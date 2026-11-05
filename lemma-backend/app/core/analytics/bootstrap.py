@@ -35,6 +35,11 @@ def start_analytics() -> None:
 
 
 async def stop_analytics() -> None:
+    # Project what committed work is still queued first: its events go to the
+    # sink closed below.
+    from app.core.analytics.domain_events import domain_event_sink
+
+    await domain_event_sink().aclose()
     sink = current_sink()
     await sink.aclose()
     configure(None)

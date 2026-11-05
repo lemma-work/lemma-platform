@@ -1,9 +1,12 @@
 from typing import List, Optional
+
+import httpx
 from pydantic import BaseModel, Field
 
 from app.core.web_search.search_client import (
     SearchClient,
     SearchFreshness,
+    SearchRefused,
     SearchResult,
     SearchVertical,
 )
@@ -26,7 +29,7 @@ class WebSearchRequest(BaseModel):
         ),
     )
     max_results: int = Field(
-        10, description="Maximum number of search results to return"
+        10, ge=1, le=20, description="Maximum number of search results to return"
     )
     vertical: SearchVertical = Field(
         SearchVertical.WEB,
@@ -66,7 +69,8 @@ class WebSearchResponse(BaseModel):
         None,
         description=(
             "Set when the search could not be run exactly as asked — for "
-            "example a vertical this provider does not serve."
+            "example a vertical this provider does not serve — or when it "
+            "found nothing, which is not always the same as nothing existing."
         ),
     )
     error: Optional[str] = Field(
@@ -74,18 +78,35 @@ class WebSearchResponse(BaseModel):
     )
 
 
-async def search_web(request: WebSearchRequest) -> WebSearchResponse:
-    """
-    Perform a standard web search using the specified search engine.
+_EMPTY_NOTE = (
+    "0 results — the provider may have refused or found nothing; rephrase the "
+    "query with fewer or different keywords, or try `include_domains`."
+)
 
-    Args:
-        request: WebSearchRequest object containing search parameters
 
-    Returns:
-        WebSearchResponse object with search results
+def _failure_reason(exc: Exception) -> str:
+    """Why a search failed, in words that carry no address or credential."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"the search provider answered HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "the search provider did not answer in time"
+    if isinstance(exc, httpx.HTTPError):
+        return f"the search provider could not be reached ({type(exc).__name__})"
+    return f"the search failed ({type(exc).__name__})"
+
+
+async def search_web(
+    request: WebSearchRequest, *, client: SearchClient | None = None
+) -> WebSearchResponse:
+    """Run one search, and say plainly when it did not really happen.
+
+    Three outcomes the caller has to tell apart, because they lead to opposite
+    decisions: results; a provider that answered "nothing"; and a provider
+    that refused or failed, so nothing was looked at. The last used to come
+    back as a successful empty search. ``client`` is the test seam.
     """
     try:
-        search_client = SearchClient()
+        search_client = client or SearchClient()
 
         results, note = await search_client.search(
             query=request.query,
@@ -113,6 +134,8 @@ async def search_web(request: WebSearchRequest) -> WebSearchResponse:
                 ),
             )
 
+        if not results:
+            note = " ".join(text for text in (note, _EMPTY_NOTE) if text)
         return WebSearchResponse(
             success=True,
             results=results,
@@ -120,6 +143,19 @@ async def search_web(request: WebSearchRequest) -> WebSearchResponse:
             note=note,
         )
 
-    except Exception:
-        logger.debug("web_search.request.failed", exc_info=True)
-        return WebSearchResponse(success=False, message="Web search failed")
+    except SearchRefused as exc:
+        logger.warning("web_search.request.refused.degraded", exc_info=True)
+        return WebSearchResponse(
+            success=False, message="Web search was refused", error=str(exc)
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed search is a tool result
+        logger.warning(
+            "web_search.request.failed.degraded",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        return WebSearchResponse(
+            success=False,
+            message="Web search failed",
+            error=f"{_failure_reason(exc)}. Try again, or rephrase the query.",
+        )

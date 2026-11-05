@@ -41,9 +41,10 @@ def test_a_named_agent_keeps_its_own_name():
 def test_the_display_name_is_not_the_product_name():
     """`Lem` is an instance; `Lemma` is what the bot and the domain already say.
 
-    The two are a word apart and the difference is the whole point: a From line
-    of "Lemma (Deepak Jha) via Lemma" names the product twice and the actor
-    never, which is why the composer had to special-case it.
+    The two are a word apart and the difference is the whole point: the
+    product's name says the same thing about every pod in every organization,
+    and the assistant is one pod's. What a pod *is* called comes from the pod --
+    see `agent_surfaces.services.group_names.sender_name_for`.
     """
     assert agent_display_name(DEFAULT_POD_AGENT_NAME) == "Lem"
 

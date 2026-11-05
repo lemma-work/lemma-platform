@@ -1,6 +1,9 @@
 """Unit tests for SurfaceIdentityResolutionService — resolving an inbound
-sender to an internal Lemma user via cache / telegram-username / email / unique
-phone, with no dedicated coverage before this."""
+sender to an internal Lemma user via cache / email / unique phone.
+
+A Telegram @username is never one of them: it is free text anyone can claim,
+so a Telegram sender is known only by a contact they share themselves whose
+number is verified on a Lemma account."""
 
 from __future__ import annotations
 
@@ -28,20 +31,20 @@ pytestmark = pytest.mark.asyncio
 )
 async def test_unknown_onboarding_sender_cannot_use_profile_email_or_username(platform):
     existing_user = uuid4()
-    users = _FakeUsers(by_email=existing_user, by_telegram=existing_user)
+    users = _FakeUsers(by_email=existing_user)
     resolved = await _service(users, _FakeExternalRepo()).resolve(
         event=_event(platform=platform, email="person@example.com", username="person"),
         require_proven_identity=True,
     )
     assert resolved.internal_user_id is None
-    assert users.telegram_lookups == []
 
 
 class _FakeExternalRepo:
     """Returns the resolved_user_id passed on write, else a preset cached id."""
 
-    def __init__(self, *, cached_user_id=None):
+    def __init__(self, *, cached_user_id=None, cached_phone=None):
         self._cached = cached_user_id
+        self._phone = cached_phone
         self.calls: list[dict] = []
 
     async def upsert(self, **kwargs):
@@ -49,38 +52,47 @@ class _FakeExternalRepo:
         resolved = kwargs.get("resolved_user_id", self._cached)
         if resolved is not None:
             self._cached = resolved
+        self._phone = kwargs.get("phone") or self._phone
         return SimpleNamespace(
             resolved_user_id=resolved,
             external_user_id=kwargs.get("external_user_id"),
             email=kwargs.get("email"),
-            phone=kwargs.get("phone"),
+            phone=self._phone,
             display_name=kwargs.get("display_name"),
         )
 
+    async def forget_resolution(self, **kwargs):
+        self.calls.append({"forget": kwargs})
+        if kwargs["resolved_user_id"] == self._cached:
+            self._cached = None
+        return 1
+
 
 class _FakeUsers:
+    """The directory port: an email lookup and a phone lookup, nothing else.
+
+    It has no handle lookup because identity publishes none, so a resolution
+    that tried to match a Telegram @username would fail here loudly.
+    """
+
     def __init__(
         self,
         *,
         by_email=None,
-        by_telegram=None,
         by_phone_ids=None,
         by_unverified_phone_ids=None,
     ):
         self._by_email = by_email
-        self._by_telegram = by_telegram
         self._by_phone_ids = by_phone_ids or []
         self._by_unverified_phone_ids = by_unverified_phone_ids or []
-        self.telegram_lookups: list[str] = []
+        self.lookups = 0
 
     async def user_id_by_email(self, email):
+        self.lookups += 1
         return self._by_email
 
-    async def user_id_by_telegram_username(self, username):
-        self.telegram_lookups.append(username)
-        return self._by_telegram
-
     async def user_ids_by_mobile_numbers(self, candidates, *, verified=True):
+        self.lookups += 1
         return list(self._by_phone_ids if verified else self._by_unverified_phone_ids)
 
 
@@ -145,25 +157,106 @@ async def test_cache_hit_returns_resolved_user_without_matching():
     resolved = await _service(users, external).resolve(event=_event())
     assert resolved.internal_user_id == cached
     # No fresh match lookups happened (cache short-circuit).
-    assert users.telegram_lookups == []
+    assert users.lookups == 0
 
 
-async def test_resolves_by_telegram_username():
-    user_id = uuid4()
-    users = _FakeUsers(by_telegram=user_id)
+async def test_a_telegram_sender_is_nobody_until_they_share_a_contact():
+    """An @username alone resolves nobody, and nothing is cached against it."""
+    users = _FakeUsers()
     external = _FakeExternalRepo()
+
     resolved = await _service(users, external).resolve(event=_event(username="@Asha"))
-    assert resolved.internal_user_id == user_id
-    # Username is normalized (stripped @, lowercased) before lookup.
-    assert users.telegram_lookups == ["asha"]
+
+    assert resolved.internal_user_id is None
+    assert all(call.get("resolved_user_id") is None for call in external.calls)
 
 
-async def test_resolves_by_email():
+async def test_a_self_shared_contact_matching_a_verified_number_resolves_and_is_cached():
+    """The proof is the number Telegram attests, matched to a verified one."""
+    owner = uuid4()
+    users = _FakeUsers(by_phone_ids=[owner])
+    external = _FakeExternalRepo()
+
+    proven = await _service(users, external).resolve(
+        event=_event(username="asha", phone="+1 555 0100")
+    )
+    later = await _service(_FakeUsers(), external).resolve(
+        event=_event(username="asha")
+    )
+
+    assert proven.internal_user_id == owner
+    assert any(call.get("resolved_user_id") == owner for call in external.calls)
+    assert later.internal_user_id == owner
+
+
+async def test_a_proven_telegram_account_stays_resolved_whatever_its_handle():
+    """PS-SURF-012: a proven resolution is stable across later messages.
+
+    The proof was the person's own number; changing a handle on Telegram
+    afterwards is not a reason to ask them again.
+    """
+    owner = uuid4()
+    external = _FakeExternalRepo(cached_user_id=owner)
+
+    resolved = await _service(_FakeUsers(), external).resolve(
+        event=_event(username="asha_renamed")
+    )
+
+    assert resolved.internal_user_id == owner
+
+
+async def test_a_squatted_handle_never_binds_anyone_to_the_squatter():
+    """Somebody once typed the victim's handle onto their own profile.
+
+    The handle is matched against nothing, so the victim writing with it is a
+    stranger -- and once they share their contact they are themselves, proven
+    by their own verified number, never the squatter.
+    """
+    squatter, victim = uuid4(), uuid4()
+    external = _FakeExternalRepo()
+
+    unproven = await _service(_FakeUsers(), external).resolve(
+        event=_event(username="victim")
+    )
+    proven = await _service(_FakeUsers(by_phone_ids=[victim]), external).resolve(
+        event=_event(username="victim", phone="+1 555 0199")
+    )
+
+    assert unproven.internal_user_id is None
+    assert proven.internal_user_id == victim
+    assert all(call.get("resolved_user_id") != squatter for call in external.calls)
+
+
+async def test_a_handle_taken_over_by_a_stranger_resolves_nobody():
+    """A gave up the handle on Telegram; a stranger now writes with it.
+
+    The stranger's account id is new to the cache and the handle is matched
+    against nothing, so they are a stranger -- and sharing a number that no
+    Lemma account has verified does not change that.
+    """
+    users = _FakeUsers(by_phone_ids=[])
+
+    resolved = await _service(users, _FakeExternalRepo()).resolve(
+        event=_event(external_user_id="new-account", username="asha")
+    )
+    shared_a_number_nobody_verified = await _service(
+        users, _FakeExternalRepo()
+    ).resolve(
+        event=_event(external_user_id="new-account", username="asha", phone="+1 5")
+    )
+
+    assert resolved.internal_user_id is None
+    assert shared_a_number_nobody_verified.internal_user_id is None
+
+
+async def test_a_teams_upn_on_a_verified_domain_resolves_by_email():
+    """The Teams adapter hands over the UPN only on a domain the tenant
+    verified, so it is the tenant's word rather than the sender's."""
     user_id = uuid4()
     users = _FakeUsers(by_email=user_id)
     external = _FakeExternalRepo()
     resolved = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.SLACK, email="a@b.test")
+        event=_event(platform=SurfacePlatform.TEAMS, email="a@b.test")
     )
     assert resolved.internal_user_id == user_id
 
@@ -346,7 +439,7 @@ async def test_a_resolution_the_number_was_verified_for_stands():
 
 
 async def test_a_resolution_bound_by_something_other_than_the_phone_stands():
-    """A managed bot's owner is bound to their user with no number involved."""
+    """A row with no number on it is not the unverified-number check's to drop."""
     cached = uuid4()
     users = _FakeUsers()
 
@@ -357,9 +450,10 @@ async def test_a_resolution_bound_by_something_other_than_the_phone_stands():
     assert resolved.internal_user_id == cached
 
 
-async def test_a_resolution_the_telegram_handle_still_backs_stands():
+async def test_a_telegram_handle_does_not_back_a_resolution_an_unverified_number_made():
+    """The handle proves nothing, so it cannot keep what the number no longer may."""
     cached = uuid4()
-    users = _FakeUsers(by_unverified_phone_ids=[cached], by_telegram=cached)
+    users = _FakeUsers(by_unverified_phone_ids=[cached])
     event = _event(platform=SurfacePlatform.TELEGRAM, phone="+1 555 0100")
     event = event.model_copy(update={"metadata": {"sender_username": "ada"}})
 
@@ -367,7 +461,7 @@ async def test_a_resolution_the_telegram_handle_still_backs_stands():
         event=event
     )
 
-    assert resolved.internal_user_id == cached
+    assert resolved.internal_user_id is None
 
 
 async def test_an_unverified_number_is_not_cached_as_a_resolution():
@@ -432,33 +526,7 @@ async def test_a_cached_sender_who_is_still_here_is_still_a_cache_hit():
     resolved = await _service(users, external).resolve(event=_event(username="asha"))
 
     assert resolved.internal_user_id == cached
-    assert users.telegram_lookups == []
-
-
-async def test_a_proven_read_does_not_consume_an_unproven_cached_match():
-    """A self-asserted handle must not become a proven identity by being cached.
-
-    A Telegram `@username` is a free-text profile field. An ordinary group
-    message resolves by it and writes the answer to the cache; the proven path
-    then wrote a permanent `VerifiedSurfaceIdentity` from that same row. The
-    row does not record what matched it, so the proven path may not read it at
-    all -- without the skip this resolves to `claimed_by_handle`.
-    """
-    claimed_by_handle = uuid4()
-    users = _FakeUsers(by_telegram=claimed_by_handle)
-    external = _FakeExternalRepo()
-
-    unproven = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.TELEGRAM, username="asha")
-    )
-    assert unproven.internal_user_id == claimed_by_handle  # now cached
-
-    proven = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.TELEGRAM, username="asha"),
-        require_proven_identity=True,
-    )
-
-    assert proven.internal_user_id is None
+    assert users.lookups == 0
 
 
 async def test_a_proven_sender_is_still_recognised_by_their_verified_phone():
@@ -487,33 +555,33 @@ async def test_phone_candidates_handle_provider_and_profile_formatting():
 
 
 async def test_proven_path_accepts_a_cache_the_profile_email_still_names():
-    """A known Slack sender stays known when the binding path asks.
+    """A known Teams sender stays known when the binding path asks.
 
-    `_match_proven_sender` answers WhatsApp and nothing else, so on Slack and
-    Teams this cache entry is the only thing standing between an already-known
-    person and being sent back through signup. Refusing every cache hit on this
-    path did exactly that, to everybody, on their next message.
+    `_match_proven_sender` answers WhatsApp and nothing else, so on Teams this
+    cache entry is the only thing standing between an already-known person and
+    being sent back through signup. Refusing every cache hit on this path did
+    exactly that, to everybody, on their next message. (Slack's entry stands on
+    Slack's own proof instead; its profile email is not the platform's word.)
     """
     cached = uuid4()
     users = _FakeUsers(by_email=cached)
     external = _FakeExternalRepo(cached_user_id=cached)
     resolved = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.SLACK, email="known@example.com"),
+        event=_event(platform=SurfacePlatform.TEAMS, email="known@example.com"),
         require_proven_identity=True,
     )
     assert resolved.internal_user_id == cached
 
 
-async def test_proven_path_refuses_a_cache_only_a_telegram_handle_supports():
+async def test_proven_path_refuses_a_cache_nothing_attested_supports():
     """The case the re-derivation exists for.
 
-    `telegram_username` is free text on a Lemma profile that nobody confirms.
-    An ordinary message resolves by it and writes the cache; without this, the
-    next message on the binding path would read that back as proof and hand the
-    handle's current owner a permanent claim on the profile that named it.
+    A cached Telegram row that neither a profile email nor a verified number
+    still names is not proof, whatever handle the sender writes with; the
+    binding path must not read it back as one.
     """
     cached = uuid4()
-    users = _FakeUsers(by_telegram=cached)  # no email, no verified phone
+    users = _FakeUsers()  # no email, no verified phone
     external = _FakeExternalRepo(cached_user_id=cached)
     resolved = await _service(users, external).resolve(
         event=_event(platform=SurfacePlatform.TELEGRAM, username="@asha"),
@@ -533,7 +601,7 @@ async def test_proven_path_refuses_a_cache_the_email_now_names_somebody_else():
     users = _FakeUsers(by_email=uuid4())
     external = _FakeExternalRepo(cached_user_id=cached)
     resolved = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.SLACK, email="moved@example.com"),
+        event=_event(platform=SurfacePlatform.TEAMS, email="moved@example.com"),
         require_proven_identity=True,
     )
     assert resolved.internal_user_id is None

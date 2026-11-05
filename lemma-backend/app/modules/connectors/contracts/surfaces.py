@@ -33,12 +33,12 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.crypto import get_secret_cipher
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.connectors.api.dependencies import get_connector_service
 from app.modules.connectors.domain.account import AccountEntity, GenericCredentials
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
+    app_made_by_lemma,
 )
 from app.modules.connectors.domain.connector import AuthProvider, AuthScheme
 from app.modules.connectors.domain.errors import ConnectorNotFoundError
@@ -79,6 +79,9 @@ class SurfaceAuthConfig:
     connector_id: str
     #: "SYSTEM_DEFAULT" (Lemma's own OAuth app) or "ORG_CUSTOM" (the org's own).
     config_source: str | None
+    #: An org's own app that Lemma made itself, whose secrets no person chose
+    #: (``APP_MADE_BY_LEMMA`` on the install's metadata).
+    made_by_lemma: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,10 +239,7 @@ async def upsert_bot_token_account(
     owns the transaction it is also writing its own rows in.
     """
     encryption = get_secret_cipher()
-    message_bus = get_message_bus()
-    auth_configs = AuthConfigRepository(
-        uow=uow, encryption=encryption, message_bus=message_bus
-    )
+    auth_configs = AuthConfigRepository(uow=uow, encryption=encryption)
     install = await auth_configs.get_active_by_org_and_app(
         organization_id, connector_id
     )
@@ -257,9 +257,7 @@ async def upsert_bot_token_account(
                 updated_by_user_id=user_id,
             )
         )
-    accounts = AccountRepository(
-        uow=uow, encryption=encryption, message_bus=message_bus
-    )
+    accounts = AccountRepository(uow=uow, encryption=encryption)
     credentials = GenericCredentials.model_validate({"bot_token": bot_token})
     existing = await accounts.get_by_user_auth_config_and_provider_account(
         user_id, install.id, provider_account_id
@@ -307,17 +305,6 @@ async def refreshed_credentials(
     return _as_mapping(credentials)
 
 
-async def require_account_owner(
-    uow, account_id: UUID, *, user_id: UUID, organization_id: UUID | None
-) -> None:
-    """Assert this person owns this account; raise ``AccountNotFoundError`` if not.
-
-    "Not yours" and "no such account" are deliberately the same answer, so the
-    caller learns nothing about accounts they do not own.
-    """
-    await get_connector_service(uow).get_account(account_id, user_id, organization_id)
-
-
 async def auth_config(uow, auth_config_id: UUID) -> SurfaceAuthConfig | None:
     """The install behind an account, or ``None`` when it is gone."""
     found = await _auth_configs(uow).get(auth_config_id)
@@ -328,6 +315,7 @@ async def auth_config(uow, auth_config_id: UUID) -> SurfaceAuthConfig | None:
         kind=_value_of(found.kind) or "",
         connector_id=found.connector_id,
         config_source=_value_of(found.config_source),
+        made_by_lemma=app_made_by_lemma(found.metadata),
     )
 
 
@@ -390,7 +378,6 @@ __all__ = [
     "app_signing_secret",
     "auth_config",
     "refreshed_credentials",
-    "require_account_owner",
     "surface_connector",
     "upsert_bot_token_account",
 ]

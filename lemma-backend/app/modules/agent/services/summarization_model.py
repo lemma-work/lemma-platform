@@ -14,14 +14,83 @@ behaviour instead of breaking every long conversation.
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from uuid import UUID
 
 from pydantic_ai.models import Model
 
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.value_objects import JsonObject
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionTarget:
+    """The model a run's history is summarized on, and the settings to send it."""
+
+    model: Model | str
+    model_settings: JsonObject | None = None
+
+
+class LazyCompactionTarget:
+    """A compaction target resolved the first time a run actually compacts.
+
+    Resolving it reads the runtime profile, and most runs never compact: they
+    finish well inside the window. So the read happens on first use, once per
+    run, rather than at the start of every run.
+    """
+
+    def __init__(self, resolve: Callable[[], Awaitable[CompactionTarget]]) -> None:
+        self._resolve = resolve
+        self._target: CompactionTarget | None = None
+
+    async def get(self) -> CompactionTarget:
+        if self._target is None:
+            self._target = await self._resolve()
+        return self._target
+
+
+#: What a compactor may be handed: a model outright, or a target resolved later.
+type SummarizationModel = Model | str | LazyCompactionTarget
+
+
+def lazy_compaction_target(
+    *,
+    organization_id: UUID | None,
+    user_id: UUID,
+    run_model: Model,
+    run_compaction_settings: JsonObject | None,
+    meter: Callable[[Model | str], Model | str],
+    resolve_model: Callable[..., Awaitable[Model | str]] | None = None,
+) -> LazyCompactionTarget:
+    """The run's compaction target, resolved only if the run ever compacts.
+
+    The run's own model gets the compaction settings resolved with the run's
+    generation settings (``generation_settings.run_generation_settings``): its
+    own parameters, turned down to a light effort and a summary-sized cap. A
+    separately configured summarization model gets only the summary cap, since
+    nothing says which of the run's settings it would accept.
+
+    ``resolve_model`` picks the model; ``resolve_summarization_model`` unless
+    a caller supplies another.
+    """
+    from app.modules.agent.services.run_input_settings import summary_only_settings
+    from app.modules.agent.services.run_phase_spans import run_phase
+
+    async def resolve() -> CompactionTarget:
+        with run_phase("summarization_model"):
+            model = await (resolve_model or resolve_summarization_model)(
+                organization_id=organization_id, user_id=user_id, fallback=run_model
+            )
+        settings = run_compaction_settings if model is run_model else None
+        return CompactionTarget(
+            meter(model), settings if settings is not None else summary_only_settings()
+        )
+
+    return LazyCompactionTarget(resolve)
 
 
 def configured_summarization_model_name() -> str | None:
@@ -44,7 +113,30 @@ async def resolve_summarization_model[T](
     fallback: T,
 ) -> Model | T:
     """A pydantic-ai model for compaction, or ``fallback`` (the run's model)."""
-    model_name = configured_summarization_model_name()
+    return await resolve_system_model(
+        configured_summarization_model_name(),
+        organization_id=organization_id,
+        user_id=user_id,
+        fallback=fallback,
+        purpose="summarization",
+    )
+
+
+async def resolve_system_model[T](
+    model_name: str | None,
+    *,
+    organization_id: UUID | None,
+    user_id: UUID,
+    fallback: T,
+    purpose: str,
+) -> Model | T:
+    """``model_name`` on the system provider, or ``fallback`` when it is unset,
+    there is no system provider, or it cannot be resolved (logged, with
+    ``purpose`` naming the setting's job).
+
+    For the side jobs a deployment may move off the run's own model --
+    compaction, the memory pass -- each named by its own setting.
+    """
     if not model_name:
         return fallback
 
@@ -80,7 +172,7 @@ async def resolve_summarization_model[T](
             user_id=user_id,
         )
         model = pydantic_ai_model_from_runtime_profile(
-            runtime_profile=resolved.public_snapshot(),
+            runtime_profile=resolved.runtime_snapshot().as_payload(),
             runtime_credentials=resolved.credentials,
         )
     except Exception:
@@ -91,8 +183,9 @@ async def resolve_summarization_model[T](
         # ImportError on every call) looked exactly like "no model configured"
         # at debug level, so the operator saw a setting that did nothing.
         logger.warning(
-            "agent.summarization_model.resolution_failed.observed",
+            "agent.system_model.resolution_failed.observed",
             model_name=model_name,
+            purpose=purpose,
             exc_info=True,
         )
         return fallback

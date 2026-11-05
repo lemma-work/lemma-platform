@@ -85,8 +85,11 @@ class TestTheApprovalPathsRedactToo:
 
     @pytest.mark.asyncio
     async def test_an_approved_tool_that_fails_does_not_leak_its_url(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """Redacted for the model, but logged in full for whoever has to debug
+        it: the redacted line was the only record, so a failing approved action
+        left nothing to diagnose from."""
         from app.modules.agent.services import approval_reconciliation
         from app.modules.agent.tools.approval import executor as approval_executor
 
@@ -105,15 +108,18 @@ class TestTheApprovalPathsRedactToo:
             approval_executor.ApprovalExecutor, "execute_as_user", _explode
         )
 
-        result = await approval_reconciliation.execute_approved_tool_as_user(
-            uow=_Uow(),
-            deps=None,
-            tool_name="http_request",
-            args={},
-        )
+        with caplog.at_level("ERROR"):
+            result = await approval_reconciliation.execute_approved_tool_as_user(
+                uow=_Uow(),
+                deps=None,
+                tool_name="http_request",
+                args={},
+            )
 
         assert result["ok"] is False
         assert "sk-secret-value" not in str(result["error"])
+        assert "agent.approval.approved_tool_execution.failed" in caplog.text
+        assert "Traceback" in caplog.text
 
     @pytest.mark.asyncio
     async def test_a_session_auto_approval_that_fails_does_not_leak_its_url(

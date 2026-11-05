@@ -106,6 +106,17 @@ def result_payload(result: object) -> Any:
     return to_json_value(result)
 
 
+# Past this, a result is sent once, as text, rather than twice.
+#
+# A dict result went out as its JSON text *and* as `structuredContent`, so a
+# large query result crossed the Agent Host bridge twice and could reach its
+# 8 MiB cap on half the data. The text is the copy to keep: MCP asks a server to
+# send it alongside structured content, it is what every client hands its
+# model, and these tools declare no `outputSchema`, which is the only thing
+# that would oblige a server to send the structured copy.
+STRUCTURED_COPY_LIMIT_CHARS = 256 * 1024
+
+
 def text_content(payload: Any) -> TextContent:
     text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
     return TextContent(type="text", text=text)
@@ -128,9 +139,12 @@ def tool_call_result(result: object) -> CallToolResult:
     images = image_contents(result)
     payload = result_payload(result)
     if isinstance(payload, dict):
+        text = text_content(payload)
         return CallToolResult(
-            content=[text_content(payload), *images],
-            structured_content=payload,
+            content=[text, *images],
+            structured_content=(
+                payload if len(text.text) <= STRUCTURED_COPY_LIMIT_CHARS else None
+            ),
             is_error=result_is_failure(payload),
         )
     return CallToolResult(content=[text_content(payload), *images])

@@ -4,6 +4,7 @@
 /* eslint-disable */
 export enum ScheduleRunStatus {
     RECEIVED = 'RECEIVED',
+    FILTERING = 'FILTERING',
     PROCESSING = 'PROCESSING',
     DISPATCHED = 'DISPATCHED',
     COMPLETED = 'COMPLETED',

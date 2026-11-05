@@ -20,18 +20,22 @@ result as its own port; the `Protocol` is structural, so pod never names it.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.core.authorization.permissions import Permissions
-from app.core.infrastructure.events.message_bus import get_message_bus
+from app.core.authorization.permissions import Permissions, equivalent_permission_ids
 from app.modules.pod.domain.pod_entities import PodMemberEntity
 from app.modules.pod.domain.roles import PodRole
-from app.modules.pod.infrastructure.models.pod_models import Pod
-from app.modules.pod.infrastructure.pod_administration_queries import members_who_can
+from app.modules.identity.contracts.orm import OrganizationMember, User
+from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
+from app.modules.pod.infrastructure.pod_administration_queries import (
+    member_holds,
+    members_who_can,
+)
 from app.modules.pod.infrastructure.pod_repositories import PodMemberRepository
 
 
@@ -44,6 +48,59 @@ async def pod_member_id(uow, pod_id: UUID, user_id: UUID) -> UUID | None:
     """
     member = await PodMemberRepository(uow).get_by_pod_and_user_id(pod_id, user_id)
     return member.id if member is not None else None
+
+
+async def pod_members_among(uow, pod_id: UUID, user_ids: Iterable[UUID]) -> set[UUID]:
+    """Which of these users are live members of this pod, in one read."""
+    wanted = sorted(set(user_ids))
+    if not wanted:
+        return set()
+    found = await uow.session.scalars(
+        select(OrganizationMember.user_id)
+        .join(PodMember, PodMember.organization_member_id == OrganizationMember.id)
+        .join(User, User.id == OrganizationMember.user_id)
+        .where(
+            PodMember.pod_id == pod_id,
+            OrganizationMember.user_id.in_(wanted),
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
+        )
+        .limit(len(wanted))
+    )
+    return set(found)
+
+
+async def pod_member_count(uow, pod_id: UUID) -> int:
+    """How many people are in this pod right now."""
+    counted = await uow.session.scalar(
+        select(func.count()).select_from(PodMember).where(PodMember.pod_id == pod_id)
+    )
+    return int(counted or 0)
+
+
+async def pod_member_user_id(uow, *, pod_id: UUID, pod_member_id: UUID) -> UUID | None:
+    """The user behind this pod membership, or ``None`` if it is not one of
+    this pod's -- what a workflow form assigned to a member is asked of."""
+    member = await PodMemberRepository(uow).get_by_pod_and_id(pod_id, pod_member_id)
+    return member.user_id if member is not None else None
+
+
+async def pod_member_holds(
+    uow, pod_id: UUID, user_id: UUID, permission_id: str
+) -> bool:
+    """Whether this member's roles in the pod grant ``permission_id``, or a
+    permission that implies it.
+
+    For deciding what somebody *else* may be given -- the member a contact's
+    chats are to belong to, say -- where there is no request of theirs to
+    authorize. A member's own request is authorized the usual way.
+    """
+    return await member_holds(
+        uow.session,
+        pod_id=pod_id,
+        user_id=user_id,
+        permission_ids=sorted(equivalent_permission_ids(permission_id)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +119,22 @@ async def pod_administrators(uow, pod_id: UUID) -> list[PodAdministrator]:
     By permission, as the last-administrator rule counts them, so a custom role
     that manages members is as much an administrator as ``POD_ADMIN``.
     """
+    return await pod_members_who_hold(uow, pod_id, Permissions.POD_MEMBER_MANAGE)
+
+
+async def pod_members_who_hold(
+    uow, pod_id: UUID, permission_id: str
+) -> list[PodAdministrator]:
+    """The members whose roles grant ``permission_id``: whom to tell about
+    something only they can fix -- the pod's editors (``pod.connector.manage``)
+    when a shared connector lost its account. ``MAX_ADMINISTRATORS_TOLD`` at
+    most."""
     return [
         PodAdministrator(user_id=user_id, pod_member_id=member_id)
         for member_id, user_id in await members_who_can(
             uow.session,
             pod_id=pod_id,
-            permission_id=Permissions.POD_MEMBER_MANAGE,
+            permission_id=permission_id,
             limit=MAX_ADMINISTRATORS_TOLD,
         )
     ]
@@ -173,7 +240,6 @@ async def add_pod_member(
         resolved_role = PodRole(pod_role)
     except ValueError:
         resolved_role = PodRole.USER
-    message_bus = get_message_bus()
     entity = PodMemberEntity(
         pod_id=pod_id,
         organization_member_id=organization_member_id,
@@ -189,7 +255,7 @@ async def add_pod_member(
         first_name=names[0] if names else None,
         last_name=names[1] if len(names) > 1 else None,
     )
-    member = await PodMemberRepository(uow, message_bus=message_bus).create(entity)
+    member = await PodMemberRepository(uow).create(entity)
     await PodRoleService(uow).sync_member_roles(
         pod_id=pod_id,
         pod_member_id=member.id,
@@ -235,8 +301,61 @@ async def refuse_pod_role_beyond_inviter(
 __all__ = [
     "add_pod_member",
     "pod_invitation_details",
+    "pod_member_count",
     "pod_member_id",
+    "pod_member_holds",
     "pod_name",
     "pod_organization_id",
     "refuse_pod_role_beyond_inviter",
 ]
+
+
+async def leave_organization_pods(
+    uow, *, organization_member_id: UUID, user_id: UUID
+) -> list[UUID]:
+    """Take a departing organization member out of every live pod they are in.
+
+    Through the pod's own removal, one membership at a time, so each one is
+    announced as ``PodMemberRemoved`` in this transaction. Deleting the
+    organization membership cascades these rows away in the database, and a
+    cascade says nothing: every module that lets go of a pod's departed member
+    -- their channel seats, the contacts they looked after, their pod accounts
+    -- never heard they had gone. Called before that deletion, so there is
+    nothing left for the cascade to take silently.
+
+    No last-administrator guard: leaving the organization is not refused for
+    the pods it empties of admins, as the cascade never was. A soft-deleted
+    pod is skipped; its own cleanup already ran.
+    """
+    repository = PodMemberRepository(uow)
+    left: list[UUID] = []
+    after: UUID | None = None
+    # A page at a time, by pod: a limit that stopped short would leave the
+    # person in every pod past it.
+    while True:
+        statement = (
+            select(PodMember.id, PodMember.pod_id)
+            .join(Pod, Pod.id == PodMember.pod_id)
+            .where(
+                PodMember.organization_member_id == organization_member_id,
+                Pod.is_deleted.is_(False),
+            )
+            .order_by(PodMember.pod_id)
+            .limit(_LEAVE_PAGE)
+        )
+        if after is not None:
+            statement = statement.where(PodMember.pod_id > after)
+        rows = (await uow.session.execute(statement)).all()
+        for pod_member_id, pod_id in rows:
+            member = await repository.get(pod_member_id)
+            if member is None:
+                continue
+            member.mark_removed(user_id=user_id)
+            if await repository.delete_entity(member):
+                left.append(pod_id)
+        if len(rows) < _LEAVE_PAGE:
+            return left
+        after = rows[-1].pod_id
+
+
+_LEAVE_PAGE = 200

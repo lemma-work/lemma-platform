@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from uuid import UUID
 
 from app.core.config import settings
@@ -95,15 +94,32 @@ def build_approval_render_plan(
     reason: str | None,
     tool_name: str | None,
     allow_session: bool = False,
+    session_scope: str | None = None,
 ) -> SurfaceApprovalRenderPlan:
     """Build a platform-neutral plan for rendering a ``request_approval`` prompt.
 
     Always includes Approve + Deny; the approve-for-session button is added only
     when ``allow_session`` is set (i.e. the paused call carries a real permission
     gate). ``callback_id`` routes the tapped decision back to the waiting run.
+
+    ``session_scope`` is what that button allows, in words ("Delete records in
+    any table for the rest of this conversation", ``approval_wording``). A
+    session approval covers the permission, not the one call, and a card that
+    only said "Approve for session" let a person agree to more than they read.
+    The sentence rides with the reason, since a platform's button label is
+    too short to carry it.
     """
     clean_title = sanitize_user_visible_text(title) or "Action requires your approval"
     clean_reason = sanitize_user_visible_text(reason).strip() if reason else None
+    if allow_session and session_scope:
+        clean_reason = "\n".join(
+            part
+            for part in (
+                clean_reason,
+                f"Allow for this conversation: {session_scope}.",
+            )
+            if part
+        )
     clean_tool = sanitize_user_visible_text(tool_name).strip() if tool_name else None
     buttons = [
         SurfaceApprovalButton(
@@ -116,7 +132,8 @@ def build_approval_render_plan(
     if allow_session:
         buttons.append(
             SurfaceApprovalButton(
-                label="Approve for session", decision=APPROVAL_DECISION_SESSION
+                label="Allow for this conversation",
+                decision=APPROVAL_DECISION_SESSION,
             )
         )
     return SurfaceApprovalRenderPlan(
@@ -198,90 +215,85 @@ def build_display_resource_url(
 ) -> str | None:
     """Build the deep link a surface user follows to open a resource in Lemma.
 
-    NOTE: this is the single place that encodes lemma-os frontend route shapes
-    (``/widgets/view``, ``/data``, ``/agents/{name}``, ``/app/view``,
-    ``/schedules``, ``/conversations/{id}``, …). These MUST stay in sync with the
-    frontend router; changing a route there without updating here produces dead
-    links. Keep all route construction in this function so the contract is
-    auditable in one place. (Verify ``/widgets/view`` and ``/app/view`` against
-    the current lemma-os routes — they changed with the widget/app unification +
-    host-based app routing.)
+    The one place backend code spells the workspace's routes -- `/t/{pod}/...`,
+    read by `lemma-frontend/src/shell/address.ts`. A route changed there and not
+    here is a dead link in every chat app, so keep all of them in this function.
+
+    A resource that was only ever drawn in a conversation -- an inline widget, a
+    filtered or queried table -- links to that conversation, because there is
+    no other page that shows the same thing. ``tool_call_id`` stays in the
+    signature for callers; no current route can scroll to one call.
     """
+    del tool_call_id
     if request.type is DisplayResourceType.BROWSER:
         output = _as_record(tool_output)
         return _as_nonempty_string(output.get("url"))
 
-    base = settings.frontend_url.rstrip("/")
-    pod_base = f"{base}/pod/{quote(str(pod_id), safe='')}"
-
-    if request.type is DisplayResourceType.WIDGET:
-        return _widget_resource_url(
-            pod_base,
-            request,
-            conversation_id=conversation_id,
-            tool_call_id=tool_call_id,
-        )
-    if request.type is DisplayResourceType.FILE:
-        return _file_resource_url(pod_base, request)
-    if request.type is DisplayResourceType.TABLE:
-        if request.query:
-            return _conversation_url(pod_base, conversation_id, tool_call_id)
-        return _table_resource_url(pod_base, request, conversation_id)
-    if request.type is DisplayResourceType.AGENT:
-        return _append_conversation(
-            f"{pod_base}/agents/{quote(request.name, safe='')}"
-            if request.name
-            else f"{pod_base}/ai",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.FUNCTION:
-        return _append_conversation(
-            f"{pod_base}/functions/{quote(request.name, safe='')}"
-            if request.name
-            else f"{pod_base}/functions",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.WORKFLOW:
-        return _append_conversation(
-            f"{pod_base}/flows/{quote(request.name, safe='')}"
-            if request.name
-            else f"{pod_base}/flows",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.APP:
-        # `page` carries the app's resource name, not a slug, on purpose. The
-        # workspace addresses an app page by the slug of its name and
-        # canonicalizes whatever the link carries on arrival, so the name
-        # resolves. Slugifying here instead would need this module to reproduce
-        # the frontend's slug rule exactly -- `normalize_public_slug` does not
-        # (`Ledger 2.0` -> `ledger-2-0` there, `ledger20` in the index) -- and a
-        # slug built by the wrong rule is one the workspace cannot resolve back.
-        return _append_conversation(
-            f"{pod_base}/app/view?{urlencode({'page': request.name})}"
-            if request.name
-            else f"{pod_base}/app/pages",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.SCHEDULE:
-        return _append_conversation(
-            f"{pod_base}/schedules",
-            conversation_id,
-        )
-    return _conversation_url(pod_base, conversation_id, tool_call_id)
-
-
-def _widget_resource_url(
-    pod_base: str,
-    request: DisplayResourceRequest,
-    *,
-    conversation_id: UUID | None,
-    tool_call_id: str | None,
-) -> str:
-    return request.public_url or _append_tool_context(
-        f"{pod_base}/widgets/view",
-        conversation_id=conversation_id,
-        tool_call_id=tool_call_id,
+    space = _space_url(pod_id)
+    conversation = (
+        build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
+        if conversation_id is not None
+        else None
     )
+    name = quote(request.name, safe="") if request.name else None
+
+    match request.type:
+        case DisplayResourceType.WIDGET:
+            return request.public_url or conversation or space
+        case DisplayResourceType.FILE:
+            return _file_resource_url(space, request)
+        case DisplayResourceType.TABLE:
+            if (request.query or request.filters) and conversation:
+                return conversation
+            return f"{space}/table/{name}" if name else f"{space}/tables"
+        case DisplayResourceType.AGENT:
+            return f"{space}/profile/{name}" if name else f"{space}/about"
+        case DisplayResourceType.WORKFLOW:
+            return (
+                build_workflow_url(pod_id=pod_id, workflow_name=request.name)
+                if request.name
+                else f"{space}/workflows"
+            )
+        case DisplayResourceType.APP:
+            # The app's resource name, not a slug, on purpose: the workspace
+            # canonicalizes whatever the link carries on arrival, and a slug
+            # built here by a different rule is one it cannot resolve back.
+            return f"{space}/app/{name}" if name else f"{space}/apps"
+        case DisplayResourceType.SCHEDULE:
+            return f"{space}/about?section=schedules"
+        case _:
+            # A function has no page of its own in the workspace: the
+            # conversation that showed it, else the teammate's space.
+            return conversation or space
+
+
+def build_conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
+    """A conversation in the workspace, for a reader outside it to open.
+
+    Beside ``build_display_resource_url`` for the reason given there: this file
+    is where the workspace's routes are spelt.
+    """
+    return f"{_space_url(pod_id)}/conversation/{quote(str(conversation_id), safe='')}"
+
+
+def build_workflow_url(*, pod_id: UUID, workflow_name: str) -> str:
+    """A workflow's page in the workspace, where its runs and forms are."""
+    return f"{_space_url(pod_id)}/workflow/{quote(workflow_name, safe='')}"
+
+
+def build_workflow_run_url(*, pod_id: UUID, run_id: UUID) -> str:
+    """One workflow run's page, with the form it waits on, for someone who may
+    read its workflow."""
+    return f"{_space_url(pod_id)}/run/{quote(str(run_id), safe='')}"
+
+
+def build_space_url(*, pod_id: UUID) -> str:
+    """The pod's own space, where its waiting list is."""
+    return _space_url(pod_id)
+
+
+def _space_url(pod_id: UUID) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/t/{quote(str(pod_id), safe='')}"
 
 
 def _display_resource_title(request: DisplayResourceRequest) -> str:
@@ -338,6 +350,12 @@ _SUMMARY_BY_TYPE: dict[DisplayResourceType, str] = {
 
 
 def _display_resource_summary(request: DisplayResourceRequest) -> str | None:
+    if request.fallback:
+        # The agent's own words for what the resource shows beat any sentence
+        # about where it opens: a chat app cannot draw a widget, and "Opens in
+        # Lemma" told the person nothing they could act on without leaving.
+        lines = sanitize_user_visible_text(request.fallback).splitlines()
+        return "\n".join(" ".join(line.split()) for line in lines if line.strip())
     if request.type is DisplayResourceType.TABLE:
         return None if request.query else _table_summary(request)
     if request.type is DisplayResourceType.WIDGET:
@@ -411,96 +429,18 @@ def _display_resource_kind(request: DisplayResourceRequest) -> str:
     return request.type.value.lower().replace("_", " ").title()
 
 
-def _file_resource_url(pod_base: str, request: DisplayResourceRequest) -> str:
-    # A bare ``?file=<path>`` deep link is intentional. The in-app document
-    # viewer opens the file straight from the path and derives the parent folder
-    # from it, so ``folder`` is redundant. ``assistantConversationId`` is
-    # deliberately omitted too: when present it switches the viewer into a
-    # header-less "assistant presentation" mode, whereas the plain path opens the
-    # full file viewer (with header + back nav) — the better reading experience.
+def _file_resource_url(space: str, request: DisplayResourceRequest) -> str:
+    """`/t/{pod}/file/<path>`, each segment encoded on its own: the slashes in a
+    pod path are structure, and everything else in a file name -- a `#`, a `?`,
+    a space -- must not reach the URL raw."""
     if not request.path:
-        return f"{pod_base}/files"
-    file_path = _normalize_pod_file_path(request.path)
-    return f"{pod_base}/files?{urlencode({'file': file_path})}"
-
-
-def _table_resource_url(
-    pod_base: str,
-    request: DisplayResourceRequest,
-    conversation_id: UUID | None,
-) -> str:
-    href = (
-        f"{pod_base}/data?{urlencode({'tab': request.name})}"
-        if request.name
-        else f"{pod_base}/data"
-    )
-    if request.filters:
-        href = _append_repeated_params(
-            href,
-            [
-                (
-                    "filter",
-                    json.dumps(
-                        item.model_dump(mode="json", exclude_none=True),
-                        separators=(",", ":"),
-                    ),
-                )
-                for item in request.filters
-            ],
-        )
-    return _append_conversation(href, conversation_id)
-
-
-def _conversation_url(
-    pod_base: str,
-    conversation_id: UUID | None,
-    tool_call_id: str | None,
-) -> str | None:
-    if conversation_id is None:
-        return None
-    return _append_query(
-        f"{pod_base}/conversations/{quote(str(conversation_id), safe='')}",
-        {"toolCallId": tool_call_id},
-    )
-
-
-def _append_tool_context(
-    href: str,
-    *,
-    conversation_id: UUID | None,
-    tool_call_id: str | None,
-) -> str:
-    return _append_query(
-        href,
-        {
-            "toolCallId": tool_call_id,
-            "assistantConversationId": str(conversation_id)
-            if conversation_id
-            else None,
-        },
-    )
-
-
-def _append_conversation(href: str, conversation_id: UUID | None) -> str:
-    return _append_query(
-        href,
-        {"assistantConversationId": str(conversation_id) if conversation_id else None},
-    )
-
-
-def _append_repeated_params(href: str, params: list[tuple[str, str]]) -> str:
-    if not params:
-        return href
-    separator = "&" if "?" in href else "?"
-    return href + separator + urlencode(params)
-
-
-def _append_query(href: str, params: dict[str, str | None]) -> str:
-    cleaned = {key: value for key, value in params.items() if value}
-    if not cleaned:
-        return href
-    separator = "&" if "?" in href else "?"
-    return href + separator + urlencode(cleaned)
+        return f"{space}/files"
+    segments = [
+        quote(segment, safe="")
+        for segment in _normalize_pod_file_path(request.path).split("/")
+        if segment
+    ]
+    return f"{space}/file/{'/'.join(segments)}" if segments else f"{space}/files"
 
 
 def _normalize_pod_file_path(path: str) -> str:

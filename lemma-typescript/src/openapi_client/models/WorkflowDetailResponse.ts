@@ -23,6 +23,10 @@ export type WorkflowDetailResponse = {
     icon_url?: (string | null);
     id: string;
     is_active?: boolean;
+    /**
+     * How many runs of this workflow may be in progress at once. A run started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run finishes. Null means no limit.
+     */
+    max_concurrent_runs?: (number | null);
     mode?: WorkflowMode;
     name: string;
     nodes?: Array<(FormNodeResponse | AgentNodeResponse | FunctionNodeResponse | DecisionNodeResponse | LoopNodeResponse | WaitUntilNodeResponse | EndNodeResponse)>;

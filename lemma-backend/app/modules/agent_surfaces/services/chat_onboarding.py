@@ -17,9 +17,7 @@ from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-    get_surface_event_dedup_store,
-)
+from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedupStore
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
 )
@@ -30,6 +28,7 @@ from app.modules.agent_surfaces.services.onboarding_outcomes import (
     OnboardingOutcomes,
 )
 from app.modules.agent_surfaces.services.onboarding_replies import (
+    VERIFIED_HERE,
     initial_prompt_for,
     ready_message,
     room_notice,
@@ -84,7 +83,9 @@ class ChatOnboardingCoordinator:
         self._uows = uow_factory
         self._adapters = SurfacePlatformAdapterRegistry()
         self._challenges = challenges
-        self._event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
+        self._event_dedup_store = event_dedup_store or SurfaceEventDedupStore(
+            uow_factory=uow_factory
+        )
         self._email_deliverable = email_deliverable
 
     def _can_email(self) -> bool:
@@ -336,9 +337,14 @@ class ChatOnboardingCoordinator:
     ) -> None:
         from app.modules.agent_surfaces.services.onboarding_workspace import (
             WorkspaceChoiceAsked,
+            bind_on_its_own_number,
             complete_onboarding_workspace,
         )
 
+        if transport.on_its_own_number:
+            await bind_on_its_own_number(self._uows, transport, state)
+            await self._reply(transport, destination, VERIFIED_HERE)
+            return
         try:
             outcome = await complete_onboarding_workspace(self._uows, transport, state)
         except WorkspaceChoiceAsked as parked:

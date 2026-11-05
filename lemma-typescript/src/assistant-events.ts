@@ -58,6 +58,12 @@ export interface ParsedAssistantStreamEvent {
    */
   noticeKind?: string;
   /**
+   * The run ended with its conversation WAITING on the agent's own work -- a
+   * sub-agent, a process, a timer -- not on a person. A run will follow when
+   * that work resolves, so a viewer should follow the conversation to it.
+   */
+  waitingOnWork?: boolean;
+  /**
    * The transport gave up, not the run. Carries no status on purpose: the run
    * is still going, and a consumer that treats this as an ending stops reading
    * a conversation the server is still writing to.
@@ -119,16 +125,27 @@ function extractStatus(payload: unknown): string | undefined {
   return normalizeStatus(payload);
 }
 
+/**
+ * A notice off a status frame the lifecycle reader did not recognise.
+ *
+ * The backend sends `{status: "config_update", notice: "<kind>", detail:
+ * "<sentence>", option?}`: `status` names the frame, `notice` the kind, so
+ * the kind is read from `notice` first and `status` is only the fallback for
+ * a frame that carries no `notice`. Older backends nested the host's own
+ * `{status, detail}` inside `detail`; that shape is still read, so a
+ * conversation reopened against one does not drop its sentence.
+ */
 function extractNotice(
   payload: unknown,
 ): { notice: string; noticeKind?: string } | undefined {
   if (!isRecord(payload)) return undefined;
-  const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+  const nested = isRecord(payload.detail) ? payload.detail : undefined;
+  const sentence = nested ? nested.detail : payload.detail;
+  const detail = typeof sentence === "string" ? sentence.trim() : "";
   if (!detail) return undefined;
-  const kind = typeof payload.status === "string"
-    ? payload.status.trim().toLowerCase()
-    : undefined;
-  return kind ? { notice: detail, noticeKind: kind } : { notice: detail };
+  const kind = [payload.notice, nested?.status, payload.status]
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return kind ? { notice: detail, noticeKind: kind.trim().toLowerCase() } : { notice: detail };
 }
 
 function extractTitle(payload: unknown): string | undefined {
@@ -219,7 +236,8 @@ export function parseAssistantStreamEvent(value: unknown): ParsedAssistantStream
       ? normalizeStatus(payload.conversation_status)
       : undefined;
     const status = conversationStatus ?? extractStatus(payload) ?? "COMPLETED";
-    return { status };
+    const waitingOnWork = isRecord(payload) && payload.waiting_on_work === true;
+    return waitingOnWork ? { status, waitingOnWork } : { status };
   }
 
   if (eventType === "stopped") {

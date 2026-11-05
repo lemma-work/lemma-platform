@@ -3,18 +3,30 @@
 Lives inside the `app` package (editable when installed as a library) so
 lemma-cloud's standalone app can import it reliably. The top-level
 standalone_app.py is the OSS run target; lemma_cloud/standalone_app.py is the
-cloud one — both call build_standalone_app with their own api_app + worker.
+cloud one -- both call build_standalone_app with their own api_app and module
+list.
+
+The embedded app *is* the whole deployment -- desktop, the Docker local stack
+and `make dev` all launch `uvicorn local_app:app` and nothing else -- so it runs
+every work class (``WORK_CLASSES`` is for split deployments of the standalone
+worker). uvicorn owns the process's signals: the lifespan's exit is the stop,
+and the work runtime drains within its per-class grace before the API's own
+teardown closes what its handlers use.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+import signal
+from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from anyio import TASK_STATUS_IGNORED, create_task_group, sleep_forever
-from anyio.abc import TaskStatus
 from fastapi import FastAPI
+
+if TYPE_CHECKING:
+    from app.core.registry.contract import LemmaModule
 
 
 @dataclass(frozen=True)
@@ -25,61 +37,26 @@ class EmbeddedApp:
     app: FastAPI
 
 
-async def _embedded_worker_signal_handler(scope) -> None:
-    del scope
-    await sleep_forever()
-
-
-class _EmbeddedLanes:
-    """Runs every worker lane inside this process.
-
-    Deliberately `list(Lane)` rather than `enabled_lanes()`. The embedded app
-    *is* the whole deployment — desktop, the Docker local stack and `make dev`
-    all launch `uvicorn local_app:app` and nothing else — so there is no second
-    process a lane could be delegated to, and honouring `WORKER_LANES` here
-    would let one env var silently leave a queue unconsumed.
-
-    Which is what used to happen without the env var. This embedded exactly one
-    Worker, the interactive one, so nothing anywhere consumed `default-bulk`.
-    Document processing lives on that lane, so every uploaded file sat at
-    PENDING with `processing_attempts` 0 forever — no consumer, no retries, and
-    the two recovery crons that would have noticed are on the same lane.
-    """
-
-    async def run_async(
-        self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED
-    ) -> None:
-        from app.core.infrastructure.jobs.streaq_runtime import Lane, run_worker_lanes
-
-        await run_worker_lanes(list(Lane), task_status=task_status)
-
-
-def _prepare_embedded_worker(worker):
-    """Silence signals on every lane this process runs, and return its runner.
-
-    uvicorn owns process signals here, and streaq 6.3 schedules
-    `signal_handler` regardless of `handle_signals`. Non-primary lanes are
-    already silenced where they are constructed; doing it for all of them keeps
-    this correct if a lane is ever added.
-    """
-    from app.core.infrastructure.jobs.streaq_runtime import LANE_WORKERS
-
-    for lane_worker in LANE_WORKERS.values():
-        lane_worker.handle_signals = False
-        lane_worker.signal_handler = _embedded_worker_signal_handler
-    del worker
-    return _EmbeddedLanes()
-
-
 def build_standalone_app(
     api_app: FastAPI,
-    worker,
+    modules: Sequence[LemmaModule] | None = None,
     *,
     embedded_apps: Sequence[EmbeddedApp] = (),
 ) -> FastAPI:
-    """Embed the streaq worker + scheduler into ``api_app`` for single-process
-    local dev. The caller passes the composed api_app (OSS or cloud) and the
-    matching streaq worker."""
+    """Embed the work runtime into ``api_app`` for single-process deployments.
+
+    ``modules`` is the list the worker half registers and runs (the open-source
+    list when omitted); it must be the list ``api_app`` was built from.
+    """
+    if modules is not None and not isinstance(modules, (list, tuple)):
+        # The second argument used to be the streaq worker. A caller still
+        # passing one (an un-updated lemma-cloud wrapper) gets this rather than
+        # a failure deep in module registration.
+        raise TypeError(
+            "build_standalone_app(api_app, modules): the second argument is the "
+            "module list the work runtime registers (the one api_app was built "
+            f"from), not a worker; got {type(modules).__name__}"
+        )
     api_app.state.embedded_worker = True
     api_app.state.embedded_apps = tuple(item.path for item in embedded_apps)
     api_lifespan = api_app.router.lifespan_context
@@ -92,27 +69,58 @@ def build_standalone_app(
 
     @asynccontextmanager
     async def standalone_lifespan(app: FastAPI):
+        from app.core.infrastructure.work.process import worker_services
+        from app.core.registry.installed import OSS_MODULES
+
         async with AsyncExitStack() as stack:
             await stack.enter_async_context(api_lifespan(app))
-
             for item in embedded_apps:
                 await stack.enter_async_context(
                     item.app.router.lifespan_context(item.app)
                 )
-
-            embedded_worker = _prepare_embedded_worker(worker)
-            async with create_task_group() as task_group:
-                await task_group.start(embedded_worker.run_async)
-                try:
-                    yield
-                finally:
-                    task_group.cancel_scope.cancel()
+            runtime = await stack.enter_async_context(
+                worker_services(
+                    OSS_MODULES if modules is None else modules,
+                    service_name="lemma-api",
+                    embedded=True,
+                )
+            )
+            begin_stop = getattr(runtime, "begin_stop", None)
+            if begin_stop is not None:
+                stack.callback(_drain_on_signal(begin_stop))
+            yield
 
     api_app.router.lifespan_context = standalone_lifespan
-
-    # No scheduler to start, and no job API to mount. Schedules are fired by the
-    # poller inside the embedded worker, so standalone gets scheduling by
-    # running a worker rather than by assembling a second control plane and
-    # calling it over loopback HTTP.
-
     return api_app
+
+
+def _drain_on_signal(begin_stop: Callable[[], None]) -> Callable[[], None]:
+    """Start the work runtime's drain the moment SIGTERM/SIGINT arrives.
+
+    uvicorn handles the signal by waiting for open connections -- a chat's
+    event stream among them -- before it runs the lifespan's exit, which is
+    where the runtime stopped. So a turn was never handed back: it finished on
+    the dying process, and shutdown waited on the stream for as long as it
+    stayed open. uvicorn's own handler still runs after this one. Returns the
+    undo, for the lifespan's exit.
+    """
+    loop = asyncio.get_running_loop()
+    previous: dict[int, object] = {}
+
+    def handle(signum: int, frame: object) -> None:
+        loop.call_soon_threadsafe(begin_stop)
+        prior = previous.get(signum)
+        if callable(prior):
+            prior(signum, frame)
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous[signum] = signal.signal(signum, handle)
+        except ValueError:  # not the main thread: no signals to watch here
+            return lambda: None
+
+    def restore() -> None:
+        for signum, prior in previous.items():
+            signal.signal(signum, prior)  # type: ignore[arg-type]
+
+    return restore

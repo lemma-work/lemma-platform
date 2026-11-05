@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import pytest
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.agent_host_selections import (
     carry_agent_host_model,
     carry_agent_host_selections,
+    options_for_model,
     validate_agent_host_model,
     validate_agent_host_selections,
 )
@@ -36,7 +38,7 @@ def test_an_enumerated_option_still_enforces_membership():
         config_options=options, selections={"permission_mode": "ask"}
     ) == {"permission_mode": "ask"}
 
-    with pytest.raises(ValueError, match="Invalid value"):
+    with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
         validate_agent_host_selections(
             config_options=options, selections={"permission_mode": "plan9"}
         )
@@ -50,7 +52,7 @@ def test_membership_in_what_the_host_published_is_the_whole_check():
     assert validate_agent_host_selections(
         config_options=options, selections={"permission_mode": "plan"}
     ) == {"permission_mode": "plan"}
-    with pytest.raises(ValueError, match="Invalid value"):
+    with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
         validate_agent_host_selections(
             config_options=options,
             selections={"permission_mode": "bypassPermissions"},
@@ -69,7 +71,7 @@ def test_an_option_whose_name_merely_contains_mode_is_not_policy():
 def test_the_model_category_is_rejected_outright():
     """Models go through default_model_name, which validates against the
     harness's own catalog. Accepting one here would bypass that."""
-    with pytest.raises(ValueError, match="default_model_name"):
+    with pytest.raises(RuntimeProfileValidationError, match="default_model_name"):
         validate_agent_host_selections(
             config_options=[{"id": "model", "category": "model"}],
             selections={"model": "gpt-5.1"},
@@ -77,7 +79,7 @@ def test_the_model_category_is_rejected_outright():
 
 
 def test_an_unknown_selection_is_rejected():
-    with pytest.raises(ValueError, match="Unknown"):
+    with pytest.raises(RuntimeProfileValidationError, match="Unknown"):
         validate_agent_host_selections(
             config_options=[_option()], selections={"nope": "x"}
         )
@@ -106,12 +108,63 @@ def test_a_selection_may_be_keyed_by_category_instead_of_id():
     ) == {"workdir": "/repo"}
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({"nested": "object"}, id="object"),
+        pytest.param(["a", "list"], id="list"),
+        pytest.param(None, id="null"),
+    ],
+)
+def test_an_option_without_an_enumeration_takes_only_a_scalar(value: object):
+    """Nothing was published to check membership against, and anything at all
+    used to be saved and forwarded to the host as the setting."""
+    options = [{"id": "workdir", "category": "workdir", "options": []}]
+
+    with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
+        validate_agent_host_selections(
+            config_options=options, selections={"workdir": value}
+        )
+    assert (
+        carry_agent_host_selections(
+            config_options=options, selections={"workdir": value}
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    ("current", "value", "accepted"),
+    [
+        pytest.param(True, False, True, id="toggle takes a bool"),
+        pytest.param(True, 1, False, id="toggle refuses a number"),
+        pytest.param(30, True, False, id="number refuses a bool"),
+        pytest.param(30, 45.5, True, id="number takes a number"),
+        pytest.param("auto", 3, False, id="text refuses a number"),
+    ],
+)
+def test_an_unenumerated_value_matches_the_type_the_harness_reports(
+    current: object, value: object, accepted: bool
+):
+    options = [{"id": "knob", "category": "knob", "current_value": current}]
+
+    if accepted:
+        assert validate_agent_host_selections(
+            config_options=options, selections={"knob": value}
+        ) == {"knob": value}
+    else:
+        with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
+            validate_agent_host_selections(
+                config_options=options, selections={"knob": value}
+            )
+
+
 class TestValidateAgentHostModel:
     def test_none_stays_none(self):
         assert validate_agent_host_model(config_options=[], model_name=None) is None
 
     def test_blank_name_is_rejected(self):
-        with pytest.raises(ValueError, match="cannot be empty"):
+        with pytest.raises(RuntimeProfileValidationError, match="cannot be empty"):
             validate_agent_host_model(
                 config_options=[{"id": "model", "category": "model", "options": []}],
                 model_name="   ",
@@ -125,13 +178,13 @@ class TestValidateAgentHostModel:
                 "options": [{"id": "gpt-5.1"}],
             }
         ]
-        with pytest.raises(ValueError, match="not offered"):
+        with pytest.raises(RuntimeProfileValidationError, match="not offered"):
             validate_agent_host_model(config_options=options, model_name="gpt-9000")
 
     def test_no_model_option_at_all_is_rejected(self):
         """A harness that publishes no `model` category has nothing to pin
         against, so any requested name is unavailable -- not a pass-through."""
-        with pytest.raises(ValueError, match="not offered"):
+        with pytest.raises(RuntimeProfileValidationError, match="not offered"):
             validate_agent_host_model(
                 config_options=[{"id": "workdir", "category": "path"}],
                 model_name="gpt-5.1",
@@ -204,4 +257,106 @@ class TestCarryAgentHostModel:
                 model_name="gpt-5.1",
             )
             is None
+        )
+
+
+def _effort(*values: str) -> dict[str, object]:
+    return {
+        "id": "effort",
+        "category": "thought_level",
+        "name": "Effort",
+        "options": [{"value": value, "name": value.title()} for value in values],
+    }
+
+
+def _claude_like() -> list[object]:
+    """A harness whose default model tops out at ``high`` and whose ``opus``
+    also offers ``max`` -- the per-model contract, ``lemma_options`` on the
+    model's own entry."""
+    return [
+        {
+            "id": "model",
+            "category": "model",
+            "name": "Model",
+            "options": [
+                {"value": "sonnet", "name": "Sonnet"},
+                {
+                    "value": "opus",
+                    "name": "Opus",
+                    "lemma_options": [_effort("low", "high", "max")],
+                },
+            ],
+        },
+        _effort("low", "high"),
+    ]
+
+
+class TestOptionsForModel:
+    def test_no_model_is_the_harness_default_and_gets_the_top_level(self):
+        assert options_for_model(_claude_like(), None) == [_effort("low", "high")]
+        assert options_for_model(_claude_like(), "  ") == [_effort("low", "high")]
+
+    def test_a_model_with_its_own_options_gets_those(self):
+        assert options_for_model(_claude_like(), "opus") == [
+            _effort("low", "high", "max")
+        ]
+
+    def test_a_model_without_its_own_options_gets_the_top_level(self):
+        assert options_for_model(_claude_like(), "sonnet") == [_effort("low", "high")]
+
+    def test_a_model_the_harness_does_not_list_gets_the_top_level(self):
+        assert options_for_model(_claude_like(), "retired") == [_effort("low", "high")]
+
+    def test_the_model_option_itself_is_never_a_selection(self):
+        nested_model = _claude_like()
+        nested_model[0]["options"][1]["lemma_options"].append(
+            {"id": "model", "category": "model", "options": []}
+        )
+        assert all(
+            option["category"] != "model"
+            for option in options_for_model(nested_model, "opus")
+        )
+
+
+class TestSelectionsFollowTheChosenModel:
+    def test_a_value_only_the_chosen_model_offers_is_accepted(self):
+        """``max`` is refused against the machine's default model and accepted
+        against the one that offers it."""
+        assert validate_agent_host_selections(
+            config_options=_claude_like(),
+            selections={"effort": "max"},
+            model_name="opus",
+        ) == {"effort": "max"}
+        with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
+            validate_agent_host_selections(
+                config_options=_claude_like(),
+                selections={"effort": "max"},
+                model_name="sonnet",
+            )
+        with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
+            validate_agent_host_selections(
+                config_options=_claude_like(), selections={"effort": "max"}
+            )
+
+    def test_the_model_is_still_refused_as_a_selection(self):
+        with pytest.raises(RuntimeProfileValidationError, match="default_model_name"):
+            validate_agent_host_selections(
+                config_options=_claude_like(),
+                selections={"model": "opus"},
+                model_name="opus",
+            )
+
+    def test_carrying_drops_what_the_model_the_run_uses_does_not_offer(self):
+        assert carry_agent_host_selections(
+            config_options=_claude_like(),
+            selections={"effort": "max"},
+            model_name="opus",
+        ) == {"effort": "max"}
+        assert (
+            carry_agent_host_selections(
+                config_options=_claude_like(),
+                selections={"effort": "max", "model": "opus"},
+                model_name=None,
+            )
+            == {}
         )

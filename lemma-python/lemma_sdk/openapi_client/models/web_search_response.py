@@ -24,7 +24,7 @@ class WebSearchResponse:
         error (None | str | Unset): Error message if the search was not successful
         message (None | str | Unset): Status message
         note (None | str | Unset): Set when the search could not be run exactly as asked — for example a vertical this
-            provider does not serve.
+            provider does not serve — or when it found nothing, which is not always the same as nothing existing.
         results (list[SearchResult] | Unset): List of search results
     """
 

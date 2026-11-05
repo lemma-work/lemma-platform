@@ -19,29 +19,32 @@ T = TypeVar("T", bound="SurfaceConnection")
 
 @_attrs_define
 class SurfaceConnection:
-    """Which account a surface runs on, and who connected it.
+    """Which account a surface's pod connector runs as, and whose it is.
 
     Accounts are personal (``accounts.user_id``) while surfaces belong to the
-    pod, so ``account_id`` alone answers nothing for a teammate — they cannot
+    pod, so an account id alone answers nothing for a teammate — they cannot
     resolve an id they don't own. This block is the pod-visible *identity* of
     that account: enough for any editor to see who to ask, never the credential.
 
         Attributes:
-            account_id (UUID):
             connector_id (str):
+            pod_connector (str):
+            account_id (None | Unset | UUID):
             connected_by (None | SurfaceConnectionOwner | Unset):
             display_name (None | str | Unset):
             status (SurfaceConnectionStatus | Unset): Health of the account a surface runs on.
 
-                Mirrors ``AccountStatus`` and adds ``MISSING`` for a surface pointing at an
-                account row that is no longer there. Whether the owner is still in the pod
+                Mirrors ``AccountStatus`` and adds ``MISSING`` for a surface whose pod
+                connector runs as no account right now: removed, or its account withdrawn
+                by its owner or gone. Whether the owner is still in the pod
                 is deliberately *not* folded in here: a departed owner's token keeps working
                 until it expires, so it is a separate fact (``connected_by.is_pod_member``),
                 not a rung on this ladder.
     """
 
-    account_id: UUID
     connector_id: str
+    pod_connector: str
+    account_id: None | Unset | UUID = UNSET
     connected_by: None | SurfaceConnectionOwner | Unset = UNSET
     display_name: None | str | Unset = UNSET
     status: SurfaceConnectionStatus | Unset = UNSET
@@ -50,9 +53,17 @@ class SurfaceConnection:
     def to_dict(self) -> dict[str, Any]:
         from ..models.surface_connection_owner import SurfaceConnectionOwner
 
-        account_id = str(self.account_id)
-
         connector_id = self.connector_id
+
+        pod_connector = self.pod_connector
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
 
         connected_by: dict[str, Any] | None | Unset
         if isinstance(self.connected_by, Unset):
@@ -76,10 +87,12 @@ class SurfaceConnection:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "account_id": account_id,
                 "connector_id": connector_id,
+                "pod_connector": pod_connector,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if connected_by is not UNSET:
             field_dict["connected_by"] = connected_by
         if display_name is not UNSET:
@@ -94,9 +107,26 @@ class SurfaceConnection:
         from ..models.surface_connection_owner import SurfaceConnectionOwner
 
         d = dict(src_dict)
-        account_id = UUID(d.pop("account_id"))
-
         connector_id = d.pop("connector_id")
+
+        pod_connector = d.pop("pod_connector")
+
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         def _parse_connected_by(data: object) -> None | SurfaceConnectionOwner | Unset:
             if data is None:
@@ -132,8 +162,9 @@ class SurfaceConnection:
             status = SurfaceConnectionStatus(_status)
 
         surface_connection = cls(
-            account_id=account_id,
             connector_id=connector_id,
+            pod_connector=pod_connector,
+            account_id=account_id,
             connected_by=connected_by,
             display_name=display_name,
             status=status,

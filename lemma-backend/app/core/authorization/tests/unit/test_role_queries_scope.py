@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from app.core.authorization.role_queries import roles_applying_to_pod
+from app.core.authorization.permissions import ORG_OWNER_PERMISSIONS, Permissions
+from app.core.authorization.role_queries import merge_role_data, roles_applying_to_pod
 
 ORG_MEMBER = uuid4()
 POD_A = uuid4()
@@ -57,3 +58,24 @@ def test_only_the_foreign_rows_are_dropped():
     kept = roles_applying_to_pod([organization_wide, scoped_to_a, scoped_to_b], POD_A)
 
     assert kept == [organization_wide, scoped_to_a]
+
+
+def test_a_built_in_role_carries_its_code_defined_permissions():
+    """Rows are re-seeded only when roles are listed or assigned. An org owner
+    whose role rows predate a release must still get what the role now means --
+    here the pod permissions that make them belong to every pod."""
+    stale_owner = (ORG_MEMBER, uuid4(), "ORG_OWNER", "org.read", None)
+    role_ids, role_names, permission_ids = set(), set(), set()
+
+    merge_role_data([stale_owner], role_ids, role_names, permission_ids)
+
+    assert ORG_OWNER_PERMISSIONS <= permission_ids
+    assert Permissions.POD_READ in permission_ids
+
+
+def test_a_custom_role_carries_only_its_rows():
+    role_ids, role_names, permission_ids = set(), set(), set()
+
+    merge_role_data([_row(None)], role_ids, role_names, permission_ids)
+
+    assert permission_ids == {"agent.read"}

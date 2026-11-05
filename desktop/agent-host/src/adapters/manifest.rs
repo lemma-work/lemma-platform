@@ -6,7 +6,7 @@ use super::{
     VersionUnknown, cached_adapter_directory, cached_adapter_executable, ensure_adapter_node_runs,
     fingerprint_path, probe_version, reason_is_transient, reason_without_marker,
     resolve_executable, snapshot_installing, snapshot_ready, snapshot_unavailable,
-    verify_cached_adapter, version_is_at_least,
+    verify_cached_adapter, version_is_at_least, version_label,
 };
 
 impl AdapterManifest {
@@ -128,7 +128,7 @@ impl AdapterManifest {
             ensure_adapter_node_runs(&spec, cache_root, &command, &upstream_command)?;
         }
         let probed = probe_version(&upstream_command, &spec.upstream_version_args);
-        let upstream_version = probed.clone().ok();
+        let upstream_version = probed.as_deref().ok().map(version_label);
         if let Some(minimum) = spec.minimum_upstream_version.as_deref() {
             let installed = probed.map_err(|reason| match reason {
                 // Says what actually happened, so nobody goes looking at their

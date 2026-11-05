@@ -24,6 +24,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.authorization.context import Context
+from app.modules.test_support.authz import allow_all_context
 from app.modules.web_login.services.sign_in import (
     SignInNotPending,
     SignInService,
@@ -39,15 +41,9 @@ OWNER = uuid4()
 pytestmark = pytest.mark.unit
 
 
-class _Ctx:
-    def __init__(self, user_id) -> None:
-        self.user_id = user_id
-        self.delegated_by_user_id = None
-        self.is_user_equivalent = False
-        self.pod_id = None
-
-    async def require(self, *_args, **_kwargs) -> None:
-        return None
+def _ctx(user_id) -> Context:
+    """A person acting for themselves, allowed everything."""
+    return allow_all_context(user_id=user_id)
 
 
 class _Browser:
@@ -173,7 +169,7 @@ def _relay_error() -> type[Exception]:
 async def test_a_site_that_does_not_ask_for_a_login_needs_no_person() -> None:
     browser = _Browser()
     assert await _service(browser).already_signed_in(
-        origin=SITE, auth_ctx=_Ctx(uuid4())
+        origin=SITE, auth_ctx=_ctx(uuid4())
     )
     assert browser.opened == [SITE]
 
@@ -187,7 +183,7 @@ async def test_a_site_that_shows_a_login_form_needs_the_person() -> None:
     """
     browser = _Browser(landed=AT_A_LOGIN_FORM)
     assert not await _service(browser).already_signed_in(
-        origin=SITE, auth_ctx=_Ctx(uuid4())
+        origin=SITE, auth_ctx=_ctx(uuid4())
     )
 
 
@@ -195,7 +191,7 @@ async def test_an_unreachable_browser_is_not_read_as_signed_in() -> None:
     """Not knowing is a reason to ask, never a reason to claim."""
     browser = _Browser(fails=_relay_error()("no relay"))
     assert not await _service(browser).already_signed_in(
-        origin=SITE, auth_ctx=_Ctx(uuid4())
+        origin=SITE, auth_ctx=_ctx(uuid4())
     )
 
 
@@ -203,7 +199,7 @@ async def test_a_browser_that_reports_nothing_is_not_read_as_signed_in() -> None
     browser = _Browser(landed={})
     browser.landed = None  # type: ignore[assignment]
     assert not await _service(browser).already_signed_in(
-        origin=SITE, auth_ctx=_Ctx(uuid4())
+        origin=SITE, auth_ctx=_ctx(uuid4())
     )
 
 
@@ -219,7 +215,7 @@ async def test_asking_puts_the_site_in_front_of_the_person() -> None:
         reason="pulling invoices",
         conversation_id=uuid4(),
         tool_call_id="call-1",
-        auth_ctx=_Ctx(uuid4()),
+        auth_ctx=_ctx(uuid4()),
     )
     assert site == SITE, "a bare host is normalised to an https origin"
     assert browser.opened == [SITE]
@@ -234,7 +230,7 @@ async def test_a_cold_browser_does_not_fail_the_ask() -> None:
         reason="pulling invoices",
         conversation_id=uuid4(),
         tool_call_id="call-1",
-        auth_ctx=_Ctx(uuid4()),
+        auth_ctx=_ctx(uuid4()),
     )
     assert site == SITE
 
@@ -391,7 +387,7 @@ async def test_the_protected_page_is_what_gets_opened() -> None:
     page = f"{SITE}/reports/42"
 
     assert await _service(browser).already_signed_in(
-        origin=SITE, auth_ctx=_Ctx(uuid4()), page_url=page
+        origin=SITE, auth_ctx=_ctx(uuid4()), page_url=page
     )
     assert browser.opened == [page], "the root would have answered for everybody"
 
@@ -401,7 +397,7 @@ async def test_without_a_page_it_still_falls_back_to_the_origin() -> None:
     browser = _Browser()
 
     assert await _service(browser).already_signed_in(
-        origin=SITE, auth_ctx=_Ctx(uuid4())
+        origin=SITE, auth_ctx=_ctx(uuid4())
     )
     assert browser.opened == [SITE]
 

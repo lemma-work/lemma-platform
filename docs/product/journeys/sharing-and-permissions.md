@@ -111,6 +111,11 @@ rights than the person who asked.
   then the system shall refuse the access.
 - The system shall apply this on every request the workload makes, not only on
   the first.
+- The system shall let an agent or function make a public link to a file only
+  where it was granted permission to share that file, whether or not it acts
+  for a person: a link hands the file to whoever holds it, outside every grant.
+  Every person in the pod may share what they can read, and the pod's
+  assistant shares as the person it acts for.
 - Granting a workload access to a resource shall not, by itself, withdraw that
   resource from the people in the pod. A grant to an agent says what the agent
   may do; it says nothing about who may see the thing. Otherwise configuring a
@@ -127,6 +132,9 @@ rights than the person who asked.
   person at the time.
 - The system shall apply that rule even when the workload acts for the person
   who created the resource.
+- The system shall treat deleting records, one or many, as destructive, and
+  shall not let permission to write a table's records stand in for permission
+  to delete them.
 - If the record of session approvals is unavailable, then the system shall treat
   every action as unapproved and shall ask again, rather than allowing it.
 
@@ -232,6 +240,34 @@ rights than the person who asked.
 > refresh-token reuse and the list.
 
 **Contracts:** `mcp_access.grants.list`, `mcp_access.grants.revoke`
+
+### PS-ACCESS-044 — A connected tool is told about new rows only when the person says so
+**Status:** manual
+
+- When a tool asks to be told about new rows, the system shall ask the person
+  about that separately from reading.
+- Where the person did not agree to it, the system shall refuse the tool's
+  request to be told about new rows.
+- While a tool is told about a table, the system shall send it each new row
+  the person may read.
+- If the person may not read a new row, then the system shall not send it.
+- If the person disconnects the tool, then the system shall send it nothing
+  further.
+- When a person opens a pod's AI tools settings, the system shall show what
+  each connected tool is told about.
+- When the person stops a tool being told about something, the system shall
+  refuse the tool's request to be told about it again until the person
+  resumes it.
+- If a tool's address for receiving rows keeps failing, then the system shall
+  stop sending to it until the tool checks in again.
+- The system shall never send a tool new rows faster than a fixed rate.
+
+> **Manual:** as PS-ACCESS-040 -- proving it needs ChatGPT itself. The module
+> e2e suite (`mcp_access/tests/e2e/test_mcp_events_e2e.py`) covers the separate
+> consent, delivery from a new row to a signed receiver, Stop and Resume, the
+> pause on a failing receiver, and revoking the connection.
+
+**Contracts:** `mcp_access.grants.list`, `mcp_access.grants.subscription.delete`, `mcp_access.grants.subscription.resume`
 
 ### PS-ACCESS-042 — A connected tool shows a pod's records as a table the person can work in
 **Status:** manual

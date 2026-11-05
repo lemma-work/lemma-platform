@@ -40,7 +40,6 @@ export interface SiteRuntime {
     features: string;
     /** The installer link. `null` is unset (use the public one); "" is no button. */
     desktopDownloadUrl: string | null;
-    voiceProvider: string;
     /** Whether a new account must verify its email before it may do anything. */
     authEmailVerificationRequired: string;
     /** Which run of a desktop installation's runtime answered. locald's health
@@ -69,7 +68,6 @@ function built(): SiteRuntime {
         analyticsHost: process.env.NEXT_PUBLIC_ANALYTICS_HOST || "https://eu.posthog.com",
         features: process.env.NEXT_PUBLIC_LEMMA_FEATURES ?? "",
         desktopDownloadUrl: process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL ?? null,
-        voiceProvider: process.env.NEXT_PUBLIC_VOICE_PROVIDER ?? "",
         authEmailVerificationRequired: process.env.NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED ?? "",
         runtimeInstanceId: process.env.NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID ?? "",
     };
@@ -87,7 +85,6 @@ const VARIABLES: Record<keyof SiteRuntime, string> = {
     analyticsHost: "NEXT_PUBLIC_ANALYTICS_HOST",
     features: "NEXT_PUBLIC_LEMMA_FEATURES",
     desktopDownloadUrl: "NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL",
-    voiceProvider: "NEXT_PUBLIC_VOICE_PROVIDER",
     authEmailVerificationRequired: "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED",
     runtimeInstanceId: "NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID",
 };

@@ -24,7 +24,7 @@ from app.modules.agent_surfaces.services.approval_preview import (
     approval_action_summary,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
-    _ask_user_link,
+    _answered_in_thread,
     _delivering_adapter,
     _pending,
     _slack_event,
@@ -153,11 +153,8 @@ _LEAKY_ARGS = {
 async def _paused_approval_egress(adapter):
     surface = _slack_surface()
     conversation_id = uuid4()
-    link = await _ask_user_link(surface, conversation_id, _slack_event())
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    link = _answered_in_thread(surface, conversation_id, _slack_event())
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.pending_approval.return_value = _pending(
         "request_approval", tool_call_id="tool-9", tool_args=_LEAKY_ARGS
     )

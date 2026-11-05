@@ -199,8 +199,9 @@ put it there having to think about it on every operation.
 
 > **Verified by:** `test_a_query_says_the_facility_is_unavailable` in
 > `app/modules/datastore/tests/e2e/test_query_unavailable_e2e.py`, not by a
-> scenario. Direct querying runs as a dedicated Postgres role
-> (`datastore_query_role`), and taking that role away is the only way the state
+> scenario. Direct querying runs as a Postgres role of the pod's own, which
+> holds nothing on any other pod's schema and which the app creates, so a
+> deployment whose app role cannot create roles is the only way the state
 > exists — which a scenario cannot do: the suite forbids mocking, and dropping
 > the role from a shared stack breaks every other scenario using it. Inducing a
 > dependency failure is what the module e2e suite is for
@@ -325,9 +326,33 @@ put it there having to think about it on every operation.
 - When a signed link expires, the system shall refuse it.
 - If a file is deleted, then the system shall refuse links to it that have not
   yet expired.
-- The system shall keep a signed link scoped to the one file it was made for.
+- The system shall keep a signed link scoped to the file it was made for and
+  what that file embeds (PS-DATA-051).
 
 **Contracts:** `file.signed_url`, `file.url`, `file.download`
+
+### PS-DATA-051 — A shared page is live and carries what it shows
+**Status:** covered
+
+- While a signed link is live, the system shall serve the file as it is now,
+  not as it was when the link was made.
+- When a shared page embeds pictures, stylesheets or scripts from the pod, the
+  system shall serve them to whoever holds the link, without counting them as
+  opens of the page.
+- The system shall serve through a page's link only what the page embeds now,
+  and never the documents it only links to.
+- The system shall serve through a link only what the person who made it can
+  still read, and, when an agent made it, only what that agent can also read.
+- The system shall serve through a page's link a personal file only when the
+  page and the file are both in the personal folder of the person who made the
+  link, and a restricted file never.
+- When a page's link has been opened for the last time it allows, the system
+  shall keep serving what the page embeds for a short while, so that last
+  reader sees the whole page.
+- If the person who made a link no longer exists, then the system shall serve
+  nothing through it, even when an agent made it for them.
+
+**Contracts:** `file.signed_url`, `file.update`
 
 ---
 

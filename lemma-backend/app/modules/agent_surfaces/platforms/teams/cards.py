@@ -17,8 +17,10 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.teams.parser import (
+    TEAMS_ACTION_KEY,
     TEAMS_APPROVAL_DECISION_KEY,
     TEAMS_FORM_CALLBACK_KEY,
+    TEAMS_THREAD_KEY,
 )
 
 
@@ -183,4 +185,25 @@ def _teams_approval_card(plan: SurfaceApprovalRenderPlan) -> dict[str, Any]:
         "version": "1.4",
         "body": body,
         "actions": actions,
+    }
+
+
+def teams_retry_card(thread_id: str | None) -> dict[str, Any]:
+    """The "Try again" control under a failure notice.
+
+    The callback key is required for Teams to route the submit to us at all;
+    the action key is what says it is a retry. The thread rides in the card
+    because a submit's ``replyToId`` names the card's own message, not the
+    thread the conversation is linked by. It is only a locator: the tap still
+    has to come from the person that thread belongs to.
+    """
+    data: dict[str, Any] = {TEAMS_FORM_CALLBACK_KEY: "retry", TEAMS_ACTION_KEY: "retry"}
+    if thread_id:
+        data[TEAMS_THREAD_KEY] = thread_id
+    return {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [],
+        "actions": [{"type": "Action.Submit", "title": "Try again", "data": data}],
     }

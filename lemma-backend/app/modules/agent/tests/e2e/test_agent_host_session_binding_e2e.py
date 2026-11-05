@@ -25,7 +25,9 @@ from app.modules.agent.infrastructure.agent_host.session_memory import (
 from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventNormalizer,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import RemoteHarness
+from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import (
+    RunEventApplier,
+)
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
@@ -112,8 +114,8 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     )
     conversation = await ConversationRepository(uow).get_conversation(conversation_id)
     assert conversation is not None
-    harness = RemoteHarness(lambda: SqlAlchemyUnitOfWork(db_session))
-    await harness._normalize(
+    applier = RunEventApplier(lambda: SqlAlchemyUnitOfWork(db_session), None)
+    await applier.events_for(
         AgentHostEventNormalizer(agent_run_id=new_run.id, model_name="claude"),
         StreamedEvent(
             stream_id="1-0",

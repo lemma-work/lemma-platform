@@ -6,7 +6,6 @@ from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.usage.domain.entities import UsageReservation
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.services.usage_service import UsageService
@@ -29,7 +28,7 @@ async def reserve_usage_for_runtime(
     if not isinstance(model_name, str):
         model_name = str(runtime_profile.get("provider_model_name") or "default")
     async with async_session_maker() as session:
-        uow = SqlAlchemyUnitOfWork(session, message_bus=get_message_bus())
+        uow = SqlAlchemyUnitOfWork(session)
         reservation = await _usage_service(uow).reserve_for_profile(
             organization_id=organization_id,
             user_id=user_id,
@@ -45,7 +44,7 @@ async def release_usage_reservation(reservation: UsageReservation | None) -> Non
     if reservation is None:
         return
     async with async_session_maker() as session:
-        uow = SqlAlchemyUnitOfWork(session, message_bus=get_message_bus())
+        uow = SqlAlchemyUnitOfWork(session)
         await _usage_service(uow).release_reservation(reservation)
         await uow.commit()
 
@@ -63,7 +62,7 @@ async def record_pydantic_ai_result_usage(
         await release_usage_reservation(reservation)
         return
     async with async_session_maker() as session:
-        uow = SqlAlchemyUnitOfWork(session, message_bus=get_message_bus())
+        uow = SqlAlchemyUnitOfWork(session)
         await _usage_service(uow).record_pydantic_ai_result_usage(
             ctx=ctx,
             runtime_profile=runtime_profile,

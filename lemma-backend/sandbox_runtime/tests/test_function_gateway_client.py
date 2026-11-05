@@ -125,6 +125,41 @@ async def test_terminal_callback_retries_transient_status_and_honors_retry_after
     assert attempts == 2
 
 
+async def test_terminal_callback_waits_out_a_slow_backend_instead_of_resending():
+    """A handler that needs a few seconds is answered once, not re-sent.
+
+    The backend redacts the logs off the event loop and writes the row before
+    it answers; under load that takes seconds. The handler is simulated rather
+    than slept: a client read timeout shorter than its work raises the read
+    timeout a real socket would, while the server finishes and commits anyway.
+    """
+    handler_seconds = 5.0
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if request.extensions["timeout"]["read"] < handler_seconds:
+            raise httpx.ReadTimeout("slow terminal handler", request=request)
+        return httpx.Response(200, json={"accepted": True}, request=request)
+
+    gateway = GatewayClient(
+        "https://gateway.lemma.test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await gateway.terminal(
+            "delegated-function-token",
+            run_id=uuid4(),
+            deadline_at=_deadline(),
+            report=_report(),
+        )
+    finally:
+        await gateway.close()
+
+    assert attempts == 1
+
+
 async def test_terminal_callback_does_not_retry_state_or_credential_rejection():
     attempts = 0
 

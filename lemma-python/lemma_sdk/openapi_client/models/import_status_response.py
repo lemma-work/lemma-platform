@@ -33,6 +33,8 @@ class ImportStatusResponse:
         status (ImportStatus):
         cancel_requested_at (datetime.datetime | None | Unset):
         committed_steps (list[int] | Unset):
+        connect_url (None | str | Unset): Where to connect the GitHub account the pod's `github` connector needs, when
+            the job failed for want of one.
         current_step (int | None | Unset):
         error (None | str | Unset):
         error_code (None | str | Unset):
@@ -51,6 +53,7 @@ class ImportStatusResponse:
     status: ImportStatus
     cancel_requested_at: datetime.datetime | None | Unset = UNSET
     committed_steps: list[int] | Unset = UNSET
+    connect_url: None | str | Unset = UNSET
     current_step: int | None | Unset = UNSET
     error: None | str | Unset = UNSET
     error_code: None | str | Unset = UNSET
@@ -86,6 +89,12 @@ class ImportStatusResponse:
         committed_steps: list[int] | Unset = UNSET
         if not isinstance(self.committed_steps, Unset):
             committed_steps = self.committed_steps
+
+        connect_url: None | str | Unset
+        if isinstance(self.connect_url, Unset):
+            connect_url = UNSET
+        else:
+            connect_url = self.connect_url
 
         current_step: int | None | Unset
         if isinstance(self.current_step, Unset):
@@ -146,6 +155,8 @@ class ImportStatusResponse:
             field_dict["cancel_requested_at"] = cancel_requested_at
         if committed_steps is not UNSET:
             field_dict["committed_steps"] = committed_steps
+        if connect_url is not UNSET:
+            field_dict["connect_url"] = connect_url
         if current_step is not UNSET:
             field_dict["current_step"] = current_step
         if error is not UNSET:
@@ -204,6 +215,15 @@ class ImportStatusResponse:
         )
 
         committed_steps = cast(list[int], d.pop("committed_steps", UNSET))
+
+        def _parse_connect_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        connect_url = _parse_connect_url(d.pop("connect_url", UNSET))
 
         def _parse_current_step(data: object) -> int | None | Unset:
             if data is None:
@@ -285,6 +305,7 @@ class ImportStatusResponse:
             status=status,
             cancel_requested_at=cancel_requested_at,
             committed_steps=committed_steps,
+            connect_url=connect_url,
             current_step=current_step,
             error=error,
             error_code=error_code,

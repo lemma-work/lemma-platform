@@ -24,6 +24,7 @@ from app.modules.agent.domain.wait import (
     AgentWaitWakeReason,
 )
 from app.modules.agent.domain.wait_decision import (
+    UNREADABLE_GRACE_SECONDS,
     LookAgainAt,
     WakeNow,
     deadline_of,
@@ -33,6 +34,7 @@ from app.modules.agent.tools.waiting.models import (
     POLL_CAP_SECONDS,
     POLL_START_SECONDS,
     next_poll_delay,
+    wake_message,
 )
 
 _NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
@@ -55,12 +57,20 @@ def _wait(wait_type: AgentWaitType, *, deadline_in: float = 3600, **spec):
     )
 
 
-def _decide(wait, *, target_reason=None, now=_NOW, poll_delay_seconds=10):
+def _decide(
+    wait,
+    *,
+    target_reason=None,
+    now=_NOW,
+    poll_delay_seconds=10,
+    unreadable_since=None,
+):
     return decide_wait(
         wait,
         target_reason=target_reason,
         now=now,
         poll_delay_seconds=poll_delay_seconds,
+        unreadable_since=unreadable_since,
     )
 
 
@@ -152,19 +162,13 @@ def test_a_naive_deadline_is_read_as_utc():
     )
 
 
-def test_rearming_resets_the_failed_wake_counter():
-    """A re-arm is a *successful* check, and the counter counts failed wakes.
-
-    Without this a wait that checks every ten seconds for an hour crosses
-    MAX_WAKE_ATTEMPTS on three unrelated transient errors spread across that
-    hour, and is abandoned with its target perfectly healthy.
-    """
+def test_rearming_counts_the_poll():
+    """A re-arm is a successful check: it moves the next look and counts it."""
     wait = _wait(AgentWaitType.PROCESS)
-    wait.wake_attempts = 2
 
     wait.rearm(_NOW + timedelta(seconds=10))
 
-    assert wait.wake_attempts == 0
+    assert wait.scheduled_at == _NOW + timedelta(seconds=10)
     assert wait.spec["poll_attempt"] == 1
 
 
@@ -173,3 +177,72 @@ def test_the_poll_backs_off_to_a_cap():
     assert next_poll_delay(0) == POLL_START_SECONDS
     assert next_poll_delay(1) == POLL_START_SECONDS * 2
     assert next_poll_delay(50) == POLL_CAP_SECONDS
+
+
+# -- a target that does not answer ---------------------------------------------
+
+
+def test_a_target_unreadable_past_the_grace_wakes_as_unreadable_not_deadline():
+    """The deadline used to be the only way out of an unreadable target, so a
+    sandbox that never answered cost the whole wait and then woke the agent to
+    "it was still running when you last looked" -- which nobody had seen."""
+    decision = _decide(
+        _wait(AgentWaitType.PROCESS),
+        unreadable_since=_NOW - timedelta(seconds=UNREADABLE_GRACE_SECONDS),
+    )
+
+    assert decision == WakeNow(AgentWaitWakeReason.TARGET_UNREADABLE)
+
+
+def test_a_brief_blip_looks_again_rather_than_waking():
+    decision = _decide(
+        _wait(AgentWaitType.PROCESS), unreadable_since=_NOW - timedelta(seconds=40)
+    )
+
+    assert isinstance(decision, LookAgainAt)
+
+
+def test_reaching_the_ceiling_while_unreadable_says_unreadable():
+    """DEADLINE claims the target was seen running; here nothing was seen."""
+    decision = _decide(
+        _wait(AgentWaitType.PROCESS, deadline_in=0),
+        unreadable_since=_NOW - timedelta(seconds=20),
+    )
+
+    assert decision == WakeNow(AgentWaitWakeReason.TARGET_UNREADABLE)
+
+
+def test_rearming_carries_and_clears_the_unreadable_clock():
+    wait = _wait(AgentWaitType.PROCESS)
+    since = _NOW - timedelta(seconds=30)
+
+    wait.rearm(_NOW + timedelta(seconds=10), unreadable_since=since)
+    assert wait.wait_spec.unreadable_since == since
+
+    wait.rearm(_NOW + timedelta(seconds=20))
+    assert wait.wait_spec.unreadable_since is None
+    assert wait.wait_spec.poll_attempt == 2
+    # The rest of what the wait recorded survives both re-arms.
+    assert wait.wait_spec.target_ref == "target-1"
+
+
+def test_an_unparseable_spec_field_does_not_make_the_wait_unreadable():
+    """A wait that cannot be parsed cannot be woken."""
+    wait = _wait(AgentWaitType.PROCESS, user_id="not-a-uuid", unreadable_since=7)
+
+    spec = wait.wait_spec
+
+    assert spec.user_id is None
+    assert spec.unreadable_since is None
+    assert spec.target_ref == "target-1"
+
+
+def test_a_finished_process_with_no_exit_code_is_not_told_to_read_one():
+    message = wake_message(
+        AgentWaitType.PROCESS, AgentWaitWakeReason.TARGET_FINISHED, exit_code=None
+    )
+
+    assert "exit code was not recorded" in message
+    assert "exit code was not recorded" not in wake_message(
+        AgentWaitType.PROCESS, AgentWaitWakeReason.TARGET_FINISHED, exit_code=0
+    )

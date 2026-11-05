@@ -22,6 +22,7 @@ from uuid import UUID
 
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.domain.outsiders import OutsiderRunRefused
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
@@ -33,6 +34,8 @@ from app.modules.agent.services.runtime_profile_service import (
 from app.modules.agent.services.workspace_model_fallback import (
     organization_default_runtime,
 )
+
+logger = get_logger(__name__)
 
 ResolveRuntime = Callable[[AgentRuntimeConfig], Awaitable[ResolvedAgentRuntime]]
 
@@ -60,8 +63,17 @@ async def in_process_runtime(
     for config in fallbacks:
         try:
             candidate = await resolve(config)
-        except DomainError, RuntimeError:
-            # Not configured, retired or unavailable: the next one may be.
+        except (DomainError, RuntimeError) as exc:
+            # Not configured, retired or unavailable: the next one may be. Said
+            # per fallback, because when they all fail the person is told only
+            # that there is no model, and this is the one record of why.
+            logger.warning(
+                "agent.outsider_runtime.fallback_skipped.degraded",
+                profile_id=config.profile_id,
+                error_code=(
+                    exc.code if isinstance(exc, DomainError) else type(exc).__name__
+                ),
+            )
             continue
         if _usable(candidate):
             return candidate

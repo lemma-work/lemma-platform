@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -30,6 +31,7 @@ from app.modules.agent.domain.entities import (
     Conversation as ConversationEntity,
     Message as MessageEntity,
 )
+from app.modules.agent.domain.conversation_lifecycle import conversation_status_for
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -50,6 +52,14 @@ class ConversationModel(UUIDAuditBase):
 
     __tablename__ = "agent_conversations"
     __table_args__ = (
+        # A channel of the conversation's own pod. Its channel going leaves the
+        # conversation in no channel -- never in no pod.
+        ForeignKeyConstraint(
+            ["channel_id", "pod_id"],
+            ["channels.id", "channels.pod_id"],
+            name="fk_agent_conversations_channel",
+            ondelete="SET NULL (channel_id)",
+        ),
         # The history list's order, `(last_activity_at, id)` descending. The
         # agent-scoped one is on the same COALESCE the listing spells out.
         Index(
@@ -74,12 +84,32 @@ class ConversationModel(UUIDAuditBase):
             "conversation_metadata",
             postgresql_using="gin",
         ),
+        # A person has one live conversation per agent in a channel.
+        Index(
+            "uq_agent_conversations_channel_person",
+            "channel_id",
+            text("COALESCE(agent_id, pod_id)"),
+            text("COALESCE(contact_id, user_id)"),
+            unique=True,
+            postgresql_where=text(
+                "channel_id IS NOT NULL AND parent_id IS NULL AND NOT is_archived"
+            ),
+        ),
         Index(
             "uq_agent_conversation_origin",
             "origin_type",
             "origin_id",
             unique=True,
             postgresql_where=text("origin_id IS NOT NULL"),
+        ),
+        # One child per spawning call: a resumed turn re-runs an interrupted
+        # `spawn_subagent` under its recorded call id and gets the same child.
+        Index(
+            "uq_agent_conv_spawn_call",
+            "parent_id",
+            "spawn_tool_call_id",
+            unique=True,
+            postgresql_where=text("spawn_tool_call_id IS NOT NULL"),
         ),
     )
 
@@ -93,6 +123,16 @@ class ConversationModel(UUIDAuditBase):
         index=True,
         nullable=False,
     )
+    #: The contact this conversation answers, when it answers one. Forgetting
+    #: the contact deletes what was said with them.
+    contact_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    #: The channel this conversation's agent works in, when it lives on one.
+    #: A conversation started in Lemma, and an agent's own task, have none.
+    channel_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
     organization_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         index=True,
@@ -122,6 +162,9 @@ class ConversationModel(UUIDAuditBase):
         index=True,
     )
     conversation_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: ``<parent run id>:<tool call id>`` of the ``spawn_subagent`` call that
+    #: created this child; unique per parent (``uq_agent_conv_spawn_call``).
+    spawn_tool_call_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     #: Put away, not deleted: the row stays, the listing skips it, and a new
     #: message clears it (`append_message`).
     is_archived: Mapped[bool] = mapped_column(
@@ -178,6 +221,41 @@ class ConversationModel(UUIDAuditBase):
     def __str__(self) -> str:
         return self.title or f"conversation {str(self.id)[:8]}"
 
+    @staticmethod
+    def values_from(conversation: ConversationEntity) -> dict[str, object]:
+        """The row a new conversation entity is inserted as.
+
+        One mapping for every insert path -- the ORM add, and the upsert a
+        caller-reserved id goes through -- so a column added to one cannot be
+        forgotten in the other.
+        """
+        return {
+            "id": conversation.id,
+            "created_at": conversation.created_at,
+            "updated_at": conversation.updated_at,
+            "user_id": conversation.user_id,
+            "pod_id": conversation.pod_id,
+            "contact_id": conversation.contact_id,
+            "channel_id": conversation.channel_id,
+            "organization_id": conversation.organization_id,
+            "agent_id": conversation.agent_id,
+            "title": conversation.title,
+            "instructions": conversation.instructions,
+            "agent_runtime": (
+                conversation.agent_runtime.model_dump(mode="json")
+                if conversation.agent_runtime
+                else None
+            ),
+            "origin_type": conversation.origin_type,
+            "origin_id": conversation.origin_id,
+            "conversation_type": conversation.type.value,
+            "status": conversation.status.value if conversation.status else None,
+            "output_data": conversation.output,
+            "parent_id": conversation.parent_id,
+            "conversation_metadata": conversation.metadata,
+            "is_archived": conversation.is_archived,
+        }
+
     def to_entity(self) -> ConversationEntity:
         loaded_messages = self.__dict__.get("messages", [])
         loaded_runs = self.__dict__.get("agent_runs", [])
@@ -188,6 +266,8 @@ class ConversationModel(UUIDAuditBase):
             updated_at=self.updated_at,
             user_id=self.user_id,
             pod_id=self.pod_id,
+            contact_id=self.contact_id,
+            channel_id=self.channel_id,
             organization_id=self.organization_id,
             agent_id=self.agent_id,
             title=self.title,
@@ -201,7 +281,7 @@ class ConversationModel(UUIDAuditBase):
             ),
             status=ConversationStatus(self.status)
             if self.status
-            else ConversationStatus(latest_run.status)
+            else conversation_status_for(AgentRunStatus(latest_run.status))
             if latest_run
             else None,
             output=self.output_data,

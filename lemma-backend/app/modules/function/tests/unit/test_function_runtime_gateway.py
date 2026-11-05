@@ -61,6 +61,25 @@ def test_runtime_timeout_without_detail_has_stable_user_facing_error() -> None:
     )
 
 
+def test_runtime_overload_reports_a_run_that_never_started() -> None:
+    from app.modules.function.application.dispatch_failures import (
+        RUNTIME_NEVER_STARTED_ERROR,
+    )
+    from sandbox_runtime.function.worker_pool import RuntimeOverloaded
+
+    # The runtime reports the exception's type name; the two sides must agree.
+    assert RUNTIME_NEVER_STARTED_ERROR == RuntimeOverloaded.__name__
+    message = _runtime_failure_message(
+        RuntimeFailure(
+            name=RUNTIME_NEVER_STARTED_ERROR,
+            message="no function worker came free before the deadline",
+        )
+    )
+
+    assert message.startswith("Function never started")
+    assert "safe to retry" in message
+
+
 @pytest.mark.asyncio
 async def test_gateway_uses_standard_principal_and_releases_uow_before_storage() -> (
     None

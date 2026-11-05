@@ -14,18 +14,10 @@ function isNoSuchFolder(problem: unknown): boolean {
     return /directory not found/i.test(message);
 }
 
-/** What the teammate has written down while it worked, beside what people
- *  taught it. Taught is skills, which people write; this is memory, which it
- *  writes. The pair is how "it learns how you work" becomes something you can
- *  open instead of something you are told.
- *
- *  Read from the files themselves, so it is the notes that exist and nothing
- *  else: no summary, no count of lessons, nothing the model was asked to
- *  report about itself. A dot marks a note changed in the last week. Shared and
- *  personal notes are two tabs, split the way Files splits them. */
-export function WhatItRemembers({ pod, onFile }: { pod: Pod; onFile: (path: string) => void }) {
-    const [scope, setScope] = useState<"shared" | "personal" | null>(null);
-    const notes = useQuery({
+/** The notes themselves, shared by the section and the line about it on
+ *  About's overview, so drawing both costs one walk of the folders. */
+export function useMemoryNotes(pod: Pod) {
+    return useQuery({
         queryKey: ["memory-notes", pod.id],
         queryFn: async () => {
             /* One listing per folder per query, however many of the walks
@@ -49,6 +41,20 @@ export function WhatItRemembers({ pod, onFile }: { pod: Pod; onFile: (path: stri
         },
         staleTime: 60_000,
     });
+}
+
+/** What the teammate has written down while it worked, beside what people
+ *  taught it. Taught is skills, which people write; this is memory, which it
+ *  writes. The pair is how "it learns how you work" becomes something you can
+ *  open instead of something you are told.
+ *
+ *  Read from the files themselves, so it is the notes that exist and nothing
+ *  else: no summary, no count of lessons, nothing the model was asked to
+ *  report about itself. A dot marks a note changed in the last week. Shared and
+ *  personal notes are two tabs, split the way Files splits them. */
+export function WhatItRemembers({ pod, onFile }: { pod: Pod; onFile: (path: string) => void }) {
+    const [scope, setScope] = useState<"shared" | "personal" | null>(null);
+    const notes = useMemoryNotes(pod);
 
     if (notes.isPending) return <p className="aboutpage__quiet">Loading…</p>;
     if (notes.isError) {

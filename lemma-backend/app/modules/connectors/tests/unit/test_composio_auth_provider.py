@@ -430,12 +430,9 @@ async def test_an_unmanaged_toolkit_signs_in_with_the_orgs_own_oauth_client():
         config={"client_id": "org-client", "client_secret": "org-secret"},
     )
     create = MagicMock(return_value=SimpleNamespace(id="ac_org"))
-    initiate = MagicMock(
-        return_value=SimpleNamespace(id="ca_org", redirect_url="https://meta/oauth")
-    )
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
-        connected_accounts=SimpleNamespace(initiate=initiate, link=initiate),
+        client=_link_client("ca_org", "https://meta/oauth"),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(),
@@ -460,17 +457,130 @@ async def test_an_unmanaged_toolkit_signs_in_with_the_orgs_own_oauth_client():
     }
 
 
+def _link_client(connected_account_id: str, redirect_url: str) -> SimpleNamespace:
+    """Composio's raw API client, with only the Connect Link call."""
+    return SimpleNamespace(
+        link=SimpleNamespace(
+            create=MagicMock(
+                return_value=SimpleNamespace(
+                    connected_account_id=connected_account_id,
+                    redirect_url=redirect_url,
+                )
+            )
+        )
+    )
+
+
+class _MemoryIds:
+    """The auth-config id cache, in a dict, as Redis would answer it."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def get(self, suffix, decode):  # type: ignore[no-untyped-def]
+        value = self.values.get(suffix)
+        return decode(value) if value else None
+
+    async def set(self, suffix: str, payload: str) -> None:
+        self.values[suffix] = payload
+
+    async def delete(self, suffix: str) -> None:
+        self.values.pop(suffix, None)
+
+
+@pytest.mark.asyncio
+async def test_a_second_sign_in_reuses_the_auth_config_and_skips_the_listing():
+    """One auth config per toolkit and options, made once: each connect used
+    to make another (a round trip, and one more left in Composio), and the
+    SDK's `link()` listed the person's connections before every link."""
+    install = _install("gmail", toolkit_slug="gmail")
+    create = MagicMock(return_value=SimpleNamespace(id="ac_once"))
+    listing = MagicMock()
+    client = _link_client("ca_1", "https://g/oauth")
+    composio = SimpleNamespace(
+        auth_configs=SimpleNamespace(create=create),
+        connected_accounts=SimpleNamespace(link=listing, list=listing),
+        client=client,
+    )
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: composio,
+        auth_config_ids=_MemoryIds(),
+    )
+
+    for state in ("s1", "s2"):
+        await provider.get_authorization_url(
+            install=install,
+            user_id=uuid4(),
+            state=state,
+            redirect_uri="https://lemma/callback",
+        )
+
+    assert create.call_count == 1
+    assert [
+        call.kwargs["auth_config_id"] for call in client.link.create.call_args_list
+    ] == [
+        "ac_once",
+        "ac_once",
+    ]
+    listing.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_remembered_auth_config_composio_refuses_is_made_again():
+    install = _install("gmail", toolkit_slug="gmail")
+    ids = _MemoryIds()
+    create = MagicMock(return_value=SimpleNamespace(id="ac_fresh"))
+    answers = iter(
+        [
+            RuntimeError("auth config not found"),
+            SimpleNamespace(connected_account_id="ca_2", redirect_url="https://g/2"),
+        ]
+    )
+
+    def link_create(**kwargs):  # type: ignore[no-untyped-def]
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    composio = SimpleNamespace(
+        auth_configs=SimpleNamespace(create=create),
+        client=SimpleNamespace(
+            link=SimpleNamespace(create=MagicMock(side_effect=link_create))
+        ),
+    )
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: composio,
+        auth_config_ids=ids,
+    )
+    # A stale id, as if made under an API key since rotated.
+    from app.modules.connectors.services.auth.composio_auth_configs import (
+        auth_config_key,
+    )
+
+    ids.values[auth_config_key("gmail", {"type": "use_composio_managed_auth"})] = (
+        "ac_stale"
+    )
+
+    url, state = await provider.get_authorization_url(
+        install=install, user_id=uuid4(), state="s", redirect_uri="https://lemma/cb"
+    )
+
+    assert (url, state) == ("https://g/2", "ca_2")
+    assert create.call_count == 1
+    assert list(ids.values.values()) == ["ac_fresh"]
+
+
 @pytest.mark.asyncio
 async def test_a_managed_toolkit_still_uses_lemmas_composio_credentials():
     """The path that was always right, pinned so the new branch cannot take it."""
     install = _install("gmail", toolkit_slug="gmail")
     create = MagicMock(return_value=SimpleNamespace(id="ac_managed"))
-    initiate = MagicMock(
-        return_value=SimpleNamespace(id="ca_managed", redirect_url="https://g/oauth")
-    )
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
-        connected_accounts=SimpleNamespace(initiate=initiate, link=initiate),
+        client=_link_client("ca_managed", "https://g/oauth"),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(),
@@ -505,11 +615,7 @@ async def test_nested_oauth2_credentials_reach_composio_flattened():
     create = MagicMock(return_value=SimpleNamespace(id="ac_org"))
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(create=create),
-        connected_accounts=SimpleNamespace(
-            link=MagicMock(
-                return_value=SimpleNamespace(id="ca", redirect_url="https://x")
-            )
-        ),
+        client=_link_client("ca", "https://x"),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
@@ -16,7 +17,7 @@ from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 
 def build_teams_surface_toolset(
     *,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
 ) -> FunctionToolset[ConversationContext]:
     service = TeamsPlatformService(credentials=credentials)
 

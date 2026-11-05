@@ -116,6 +116,32 @@ def test_the_two_clocks_are_independent(kwargs, expected):
     assert exec_clocks(ExecCommandRequest(**kwargs)) == expected
 
 
+def test_a_foreground_command_may_wait_ten_minutes_and_no_longer():
+    """A 900 s ask was a validation error that cost the agent a retry; a build
+    that needs ten minutes in the foreground should not need `wait_for`."""
+    from pydantic import ValidationError
+
+    from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+    from app.modules.agent.tools.workspace_cli.workspace_cli import exec_clocks
+
+    assert exec_clocks(ExecCommandRequest(cmd="x", timeout_seconds=600)) == (600, None)
+    with pytest.raises(ValidationError):
+        ExecCommandRequest(cmd="x", timeout_seconds=601)
+
+
+def test_the_documented_defaults_are_the_real_ones():
+    """The description said 30 s; the default patience is 60 s and 30 s is the
+    early return, so an agent planning around the text was off by half."""
+    from app.modules.agent.tools.workspace_cli import workspace_cli
+    from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+
+    fields = ExecCommandRequest.model_fields
+    timeout_text = fields["timeout_seconds"].description or ""
+    yield_text = fields["yield_time_ms"].description or ""
+    assert f"default {workspace_cli._DEFAULT_EXEC_TIMEOUT_S}s" in timeout_text
+    assert str(workspace_cli._DEFAULT_EXEC_YIELD_TIME_MS) in yield_text
+
+
 def test_every_render_call_passes_the_cap_the_caller_asked_for():
     """The renderer honouring `max_output_tokens` is only half of it: a call
     site that forgets to pass it leaves the parameter documented and dead.

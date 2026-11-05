@@ -14,9 +14,10 @@ argument that neither of them used, and every caller had to build one to pass
 it. Surface config resolution is about apps and channels; nothing in it asks
 about an agent.
 
-A submodule rather than `contracts/__init__`: this reaches the service and API
-schema layers, and `contracts/__init__` is imported by anything that wants any
-contract at all.
+A submodule rather than `contracts/__init__`: this reaches the service layer,
+and `contracts/__init__` is imported by anything that wants any contract at
+all. It does not reach the HTTP layer: the surface's written-down shape is
+`domain.surface_representation`, which the API serves and the bundle carries.
 """
 
 from __future__ import annotations
@@ -29,14 +30,14 @@ from app.modules.agent_surfaces.composition import build_surface_service
 from app.modules.agent_surfaces.services.surface_identity_claim import (
     create_surface_claiming_identity,
 )
-from app.modules.agent_surfaces.api.schemas import (
+from app.modules.agent_surfaces.domain.surface_representation import (
     AgentSurfaceResponse,
     SurfaceBehaviorConfigInput,
     SurfaceConfigResponse,
     SurfaceConnection,
     SurfaceReach,
 )
-from app.modules.agent_surfaces.api.surface_config_resolver import (
+from app.modules.agent_surfaces.services.surface_config_input import (
     merge_surface_config,
     resolve_surface_config,
 )
@@ -49,6 +50,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceNotFoundError
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 from app.modules.agent_surfaces.services.contact_keepers import contacts_warnings
+from app.modules.agent_surfaces.services.surface_problems import surface_problem
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 
@@ -59,6 +61,7 @@ def surface_response(
     reach: SurfaceReach | None = None,
     connection: SurfaceConnection | None = None,
     contacts_warning: str | None = None,
+    problem: str | None = None,
 ) -> AgentSurfaceResponse:
     """One surface as this module serializes it, for its API and for export."""
     return AgentSurfaceResponse(
@@ -72,7 +75,7 @@ def surface_response(
         ),
         platform=surface.surface_type,
         credential_mode=surface.credential_mode,
-        account_id=surface.account_id,
+        pod_connector=surface.pod_connector_slug,
         connection=connection,
         surface_identity_id=surface.surface_identity_id,
         surface_identity_username=surface.surface_identity_username,
@@ -82,6 +85,7 @@ def surface_response(
         config=SurfaceConfigResponse.from_domain(surface.config),
         status=surface.status,
         contacts_warning=contacts_warning,
+        problem=problem,
     )
 
 
@@ -93,7 +97,8 @@ async def warned_surface_response(
     reach: SurfaceReach | None = None,
     connection: SurfaceConnection | None = None,
 ) -> AgentSurfaceResponse:
-    """``surface_response``, saying so when nobody looks after its contacts."""
+    """``surface_response``, saying so when nobody looks after its contacts,
+    or when it cannot do its work."""
     warnings = await contacts_warnings(uow, surface.pod_id, surface)
     return surface_response(
         surface,
@@ -101,15 +106,13 @@ async def warned_surface_response(
         reach=reach,
         connection=connection,
         contacts_warning=warnings.get(surface.id),
+        problem=await surface_problem(surface),
     )
 
 
 async def list_surfaces(uow, *, pod_id: UUID) -> list[AgentSurfaceEntity]:
-    """Every surface configured on the pod."""
-    surfaces, _ = await build_surface_service(uow).list_surfaces_by_pod(
-        pod_id, limit=100
-    )
-    return list(surfaces)
+    """Every surface configured on the pod -- all of them, not the first page."""
+    return await build_surface_service(uow).all_surfaces_in_pod(pod_id)
 
 
 async def get_surface_by_name(
@@ -138,7 +141,7 @@ async def create_surface(
     name: str,
     config: SurfaceConfig,
     credential_mode: SurfaceCredentialMode | None,
-    account_id: UUID | None,
+    pod_connector_slug: str | None,
     ctx: Context,
 ) -> AgentSurfaceEntity:
     """Create a surface, minting the address a platform needs one for.
@@ -157,7 +160,7 @@ async def create_surface(
         name=name,
         config=config,
         credential_mode=credential_mode,
-        account_id=account_id,
+        pod_connector_slug=pod_connector_slug,
         ctx=ctx,
     )
 
@@ -170,7 +173,7 @@ async def update_surface(
     update_agent_id: bool = False,
     config: SurfaceConfig | None = None,
     credential_mode: SurfaceCredentialMode | None = None,
-    account_id: UUID | None = None,
+    pod_connector_slug: str | None = None,
     is_active: bool | None = None,
     ctx: Context,
 ) -> AgentSurfaceEntity:
@@ -181,7 +184,7 @@ async def update_surface(
         update_agent_id=update_agent_id,
         config=config,
         credential_mode=credential_mode,
-        account_id=account_id,
+        pod_connector_slug=pod_connector_slug,
         is_active=is_active,
         ctx=ctx,
     )

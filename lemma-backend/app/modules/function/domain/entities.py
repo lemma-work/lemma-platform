@@ -127,7 +127,10 @@ class FunctionExecutionDispatch(BaseModel):
     contact_id: UUID | None = None
     config: JsonObject | None
     mode: FunctionDispatchMode
+    # While the run is PENDING this is the latest it may *start*; starting
+    # replaces it with the execution deadline, ``execution_seconds`` later.
     deadline_at: datetime
+    execution_seconds: int = Field(gt=0)
     revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     input_data: JsonObject
 

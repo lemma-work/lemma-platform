@@ -114,6 +114,22 @@ class Conversation:
         """Send a message, as the person would type it."""
         await self._client.send_message(self._bot, text)
 
+    async def shares_own_contact(self, phone: str, first_name: str) -> None:
+        """Share this account's own contact, as Telegram's "Share" button does.
+
+        How a person proves the account is theirs: Telegram attests the number
+        of a contact a user shares about themselves, and Lemma matches it to the
+        number verified on their profile. A Telegram handle is no proof.
+        """
+        from telethon.tl.types import InputMediaContact
+
+        await self._client.send_message(
+            self._bot,
+            file=InputMediaContact(
+                phone_number=phone, first_name=first_name, last_name="", vcard=""
+            ),
+        )
+
     async def sends_file(self, name: str, content: bytes, *, caption: str = "") -> None:
         """Attach a document, which is the thing a bot cannot fake for itself."""
         import io
@@ -183,10 +199,20 @@ def _choices(message: Any) -> tuple[str, ...]:
 class Person:
     """The account, signed in. Made by :func:`a_person_on_telegram`."""
 
-    def __init__(self, client: Any, username: str | None, user_id: int) -> None:
+    def __init__(
+        self,
+        client: Any,
+        username: str | None,
+        user_id: int,
+        phone: str | None = None,
+        first_name: str = "",
+    ) -> None:
         self._client = client
         self.username = username
         self.user_id = user_id
+        #: The account's own number, digits only, as Telegram reports it.
+        self.phone = phone
+        self.first_name = first_name
 
     @asynccontextmanager
     async def talking_to(self, bot: str) -> AsyncIterator[Conversation]:
@@ -235,4 +261,10 @@ async def a_person_on_telegram() -> Person:
             "TELEGRAM_SESSION belongs to a bot account. The point of it is to "
             "be a person: a bot cannot start a conversation with another bot."
         )
-    return Person(client, getattr(me, "username", None), me.id)
+    return Person(
+        client,
+        getattr(me, "username", None),
+        me.id,
+        phone=getattr(me, "phone", None),
+        first_name=getattr(me, "first_name", None) or "",
+    )

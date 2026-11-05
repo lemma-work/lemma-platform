@@ -20,7 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import reveal_secret
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.api.schemas import (
+from app.modules.agent_surfaces.domain.surface_catalog import (
     AvailableSurface,
     AvailableSurfacesResponse,
     SurfaceConnectDescriptor,

@@ -9,13 +9,8 @@ collaborator *off* the service (`conversation_repository`, `agent_repository`,
 `services/interaction_helpers.py` assembled a second service out of six of them.
 
 Twelve operations replace it. Two of the six collaborators turned out to be
-dead weight: `ConversationService` stores `authorization_service` and
-`fallback_model_name` and neither it nor any of the five coordinators it builds
-ever reads them -- `agent/api/dependencies.py` has never even passed a
-`fallback_model_name`, so every surface was threading `None` across a module
-boundary. They are still on the constructor -- taking a parameter off it is a
-change to every place in `agent` that builds one, and not this change -- but
-nothing crosses a module boundary for them any more.
+dead weight -- nothing ever read `authorization_service` or
+`fallback_model_name` -- and are gone from `ConversationService` altogether.
 
 Every operation takes the unit of work rather than being handed a bound service,
 which is also what makes the worker's two modes disappear from the caller: the
@@ -40,17 +35,22 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.api.dependencies import get_conversation_service
+from app.modules.agent.services.service_factories import build_conversation_service
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
-    OUTSIDE_ANSWER_TOOL,
     Audience,
+)
+from app.modules.agent.domain.pausing_tools import (
+    USER_PAUSING_TOOL_NAMES,
+    PendingPause,
 )
 from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
@@ -62,9 +62,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.usage.contracts.execution import build_usage_service
 
 #: The pausing kind a surface renders as a decision rather than as a question.
@@ -141,19 +139,17 @@ def _service(uow: SqlAlchemyUnitOfWork):
     A plain factory despite its FastAPI ``Depends`` annotation -- calling it
     directly is how the other non-request callers build the same service.
     """
-    return get_conversation_service(uow)
+    return build_conversation_service(uow)
 
 
-def _pending(raw: dict[str, object] | None) -> PendingInteraction | None:
-    if raw is None:
+def _pending(pause: PendingPause | None) -> PendingInteraction | None:
+    if pause is None:
         return None
-    tool_args = raw.get("tool_args")
-    agent_run_id = raw.get("agent_run_id")
     return PendingInteraction(
-        tool_call_id=str(raw.get("tool_call_id") or ""),
-        kind=str(raw.get("kind") or ""),
-        tool_args=tool_args if isinstance(tool_args, dict) else {},
-        agent_run_id=agent_run_id if isinstance(agent_run_id, UUID) else None,
+        tool_call_id=pause.tool_call_id,
+        kind=pause.kind.value,
+        tool_args=pause.tool_args,
+        agent_run_id=pause.agent_run_id,
     )
 
 
@@ -202,6 +198,20 @@ async def lemma_message_run_started_at(
     return run.started_at
 
 
+async def authorize_surface_conversation(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_name: str | None, user_id: UUID
+) -> None:
+    """Refuse a person who may not run this agent, as opening would.
+
+    It releases the pooled connection while it checks, so a caller that opens
+    under a transaction-scoped lock checks here before taking the lock, and
+    opens with ``require_execute_grant=False``.
+    """
+    await _service(uow).authorize_opening(
+        pod_id=pod_id, agent_name=agent_name, user_id=user_id
+    )
+
+
 async def open_surface_conversation(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -211,8 +221,8 @@ async def open_surface_conversation(
     title: str | None,
     metadata: dict[str, object] | None = None,
     require_execute_grant: bool = True,
-    for_outsiders: bool = False,
-    for_contact: UUID | None = None,
+    contact_id: UUID | None = None,
+    channel_id: UUID | None = None,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -221,23 +231,15 @@ async def open_surface_conversation(
     permission to run the agent that is writing to them. Every inbound path
     leaves it on.
 
-    ``for_outsiders`` opens the conversation a group's people from outside the
-    pod talk in. ``user_id`` is then the member who looks after that group, and
-    every run in it authorizes as nobody (see ``domain/outsiders``). Marked here,
-    by this module, so the key that decides it is written in one place.
+    ``channel_id`` is the channel it works in (``channel_conversations``).
+    ``contact_id`` opens a contact's conversation -- in a private chat, a group
+    or a web page. ``user_id`` is then the member who looks after it, and every
+    run in it authorizes as that contact (see ``domain/outsiders``).
 
     The caller sets the authorization context, because it is the caller that
     knows whose it is -- an inbound message runs as the sender, a notification
     as nobody in particular.
-
-    ``for_contact`` opens a contact's private chat: the same rules, for one
-    person the pod knows, named on the conversation so the run can address
-    them.
     """
-    if for_contact is not None:
-        metadata = {**(metadata or {}), **Audience.contact(for_contact).to_metadata()}
-    elif for_outsiders:
-        metadata = {**(metadata or {}), **Audience.outsiders().to_metadata()}
     conversation = await _service(uow).create_conversation(
         pod_id=pod_id,
         agent_name=agent_name,
@@ -245,6 +247,8 @@ async def open_surface_conversation(
         title=title,
         metadata=metadata,
         require_execute_grant=require_execute_grant,
+        contact_id=contact_id,
+        channel_id=channel_id,
     )
     return _conversation(conversation)
 
@@ -283,18 +287,46 @@ async def append_notification_message(
     message: str,
     notification_id: UUID,
 ) -> None:
-    """Write an outbound notification into the recipient's thread.
+    """Write an outbound notification into the recipient's thread, once.
 
     Belongs to no run, which is the point: it is what makes the recipient's
     agent able to answer "yes" six hours later against a question it can
-    actually see in its own history.
+    actually see in its own history. A retried send of the same notification
+    finds it there and adds no second copy.
     """
+    from app.modules.agent.contracts.contact_conversations import (
+        notification_keyed,
+    )
+
+    if await notification_keyed(
+        uow, conversation_id, key="notification_id", value=str(notification_id)
+    ):
+        return
     await ConversationRepository(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification(
             message, metadata={"notification_id": str(notification_id)}
         ),
+    )
+
+
+async def append_delivery_notice(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    message: str,
+    metadata: dict[str, str],
+) -> None:
+    """Write a line about a delivery into the conversation, in no run.
+
+    For what the person reading the conversation in Lemma should know about
+    a message sent on their behalf elsewhere -- that it may not have arrived.
+    """
+    await ConversationRepository(uow).append_message(
+        conversation_id=conversation_id,
+        agent_run_id=None,
+        draft=MessageDraft.of_notification(message, metadata=dict(metadata)),
     )
 
 
@@ -313,6 +345,21 @@ async def pending_interaction(
             conversation_id=conversation_id
         )
     )
+
+
+async def undecided_pauses(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> list[str]:
+    """Every pause nobody has decided yet, by tool call id, oldest first.
+
+    Exactly what starting a new turn denies on the person's behalf, so a
+    surface that reads it first knows which of its cards the turn cancels.
+    """
+    calls = await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+        conversation_id=conversation_id,
+        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
+    )
+    return [call.tool_call_id for call in calls if call.tool_call_id]
 
 
 async def pending_question(
@@ -364,20 +411,28 @@ async def resolve_pending_interaction(
     pod_id: UUID | None = None,
     decision: AgentRunApprovalDecision,
     response: dict[str, object] | None = None,
-    defer_reconciliation: bool = True,
-) -> bool:
+) -> ApprovalResolution | None:
     """Record a person's decision and resume the run it paused.
 
-    ``False`` when the conversation is no longer there, and nothing was
+    ``None`` when the conversation is no longer there, and nothing was
     recorded. The caller must be able to tell that apart from a decision that
     landed: starting an ordinary turn instead supersedes the pause with an
     auto-denial, which is how an "approve" became a cancellation.
 
+    Otherwise the resolution, whose ``decision`` is the one that *stands* --
+    not necessarily the one passed in. A pause the person moved on from was
+    already denied on their behalf, and a tap on its card adopts that denial
+    rather than recording a second answer. A caller that reported the tap
+    alone would tell somebody who pressed Approve that it was done, when the
+    action never ran; ``status`` is ``"queued"`` when a worker job owns the
+    rest, so "done" is not yet true either.
+
     Skips the authorization the HTTP entry point does, exactly as the service
     method it replaces did: a surface has already matched the person who tapped
     against the conversation's owner, and it is holding a webhook deadline while
-    it does. ``defer_reconciliation`` is on by default for the same reason --
-    an approved command outlives the webhook that approved it.
+    it does. An approved command outlives the webhook that approved it, so it
+    is a worker's: the decision commits with its ``agent.approval.execute``
+    item and the status comes back ``"queued"``.
 
     ``pod_id`` is optional because the conversation is loaded here anyway and
     knows its own pod. A caller that holds one passes it; one that holds only
@@ -386,17 +441,15 @@ async def resolve_pending_interaction(
     """
     entity = await ConversationRepository(uow).get_conversation(conversation_id)
     if entity is None:
-        return False
-    await _service(uow).resolve_user_approval_internal(
+        return None
+    return await _service(uow).resolve_user_approval_internal(
         conversation=entity,
         approval_id=approval_id,
         user_id=user_id,
         pod_id=pod_id if pod_id is not None else entity.pod_id,
         decision=decision,
         response=response or {},
-        defer_reconciliation=defer_reconciliation,
     )
-    return True
 
 
 async def retry_failed_run(
@@ -424,11 +477,10 @@ async def retry_failed_run(
     )
     token = set_current_context(auth_ctx)
     try:
-        await ConversationRetryService(
+        await ConversationService(
             uow=uow,
             conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         ).retry_failed_run(
             conversation_id=conversation_id,
@@ -487,7 +539,10 @@ async def conversation_metadata_value(
 
 
 async def set_conversation_metadata_value(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, key: str, value: str | None
+    uow: SqlAlchemyUnitOfWork,
+    conversation_id: UUID,
+    key: str,
+    value: str | BaseModel | None,
 ) -> None:
     """Write one metadata key, leaving every sibling key alone.
 
@@ -495,16 +550,20 @@ async def set_conversation_metadata_value(
     writes it back, so a concurrent writer touching another key loses. This
     goes through `jsonb_set`, which is what a flag written from an inbound
     webhook while a run is stamping its own metadata needs.
+
+    A model is stored as its JSON object, so its fields can be queried
+    (`conversation_metadata_records`).
     """
     await ConversationRepository(uow).set_conversation_metadata_key(
-        conversation_id, key, value
+        conversation_id,
+        key,
+        value.model_dump(mode="json") if isinstance(value, BaseModel) else value,
     )
 
 
 __all__ = [
     # The tool an approval card for an answer to someone outside the pod
     # approves; the surface renders that card in its own words.
-    "OUTSIDE_ANSWER_TOOL",
     # Re-exported because `resolve_pending_interaction` takes one, and the enum
     # itself lives in `domain`, which is not a surface another module may reach
     # into. A published function whose argument type is unreachable is not
@@ -513,10 +572,15 @@ __all__ = [
     # Raised by `resolve_pending_interaction` when somebody other than the
     # owner tries to approve; a surface treats that as an ordinary message.
     "ApprovalNotOwnedError",
+    # What `resolve_pending_interaction` returns: the decision that stands and
+    # whether a worker job still owns the rest.
+    "ApprovalResolution",
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",
+    "append_delivery_notice",
     "append_notification_message",
+    "authorize_surface_conversation",
     "conversation_metadata_value",
     "lemma_message_run_started_at",
     "open_surface_conversation",
@@ -530,4 +594,5 @@ __all__ = [
     "start_surface_turn",
     "surface_agent_identity",
     "surface_conversation",
+    "undecided_pauses",
 ]

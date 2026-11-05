@@ -1,6 +1,6 @@
 "use client";
 import { docTitle } from "@/library/doc-title";
-import { startAnalytics, setAnalyticsIdentity } from '@/site/analytics/client';
+import { useAnalyticsIdentity } from "@/site/analytics/identity";
 import { settingsFromQuery } from "@/site/legacy-address";
 
 import { WorkspaceLoading } from "@/shell/workspace-loading";
@@ -11,7 +11,7 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
-import { MinimizeIcon, ChevronUpIcon, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon } from "@/ui/icons";
+import { MinimizeIcon, ChevronUpIcon, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon, SettingsIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { PaneVisibleContext } from "./pane-visible";
@@ -22,26 +22,26 @@ import { DocSpace, isDoc } from "@/docs/doc-space";
 import { CommentsButton } from "@/docpages/comments/button";
 import { DocAskContext } from "@/docs/doc-ask";
 import { AllView } from "@/space/all-view";
-import { SpaceNav } from "@/space/space-nav";
+import { SpaceNav, useContactsPlace } from "@/space/space-nav";
 import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
 import { SIGN_IN_EVENT, type SignInRequest } from "@/computer/sign-in-bridge";
 import { SignInPane } from "@/computer/sign-in-pane";
 import { AgentPage } from "@/space/agent-page";
 import { WorkflowPage } from "@/space/workflow-page";
 import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
-import { SettingsPage, type SettingsSection as SpaceSettingsSection } from "@/space/settings-page";
 import { WorkflowsPage } from "@/space/workflows-page";
-import { GroupsPage } from "@/space/groups-page";
+import { ChannelPage } from "@/channels/channel-page";
 import { ContactsPage } from "@/space/contacts-page";
-import { GroupPage } from "@/space/group-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
 import { RunPage } from "@/space/run-page";
-import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page";
+import { AboutPage, aboutLabel, isAboutSection, type AboutSection } from "@/space/about-page";
+import { settingsSectionOf } from "@/space/about-sections";
 import { TeammateRail } from "@/space/teammate-rail";
 import { TeammatesPage } from "@/space/teammates-page";
 import { owedFrom } from "@/space/teammates";
-import { byAge, gatherAsked } from "@/thread/waiting-on-you";
+import { byAge } from "@/thread/waiting-on-you";
+import { useConversationAsks } from "@/thread/use-conversation-asks";
 import type { SpaceView } from "@/data";
 import { FloatingChat, moveDocThread, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
 import type { ConversationRef, FileContent, LibraryItem, Org, Pod, Tab } from "@/data";
@@ -54,12 +54,12 @@ import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
 import { recordMove } from "@/docpages/moves";
 import { moveComments } from "@/docpages/comments/store";
-import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
+import { NOWHERE, TEAMMATES, isAlwaysListed, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
 import { Mark } from "./mark";
 import { Surfaces } from "./surfaces";
-import { Notifications } from "./notifications";
+import { WaitingBell } from "@/channels/waiting-panel";
 import { WaitingInbox, gather } from "@/workflow/waiting-inbox";
 import { SearchPalette } from "@/search/palette";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
@@ -69,6 +69,7 @@ import { Modal } from "./modal";
 import { SettingsModal, type SettingsSection } from "@/settings/settings-modal";
 import { HiringView, type FirstMove } from "@/stage/hiring";
 import { ArrivalView } from "@/org/arrival-view";
+import { arrivedFromInstall } from "@/site/import/pending-install";
 import { NewOrgDialog } from "@/org/new-org-dialog";
 import { ConversationPane } from "@/thread/conversation";
 import { LiveConversation } from "@/thread/live-conversation";
@@ -76,6 +77,7 @@ import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
 import { refreshConversationLists } from "@/thread/conversation-list";
 import { ComputerView } from "@/computer/computer-view";
+import { ConnectBanner } from "@/connect/pod-connect";
 import { FileView } from "@/thread/file-view";
 import { acknowledge, readComposeRequest, registerFrame } from "@/thread/compose-bridge";
 import { identityGenes } from "@/identity/seeded-identity";
@@ -97,7 +99,6 @@ import { HelpMenu } from "@/tour/help-menu";
 import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
-import { useFeature } from "@/site/analytics/flags";
 import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
 import { humanizeName } from "@/schedule/schedules";
 
@@ -128,8 +129,8 @@ function homeListOf(tab: Tab): string | null {
         case "run":
         case "workflow":
             return "space:workflows";
-        case "group":
-            return "space:groups";
+        case "channel":
+            return "space:chats";
         default:
             return null;
     }
@@ -152,13 +153,27 @@ function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElem
     return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["contacts", "Contacts"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
+/** A place behind a flag that is off, reached by its address: said, rather
+ *  than an empty pane nobody can tell from a broken one. */
+function NotSwitchedOn({ what }: { what: string }) {
+    return (
+        <section className="empty empty--compact" aria-label={what}>
+            <h2 className="empty__title">{what} isn’t switched on for this space yet.</h2>
+        </section>
+    );
+}
+
+/** Contacts, for whoever may look after contacts: a pod's editors and
+ *  admins. Reached by its address by anyone else, it says it is not on. */
+function ContactsPlace({ pod, onConnect }: { pod: Pod; onConnect: () => void }) {
+    return useContactsPlace(pod.id) ? <ContactsPage pod={pod} onConnect={onConnect} /> : <NotSwitchedOn what="Contacts" />;
+}
+
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["channels", "Shared chats"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
-    const groupsOn = useFeature("groups");
-    const contactsOn = useFeature("contacts");
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
     const incoming = useSearchParams();
@@ -194,7 +209,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     /** Words handed to the Chat tab to send, and the bot to start the
      *  conversation with. Cleared by any other change of conversation, so a
      *  hand-over never outlives the new chat it was for. */
-    const [handoff, setHandoff] = useState<{ text: string; createWith?: Record<string, unknown>; id: number; podId: string; sent: boolean } | null>(null);
+    const [handoff, setHandoff] = useState<{ text: string; createWith?: Record<string, unknown>; files?: File[]; id: number; podId: string; sent: boolean } | null>(null);
     const setConversationId = useCallback((id: string | null) => {
         setHandoff(null);
         setSelection(previous => ({ id, generation: previous.generation + 1 }));
@@ -209,7 +224,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
      *  its conversation mounted, and the reveal sets a fill in the same batch
      *  that switches pods. Without it the words land in whichever composer was
      *  already standing there, and the new teammate opens empty. */
-    const [fill, setFill] = useState<{ text: string; id: number; podId: string } | null>(() => {
+    const [fill, setFill] = useState<{ text: string; id: number; podId: string; files?: File[] } | null>(() => {
         const raw = incoming.get("remixSource");
         if (!raw || !podId) return null;
         try {
@@ -241,7 +256,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        recorded the API sends it to the app root, and the panel that reads it
        is the one that has to be open. */
     const [settings, setSettings] = useState<SettingsSection | null>(() =>
-        settingsFromQuery(incoming.get("settings")) ?? (incoming.get("connect") ? "connectors" : null));
+        settingsFromQuery(incoming.get("settings")) ?? (incoming.get("connect") ? "connectors" : null)
+        /* About carried the organization's models and usage for a while; an
+           old `?section=` naming one opens it where it lives. */
+        ?? settingsSectionOf(incoming.get("section")));
     /* The desktop menu and tray open Settings at a section by raising
        `lemma:open-settings` in this page. Keyed by request, so asking for a
        different section while Settings is already open moves it there. */
@@ -322,11 +340,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        one other door into that sheet is mounted beside the people dialog,
        which is here for the same reason. */
     const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
-    /** Which part of About a link asked for. Counted, so asking for the same
-     *  section twice scrolls to it twice. An old `?section=` still lands. */
-    const [aboutSection, setAboutSection] = useState<{ at: AboutSection | null; id: number }>(() => {
+    /** Which part of About is open, or null for its overview. Each part has
+     *  an address of its own (`/about/people`); an old `?section=` still lands. */
+    const [aboutSection, setAboutSection] = useState<AboutSection | null>(() => {
         const asked = incoming.get("section");
-        return { at: isAboutSection(asked) ? asked : null, id: 0 };
+        return isAboutSection(asked) ? asked : null;
     });
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
@@ -338,7 +356,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (!preview || demoStep === undefined) return;
         setPreviewTeam(false);
         setPreviewPod("kit");
-        setAboutSection((was) => ({ at: previewAboutForStep(demoStep), id: was.id + 1 }));
+        setAboutSection(previewAboutForStep(demoStep));
         setSelection(previous => previous.id === null ? previous : { id: null, generation: previous.generation + 1 });
         setSettings(null);
         setSearching(false);
@@ -374,7 +392,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         /* `first_name`/`last_name`, not `name` — there is no `name` on the
            account, and reading one gave the arrival screen nothing to work
            with, so it fell back to the local part of an address and offered
-           to call somebody's workspace "deepakjha0196+99's Personal". */
+           to call somebody's workspace "ada+99's Personal". */
         queryFn: () => lemma().users.current() as Promise<{ id?: string; email?: string; first_name?: string; last_name?: string; created_at?: string } | undefined>,
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,
@@ -399,18 +417,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     useRemember(["pod-access", podId], linkedPod.data, linkedPod.dataUpdatedAt);
     const remembered = orgs.data?.some((candidate) => candidate.id === orgId) ? orgId : null;
     const activeOrgId = linkedPod.data?.orgId ?? remembered ?? orgs.data?.[0]?.id ?? null;
-    useEffect(() => {
-        if (source.label === "sample") return;
-        let active = true;
-        void startAnalytics().then(() => {
-            if (active && me.data?.id) setAnalyticsIdentity({
-                userId: me.data.id,
-                organizationId: activeOrgId ?? undefined,
-                podId: podId ?? undefined,
-            });
-        });
-        return () => { active = false; };
-    }, [me.data?.id, activeOrgId, podId]);
+    useAnalyticsIdentity(source.label === "sample" ? null : { userId: me.data?.id, organizationId: activeOrgId, podId });
     const activeOrg = orgs.data?.find((candidate) => candidate.id === activeOrgId) ?? null;
 
     const pods = useQuery({
@@ -435,12 +442,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     });
     /* And the conversations paused on you: a question or an approval a run
        stopped on, scheduled ones included. Same key Home reads. */
-    const asked = useQuery({
-        queryKey: ["conversation-asks", (pods.data ?? []).map((one) => one.id).join(",")],
-        queryFn: () => gatherAsked(pods.data ?? [], source.label === "sample"),
-        enabled: !preview && (pods.data?.length ?? 0) > 0,
-        staleTime: 60_000,
-    });
+    const asked = useConversationAsks(pods.data ?? [], { enabled: !preview });
     const owed = useMemo(() => owedFrom(waiting.data?.rows ?? [], byAge(asked.data ?? []).fresh), [waiting.data, asked.data]);
 
     /* Changing teammate drops the conversation you were reading — unless the
@@ -499,38 +501,20 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const openConversationId =
         conversationId ?? (history.data && history.data.length > 0 ? history.data[0].id : null);
 
-    /* A call is with a teammate, not with whatever is on screen — so the pod
-       it started in is frozen for its duration. Without this, walking into
-       another pod mid-call would re-point the call's own conversation at a
-       pod the person is not talking to. */
-    const [callPod, setCallPod] = useState<{ id: string; name: string; teammate: string } | null>(null);
-    const callIn = callPod ?? { id: pod?.id ?? "", name: pod?.name ?? "", teammate: pod?.teammate?.name ?? "" };
-    const huddle = useHuddle({
-        pod: { id: callIn.id, name: callIn.name },
-        teammate: callIn.teammate,
-        conversationId: openConversationId,
-    });
+    /* A call is with a teammate, not with whatever is on screen: the pod and
+       teammate it was placed with are the call's own, held by the huddle for
+       as long as it lasts, so walking into another pod mid-call neither
+       re-points it nor relabels it. */
+    const huddle = useHuddle();
+    const callIn = huddle.target
+        ? { id: huddle.target.pod.id, name: huddle.target.pod.name, teammate: huddle.target.teammate }
+        : { id: pod?.id ?? "", name: pod?.name ?? "", teammate: pod?.teammate?.name ?? "" };
     const callConversationId = huddle.callConversationId;
-    useEffect(() => {
-        if (!callConversationId || callIn.id !== pod?.id) return;
-        // Adopt the regular conversation created from an empty/new pane.
-        if (!openConversationId || openConversationId === NEW_CONVERSATION) {
-            setConversationId(callConversationId);
-        }
-        void refreshConversationLists(queryClient, callIn.id);
-    }, [callConversationId, queryClient, pod?.id, callIn.id, openConversationId]);
-
-    const { start: openCall, end: closeCall } = huddle;
-    const startCall = useCallback(() => {
-        if (!pod) return;
-        setCallPod({ id: pod.id, name: pod.name, teammate: pod.teammate.name });
-        void openCall();
-    }, [pod, openCall]);
-    const endCall = useCallback(() => { closeCall(); setCallPod(null); }, [closeCall]);
-    /* Offered only once the install says it can place one. Nothing to link
-       to otherwise: calls run on the web app's own voice gateway, which no
-       settings page configures. */
-    const voiceReady = useVoiceConfigured() === true;
+    const endCall = huddle.end;
+    /* Offered only once the server says it can place one: a voice engine is
+       a server setting, which no settings page here configures. The sample
+       pod has no server to ask. */
+    const voiceReady = useVoiceConfigured(source.label === "sample" ? null : pod?.id ?? null) === true;
 
     const podTabs = useQuery({
         queryKey: ["tabs", pod?.id],
@@ -606,16 +590,15 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         : activeTab?.kind === "record" ? { kind: "table", name: activeTab.table, label: readableName(activeTab.table) }
         : null;
     const [shareOpen, setShareOpen] = useState(false);
-    /* Share opened to add somebody — a group page's Invite. */
-    const [shareAdding, setShareAdding] = useState(false);
-    const [settingsSection, setSettingsSection] = useState<SpaceSettingsSection>("agents");
     const shareSubject: ShareSubject = !chatResource ? { kind: "space" }
         : chatResource.kind === "file" ? { kind: "file", path: chatResource.name, label: chatResource.label }
         : { kind: chatResource.kind === "app" ? "app" : "table", label: chatResource.label };
     const docAsk = useMemo(() => chatResource && pod ? { label: pod.name, ask: chat.ask } : null, [chatResource !== null, pod?.name, chat.ask]);  
     const paneProps = (id: string) => ({
         hidden: !isVisible(id),
-        onStage: !(hiring || huddle.expanded || stranger || atTeam),
+        // The call screen sits beside the chat rather than over it, so the
+        // chat stays on stage during a call.
+        onStage: !(hiring || stranger || atTeam),
         "data-side": id === layout.right ? "right" : "left",
         inert: sheetLowered && id === layout.right,
     });
@@ -727,10 +710,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
     const openAbout = useCallback((at: AboutSection | null) => {
         if (!pod) return;
-        setAboutSection((was) => ({ at, id: was.id + 1 }));
+        setAboutSection(at);
         setExpandedTab(null);
         setPeekedTab(null);
         setTabs((previous) => ({ ...previous, [pod.id]: "space:about" }));
+    }, [pod]);
+    /* A part of About is one teammate's: moving to another opens its overview.
+       Not on the first teammate to arrive, whose part a link may have named. */
+    const aboutOf = useRef<string | null>(null);
+    useEffect(() => {
+        if (!pod) return;
+        if (aboutOf.current && aboutOf.current !== pod.id) setAboutSection(null);
+        aboutOf.current = pod.id;
     }, [pod]);
 
     /* Agents are a section of the teammate's profile rather than a view of
@@ -770,9 +761,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: humanizeName(name), name }),
         [openTab],
     );
-    /* A group opens on its own page, with Groups one step back. */
-    const openGroup = useCallback(
-        (group: { id: string; title: string | null }) => openTab({ id: "group:" + group.id, kind: "group", label: group.title || "Group", groupId: group.id }, "space:groups"),
+    /* A channel opens on its own page, with Channels one step back. */
+    const openChannel = useCallback(
+        (channel: { id: string; title: string | null }) => openTab({ id: "channel:" + channel.id, kind: "channel", label: channel.title || "Chat", channelId: channel.id }, "space:chats"),
         [openTab],
     );
 
@@ -905,6 +896,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        after the tab, and the mirror would otherwise write the chat being left
        over the one asked for — as a new history entry. */
     const pendingConversation = useRef<string | null>(null);
+    /* And for a part of About: Back from one sets the section a render after
+       the address, and the mirror would write the part being left back over
+       the overview asked for. Undefined when nothing is pending. */
+    const pendingSection = useRef<AboutSection | null | undefined>(undefined);
     /* Pages renamed in this session, old tab id to new, so an address still in
        the browser's history (Back to the page under its old name) lands on
        the page instead of on a file that is not there any more. */
@@ -936,9 +931,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         let wanted = address.tabId;
         for (let hops = 0; renamed.current[pod.id + "|" + wanted] && hops < 20; hops++) wanted = renamed.current[pod.id + "|" + wanted];
         if (wanted !== address.tabId) replaceNext.current = true;
+        /* The space's settings are sections of the teammate's page now, so a
+           tab remembered from before the merge, or a link that still names
+           them, opens that page instead of falling back to Home. */
+        if (wanted === "space:settings") { wanted = "space:about"; replaceNext.current = true; }
 
         setTabs((previous) => (previous[pod.id] === wanted ? previous : { ...previous, [pod.id]: wanted }));
         if (address.agentName) setOpenAgentName(address.agentName);
+        /* Back from a part of About lands on its overview, which names none. */
+        if (wanted === "space:about") {
+            pendingSection.current = address.section ?? null;
+            setAboutSection(address.section ?? null);
+        }
         if (address.conversationId && address.conversationId !== selection.id) {
             pendingConversation.current = address.conversationId;
             setConversationId(address.conversationId);
@@ -946,11 +950,17 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
         const known = allTabs.some((tab) => tab.id === wanted);
         const rebuilt = known ? null : tabFromId(wanted);
-        /* A group lives in Groups, whichever page linked to it. */
-        if (rebuilt) openTab(rebuilt, rebuilt.kind === "group" ? "space:groups" : undefined);
+        /* A channel lives in Channels, whichever page linked to it. */
+        if (rebuilt) openTab(rebuilt, rebuilt.kind === "channel" ? "space:chats" : undefined);
         /* Only a tab that will exist: one that never arrives would hold the
-           mirror still for good. */
-        if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
+           mirror still for good. The conversation is one that will, and it is
+           the link people are sent most: it arrives with the pod's tab list,
+           and until then the shell draws Home in its place. Not waiting for it
+           let the mirror write that stand-in over the link -- `/home` for a
+           moment, long enough for the tour to be offered over the chat, and
+           on a slow enough load the address the conversation never came back
+           from. */
+        if (known || rebuilt || isAlwaysListed(wanted)) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
     }, [pathname, address, pod, allTabs, openTab, selection.id, setConversationId, preview]);
 
     /** The address bar, kept in step with where you actually are.
@@ -977,6 +987,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             if (activeTab.kind === "conversation" && pendingConversation.current !== conversationId) return;
             pendingConversation.current = null;
         }
+        if (pendingSection.current !== undefined) {
+            if (activeTab.id === "space:about" && pendingSection.current !== aboutSection) return;
+            pendingSection.current = undefined;
+        }
 
         const url = writeAddress({
             podId: pod.id,
@@ -986,13 +1000,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             conversationId:
                 activeTab.kind === "conversation" && conversationId !== NEW_CONVERSATION ? conversationId : null,
             agentName: activeTab.kind === "profile" ? openAgentName : null,
+            ...(activeTab.id === "space:about" && aboutSection ? { section: aboutSection } : {}),
         });
         if (url === pathname) return;
         applied.current = url;
         if (replaceNext.current) { replaceNext.current = false; window.history.replaceState(null, "", url); }
         else if (isNewPlace(readAddress(pathname), readAddress(url))) window.history.pushState(null, "", url);
         else window.history.replaceState(null, "", url);
-    }, [pod, activeTab, conversationId, openAgentName, pathname, preview]);
+    }, [pod, activeTab, conversationId, openAgentName, aboutSection, pathname, preview]);
 
     useEffect(() => {
         try {
@@ -1049,10 +1064,34 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             if (!pod) return;
             setExpandedTab(null);
             setPeekedTab(null);
+            /* Choosing a tab replaces whatever a link was still waiting for.
+               A conversation link waits out the pod's tab list, and a tab
+               picked meanwhile would otherwise never be the pending one, so
+               the mirror would hold the address on the link for good. */
+            if (pendingTab.current !== tabId) pendingTab.current = null;
             setTabs((previous) => ({ ...previous, [pod.id]: tabId }));
         },
         [pod],
     );
+
+    /* A call continues the chat it is started from -- that chat is where the
+       call's turns, the teammate's work and the transcript land -- and one
+       started from home starts a new conversation. Once it is placed, the
+       chat it is held in is opened, once: not again on every navigation,
+       which snapped a person back to the call whenever they opened a new chat. */
+    const { start: placeCall } = huddle;
+    const startCall = useCallback(async (fromHome = false) => {
+        if (!pod) return;
+        const placed = await placeCall({
+            pod: { id: pod.id, name: pod.name },
+            teammate: pod.teammate.name,
+            conversationId: fromHome ? null : openConversationId,
+        });
+        if (!placed) return;
+        setConversationId(placed);
+        pickTab("conversation");
+        void refreshConversationLists(queryClient, pod.id);
+    }, [pod, placeCall, openConversationId, setConversationId, pickTab, queryClient]);
 
     /* The one door from a framed view into the conversation.
      *
@@ -1066,13 +1105,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
      *  person decides. */
     const asks = useRef(0);
     /* Start a conversation somewhere that is not one — Home, a bot's page —
-       by handing the words to the Chat tab, which creates it and sends them. */
-    const startChat = useCallback((text: string, createWith?: Record<string, unknown>) => {
+       by handing the words and any files to the Chat tab, which creates it,
+       uploads them into its working directory and sends them. */
+    const startChat = useCallback((text: string, createWith?: Record<string, unknown>, files?: File[]) => {
         if (!pod) return;
         asks.current += 1;
         setConversationId(NEW_CONVERSATION);
-        if (source.label === "live") setHandoff({ text, createWith, id: asks.current, podId: pod.id, sent: false });
-        else setFill({ text, id: asks.current, podId: pod.id });
+        if (source.label === "live") setHandoff({ text, createWith, files, id: asks.current, podId: pod.id, sent: false });
+        else setFill({ text, id: asks.current, podId: pod.id, files });
         pickTab("conversation");
     }, [pod, setConversationId, pickTab]);
     const collapseCall = huddle.collapse;
@@ -1171,6 +1211,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const meCreated = me.data?.created_at;
     useEffect(() => {
         if (preview || source.label !== "live" || !meId) return;
+        /* The visit an install opens is for what was installed; the tour
+           is offered on the next one. */
+        let fromInstall = false;
+        try { fromInstall = arrivedFromInstall(sessionStorage); } catch { /* no storage */ }
+        if (fromInstall) return;
         if (offersTour(meCreated, { seen: readTourSeen(meId) })) setTourWanted((was) => was ?? "offered");
     }, [preview, meId, meCreated]);
     const onHome = atHome(address.tabId, activeTabId);
@@ -1397,6 +1442,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     aria-label={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
                                     <span className="side__mate-name">{pod.name}</span>
                                 </button>
+                                {/* How this teammate is set up: About's overview,
+                                    a tile for each part of it. At the top beside
+                                    the name, because at the foot nobody found it. */}
+                                <button className="icon-button side__gear" title="Settings" aria-label={"Settings for " + pod.name}
+                                    onClick={() => { openAbout(null); setMobileOpen(false); }}>
+                                    <SettingsIcon size={18} />
+                                </button>
                                 {/* On a phone the toolbar is already full; the
                                     drawer has space for it. */}
                                 <button className="icon-button side__search" title="Search" aria-label="Search"
@@ -1415,16 +1467,17 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 recents={((pod && extraTabs[pod.id]) || []).slice().reverse()}
                                 onPick={(id) => { pickTab(id); setMobileOpen(false); }}
                                 onWorkflows={() => { pickTab("space:workflows"); setMobileOpen(false); }}
-                                onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); setMobileOpen(false); }}
                                 openChatId={openConversationId}
                                 onOpenChat={(id) => { setConversationId(id); pickTab("conversation"); setMobileOpen(false); }}
+                                onOpenChannel={(channel) => { openChannel(channel); setMobileOpen(false); }}
+                                onConnect={() => setReaching(true)}
                             />
                         </>}
                     </div>
                 )}
             </aside>
 
-            <main className="main" inert={mobileOpen} ref={mainRef}>
+            <main className={`main${huddle.expanded ? " main--calling" : ""}`} inert={mobileOpen} ref={mainRef}>
                 {sidebarHidden && <button className="desktop-nav-toggle icon-button" aria-label="Show sidebar" title="Show sidebar" onClick={() => { setSidebarHidden(false); setCollapsed(false); }}><SidebarIcon size={21} /></button>}
                 <button className="mobile-nav-toggle icon-button" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}><MenuIcon size={22} /></button>
                 {settings && <SettingsModal
@@ -1516,22 +1569,24 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                     </div>
                 )}
                 {huddle.expanded && (
-                    <div className="settings-view">
+                    <div className="settings-view call-stage">
                         <CallScreen
                             teammate={callIn.teammate}
                             podId={callIn.id}
-                            conversationId={huddle.callConversationId}
                             status={huddle.status}
                             error={huddle.error}
+                            notice={huddle.notice}
                             muted={huddle.muted}
                             thinking={huddle.thinking}
                             level={huddle.level}
-                            resources={huddle.resources}
+                            canvas={huddle.canvas}
+                            showing={huddle.showing}
                             transcript={huddle.transcript}
-                            plan={huddle.plan}
                             onMute={huddle.toggleMute}
                             onEnd={endCall}
                             onCollapse={huddle.collapse}
+                            onShow={huddle.show}
+                            onRenderFailed={huddle.renderFailed}
                             /* Opening lands on the stage, which is behind the
                                call screen — so step back to the bar first, or
                                the tab opens somewhere nobody can see it. */
@@ -1546,9 +1601,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         teammate={callIn.teammate}
                         status={huddle.status}
                         error={huddle.error}
+                        notice={huddle.notice}
                         muted={huddle.muted}
                         thinking={huddle.thinking}
-                        plan={huddle.plan}
                         level={huddle.level}
                         onMute={huddle.toggleMute}
                         onEnd={endCall}
@@ -1567,7 +1622,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         ["--field-ink" as string]: pressSlot(identityGenes(pod.id).tone).ink,
                     } : undefined}
                     /* The same test the panes read as `onStage`. */
-                    hidden={Boolean(hiring || huddle.expanded || stranger || atTeam)}
+                    hidden={Boolean(hiring || stranger || atTeam)}
                 >
                 {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
                     access.state === "error" || access.state === "missing" ? (
@@ -1655,7 +1710,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             >
                                 <SearchIcon size={19} />
                             </button>
-                            {!preview && <Notifications podId={pod.id} />}
+                            {!preview && <WaitingBell podId={pod.id} />}
                             {/* Beside the bell, and not inside it. The panel
                                 next door is a log of things said to you, most
                                 of which are over; this is a queue of work with
@@ -1723,11 +1778,25 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             ) : <>
                                 <button type="button" className="crumb__up crumb__mate" onClick={() => pickTab("space:home")}>{pod.name}</button>
                                 <span className="crumb__sep">/</span>
+                                {/* A chat names itself in its own header: the
+                                    crumb ends at the list it is in, rather
+                                    than saying its name a second time. */}
+                                {activeTab?.kind === "channel" ? (
+                                    <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom?.id ?? "space:chats")}>{cameFrom?.label ?? "Chats"}</button>
+                                ) : <>
                                 {cameFrom && <>
                                     <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
                                     <span className="crumb__sep crumb__sep--from">/</span>
                                 </>}
-                                <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
+                                {/* A part of About sits one step under it. */}
+                                {activeTab?.id === "space:about" && aboutSection ? <>
+                                    <button type="button" className="crumb__from" onClick={() => openAbout(null)}>{activeTab.label}</button>
+                                    <span className="crumb__sep crumb__sep--from">/</span>
+                                    <span className="crumb__here">{aboutLabel(aboutSection)}</span>
+                                </> : (
+                                    <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
+                                )}
+                                </>}
                             </>}
                         </div>
                             {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
@@ -1748,13 +1817,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             <button className="share-pill" data-tour="share" onClick={() => setShareOpen(true)} title={"Share " + (chatResource?.label ?? pod.name)}>Share</button>
                             {/* The header row is gone, as it is in Space; what it
                                 carried that is still owed to you lives here. */}
-                            {!preview && <Notifications podId={pod.id} />}
+                            {!preview && <WaitingBell podId={pod.id} />}
                             {!preview && <WaitingInbox pods={pods.data ?? []} />}
                         </div>
 
+                        {/* Over the pod and every app in it: a connector this pod
+                            asks everyone to connect that I have not. */}
+                        {!preview && !stranger && <ConnectBanner key={pod.id} pod={pod} />}
                         <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "") + (chat.open && chatResource ? " body--chat" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
-                            {pod && !stranger && !isVisible("conversation") && activeTab?.kind !== "profile" && activeTab?.kind !== "bot" && activeTab?.id !== "space:home" && activeTab?.id !== "space:about" && (
+                            {/* Not over a channel: it has a box of its own, and its
+                                agents answer there. */}
+                            {pod && !stranger && !isVisible("conversation") && activeTab?.kind !== "profile" && activeTab?.kind !== "bot" && activeTab?.kind !== "channel" && activeTab?.id !== "space:home" && activeTab?.id !== "space:about" && (
                                 <FloatingChat
                                     pod={pod}
                                     resource={chatResource}
@@ -1826,9 +1900,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                                 onOpenApp={(name) => pickTab("app:" + name)}
                                                 onOpenFile={openFile}
                                                 onOpenTable={openTable}
-                                                onVoice={voiceReady ? startCall : undefined}
+                                                onVoice={voiceReady ? () => void startCall() : undefined}
                                                 callError={huddle.error}
-                                                callRefresh={callConversationId === openConversationId ? `${huddle.active}:${huddle.thinking}:${huddle.expanded}` : ""}
+                                                /* While the call is held here: reattach to the run each
+                                                   time the call connects or work starts, so the teammate
+                                                   and its sub-agents are seen working, live. */
+                                                callRefresh={callConversationId === openConversationId
+                                                    ? `live:${huddle.liveEpoch}:${huddle.active}`
+                                                    : huddle.settled?.callId === openConversationId ? `settled:${huddle.settled.count}` : ""}
                                             />
                                         ) : (
                                             <ConversationPane
@@ -1858,31 +1937,40 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         <Home
                                             pod={pod}
                                             pods={pods.data ?? []}
+                                            apps={allTabs.filter((each): each is Extract<Tab, { kind: "app" }> => each.kind === "app")}
+                                            onOpenApp={pickTab}
+                                            onOpenApps={() => pickTab("apps")}
                                             onNewPage={newPage}
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onAbout={() => openAbout(null)}
-                                            onAsk={(text) => startChat(text)}
+                                            onCall={voiceReady ? () => void startCall(true) : undefined}
+                                            onAsk={(text, files, model) => startChat(text, model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined, files)}
                                         />
                                     ) : tab.view === "about" ? (
                                         <AboutPage
                                             pod={pod}
                                             orgId={activeOrgId}
                                             orgName={activeOrg?.name ?? "this organization"}
-                                            section={aboutSection.at}
-                                            request={aboutSection.id}
+                                            section={aboutSection}
+                                            onSection={openAbout}
+                                            onOpenSettings={(section) => { setSettingsFocus(null); setSettings(section); setSettingsRequest((count) => count + 1); }}
                                             onAsk={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                             onOpenAgent={openAgent}
+                                            onOpenTeammate={(id) => goToPod(id)}
                                             onAskFor={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }}
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onFile={(path) => openFile(path, "space:about")}
-                                            onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); }}
                                             onDeleted={() => goToTeam(null)}
                                         />
-                                    ) : tab.view === "chats" ? (
+                                    ) : tab.view === "chats" || tab.view === "channels" ? (
                                         <ChatsPage
+                                            key={tab.view}
                                             pod={pod}
+                                            initialFilter={tab.view === "channels" ? "channels" : "all"}
+                                            onOpenChannel={(id) => openChannel({ id, title: null })}
+                                            onConnect={() => setReaching(true)}
                                             openId={openConversationId}
                                             onOpen={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onOpenRun={(runId) => openRun(runId, "Workflow run")}
@@ -1893,19 +1981,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         />
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
-                                    ) : tab.view === "groups" ? (
-                                        groupsOn && <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
                                     ) : tab.view === "contacts" ? (
-                                        contactsOn && <ContactsPage pod={pod} />
-                                    ) : tab.view === "settings" ? (
-                                        <SettingsPage
-                                            pod={pod}
-                                            orgId={activeOrgId}
-                                            orgName={activeOrg?.name ?? "this organization"}
-                                            section={settingsSection}
-                                            onSection={setSettingsSection}
-                                            onAbout={() => openAbout(null)}
-                                        />
+                                        <ContactsPlace pod={pod} onConnect={() => setReaching(true)} />
                                     ) : <AllView
                                         podId={pod.id}
                                         spaceName={pod.name}
@@ -1960,25 +2037,23 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     </div>
                                 </Pane>
                             ))}
-                            {groupsOn && allTabs.filter((tab): tab is Extract<Tab, {kind: "group"}> => tab.kind === "group").map(tab => (
-                                <Pane className="pane group-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
-                                    <GroupPage
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "channel"}> => tab.kind === "channel").map(tab => (
+                                <Pane className="pane channel-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    <ChannelPage
                                         pod={pod}
-                                        groupId={tab.groupId}
+                                        channelId={tab.channelId}
                                         visible={isVisible(tab.id)}
                                         onNamed={(title) => renameTab(tab.id, title)}
-                                        onOpenGroups={() => pickTab("space:groups")}
-                                        onInvite={() => { setShareAdding(true); setShareOpen(true); }}
+                                        onLeft={() => pickTab("space:chats")}
                                     />
                                 </Pane>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "workflow"}> => tab.kind === "workflow").map(tab => (
                                 <Pane className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <div className="run-page">
-                                        <WorkflowPage pod={pod} orgId={activeOrgId} name={tab.name}
+                                        <WorkflowPage pod={pod} name={tab.name}
                                             onBack={() => pickTab("space:workflows")}
                                             onOpenRun={openRun}
-                                            onConnect={() => setSettings("connectors")}
                                             onDiscuss={(name) => {
                                                 void (async () => {
                                                     const id = await discussion.open("workflow", name);
@@ -2042,7 +2117,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             </main>
 
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
-            {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} adding={shareAdding} onClose={() => { setShareOpen(false); setShareAdding(false); }} />}
+            {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} onClose={() => setShareOpen(false)} />}
             {touring && pod && <AppTour stops={stops} onPrepare={prepareStop} onClose={endTour} />}
             {guideOpen && guide && !touring && <PlaceGuide guide={guide} onTry={guide.tryIt ? tryGuide : undefined} onClose={() => setGuideOpen(false)} />}
 

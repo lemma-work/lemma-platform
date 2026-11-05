@@ -531,10 +531,21 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         await self._service.release(logical_id)
 
     async def destroy_sandbox(
-        self, workload_kind, logical_id: UUID, *, deadline_at: datetime | None = None
-    ) -> None:
+        self,
+        workload_kind,
+        logical_id: UUID,
+        *,
+        deadline_at: datetime | None = None,
+        expected_epoch: int | None = None,
+    ) -> bool:
+        """Destroy the sandbox, or only the incarnation at ``expected_epoch``.
+
+        Returns False when the sandbox has already moved past that epoch, in
+        which case nothing was destroyed: the caller's handle names a sandbox
+        that is gone, and its replacement is not the caller's to destroy.
+        """
         del workload_kind, deadline_at
-        await self._service.destroy(logical_id)
+        return await self._service.destroy(logical_id, expected_epoch=expected_epoch)
 
     async def close(self) -> None:
         # The provider outlives any one client; disposal is the service's job.

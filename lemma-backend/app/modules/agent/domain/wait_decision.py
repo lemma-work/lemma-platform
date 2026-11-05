@@ -14,7 +14,7 @@ double in front of half the service to do it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
@@ -44,18 +44,27 @@ class LookAgainAt:
 WaitDecision = WakeNow | LookAgainAt
 
 
+#: How long a target may go unanswered before the agent is told so. Long enough
+#: to ride out a provider blip or a sandbox restarting; short enough that a
+#: sandbox which is simply not coming back costs minutes rather than the whole
+#: wait. Before this, the deadline was the only way out of an unreadable target.
+UNREADABLE_GRACE_SECONDS = 5 * 60
+
+
 def decide_wait(
     wait: AgentConversationWaitEntity,
     *,
     target_reason: AgentWaitWakeReason | None,
     now: datetime,
     poll_delay_seconds: int,
+    unreadable_since: datetime | None = None,
 ) -> WaitDecision:
     """Resolve, re-arm, or give up, for a wait whose scheduled time arrived.
 
     ``target_reason`` is what reading the target established, or None for "still
     going" -- which is also what a TIME wait always reports, since it has no
-    target to read.
+    target to read. ``unreadable_since`` is set when this read, and every read
+    since that moment, could not reach the target at all.
     """
     if target_reason is not None:
         return WakeNow(target_reason)
@@ -63,7 +72,15 @@ def decide_wait(
         # For TIME the timer *is* the condition: arriving here is the answer.
         return WakeNow(AgentWaitWakeReason.TIMER)
 
+    unreadable_too_long = unreadable_since is not None and now - unreadable_since >= (
+        timedelta(seconds=UNREADABLE_GRACE_SECONDS)
+    )
     deadline = deadline_of(wait, fallback=now)
+    if unreadable_too_long or (unreadable_since is not None and now >= deadline):
+        # Not DEADLINE, which says the target was still running when last
+        # looked at: nothing could be looked at, and the agent should know
+        # that its wait was blind rather than waiting blind again.
+        return WakeNow(AgentWaitWakeReason.TARGET_UNREADABLE)
     if now >= deadline:
         # Not TIMER. TIMER means "your time is up, as you asked"; DEADLINE means
         # "I gave up waiting and it had not finished", and the two imply
@@ -83,11 +100,4 @@ def deadline_of(wait: AgentConversationWaitEntity, *, fallback: datetime) -> dat
     agent told its wait expired can check and carry on, while one that is never
     woken is simply lost.
     """
-    raw = (wait.spec or {}).get("deadline_at")
-    if not isinstance(raw, str):
-        return fallback
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except ValueError:
-        return fallback
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return wait.wait_spec.deadline_at or fallback

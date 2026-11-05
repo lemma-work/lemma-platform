@@ -4,18 +4,18 @@ from typing import Iterable, Optional, Sequence, Tuple
 from uuid import UUID
 
 from sqlalchemy import (
+    and_,
     delete,
     select,
     text,
 )
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.sql import ColumnElement
 
+from app.core.authorization.authz_epoch import bump_after_commit
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
-from app.core.authorization.permissions import Permissions
-from app.core.authorization.sql_actions import (
-    allowed_actions_contains,
-    allowed_actions_expr,
-)
+from app.core.authorization.sql_actions import allowed_actions_expr
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreRecordNotFoundError,
@@ -23,8 +23,10 @@ from app.modules.datastore.domain.errors import (
 from app.core.infrastructure.db.transaction_locks import (
     mark_transaction_scoped_lock,
 )
-from app.modules.datastore.domain.file_entities import (
-    DatastoreFileEntity,
+from app.modules.datastore.domain.file_entities import DatastoreFileEntity
+from app.modules.datastore.domain.search_scope import (
+    SearchablePartition,
+    SearchScopeTimedOut,
 )
 from app.modules.datastore.domain.ports import DatastoreFileRepositoryPort
 from app.modules.datastore.infrastructure.models import DatastoreFile
@@ -32,7 +34,12 @@ from app.modules.datastore.infrastructure.repositories.file_tree_sql import (
     tree_statements,
 )
 from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
-    has_unreadable_ancestor,
+    has_ancestor_where,
+)
+from app.modules.datastore.infrastructure.repositories.file_read_rule import (
+    resolve_blocked_folders,
+    resolve_read_rule,
+    searchable_side_statement,
 )
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
@@ -48,8 +55,8 @@ from app.modules.datastore.infrastructure.repositories.file_listing_sql import (
     repoint_descendants,
     stragglers_under,
 )
-from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
-    DatastoreFileRecoveryQueriesMixin,
+from app.modules.datastore.infrastructure.repositories.file_status_counts import (
+    DatastoreFileStatusCountsMixin,
 )
 
 
@@ -65,6 +72,10 @@ def _file_actions_expr(ctx: Context):
     )
 
 
+#: Postgres' SQLSTATE for a statement cancelled by ``statement_timeout``.
+_QUERY_CANCELED = "57014"
+
+
 def _file_payload(entity: DatastoreFileEntity) -> dict:
     payload = entity.model_dump(exclude={"allowed_actions"})
     payload["kind"] = entity.kind.value
@@ -76,7 +87,7 @@ def _file_payload(entity: DatastoreFileEntity) -> dict:
 class DatastoreFileRepository(
     DatastoreFileListingMixin,
     DatastoreFileProcessingStateMixin,
-    DatastoreFileRecoveryQueriesMixin,
+    DatastoreFileStatusCountsMixin,
     DatastoreRepositoryBase,
     DatastoreFileRepositoryPort,
 ):
@@ -102,6 +113,8 @@ class DatastoreFileRepository(
         self.session.add(instance)
         await self.session.flush()
         self._collect_events(entity)
+        await self._enqueue_requested_processing(entity, instance)
+        bump_after_commit(self.session, instance.pod_id, files=True)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[DatastoreFileEntity]:
@@ -142,14 +155,24 @@ class DatastoreFileRepository(
                 resource_id=entity.id,
             )
 
+        # Who may read what, and what search can reach, change with these;
+        # anything cached from the old answer is retired after commit.
+        reach_changed = (
+            instance.visibility != entity.visibility
+            or instance.path != entity.path
+            or instance.search_enabled != entity.search_enabled
+        )
         for key, value in _file_payload_unset(entity).items():
             if key in {"id", "created_at", "updated_at"}:
                 continue
             if hasattr(instance, key):
                 setattr(instance, key, value)
+        if reach_changed:
+            bump_after_commit(self.session, instance.pod_id, files=True)
 
         await self.session.flush()
         self._collect_events(entity)
+        await self._enqueue_requested_processing(entity, instance)
         return instance.to_entity()
 
     async def delete(self, id: UUID) -> bool:
@@ -167,6 +190,7 @@ class DatastoreFileRepository(
             return False
         self._collect_events(entity)
         await self.session.delete(instance)
+        bump_after_commit(self.session, instance.pod_id, files=True)
         return True
 
     async def delete_entities(self, entities: Sequence[DatastoreFileEntity]) -> int:
@@ -189,6 +213,7 @@ class DatastoreFileRepository(
         result = await self.session.execute(
             delete(DatastoreFile).where(DatastoreFile.id.in_(ids))
         )
+        bump_after_commit(self.session, entities[0].pod_id, files=True)
         return int(result.rowcount or 0)
 
     async def get_by_datastore(
@@ -225,12 +250,16 @@ class DatastoreFileRepository(
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[DatastoreFileEntity], Optional[str]]:
         direct, nested = direct_child_patterns(directory_path)
-        actions = _file_actions_expr(ctx)
-        stmt = select(DatastoreFile, actions).where(
+        # Filter on the resolved read rule; the full action projection is only
+        # computed for the rows the page returns.
+        readable = await self.readable_where(
+            pod_id=pod_id, ctx=ctx, walk_ancestors=False
+        )
+        stmt = select(DatastoreFile, _file_actions_expr(ctx)).where(
             DatastoreFile.pod_id == pod_id,
             DatastoreFile.path.like(direct, escape="!"),
             ~DatastoreFile.path.like(nested, escape="!"),
-            allowed_actions_contains(actions, Permissions.FOLDER_READ),
+            readable,
         )
         if cursor:
             stmt = stmt.where(DatastoreFile.id > UUID(cursor))
@@ -256,13 +285,12 @@ class DatastoreFileRepository(
         tree. This is for asking what a narrow reader can reach at all -- an
         outsider's run can open a Public file wherever it sits.
         """
-        actions = _file_actions_expr(ctx)
+        readable = await self.readable_where(
+            pod_id=pod_id, ctx=ctx, walk_ancestors=False
+        )
         result = await self.session.execute(
-            select(DatastoreFile, actions)
-            .where(
-                DatastoreFile.pod_id == pod_id,
-                allowed_actions_contains(actions, Permissions.FOLDER_READ),
-            )
+            select(DatastoreFile, _file_actions_expr(ctx))
+            .where(DatastoreFile.pod_id == pod_id, readable)
             .order_by(DatastoreFile.path)
             .limit(limit)
         )
@@ -327,54 +355,148 @@ class DatastoreFileRepository(
         among: Iterable[UUID] | None = None,
         limit: int | None = None,
     ) -> set[UUID]:
-        """The file ids in the pod the caller may read, in one statement.
+        """The file ids in the pod the caller may read.
 
-        This replaces a loop that loaded *every* file row in the pod, hydrated
-        them into ORM objects and then entities,
-        collected the ancestor path of each, re-queried by those paths, and
-        then re-derived inheritance in Python. The predicate it re-derived is
-        the same ``_file_actions_expr`` CASE used everywhere else, so it was
-        being evaluated in SQL and then again, differently, above it.
+        The read rule is resolved first -- one read of the caller's grants and,
+        for a full-pod walk, one of the unreadable rows that have rows beneath
+        them -- and then applied as a plain predicate (``readable_where``), so
+        the statement over the pod runs no subquery per row. The answer is the
+        one ``_file_actions_expr`` gives row by row, ancestor walk included.
 
         ``walk_ancestors`` is the human/workload split, and it is a real
         difference in the rule rather than an optimization. A workload holds no
-        ambient access, so ``_file_actions_expr`` — which already resolves the
-        grant cascade — is the whole answer: re-deriving inheritance on top of
-        it would demand a separate grant on every folder above and cancel the
-        cascade it just followed. That regression withheld every file from an
-        agent holding a real folder grant. A human, by contrast, may
-        read a POD file by role alone, so an unreadable folder above it has to
-        hide what is inside.
+        ambient access, so the row's own grant cascade is the whole answer:
+        re-deriving inheritance on top of it would demand a separate grant on
+        every folder above and cancel the cascade it just followed. That
+        regression withheld every file from an agent holding a real folder
+        grant. A human, by contrast, may read a POD file by role alone, so an
+        unreadable folder above it has to hide what is inside.
 
         ``among`` narrows the question to a known list -- the shape search uses
         to authorize a candidate pool -- and costs a primary-key lookup per id
-        rather than a pass over the pod. It composes with ``walk_ancestors``:
-        the ancestor EXISTS correlates against the un-aliased ``DatastoreFile``,
-        so an extra predicate on the outer query leaves that correlation alone.
+        rather than a pass over the pod. Its walk probes each candidate's
+        ancestors rather than reading the blocked rows of the whole pod.
 
-        ``limit`` stops the statement early. Its only caller asks "is the
-        readable set small enough to send to the other database?" and passes
-        ``ceiling + 1``, so a short answer is the complete set and a full one
-        means *more than this*. That is why there is no ORDER BY: a truncated
-        result is never used as a result, only as that verdict.
+        ``limit`` stops the statement early; a truncated result is a verdict
+        ("more than this"), never a result, which is why there is no ORDER BY.
         """
-        actions = _file_actions_expr(ctx)
         if among is not None:
             among = list(among)
             if not among:
                 return set()
-        stmt = select(DatastoreFile.id).where(
-            DatastoreFile.pod_id == pod_id,
-            allowed_actions_contains(actions, Permissions.FOLDER_READ),
+        readable = await self.readable_where(
+            pod_id=pod_id,
+            ctx=ctx,
+            walk_ancestors=walk_ancestors,
+            per_row_walk=among is not None,
         )
+        stmt = select(DatastoreFile.id).where(DatastoreFile.pod_id == pod_id, readable)
         if among is not None:
             stmt = stmt.where(DatastoreFile.id.in_(among))
-        if walk_ancestors:
-            stmt = stmt.where(~has_unreadable_ancestor(ctx, pod_id))
         if limit is not None:
             stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
+
+    async def readable_where(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+        per_row_walk: bool = False,
+    ) -> ColumnElement[bool]:
+        """The read predicate over ``DatastoreFile`` for *ctx*, authority first.
+
+        The caller's grants are read once (and, for a walk, the unreadable rows
+        that have rows beneath them), so what is left per row is a CASE over
+        its own columns. See ``file_read_rule`` for why, and for the rule this
+        must agree with.
+
+        ``per_row_walk`` probes each row's ancestors instead of reading the
+        pod's blocked folders up front -- cheaper when the outer query is
+        already bounded to a short list of ids.
+        """
+        rule = await resolve_read_rule(self.session, pod_id=pod_id, ctx=ctx)
+        readable = rule.readable()
+        if not walk_ancestors or rule.reads_everything:
+            return readable
+        if per_row_walk:
+            return and_(
+                readable,
+                ~has_ancestor_where(pod_id, lambda ancestor: ~rule.readable(ancestor)),
+            )
+        blocked = await resolve_blocked_folders(self.session, pod_id=pod_id, rule=rule)
+        if blocked.empty:
+            return readable
+        return and_(readable, ~blocked.hides(DatastoreFile.path))
+
+    async def searchable_partition(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+        timeout_ms: int,
+        limit: int | None = None,
+        readable_only: bool = False,
+    ) -> SearchablePartition:
+        """The pod's searchable files, split into readable and hidden.
+
+        Each side is read up to *limit* rows (all of it when None), so a pod
+        with millions of searchable files costs the split ``2 * limit`` ids,
+        not millions; *readable_only* skips the hidden side, for the caller
+        that needs the complete readable set and nothing else.
+
+        Bounded in time as well. The statements run inside a
+        savepoint under ``statement_timeout``; the savepoint is rolled back
+        afterwards either way, which is what returns the timeout to the
+        session's own and leaves the transaction usable after a cancel. A
+        cancel raises ``SearchScopeTimedOut`` so search can fall back to
+        authorizing its results instead of failing.
+        """
+        savepoint = await self.session.begin_nested()
+        try:
+            await self.session.execute(
+                text("SELECT set_config('statement_timeout', :ms, true)"),
+                {"ms": str(int(timeout_ms))},
+            )
+            readable = await self.readable_where(
+                pod_id=pod_id, ctx=ctx, walk_ancestors=walk_ancestors
+            )
+            readable_ids = set(
+                (
+                    await self.session.execute(
+                        searchable_side_statement(
+                            pod_id, readable, readable_side=True, limit=limit
+                        )
+                    )
+                ).scalars()
+            )
+            hidden_ids: set[UUID] = (
+                set()
+                if readable_only
+                else set(
+                    (
+                        await self.session.execute(
+                            searchable_side_statement(
+                                pod_id, readable, readable_side=False, limit=limit
+                            )
+                        )
+                    ).scalars()
+                )
+            )
+        except DBAPIError as exc:
+            if getattr(exc.orig, "sqlstate", None) == _QUERY_CANCELED:
+                raise SearchScopeTimedOut(
+                    f"search scope exceeded {timeout_ms}ms"
+                ) from exc
+            raise
+        finally:
+            await savepoint.rollback()
+        return SearchablePartition(
+            readable=frozenset(readable_ids), hidden=frozenset(hidden_ids)
+        )
 
     async def get_tree_items(
         self,
@@ -391,12 +513,12 @@ class DatastoreFileRepository(
         statements rather than one read of the pod.
         """
         folders_stmt, files_stmt = tree_statements(
-            _file_actions_expr(ctx),
+            await self.readable_where(
+                pod_id=pod_id, ctx=ctx, walk_ancestors=walk_ancestors
+            ),
             pod_id,
-            ctx,
             subtree_root=subtree_root,
             files_per_directory=files_per_directory,
-            walk_ancestors=walk_ancestors,
         )
         folders = await self.session.execute(folders_stmt)
         items = [instance.to_entity() for instance in folders.scalars().all()]

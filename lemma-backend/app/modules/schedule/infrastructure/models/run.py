@@ -65,16 +65,6 @@ class ScheduleRun(UUIDAuditBase):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # When the recovery sweep last looked at this row, as distinct from when the
-    # row last changed. They were the same field, and that is what broke the
-    # sweep: for a run whose target is alive but not yet finished there is
-    # nothing to write, so SQLAlchemy emitted no UPDATE, so ``updated_at`` never
-    # moved, so the ORDER BY handed back the same hundred rows on the next tick
-    # and every tick after it. In production the cursor sat on the same rows for
-    # days while reporting a full batch reconciled on every tick.
-    last_inspected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -92,15 +82,26 @@ class ScheduleRun(UUIDAuditBase):
         # schedule's whole completed history and sorted it, on every run
         # completion.
         #
-        # Partial on completed_at IS NOT NULL because that is the query's own
-        # filter and because an in-flight run has no place in a streak: at rest
-        # that excludes only the small fraction of the table still running.
+        # Partial on the query's own filter: an in-flight run has no place in a
+        # streak, and neither has an event the filter skipped -- a schedule
+        # that skips most events would otherwise make every count walk past
+        # them.
         Index(
-            "ix_schedule_runs_schedule_completed",
+            "ix_schedule_runs_schedule_streak",
             "schedule_id",
             text("completed_at DESC"),
             text("id DESC"),
-            postgresql_where=text("completed_at IS NOT NULL"),
+            postgresql_where=text("completed_at IS NOT NULL AND status <> 'FILTERED'"),
+        ),
+        # A schedule's history without the events its filter skipped, newest
+        # first -- what the run list shows by default, and what would otherwise
+        # walk past every skip of a busy webhook schedule to find its fires.
+        Index(
+            "ix_schedule_runs_schedule_fires",
+            "schedule_id",
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_where=text("status <> 'FILTERED'"),
         ),
         Index(
             "uq_schedule_runs_target",
@@ -114,43 +115,6 @@ class ScheduleRun(UUIDAuditBase):
             "redrive_of_run_id",
             unique=True,
             postgresql_where=text("redrive_of_run_id IS NOT NULL"),
-        ),
-        # Serves the five-minute recovery sweep. There was already an index for
-        # that sweep -- ix_schedule_runs_retryable_recovery, created in 0003 --
-        # but its predicate covered RECEIVED/PROCESSING/FAILED while the query
-        # asks about PROCESSING/FAILED/DISPATCHED. Postgres cannot use a partial
-        # index it cannot prove covers the query, so it never did: zero scans in
-        # production while the sweep sequentially scanned the table.
-        #
-        # It was also declared only in the migration and not here, so databases
-        # built by create_all -- every test database -- never had it at all.
-        #
-        # The predicate is `target_outcome IS NULL` and nothing else, because
-        # that alone carries essentially all the selectivity: unresolved runs are
-        # a small fraction of the table. Adding back the sweep's status set would
-        # exclude a negligible handful of rows on top of that -- and reintroduce
-        # precisely the coupling that made 0003 dead weight, where the query's
-        # status list drifts from the index's and Postgres silently stops using
-        # it. A predicate that saves almost nothing and can silently disable the
-        # index is not worth having. Statuses are filtered from the rows this
-        # returns instead.
-        #
-        # Leads with (last_inspected_at, id) because that is what the sweep now
-        # orders by. It used to lead with updated_at, which the sweep could not
-        # advance -- a row it inspected and correctly left alone was written
-        # back unchanged, so no UPDATE fired and the cursor never moved off the
-        # oldest hundred rows.
-        #
-        # NULLS FIRST must be spelled out here as well as in the query. Postgres
-        # sorts nulls last under ASC, and an index can only answer an ORDER BY
-        # whose null placement it matches -- so leaving it off either side would
-        # leave the planner to fetch every matching row and sort them, which is
-        # the cost the LIMIT is supposed to avoid.
-        Index(
-            "ix_schedule_runs_recoverable",
-            text("last_inspected_at ASC NULLS FIRST"),
-            "id",
-            postgresql_where=text("target_outcome IS NULL"),
         ),
     )
 

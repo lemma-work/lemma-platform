@@ -67,3 +67,47 @@ def test_the_display_it_starts_does_not_inherit_the_capture_lock(
     )
 
     assert mark.read_text().strip() == "closed"
+
+
+def test_a_caller_ceiling_runs_the_whole_capture_under_timeout(
+    tmp_path: Path,
+) -> None:
+    """The caller's own deadline cannot end the process; this one does.
+
+    A capture that outlived `web_fetch`'s window kept running and kept the
+    lock, so every capture queued behind it overran too. The stubbed `timeout`
+    records how it was called and then runs the capture, as the real one does.
+    """
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    mark = tmp_path / "timeout-args"
+    _stub(binaries, "timeout", f'echo "$1 $2 $3" > "{mark}"; shift 3; exec "$@"')
+    _stub(binaries, "flock", "exit 0")
+    _stub(binaries, "browser-is-live", "exit 0")
+    _stub(binaries, "agent-browser", "exit 0")
+
+    finished = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "https://example.com",
+            "--formats",
+            "pdf",
+            "--out",
+            str(tmp_path / "out"),
+            "--name",
+            "page",
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{binaries}:{os.environ['PATH']}",
+            "AGENT_BROWSER_CAPTURE_LOCK": str(tmp_path / "capture.lock"),
+            "SAVE_WEBPAGE_TIMEOUT": "65",
+        },
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    assert mark.read_text().strip() == "-k 5 65"

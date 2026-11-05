@@ -19,6 +19,35 @@ from app.modules.schedule.domain.interfaces import ScheduleTarget
 from app.modules.schedule.services.schedule_service import ScheduleService
 
 
+class _Connectors:
+    """The connector check, as a recording stand-in: who asked, for what."""
+
+    def __init__(self, refuse: Exception | None = None) -> None:
+        self.asked: list[tuple[object, object, str]] = []
+        self.refuse = refuse
+
+    async def __call__(self, _uow, ctx, *, pod_id, slug, pod_account_id=None):
+        self.asked.append((ctx, pod_id, slug))
+        if self.refuse is not None:
+            raise self.refuse
+
+
+def _listening_service(**kwargs):
+    """A service creating a schedule in a pod, through a pod connector."""
+    schedule_repo = kwargs.pop("schedule_repository", AsyncMock())
+    schedule_repo.get_by_name.return_value = None
+    return ScheduleService(
+        uow=kwargs.pop("uow", AsyncMock()),
+        schedule_repository=schedule_repo,
+        external_schedule_writer=kwargs.pop("external_schedule_writer", AsyncMock()),
+        connector_access=kwargs.pop("connector_access", _Connectors()),
+        **kwargs,
+    )
+
+
+_CTX = SimpleNamespace(user_id=uuid4())
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("was_active, should_reset", [(False, True), (True, False)])
 async def test_only_explicit_reactivation_resets_failure_streak(
@@ -63,41 +92,76 @@ async def test_create_external_schedule_success():
     schedule_repo = AsyncMock()
     external_writer = AsyncMock()
 
-    service = ScheduleService(
+    service = _listening_service(
         uow=uow,
         schedule_repository=schedule_repo,
         external_schedule_writer=external_writer,
     )
 
-    user_id = uuid4()
-    account_id = uuid4()
-    app_schedule_id = "gmail_new_email"
-
     schedule_create = ScheduleCreateEntity(
-        user_id=user_id,
+        user_id=uuid4(),
+        pod_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
-        connector_trigger_id=app_schedule_id,
-        account_id=account_id,
+        connector_trigger_id="gmail_new_email",
+        pod_connector_slug="gmail",
         config={"some": "config"},
         visibility="PERSONAL",
     )
 
-    created_schedule = ScheduleEntity(id=uuid4(), **schedule_create.model_dump())
-    schedule_repo.create.return_value = created_schedule
-    external_writer.create_provider_trigger.return_value = ProvisionedTrigger(
-        provider_trigger_id="provider_123"
-    )
+    order: list[str] = []
 
-    updated_schedule = created_schedule.model_copy(deep=True)
-    updated_schedule.config["provider_trigger_id"] = "provider_123"
-    schedule_repo.update.return_value = updated_schedule
+    async def provision(schedule):
+        order.append("provision")
+        return ProvisionedTrigger(provider_trigger_id="provider_123")
 
-    result = await service.create_schedule(schedule_create)
+    async def write(schedule):
+        order.append("write")
+        return schedule
+
+    external_writer.create_provider_trigger.side_effect = provision
+    schedule_repo.create.side_effect = write
+
+    result = await service.create_schedule(schedule_create, ctx=_CTX)
 
     assert result.schedule_type == ScheduleType.WEBHOOK
     assert result.config["provider_trigger_id"] == "provider_123"
-    external_writer.create_provider_trigger.assert_called_once_with(created_schedule)
-    schedule_repo.update.assert_called_once()
+    assert order == ["provision", "write"], (
+        "subscribed before the row is written, so the row is written once, routed"
+    )
+    schedule_repo.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_row_that_fails_to_write_drops_the_subscription_just_made():
+    uow = AsyncMock()
+    schedule_repo = AsyncMock()
+    external_writer = AsyncMock()
+    service = _listening_service(
+        uow=uow,
+        schedule_repository=schedule_repo,
+        external_schedule_writer=external_writer,
+    )
+    external_writer.create_provider_trigger.return_value = ProvisionedTrigger(
+        provider_trigger_id="provider_123"
+    )
+    schedule_repo.create.side_effect = RuntimeError("database went away")
+
+    with pytest.raises(RuntimeError):
+        await service.create_schedule(
+            ScheduleCreateEntity(
+                user_id=uuid4(),
+                pod_id=uuid4(),
+                schedule_type=ScheduleType.WEBHOOK,
+                connector_trigger_id="gmail_new_email",
+                pod_connector_slug="gmail",
+                config={"some": "config"},
+                visibility="PERSONAL",
+            ),
+            ctx=_CTX,
+        )
+
+    [call] = external_writer.delete_provider_trigger.await_args_list
+    assert call.args[0].config["provider_trigger_id"] == "provider_123"
 
 
 @pytest.mark.asyncio
@@ -118,7 +182,7 @@ async def test_delete_external_schedule():
         user_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
         connector_trigger_id="gmail_new_email",
-        account_id=uuid4(),
+        pod_connector_slug="gmail",
         config={"provider_trigger_id": "provider_123"},
     )
     schedule_repo.get.return_value = existing_schedule
@@ -136,7 +200,7 @@ async def test_create_schedule_no_provider_schedule_created():
     schedule_repo = AsyncMock()
     external_writer = AsyncMock()
 
-    service = ScheduleService(
+    service = _listening_service(
         uow=uow,
         schedule_repository=schedule_repo,
         external_schedule_writer=external_writer,
@@ -144,9 +208,10 @@ async def test_create_schedule_no_provider_schedule_created():
 
     schedule_create = ScheduleCreateEntity(
         user_id=uuid4(),
+        pod_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
         connector_trigger_id="generic_webhook",
-        account_id=uuid4(),
+        pod_connector_slug="generic",
         config={"some": "config"},
         visibility="PERSONAL",
     )
@@ -156,7 +221,7 @@ async def test_create_schedule_no_provider_schedule_created():
     # "nothing needed provisioning", which is now said rather than implied.
     external_writer.create_provider_trigger.return_value = ProvisionedTrigger()
 
-    result = await service.create_schedule(schedule_create)
+    result = await service.create_schedule(schedule_create, ctx=_CTX)
 
     assert result.id == created_schedule.id
     schedule_repo.update.assert_not_called()
@@ -180,7 +245,7 @@ async def test_delete_external_schedule_failure_preserves_local_schedule():
         user_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
         connector_trigger_id="gmail_new_email",
-        account_id=uuid4(),
+        pod_connector_slug="gmail",
         config={"provider_trigger_id": "provider_123"},
     )
     schedule_repo.get.return_value = existing_schedule
@@ -218,7 +283,7 @@ async def test_workflow_webhook_schedule_derives_trigger_from_workflow_start():
         pod_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
         workflow_name="gmail_email_ingest",
-        account_id=uuid4(),
+        pod_connector_slug="gmail",
         config={"source": "composio"},
         filter_instruction="Only important mail",
         filter_output_schema={"type": "object"},
@@ -258,7 +323,7 @@ async def test_workflow_webhook_schedule_rejects_trigger_mismatch():
         schedule_type=ScheduleType.WEBHOOK,
         workflow_name="gmail_email_ingest",
         connector_trigger_id="gmail:wrong_trigger",
-        account_id=uuid4(),
+        pod_connector_slug="gmail",
         config={"source": "composio"},
     )
 
@@ -322,3 +387,74 @@ async def test_delete_all_for_pod_force_deletes_on_teardown_failure():
     # 1 from the fallback row delete + 1 from the normal delete.
     assert deleted == 2
     schedule_repo.delete.assert_awaited_once_with(failing.id)
+
+
+@pytest.mark.asyncio
+async def test_a_connector_schedule_is_resolved_as_its_creator_before_it_subscribes():
+    """The creator must be able to use the pod connector themselves -- their
+    own account for a per-member one, the shared one if it was shared with
+    them -- or nothing is subscribed on anyone's account."""
+    connectors = _Connectors()
+    external_writer = AsyncMock()
+    external_writer.create_provider_trigger.return_value = ProvisionedTrigger()
+    service = _listening_service(
+        external_schedule_writer=external_writer, connector_access=connectors
+    )
+    pod_id = uuid4()
+
+    await service.create_schedule(
+        ScheduleCreateEntity(
+            user_id=_CTX.user_id,
+            pod_id=pod_id,
+            schedule_type=ScheduleType.WEBHOOK,
+            connector_trigger_id="gmail_new_email",
+            pod_connector_slug="support-inbox",
+            visibility="PERSONAL",
+        ),
+        ctx=_CTX,
+    )
+
+    assert connectors.asked == [(_CTX, pod_id, "support-inbox")]
+
+
+@pytest.mark.asyncio
+async def test_a_creator_who_may_not_use_the_connector_subscribes_nothing():
+    refusal = ScheduleValidationError("CONNECTOR_NEEDS_ACCOUNT stand-in")
+    external_writer = AsyncMock()
+    service = _listening_service(
+        external_schedule_writer=external_writer,
+        connector_access=_Connectors(refuse=refusal),
+    )
+
+    with pytest.raises(ScheduleValidationError):
+        await service.create_schedule(
+            ScheduleCreateEntity(
+                user_id=_CTX.user_id,
+                pod_id=uuid4(),
+                schedule_type=ScheduleType.WEBHOOK,
+                connector_trigger_id="gmail_new_email",
+                pod_connector_slug="support-inbox",
+                visibility="PERSONAL",
+            ),
+            ctx=_CTX,
+        )
+
+    external_writer.create_provider_trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_only_a_webhook_schedule_listens_through_a_connector():
+    service = _listening_service()
+
+    with pytest.raises(ScheduleValidationError):
+        await service.create_schedule(
+            ScheduleCreateEntity(
+                user_id=_CTX.user_id,
+                pod_id=uuid4(),
+                schedule_type=ScheduleType.TIME,
+                config={"cron": "0 9 * * *"},
+                pod_connector_slug="gmail",
+                visibility="PERSONAL",
+            ),
+            ctx=_CTX,
+        )

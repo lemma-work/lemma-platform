@@ -7,7 +7,7 @@ invitation to transcribe it a second time.
 
 from __future__ import annotations
 
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     _failed_files_block,
     _shared_files_blocks,
 )

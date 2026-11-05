@@ -85,6 +85,27 @@ def test_relaxed_alignment_accepts_a_subdomain_of_the_signing_domain() -> None:
     )
 
 
+def test_a_domain_under_a_tld_the_suffix_list_does_not_know_still_aligns() -> None:
+    """The list's implicit ``*`` rule: the last label is the suffix.
+
+    Without it every address under an unlisted TLD aligned with nothing, so a
+    receiver's pass for it was read as no verdict at all.
+    """
+    assert (
+        _verdict(
+            "mx; dkim=pass header.d=client.example", sender="a@mail.client.example"
+        )
+        is EmailAuthenticationVerdict.PASS
+    )
+
+
+def test_a_bare_unlisted_tld_aligns_with_nothing_under_it() -> None:
+    assert (
+        _verdict("mx; dkim=pass header.d=example", sender="a@client.example")
+        is EmailAuthenticationVerdict.UNKNOWN
+    )
+
+
 def test_spf_pass_is_read_from_the_envelope_sender() -> None:
     assert (
         _verdict("mx; spf=pass smtp.mailfrom=bounce@example.com")
@@ -230,7 +251,9 @@ async def test_a_chat_platform_is_never_asked_to_authenticate() -> None:
     resolving — the bypass below, asserted as correct behaviour.
     """
     known = uuid4()
-    resolved = await _service(known).resolve(event=_event(None, platform="SLACK"))
+    # Teams rather than Slack: a cached Slack answer also needs Slack's proof
+    # (``slack_cached_identity``), a question with no database to answer it.
+    resolved = await _service(known).resolve(event=_event(None, platform="TEAMS"))
     assert resolved.internal_user_id == known
 
 
@@ -258,3 +281,81 @@ def test_the_trusted_receiver_is_named_out_of_the_box() -> None:
     from app.modules.agent_surfaces.config import SurfaceSettings
 
     assert SurfaceSettings().surface_email_trusted_authserv_ids == "amazonses.com"
+
+
+# --- one address, end to end ----------------------------------------------
+
+
+def _fetched(from_header: object, *, received_from: str) -> dict[str, object]:
+    """A Received Emails API response whose receiver vouched for corp.com."""
+    return {
+        "from": received_from,
+        "text": "Wire the money.",
+        "headers": {
+            "from": from_header,
+            "authentication-results": "amazonses.com; dmarc=pass header.from=corp.com",
+        },
+    }
+
+
+def _webhook_event(sender: str) -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
+        platform="RESEND",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="thread-1",
+        sender_external_user_id=sender,
+        sender_email=sender,
+        message_text="",
+        metadata={"email_id": "email-1"},
+    )
+
+
+def test_the_verdict_is_for_the_address_identity_resolution_reads() -> None:
+    from app.modules.agent_surfaces.platforms.resend.parser import (
+        merge_received_email,
+    )
+
+    merged = merge_received_email(
+        _webhook_event("ceo@corp.com"),
+        _fetched("CEO <ceo@corp.com>", received_from="CEO <ceo@corp.com>"),
+    )
+
+    assert merged is not None
+    assert merged.sender_email == merged.sender_external_user_id == "ceo@corp.com"
+    assert merged.sender_authentication == EmailAuthenticationVerdict.PASS.value
+
+
+def test_a_fetched_from_naming_someone_else_does_not_vouch_for_the_event() -> None:
+    """The webhook resolves one address; the receiver judged another."""
+    from app.modules.agent_surfaces.platforms.resend.parser import (
+        merge_received_email,
+    )
+
+    merged = merge_received_email(
+        _webhook_event("ceo@victim.com"),
+        _fetched("someone@corp.com", received_from="someone@corp.com"),
+    )
+
+    assert merged is not None
+    assert merged.sender_email == "ceo@victim.com"
+    assert merged.sender_authentication == EmailAuthenticationVerdict.UNKNOWN.value
+
+
+def test_two_from_headers_leave_the_sender_unauthenticated() -> None:
+    """Which ``From:`` the receiver evaluated cannot be told from here."""
+    import json
+
+    from app.modules.agent_surfaces.platforms.resend.parser import (
+        merge_received_email,
+    )
+
+    merged = merge_received_email(
+        _webhook_event("ceo@corp.com"),
+        _fetched(
+            json.dumps(["ceo@corp.com", "someone@elsewhere.com"]),
+            received_from="ceo@corp.com",
+        ),
+    )
+
+    assert merged is not None
+    assert merged.sender_authentication == EmailAuthenticationVerdict.UNKNOWN.value

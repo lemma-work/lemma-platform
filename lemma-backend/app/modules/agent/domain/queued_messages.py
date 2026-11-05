@@ -17,6 +17,16 @@ message is in, without a column of its own.
   message for the follow-up turn.
 - ``steer_undelivered`` is the host's reason, when it reported that it could not
   put the message into the turn in flight.
+- ``waiting_on_answer`` names the run whose question the message is held
+  behind: that run ended by asking the person something, and nothing answers
+  what was said meanwhile until they answer it.
+- ``stop_requested_after_sequence`` is on the *run*, not a message: the newest
+  message sequence when Stop was pressed. Only what was said after it is owed
+  a turn once the run has stopped.
+
+All of these are the server's to write. A client sending any of them in a
+message's metadata would decide its own delivery -- never answered, or not
+withdrawable -- so they are dropped on the way in (``SERVER_OWNED_KEYS``).
 
 Kept out of the repository so the frontend-facing names are written down once
 next to what they mean, and so the harness, the service and the tests can name
@@ -31,6 +41,24 @@ DURING_ACTIVE_RUN = "during_active_run"
 STEERED_INTO_RUN = "steered_into_run"
 STEER_DISPATCHED_AT = "steer_dispatched_at"
 STEER_UNDELIVERED = "steer_undelivered"
+WAITING_ON_ANSWER = "waiting_on_answer"
+STOP_REQUESTED_AFTER_SEQUENCE = "stop_requested_after_sequence"
+
+#: Set by Lemma when it delivers, or holds, a message -- never by its sender.
+#: ``client_message_id`` is here too: it is taken from the request's own field
+#: and stamped by the server, so a value smuggled in through metadata could
+#: claim another send's place in the double-submit check.
+CLIENT_MESSAGE_ID = "client_message_id"
+SERVER_OWNED_KEYS = frozenset(
+    {
+        DURING_ACTIVE_RUN,
+        STEERED_INTO_RUN,
+        STEER_DISPATCHED_AT,
+        STEER_UNDELIVERED,
+        WAITING_ON_ANSWER,
+        CLIENT_MESSAGE_ID,
+    }
+)
 
 # Reported by the host (and by the harness about itself) as the reason a steer
 # did not land. Free text on the wire; these are the ones Lemma produces.

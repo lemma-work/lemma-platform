@@ -14,28 +14,21 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql import ColumnElement
 
-from app.core.authorization.context import Context
-from app.core.authorization.permissions import Permissions
-from app.core.authorization.sql_actions import allowed_actions_contains
 from app.core.infrastructure.db.sql_text import escape_like
 from app.modules.datastore.domain.file_entities import FileKind
 from app.modules.datastore.infrastructure.models import DatastoreFile
-from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
-    has_unreadable_ancestor,
-)
 
 
 def tree_statements(
-    actions,
+    visible: ColumnElement[bool],
     pod_id: UUID,
-    ctx: Context,
     *,
     subtree_root: str,
     files_per_directory: int,
-    walk_ancestors: bool,
 ) -> tuple[Select, Select]:
     """``(folders, files)`` for one subtree, both already visibility-filtered.
 
@@ -47,12 +40,9 @@ def tree_statements(
     Visibility is applied *inside* the window rather than over its result.
     Ranking first and filtering after would quietly show fewer files than the cap
     in any directory whose first entries the caller cannot read — the rows would
-    be spent on files that were then dropped.
+    be spent on files that were then dropped. *visible* is the caller's read
+    predicate over ``DatastoreFile``, ancestor walk included where it applies.
     """
-    visible = allowed_actions_contains(actions, Permissions.FOLDER_READ)
-    if walk_ancestors:
-        visible = and_(visible, ~has_unreadable_ancestor(ctx, pod_id))
-
     scope = [DatastoreFile.pod_id == pod_id, visible]
     if subtree_root != "/":
         scope.append(

@@ -130,7 +130,7 @@ class TestTheHarnessClosesWhatItOpened:
                 conversation=SimpleNamespace(id=RUN_ID),
                 messages=[],
                 ctx=SimpleNamespace(),
-                options=SimpleNamespace(should_stop=None),
+                options=SimpleNamespace(should_stop=None, runtime_profile=None),
                 agent_run_id=RUN_ID,
             )
         ]
@@ -241,7 +241,7 @@ class TestAStoppedRunClosesWhatItOpened:
                 conversation=SimpleNamespace(id=RUN_ID),
                 messages=[],
                 ctx=SimpleNamespace(),
-                options=SimpleNamespace(should_stop=None),
+                options=SimpleNamespace(should_stop=None, runtime_profile=None),
                 agent_run_id=RUN_ID,
             )
         ]

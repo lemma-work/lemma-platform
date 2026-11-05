@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { LemmaClient } from "../client.js";
-import type { ChangeStreamStatus, DatastoreChangeFrame } from "../datastore-changes.js";
+import type {
+  ChangeStreamResyncReason,
+  ChangeStreamStatus,
+  DatastoreChangeFrame,
+} from "../datastore-changes.js";
 import { resolvePodClient } from "./utils.js";
 
 export interface UseWatchChangesOptions {
@@ -10,6 +14,11 @@ export interface UseWatchChangesOptions {
   table?: string;
   /** Invoked for every record change frame (insert / update / delete). */
   onChange: (frame: DatastoreChangeFrame) => void;
+  /**
+   * The server could not replay what was missed (too old, or too many changes
+   * at once): refetch your view. Changes keep arriving after it.
+   */
+  onResync?: (info: { cursor: string; reason: ChangeStreamResyncReason }) => void;
   /** Connection lifecycle notifications. */
   onStatus?: (status: ChangeStreamStatus) => void;
   /** Terminal errors (e.g. auth failed, max retries reached). */
@@ -31,7 +40,8 @@ export interface UseWatchChangesResult {
  * Subscribe to the pod's live datastore change stream for the lifetime of a component.
  *
  * This is the thin, correct lifecycle wrapper around `client.datastore.watchChanges`:
- * it opens **one** WebSocket and tears it down on unmount. Callbacks are held in refs,
+ * it adds **one** subscription to the pod's shared live socket and removes it on
+ * unmount; every watch on the same pod shares that socket. Callbacks are held in refs,
  * so passing a fresh inline `onChange` on every render does **not** resubscribe — the
  * stream stays open and keeps its resume cursor. (That resubscribe-every-render bug is
  * the usual reason a hand-rolled `useEffect` flickers or drops events.)
@@ -47,6 +57,7 @@ export function useWatchChanges({
   podId,
   table,
   onChange,
+  onResync,
   onStatus,
   onError,
   enabled = true,
@@ -57,9 +68,11 @@ export function useWatchChanges({
 
   // Latest callbacks in refs: a new callback identity must not tear down the socket.
   const onChangeRef = useRef(onChange);
+  const onResyncRef = useRef(onResync);
   const onStatusRef = useRef(onStatus);
   const onErrorRef = useRef(onError);
   onChangeRef.current = onChange;
+  onResyncRef.current = onResync;
   onStatusRef.current = onStatus;
   onErrorRef.current = onError;
 
@@ -75,6 +88,7 @@ export function useWatchChanges({
       useCookie,
       maxRetries,
       onChange: (frame) => onChangeRef.current(frame),
+      onResync: (info) => onResyncRef.current?.(info),
       onStatus: (next) => {
         setStatus(next);
         onStatusRef.current?.(next);

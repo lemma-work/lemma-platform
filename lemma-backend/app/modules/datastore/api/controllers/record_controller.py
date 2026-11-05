@@ -348,6 +348,7 @@ async def bulk_create_records(
         data.records,
         user.id,
         upsert=data.upsert,
+        intent=data.intent,
     )
     return DatastoreCountResponse(count=count)
 
@@ -388,6 +389,7 @@ async def bulk_update_records(
         data.records,
         user.id,
         admin_mode=mode == RecordAccessMode.ADMIN,
+        intent=data.intent,
     )
     return DatastoreCountResponse(count=count)
 
@@ -425,5 +427,6 @@ async def bulk_delete_records(
         data.record_ids,
         user.id,
         admin_mode=mode == RecordAccessMode.ADMIN,
+        intent=data.intent,
     )
     return DatastoreCountResponse(count=count)

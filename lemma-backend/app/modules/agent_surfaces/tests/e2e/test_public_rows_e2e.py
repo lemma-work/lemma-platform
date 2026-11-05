@@ -15,8 +15,9 @@ from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frame
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
@@ -32,6 +33,8 @@ from app.modules.agent_surfaces.tests.e2e.test_web_widgets_e2e import (
     _session,
     _widget,
 )
+from app.modules.datastore.contracts.contact_rows import rows_for_contact
+from app.modules.test_support.e2e.row_bound_records import row_bound_records
 
 pytestmark = pytest.mark.e2e
 
@@ -73,6 +76,20 @@ async def _rows(client: AsyncClient, pod_id: str, table: str) -> list[dict]:
     listed = await client.get(f"/pods/{pod_id}/datastore/tables/{table}/records")
     assert listed.status_code == 200, listed.text
     return listed.json()["items"]
+
+
+async def _confirm(client: AsyncClient, key: str, visitor: dict, email: str) -> dict:
+    """The visitor, once they have proved ``email`` is theirs: now a contact."""
+    await client.post(
+        f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
+    )
+    verified = await client.post(
+        f"/public/web/{key}/code/verify",
+        json={"email": email, "code": _latest_code(email)},
+        headers=_as(visitor),
+    )
+    assert verified.status_code == 200, verified.text
+    return verified.json()
 
 
 async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
@@ -206,16 +223,7 @@ async def test_a_contacts_only_table_asks_a_stranger_to_confirm_first(
     assert stranger.json()["code"] == "needs_contact"
 
     email = f"rows-{widget['id'][:8]}@client.example"
-    await authenticated_client.post(
-        f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
-    )
-    verified = await authenticated_client.post(
-        f"/public/web/{key}/code/verify",
-        json={"email": email, "code": _latest_code(email)},
-        headers=_as(visitor),
-    )
-    assert verified.status_code == 200, verified.text
-    contact = verified.json()
+    contact = await _confirm(authenticated_client, key, visitor, email)
 
     forged = {**answers, "contact_id": "00000000-0000-0000-0000-000000000000"}
     added = await authenticated_client.post(
@@ -229,6 +237,65 @@ async def test_a_contacts_only_table_asks_a_stranger_to_confirm_first(
     ][0]["id"]
     rows = await _rows(authenticated_client, pod_id, table)
     assert [row.get("contact_id") for row in rows] == [contact_id]
+
+
+async def test_a_contacts_row_lands_as_theirs_where_row_security_binds(
+    authenticated_client: AsyncClient, test_pod, db_session: AsyncSession
+):
+    """A confirmed visitor's ``addRow`` names them, and they read back only it.
+
+    Under a role the contact policy binds, as a deployment's is. The row is
+    added as the member who opened the table, and once that add named nobody
+    to the policy: the database refused it, and the page heard only that it
+    did not save.
+    """
+    pod_id = test_pod["id"]
+    table = await _signups(
+        authenticated_client,
+        pod_id,
+        "bookings",
+        contact_owned=True,
+        contact_columns=["full_name"],
+    )
+    opened = await _open(authenticated_client, pod_id, table, audience="contacts")
+    assert opened.status_code == 200, opened.text
+    widget = await _widget(authenticated_client, pod_id, name="Bookings door")
+    key = widget["public_key"]
+    visitor = await _session(authenticated_client, key)
+    email = f"bound-{widget['id'][:8]}@client.example"
+    contact = await _confirm(authenticated_client, key, visitor, email)
+    someone_else = "00000000-0000-0000-0000-00000000000b"
+
+    async with row_bound_records(UUID(pod_id)):
+        added = await authenticated_client.post(
+            f"/public/web/{key}/rows",
+            json={"table": table, "values": {"full_name": "Ana"}},
+            headers=_as(contact),
+        )
+        assert added.status_code == 201, added.text
+        theirs = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/{table}/records",
+            json={"data": {"full_name": "Bo", "contact_id": someone_else}},
+        )
+        assert theirs.status_code == 201, theirs.text
+
+        contact_id = (
+            await authenticated_client.get(f"/pods/{pod_id}/contacts")
+        ).json()["items"][0]["id"]
+        rows = await _rows(authenticated_client, pod_id, table)
+        assert sorted((row["full_name"], row["contact_id"]) for row in rows) == [
+            ("Ana", contact_id),
+            ("Bo", someone_else),
+        ]
+        own = await rows_for_contact(
+            SessionUnitOfWorkFactory(
+                async_sessionmaker(db_session.bind, expire_on_commit=False)
+            ),
+            pod_id=UUID(pod_id),
+            table_name=table,
+            contact_id=UUID(contact_id),
+        )
+        assert own == [{"full_name": "Ana"}]
 
 
 async def test_the_hosted_page_draws_an_open_tables_form_and_nothing_else(

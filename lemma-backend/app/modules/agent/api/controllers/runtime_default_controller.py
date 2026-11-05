@@ -32,7 +32,6 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
 from app.modules.agent.services.organization_default_service import (
-    OrganizationDefaultNotFoundError,
     OrganizationDefaultService,
 )
 
@@ -62,22 +61,14 @@ async def set_organization_default_runtime(
     # Every teammate in every pod that has not pinned a model runs on this, so
     # it takes the same gate as adding an organization-wide provider.
     await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(organization_id))
-    try:
-        return await _default_service(uow).set_default(
-            organization_id=organization_id,
-            profile_id=data.profile_id,
-            model_name=data.model_name,
-        )
-    except OrganizationDefaultNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Runtime profile not found",
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+    # Not found is a 404, a profile that cannot be the default a 400, and a
+    # default chosen at the same moment a 409 -- each raised as its own typed
+    # error by the service.
+    return await _default_service(uow).set_default(
+        organization_id=organization_id,
+        profile_id=data.profile_id,
+        model_name=data.model_name,
+    )
 
 
 @router.delete(
@@ -130,22 +121,16 @@ async def check_runtime_profile_connection(
         organization_id=organization_id,
         user_id=user.id,
     )
-    try:
-        # Two provider round trips, one of them a model call that can take
-        # seconds on a cold local server; nothing is written afterwards.
-        async with connection_released(uow.session):
-            # Imported here: it builds provider clients, whose import graph is the
-            # whole of openai's, and only this one endpoint needs it.
-            from app.modules.agent.services.runtime_provider_check import (
-                check_saved_provider_connection,
-            )
+    # Two provider round trips, one of them a model call that can take
+    # seconds on a cold local server; nothing is written afterwards.
+    async with connection_released(uow.session):
+        # Imported here: it builds provider clients, whose import graph is the
+        # whole of openai's, and only this one endpoint needs it.
+        from app.modules.agent.services.runtime_provider_check import (
+            check_saved_provider_connection,
+        )
 
-            result = await check_saved_provider_connection(resolved)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+        result = await check_saved_provider_connection(resolved)
     return AgentRuntimeProfileTestResponse(
         ok=result.ok, message=result.message, models=result.models
     )

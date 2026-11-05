@@ -10,6 +10,7 @@ import type { ConversationStatus } from '../models/ConversationStatus.js';
 import type { ConversationType } from '../models/ConversationType.js';
 import type { CreateConversationRequest } from '../models/CreateConversationRequest.js';
 import type { MessageListResponse } from '../models/MessageListResponse.js';
+import type { PendingInteractionListResponse } from '../models/PendingInteractionListResponse.js';
 import type { ResolveUserApprovalRequest } from '../models/ResolveUserApprovalRequest.js';
 import type { SendMessageRequest } from '../models/SendMessageRequest.js';
 import type { UpdateConversationRequest } from '../models/UpdateConversationRequest.js';
@@ -20,7 +21,7 @@ import { request as __request } from '../core/request.js';
 export class AgentConversationsService {
     /**
      * List Pod Agent Conversations
-     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive. Pass search to keep only conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent first.
+     * List root conversations for the current user in a pod. Omit agent_name for conversations across the pod, pass POD_DEFAULT (or pod_default) for the pod assistant's, or a name for one pod agent's. Child (sub-agent) conversations are omitted by default; pass parent_id to list one conversation's children instead. Archived conversations are omitted; pass archived=true for the archive. search keeps titles containing it (case-insensitive); in_channel=false keeps conversations of no channel (the chats list), true those in one. Ordered by last_activity_at, most recent first.
      * @param podId
      * @param agentName
      * @param status
@@ -28,6 +29,7 @@ export class AgentConversationsService {
      * @param parentId
      * @param archived
      * @param search
+     * @param inChannel
      * @param pageToken
      * @param limit
      * @returns ConversationListResponse Successful Response
@@ -41,6 +43,7 @@ export class AgentConversationsService {
         parentId?: (string | null),
         archived: boolean = false,
         search?: (string | null),
+        inChannel?: (boolean | null),
         pageToken?: (string | null),
         limit: number = 20,
     ): CancelablePromise<ConversationListResponse> {
@@ -57,6 +60,7 @@ export class AgentConversationsService {
                 'parent_id': parentId,
                 'archived': archived,
                 'search': search,
+                'in_channel': inChannel,
                 'page_token': pageToken,
                 'limit': limit,
             },
@@ -85,6 +89,35 @@ export class AgentConversationsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Interactions Waiting On You
+     * List every ask_user question, request_approval and Agent Host permission request waiting on the caller, across their own conversations in the pod, sub-agent conversations included and archived ones left out. Longest-waiting first. Resolve one through the conversation's approval decision endpoint, using tool_call_id as the approval id. A permission request drops off once the Agent Host has stopped waiting for it.
+     * @param podId
+     * @param pageToken
+     * @param limit
+     * @returns PendingInteractionListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationPendingInteractionList(
+        podId: string,
+        pageToken?: (string | null),
+        limit: number = 50,
+    ): CancelablePromise<PendingInteractionListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/conversations/pending-interactions',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'page_token': pageToken,
+                'limit': limit,
+            },
             errors: {
                 422: `Validation Error`,
             },
@@ -265,7 +298,7 @@ export class AgentConversationsService {
     }
     /**
      * Append Pod Conversation Message
-     * Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one exactly like the streaming send route, just without attaching a stream to it.
+     * Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one like the streaming send route, unstreamed.
      * @param podId
      * @param conversationId
      * @param requestBody

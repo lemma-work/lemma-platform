@@ -8,10 +8,15 @@ else, the finished message and "done" -- and from a private run, nothing.
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts.visitor_stream import _translate, visitor_frame
+from app.modules.agent.contracts.visitor_stream import (
+    COULD_NOT_ANSWER_VISITOR,
+    _translate,
+    visitor_frame,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -73,10 +78,57 @@ def test_the_visitors_own_message_is_not_echoed():
 
 def test_a_retry_resets_and_the_end_says_done():
     assert visitor_frame(_token("", "stream_reset")) == {"type": "reset"}
-    for terminal in ("completed", "error", "stopped"):
+    for terminal in ("completed", "stopped"):
         assert visitor_frame({"type": terminal, "data": {"secret": 1}}) == {
             "type": "done"
         }
+
+
+def test_a_failed_run_tells_the_visitor_a_person_will_answer_never_why():
+    frame = visitor_frame({"type": "error", "data": "Provider said: sk-secret"})
+
+    assert frame == {"type": "error", "text": COULD_NOT_ANSWER_VISITOR}
+    assert "sk-secret" not in json.dumps(frame)
+
+
+async def test_a_failed_run_still_ends_the_stream_with_done(monkeypatch):
+    """After the error frame, "done": a page that knows no "error" stops."""
+    from contextlib import asynccontextmanager
+
+    from app.modules.agent.contracts import visitor_stream
+
+    published = [json.dumps({"type": "error", "agent_run_id": RUN, "data": "x"})]
+
+    class _Service:
+        @asynccontextmanager
+        async def subscribe(self, channels):
+            async def frames():
+                for raw in published:
+                    yield raw
+
+            yield frames()
+
+    async def service():
+        return _Service()
+
+    async def not_private(run_id: str) -> bool:
+        return False
+
+    monkeypatch.setattr(visitor_stream, "get_channel_service", service)
+    monkeypatch.setattr(
+        visitor_stream, "_private_run_lookup", lambda _factory: not_private
+    )
+    seen = [
+        frame
+        async for frame in visitor_stream.visitor_frames(
+            uuid4(), uow_factory=None, max_seconds=5
+        )
+    ]
+
+    assert seen == [
+        {"type": "error", "text": COULD_NOT_ANSWER_VISITOR},
+        {"type": "done"},
+    ]
 
 
 def test_frames_nobody_outside_needs_send_nothing():

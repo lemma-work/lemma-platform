@@ -16,16 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from typing import Any
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote_plus
 
-import sqlglot
 from asyncpg.exceptions import PostgresError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlglot import exp
-from sqlglot.errors import SqlglotError
 
 from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
@@ -36,31 +34,47 @@ from app.modules.connectors.domain.errors import (
     OperationExecutionValidationError,
 )
 
+if TYPE_CHECKING:
+    from sqlglot import exp
+
 logger = get_logger(__name__)
 
+
 # Reuse the datastore read-only policy (mutation/DDL nodes forbidden anywhere).
-_FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
-    exp.Insert,
-    exp.Update,
-    exp.Delete,
-    exp.Merge,
-    exp.Create,
-    exp.Drop,
-    exp.Alter,
-    exp.TruncateTable,
-    exp.Grant,
-    exp.Revoke,
-    exp.Copy,
-    exp.Command,
-)
-_ALLOWED_ROOTS: tuple[type[exp.Expression], ...] = (
-    exp.Select,
-    exp.Union,
-    exp.Intersect,
-    exp.Except,
-    exp.Subquery,
-    exp.With,
-)
+# sqlglot loads on the first query, not at import: the connector registry puts
+# this module on app.app's import path, and the parser costs ~40 modules and
+# ~170 ms that starting the API does not need.
+@lru_cache(maxsize=1)
+def _forbidden_nodes() -> tuple[type[exp.Expression], ...]:
+    from sqlglot import exp
+
+    return (
+        exp.Into,
+        exp.Insert,
+        exp.Update,
+        exp.Delete,
+        exp.Merge,
+        exp.Create,
+        exp.Drop,
+        exp.Alter,
+        exp.TruncateTable,
+        exp.Grant,
+        exp.Revoke,
+        exp.Copy,
+        exp.Command,
+    )
+
+
+@lru_cache(maxsize=1)
+def _allowed_roots() -> tuple[type[exp.Expression], ...]:
+    from sqlglot import exp
+
+    return (exp.Select, exp.Union, exp.Intersect, exp.Except, exp.Subquery, exp.With)
+
+
+# Session-setting functions ride inside an otherwise read-only SELECT; the
+# datastore refuses the same one for the same reason.
+_FORBIDDEN_FUNCTIONS = frozenset({"set_config"})
 
 _DIALECT_DRIVERS = {
     "postgresql": "postgresql+asyncpg",
@@ -82,6 +96,9 @@ def _ensure_read_only(sql: str) -> None:
             f"SQL query exceeds the {_MAX_SQL_CHARS} character limit.",
             details={"reason": "query_too_long"},
         )
+    import sqlglot
+    from sqlglot.errors import SqlglotError
+
     try:
         statements = [
             s for s in sqlglot.parse(sql, dialect="postgres") if s is not None
@@ -97,10 +114,25 @@ def _ensure_read_only(sql: str) -> None:
             "Only a single SQL statement is allowed."
         )
     statement = statements[0]
-    if not isinstance(statement, _ALLOWED_ROOTS) or statement.find(*_FORBIDDEN_NODES):
+    if not isinstance(statement, _allowed_roots()) or statement.find(
+        *_forbidden_nodes()
+    ):
         raise OperationExecutionValidationError(
             "Only read-only SELECT queries are allowed."
         )
+    from sqlglot import exp
+
+    for function in statement.find_all(exp.Func):
+        # Unmodelled functions parse as Anonymous and carry their own name.
+        name = (
+            function.name
+            if isinstance(function, exp.Anonymous)
+            else function.sql_name()
+        )
+        if name.lower() in _FORBIDDEN_FUNCTIONS:
+            raise OperationExecutionValidationError(
+                f"{name}() is not allowed in connector queries."
+            )
 
 
 def _resolve_row_cap(connection_config: dict[str, Any]) -> int:
@@ -124,6 +156,35 @@ def _resolve_row_cap(connection_config: dict[str, Any]) -> int:
     if requested <= 0:
         return _DEFAULT_ROW_CAP
     return min(requested, _MAX_ROW_CAP)
+
+
+# What a column will accept, not only what it is called. `data_type` alone
+# reported `character varying` with no length and a PostgreSQL enum as
+# `USER-DEFINED` with no labels, and said nothing of CHECK constraints -- so an
+# agent wrote values the database then refused, and learned the rule only from
+# the error. The enum's own type name stands in for `USER-DEFINED`; NOT NULL,
+# which the catalog also lists as a check, is already `is_nullable`.
+_DESCRIBE_COLUMNS = (
+    "SELECT c.table_schema, c.column_name, "
+    "CASE WHEN c.data_type = 'USER-DEFINED' THEN c.udt_name "
+    "ELSE c.data_type END AS data_type, "
+    "c.character_maximum_length, c.numeric_precision, c.numeric_scale, "
+    "c.is_nullable, c.column_default, "
+    "(SELECT json_agg(e.enumlabel::text ORDER BY e.enumsortorder)::text "
+    " FROM pg_catalog.pg_type t "
+    " JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace "
+    " JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid "
+    " WHERE t.typname = c.udt_name AND n.nspname = c.udt_schema) AS enum_labels, "
+    "(SELECT json_agg(cc.check_clause::text ORDER BY cc.constraint_name)::text "
+    " FROM information_schema.constraint_column_usage u "
+    " JOIN information_schema.check_constraints cc "
+    "   ON cc.constraint_schema = u.constraint_schema "
+    "  AND cc.constraint_name = u.constraint_name "
+    " WHERE u.table_schema = c.table_schema AND u.table_name = c.table_name "
+    "   AND u.column_name = c.column_name "
+    "   AND cc.check_clause NOT LIKE '%IS NOT NULL') AS check_constraints "
+    "FROM information_schema.columns c WHERE c.table_name = :table "
+)
 
 
 class SqlExecutor:
@@ -221,10 +282,9 @@ class SqlExecutor:
         # Without a schema this describes every same-named table across schemas;
         # the schema column in the projection is what disambiguates them.
         sql = (
-            "SELECT table_schema, column_name, data_type, is_nullable, column_default "
-            "FROM information_schema.columns WHERE table_name = :table "
-            + ("AND table_schema = :schema " if schema else "")
-            + "ORDER BY table_schema, ordinal_position"
+            _DESCRIBE_COLUMNS
+            + ("AND c.table_schema = :schema " if schema else "")
+            + "ORDER BY c.table_schema, c.ordinal_position"
         )
         params = {"table": table} | ({"schema": schema} if schema else {})
         return sql, params
@@ -357,10 +417,14 @@ class SqlExecutor:
         except OperationExecutionValidationError:
             raise
         except (SQLAlchemyError, OSError, PostgresError) as exc:
+            # Not chained: this is the tenant's own database, and a refused
+            # connection in the cause would read to the work runtime as
+            # Lemma's database being down -- an uncharged retry for an outage
+            # that is not ours. The upstream text is kept in the details.
             raise OperationExecutionInfrastructureError(
                 f"SQL execution failed: {exc}",
                 details={"provider": "sql", "upstream_message": str(exc)},
-            ) from exc
+            ) from None
 
         truncated = len(rows) > row_cap
         rows = rows[:row_cap]

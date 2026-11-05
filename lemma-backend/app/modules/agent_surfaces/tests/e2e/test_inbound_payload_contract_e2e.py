@@ -111,6 +111,11 @@ async def test_the_parser_reads_each_inbound_payload_as_the_case_says(
     _assert_fields(parsed, case.expected, f"{case.platform.value}/{case.name}")
 
 
+# Against the lane's Redis: a Telegram tap resolves its token from the store,
+# and "no such token" is only an answer when the store could be asked. With no
+# Redis behind it every tap reads as unreadable, which is the right answer to
+# an outage and the wrong thing for a case about a missing token to measure.
+@pytest.mark.usefixtures("e2e_settings")
 @pytest.mark.parametrize(
     "case", _interaction_cases(), ids=lambda case: f"{case.platform.value}-{case.name}"
 )

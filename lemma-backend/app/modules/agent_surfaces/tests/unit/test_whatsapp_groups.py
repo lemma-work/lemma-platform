@@ -35,6 +35,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.group_updates import (
     whatsapp_group_updates,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.parser import WhatsAppMessageParser
+from app.modules.agent_surfaces.domain.reply_targets import WhatsAppReplyTarget
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import whatsapp_recipient
 from app.modules.agent_surfaces.platforms.whatsapp.service import (
     WhatsAppPlatformService,
@@ -192,7 +193,7 @@ def test_an_at_mention_is_the_whole_number(text, expected):
 
 def test_a_group_reply_never_falls_back_to_the_senders_number():
     recipient = whatsapp_recipient(
-        {"group_id": GROUP, "sender_wa_id": "16505551234"},
+        WhatsAppReplyTarget(group_id=GROUP, sender_wa_id="16505551234"),
         fallback_wa_id="16505551234",
     )
 
@@ -201,7 +202,7 @@ def test_a_group_reply_never_falls_back_to_the_senders_number():
 
 
 def test_a_private_reply_still_goes_to_the_person():
-    recipient = whatsapp_recipient({}, fallback_wa_id="16505551234")
+    recipient = whatsapp_recipient(WhatsAppReplyTarget(), fallback_wa_id="16505551234")
 
     assert recipient is not None
     assert (recipient.to, recipient.recipient_type) == ("16505551234", "individual")
@@ -362,6 +363,54 @@ def test_a_deletion_and_nothing_else():
     ]
 
 
+def _participants(*groups: dict[str, Any]) -> dict[str, Any]:
+    payload = _lifecycle(*groups)
+    payload["entry"][0]["changes"][0]["field"] = "group_participants_update"
+    return payload
+
+
+def test_people_joining_and_leaving_a_group_are_named_by_their_number():
+    updates = whatsapp_group_updates(
+        _participants(
+            {
+                "timestamp": "1",
+                "group_id": GROUP,
+                "type": "group_participants_add",
+                "reason": "invite_link",
+                "added_participants": [
+                    {"wa_id": "447700900123"},
+                    {"input": "+447700900456", "wa_id": "447700900456"},
+                ],
+            },
+            {
+                "timestamp": "1",
+                "group_id": GROUP,
+                "type": "group_participants_remove",
+                "initiated_by": "participant",
+                "removed_participants": [{"wa_id": "447700900789"}],
+            },
+            {
+                "timestamp": "1",
+                "group_id": GROUP,
+                "type": "group_participants_remove",
+                "initiated_by": "business",
+                "removed_participants": [],
+                "failed_participants": [{"input": "447700900999", "errors": [{}]}],
+                "errors": [{}],
+            },
+        )
+    )
+
+    assert [(u.kind, u.external_user_id, u.phone) for u in updates] == [
+        (GroupUpdateKind.MEMBER_JOINED, "447700900123", "447700900123"),
+        (GroupUpdateKind.MEMBER_JOINED, "447700900456", "447700900456"),
+        (GroupUpdateKind.MEMBER_LEFT, "447700900789", "447700900789"),
+    ]
+    assert {u.external_channel_id for u in updates} == {GROUP}
+    # Resolved under the account's WhatsApp Business id, as messages are.
+    assert {u.tenant_id for u in updates} == {"waba-1"}
+
+
 def test_a_message_webhook_carries_no_group_update():
     assert whatsapp_group_updates(_group_message("hello")) == []
 
@@ -376,7 +425,7 @@ def _whatsapp_surface() -> AgentSurfaceEntity:
         name="whatsapp",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
-        account_id=None,
+        pod_connector_slug=None,
         config=SurfaceConfig(),
         is_active=True,
     )
@@ -432,6 +481,7 @@ def test_a_whatsapp_group_is_named_from_the_pods_record_of_it():
     from app.modules.agent_surfaces.services.outsiders import named_after
 
     group = SurfaceGroup(
+        channel_id=uuid4(),
         pod_id=uuid4(),
         surface_id=uuid4(),
         platform="WHATSAPP",

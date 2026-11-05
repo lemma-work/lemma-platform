@@ -26,8 +26,15 @@ from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.services.install_provisioning import DiscoveryStatus
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 
 def _free_port() -> int:
@@ -429,8 +436,28 @@ class TestConnectingAnAccountAndExecuting:
         # Execution goes over HTTP: the use case takes a Request, because the
         # authorization context is built from it. Calling it any other way
         # would be testing a path no caller uses.
+        # Through a pod connector on the install: the one way an operation runs.
+        pod = await authenticated_client.post(
+            "/pods",
+            json={
+                "organization_id": str(org_id),
+                "name": f"MCP Pod {uuid4().hex[:8]}",
+                "type": "HYBRID",
+            },
+        )
+        assert pod.status_code == 201, pod.text
+        pod_id = pod.json()["id"]
+        declared = await authenticated_client.post(
+            f"/pods/{pod_id}/connectors",
+            json={
+                "slug": "calc",
+                "auth_config_id": str(install.id),
+                "mode": "PER_MEMBER",
+            },
+        )
+        assert declared.status_code == 201, declared.text
         executed = await authenticated_client.post(
-            f"/organizations/{org_id}/connectors/{install.name}/operations/add/execute",
+            f"/pods/{pod_id}/connectors/calc/operations/add/execute",
             json={"payload": {"a": 2, "b": 3}},
         )
         assert executed.status_code == 200, executed.text

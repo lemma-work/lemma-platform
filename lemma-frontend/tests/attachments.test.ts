@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     attachmentKey,
     canSend,
+    offered,
     contentFor,
     describeSize,
     markAttachment,
@@ -11,6 +12,7 @@ import {
     tooLarge,
     withReferences,
     isAlreadyUploaded,
+    namePasted,
     MAX_BYTES,
     type Attachment,
 } from "../src/thread/attachments.ts";
@@ -92,6 +94,21 @@ test("a file too large to send is refused before the upload, not after it", () =
     assert.equal(tooLarge(file("exact.bin", MAX_BYTES)), false);
 });
 
+test("what a drop hands over is split by the ceiling, in one sentence", () => {
+    // The composer and the box on Home are the same act on two surfaces, so
+    // they refuse the same file with the same words — a second copy of this
+    // rule is a second ceiling, and the one that drifts is the one people hit.
+    const small = file("small.pdf", 1024);
+    const huge = file("huge.bin", MAX_BYTES + 1);
+    const alsoHuge = file("dump.zip", MAX_BYTES * 2);
+
+    assert.deepEqual(offered([small]), { take: [small], refused: null });
+    assert.deepEqual(offered([huge]), { take: [], refused: "huge.bin is too large to attach (100 MB)." });
+    assert.deepEqual(offered([small, huge]), { take: [small], refused: "huge.bin is too large to attach (100 MB)." });
+    assert.deepEqual(offered([huge, alsoHuge]), { take: [], refused: "2 files are too large to attach." });
+    assert.deepEqual(offered([]), { take: [], refused: null });
+});
+
 test("sizes read the way a person would say them", () => {
     assert.equal(describeSize(512), "512 B");
     assert.equal(describeSize(2048), "2 KB");
@@ -114,4 +131,57 @@ test("a file already in the pod is not put there a second time", () => {
     assert.equal(isAlreadyUploaded({ ...one, status: "uploaded" }), false);
     assert.equal(isAlreadyUploaded({ ...one, status: "uploaded", path: "" }), false);
     assert.equal(isAlreadyUploaded({ ...one, status: "failed", path: "/me/x.pdf" }), false);
+});
+
+test("two pasted images are two names, not one", () => {
+    // Every clipboard image is called `image.png`. Two pastes in one message
+    // were therefore one name, and a folder that already held an `image.png`
+    // had nowhere to put either.
+    const at = new Date(2026, 9, 17, 6, 41, 58);
+    const [first, second] = namePasted([file("image.png"), file("image.png")], at);
+
+    assert.equal(first.name, "pasted-20261017-064158.png");
+    assert.equal(second.name, "pasted-20261017-064158-2.png");
+});
+
+test("a second paste in the same second is still a different name", () => {
+    // The two arrive as two paste events, so the count has to outlive one call.
+    const at = new Date(2026, 9, 17, 6, 41, 59);
+    const [one] = namePasted([file("image.png")], at);
+    const [two] = namePasted([file("image.png")], at);
+
+    assert.equal(one.name, "pasted-20261017-064159.png");
+    assert.equal(two.name, "pasted-20261017-064159-2.png");
+});
+
+test("a paste of two then a paste of one in the same second gives three names", () => {
+    // The count is of files named, not of pastes: counting pastes would hand
+    // the third file the second one's name.
+    const at = new Date(2026, 9, 17, 6, 41, 57);
+    const firstPaste = namePasted([file("image.png"), file("image.png")], at);
+    const [third] = namePasted([file("image.png")], at);
+
+    assert.deepEqual(
+        [...firstPaste.map((one) => one.name), third.name],
+        ["pasted-20261017-064157.png", "pasted-20261017-064157-2.png", "pasted-20261017-064157-3.png"],
+    );
+});
+
+test("a pasted file keeps a readable extension, from its name or its type", () => {
+    const at = (second: number) => new Date(2026, 9, 17, 6, 42, second);
+
+    assert.equal(
+        namePasted([file("Screenshot 2026-10-17.PNG")], at(0))[0].name,
+        "pasted-20261017-064200.png",
+    );
+    // A clipboard image often arrives with no extension at all; without one it
+    // cannot be read back as an image by anything.
+    assert.equal(
+        namePasted([new File([new Uint8Array(4)], "image", { type: "image/jpeg" })], at(1))[0].name,
+        "pasted-20261017-064201.jpg",
+    );
+    assert.equal(
+        namePasted([new File([new Uint8Array(4)], "blob", { type: "application/pdf" })], at(2))[0].name,
+        "pasted-20261017-064202.pdf",
+    );
 });

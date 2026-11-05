@@ -138,7 +138,8 @@ async def test_telegram_managed_bot_full_lifecycle_completes_and_creates_surface
     body = completed.json()
     assert body["status"] == "COMPLETE"
     assert body["bot_username"] == "surface_e2e_bot"
-    assert body["account_id"]
+    # The bot is shared into the pod as a SHARED connector the surface runs as.
+    assert body["pod_connector"]
     assert body["surface_id"]
     assert body["bot_launch_url"] == "https://t.me/surface_e2e_bot?start=lemma"
     assert body["error"] is None
@@ -325,7 +326,7 @@ async def test_telegram_managed_bot_provisioning_failure_marks_setup_failed(
     body = failed.json()
     assert body["status"] == "FAILED"
     assert body["error"]
-    assert body["account_id"] is None
+    assert body["pod_connector"] is None
     assert body["surface_id"] is None
 
     failure_texts = [msg.get("text") for msg in message_store.get_all("TELEGRAM")]
@@ -365,3 +366,27 @@ async def test_telegram_managed_bot_setup_rejects_duplicate_surface_name(
         json={},
     )
     assert conflict.status_code == 409, conflict.text
+
+
+async def test_a_setup_for_a_pod_with_no_row_is_not_found_not_a_server_error(
+    db_session: AsyncSession, test_pod
+):
+    """The pod is read again after the permission check; one deleted in
+    between answered 500 through a bare `ValueError`."""
+    from uuid import UUID, uuid4
+
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent_surfaces.services.pod_scope import pod_scope
+    from app.modules.agent_surfaces.domain.errors import (
+        AgentSurfacePodNotFoundError,
+    )
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    with pytest.raises(AgentSurfacePodNotFoundError) as raised:
+        await pod_scope(uow, uuid4())
+    assert raised.value.status_code == 404
+
+    organization_id, name = await pod_scope(uow, UUID(str(test_pod["id"])))
+    assert organization_id is not None
+    assert name

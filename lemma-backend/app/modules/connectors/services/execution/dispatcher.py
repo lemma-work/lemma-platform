@@ -17,10 +17,12 @@ a new kind cannot forget to add a timeout.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import replace
 from typing import Any
 
 from app.core.log.log import get_logger
+from app.core.observability.product_metrics import record_connector_operation
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.domain.errors import OperationExecutionTimeoutError
@@ -96,6 +98,20 @@ class KindDispatcher:
         )
 
     async def execute(self, request: ExecutionRequest) -> Any:
+        started = time.monotonic()
+        succeeded = False
+        try:
+            result = await self._bounded(request)
+            succeeded = True
+            return result
+        finally:
+            record_connector_operation(
+                request.connector_id,
+                succeeded=succeeded,
+                seconds=time.monotonic() - started,
+            )
+
+    async def _bounded(self, request: ExecutionRequest) -> Any:
         plugin = self._registry.get(request.kind)
         try:
             return await asyncio.wait_for(

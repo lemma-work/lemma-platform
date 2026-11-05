@@ -277,6 +277,16 @@
     font-size: 16px;
     line-height: 1.7;
 }
+/* Emphasis in a page has to read as emphasis. Weight stops at 500 everywhere
+   else (design.md), but a document is read at 16px, where a bold one step
+   above its own body disappears into it — this is the allowance prose gets,
+   and it is the browser's own weight for `strong`. */
+.filecard--full .md strong,
+.filecard--full .md b,
+.shared__sheet .md strong,
+.shared__sheet .md b {
+    font-weight: 700;
+}
 .filecard--full .md h1,
 .shared__sheet .md h1 {
     font-size: 34px;
@@ -515,6 +525,35 @@
 }
 .all__menu button:hover {
     background: var(--accent-soft);
+}
+
+/* Naming a folder, under the button that asked for it: the form is the same
+   size as the row it will become, so making one does not move the page. */
+.all__new-folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -14px 0 24px;
+}
+.all__new-folder input {
+    flex: 1;
+    min-width: 0;
+    max-width: 340px;
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    font: inherit;
+    font-size: 14px;
+    color: var(--ink);
+}
+.all__new-folder input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.all__new-folder .btn {
+    min-height: 44px;
 }
 
 .all__table {
@@ -1311,6 +1350,32 @@
 @media (max-width: 700px) {
     .all__col-access { width: auto; }
     .all__access { font-size: 13px; }
+}
+/* A pane narrower than the list — beside a conversation, or with the sidebar
+   open on a tablet — wraps its header and keeps the name, dropping the
+   columns beside it, rather than running off the side of the pane. The same
+   answer the phone gets, asked of the space the list is actually drawn in: a
+   viewport a little above the phone breakpoint still has a narrow pane when
+   the sidebar sits beside it. 580px is where the header and the three-column
+   table stop fitting. */
+@container (max-width: 580px) {
+    .all__head {
+        flex-wrap: wrap;
+    }
+    .all__search {
+        order: 3;
+        width: 100%;
+    }
+    .all__table:not(.chats-page__table) th:not(:first-child),
+    .all__table:not(.chats-page__table) td:not(:first-child) {
+        display: none;
+    }
+    .all__table:not(.chats-page__table) {
+        table-layout: fixed;
+    }
+    .all__table:not(.chats-page__table) td:first-child {
+        overflow: hidden;
+    }
 }
 .ssheet__note--public {
     color: var(--warn);
@@ -2162,28 +2227,6 @@ samp,
     color: var(--ink-3);
 }
 
-/* Space settings sits at the foot of the sidebar's list, and stays there:
-   a long list of chats scrolls under it instead of pushing it out of view. */
-.snav__foot {
-    margin-top: auto;
-    position: sticky;
-    bottom: -16px;
-    margin-bottom: -16px;
-    padding: 4px 0 16px;
-    background: var(--chrome);
-    z-index: 1;
-}
-.snav__foot::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: -16px;
-    height: 16px;
-    background: linear-gradient(to bottom, transparent, var(--chrome));
-    pointer-events: none;
-}
-
 /* ── Collapsed sidebar: one centre line for everything ─────────────────── */
 .shell--collapsed .side {
     align-items: center;
@@ -2238,161 +2281,6 @@ samp,
     text-align: left;
 }
 
-/* ── Space settings: a short list on the left, one section on the right ── */
-.settings {
-    display: grid;
-    grid-template-columns: 200px minmax(0, 1fr);
-    gap: 40px;
-    max-width: 1080px;
-    margin: 0 auto;
-    padding: 28px 40px 120px;
-}
-.settings__nav {
-    position: sticky;
-    top: 0;
-    align-self: start;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-.settings__nav h1 {
-    margin: 0 0 18px 10px;
-    font-size: 30px;
-    font-weight: 500;
-    letter-spacing: -0.02em;
-}
-.settings__nav button {
-    height: 36px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 14.5px;
-    text-align: left;
-    cursor: pointer;
-    transition: background-color 120ms ease, color 120ms ease;
-}
-.settings__nav button:hover {
-    background: var(--accent-soft);
-    color: var(--ink);
-}
-.settings__nav button[aria-current="page"] {
-    background: var(--line-2);
-    color: var(--ink);
-}
-.settings__body {
-    min-width: 0;
-    padding-top: 56px;
-}
-.settings__section > header {
-    margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--line);
-}
-.settings__section h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 500;
-}
-.settings__section header p {
-    margin: 4px 0 0;
-    font-size: 14px;
-    color: var(--ink-3);
-}
-.settings__content {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-}
-.settings__content .pcard {
-    border: 0;
-    box-shadow: none;
-    background: transparent;
-    padding: 0;
-}
-.settings__people {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-.settings__people li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 48px;
-    border-bottom: 1px solid var(--line);
-}
-.settings__row {
-    display: flex;
-    align-items: flex-end;
-    gap: 14px;
-}
-.settings__field {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--ink-3);
-}
-.settings__field input {
-    height: 40px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: var(--r-sm);
-    box-shadow: inset 0 0 0 1px var(--line-2);
-    background: var(--paper);
-    color: var(--ink);
-    font: inherit;
-    font-size: 15px;
-    outline: none;
-}
-.settings__field input:focus {
-    box-shadow: inset 0 0 0 1px var(--accent-line);
-}
-.settings__save {
-    height: 40px;
-    padding: 0 18px;
-    border: 0;
-    border-radius: 999px;
-    background: var(--accent);
-    color: var(--on-accent);
-    font: inherit;
-    font-size: 14px;
-    cursor: pointer;
-}
-.settings__save:disabled {
-    background: var(--line-2);
-    color: var(--ink-3);
-    cursor: default;
-}
-.settings__error {
-    margin: 8px 0 0;
-    color: var(--bad);
-    font-size: 13px;
-}
-@media (max-width: 800px) {
-    .settings {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 12px;
-        padding: 20px 16px 100px;
-    }
-    .settings__nav {
-        position: static;
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 4px;
-    }
-    .settings__nav h1 {
-        width: 100%;
-        margin-left: 2px;
-    }
-    .settings__body {
-        padding-top: 8px;
-    }
-}
 
 .workflows-page__note {
     margin: -18px 0 24px;
@@ -2401,72 +2289,7 @@ samp,
     border-radius: calc(var(--r-sm) - 1px);
 }
 
-/* Settings, tightened: a smaller title, a narrower list, the section
-   starting level with the title, and less air between parts. */
-.settings {
-    grid-template-columns: 172px minmax(0, 1fr);
-    gap: 36px;
-    max-width: 1180px;
-    padding: 20px 32px 96px;
-}
-.settings__nav h1 {
-    margin: 2px 0 12px 10px;
-    font-size: 22px;
-    letter-spacing: -0.015em;
-}
-.settings__nav button {
-    height: 34px;
-    font-size: 14px;
-}
-.settings__body {
-    padding-top: 0;
-}
-.settings__section + .settings__section {
-    margin-top: 40px;
-}
-.settings__section > header {
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-}
-.settings__section h2 {
-    font-size: 18px;
-}
-.settings__section header p {
-    font-size: 13.5px;
-}
-.settings__content {
-    gap: 16px;
-}
 
-/* Skills as a grid of their cards, not a carousel to scroll through. */
-.settings .skill-track {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-    gap: 12px;
-    overflow: visible;
-    padding: 0;
-    scroll-snap-type: none;
-}
-.settings .skill-card {
-    flex: none;
-    width: auto;
-}
-.settings .skill-oars {
-    display: none;
-}
-
-/* Settings starts where the stage starts, not centred in it: on a wide
-   screen the centred column left a strip of nothing down the left. */
-.settings {
-    max-width: none;
-    margin: 0;
-    padding: 20px 28px 96px 24px;
-    grid-template-columns: 164px minmax(0, 1fr);
-    gap: 28px;
-}
-.settings__body {
-    max-width: 1040px;
-}
 
 /* ── Home: what is owed, ways to start, and a plain box ──────────────── */
 .home {
@@ -2507,6 +2330,76 @@ samp,
     font-size: 13px;
     font-weight: 500;
     color: var(--ink-3);
+}
+/* The space's apps, under its name: one row of covers, newest first. */
+.home__section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.home__all {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.home__all:hover {
+    color: var(--ink);
+}
+.home__apps {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.home__app {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.home__app-cover {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1200 / 630;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+    transition: border-color 120ms ease;
+}
+.home__app:hover .home__app-cover {
+    border-color: var(--line-2);
+}
+.home__app-letter {
+    font-size: 26px;
+    font-weight: 500;
+    color: var(--ink-3);
+}
+.home__app-name {
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+@media (max-width: 720px) {
+    .home__apps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 .home__quiet {
     margin: 0;
@@ -2671,6 +2564,19 @@ samp,
 }
 .chats-page__title {
     color: var(--ink);
+}
+/* The same amber `--warn` the inbox's ages use, measured there for AA at this
+   size; a pill rather than a dot so it reads without a legend. */
+.chats-page__waiting {
+    display: inline-block;
+    margin-left: 10px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--wash-b);
+    font-size: 12px;
+    color: var(--warn);
+    vertical-align: 1px;
+    white-space: nowrap;
 }
 .chats-page__origin {
     display: inline-flex;
@@ -2977,37 +2883,6 @@ samp,
     grid-template-columns: 7px minmax(0, auto) minmax(0, 1fr) auto auto auto;
 }
 
-/* ── About › Hands work to: one list, flush with its heading ────────── */
-.settings__heading {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.settings__heading h2 {
-    margin-right: auto;
-}
-.settings__action {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 14px;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--line-2);
-    color: var(--ink);
-    font-size: 13.5px;
-    cursor: pointer;
-}
-.settings__action:hover {
-    background: var(--accent-soft);
-}
-.settings__quiet {
-    margin: 0;
-    font-size: 14px;
-    color: var(--ink-3);
-}
 .agentlist {
     margin: -8px 0 0;
     padding: 0;
@@ -3031,6 +2906,141 @@ samp,
 .agentlist__row .mark {
     flex: none;
     border-radius: calc(var(--r-md) - 2px);
+}
+
+/* ── who can ask this teammate, and connecting one ────────────────────── */
+.asked-by {
+    margin-top: 20px;
+}
+/* Not an `agentlist__row`: that row is one button, and its hover underlines
+   the name. Here the name and Disconnect are separate controls, and hovering
+   one must not mark the other. */
+.asked-by__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 14px 0;
+}
+.asked-by__who {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 14px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+}
+.asked-by__who:hover .agentlist__title b {
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+.asked-by__acts {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+.asked-by__confirm {
+    padding: 0 0 14px 46px;
+}
+.asked-by__confirm p {
+    margin: 0 0 10px;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.asked-by__confirm .acct__confirm {
+    margin-left: 0;
+    flex-wrap: wrap;
+}
+.connect__label {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.connect__exposed {
+    margin: 0 0 10px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+}
+.connect__choices {
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+}
+.connect__choices--nested {
+    margin: 0;
+    padding-left: 22px;
+}
+.connect__choices .check {
+    align-items: center;
+    margin-bottom: 8px;
+}
+.connect__share {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+.connect__share .check {
+    flex: 1;
+    min-width: 0;
+}
+.connect__open {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+.connect__open:hover {
+    background: var(--chrome);
+    color: var(--ink);
+}
+.connect__public {
+    font-weight: 500;
+    color: var(--ink-2);
+}
+/* The dialog's list can run past a screen; what it is for stays in reach.
+   Pinned to the foot of the scrolling body, bled out over its padding so
+   nothing scrolls by underneath. */
+.connect__acts {
+    position: sticky;
+    bottom: -22px;
+    flex-wrap: wrap;
+    margin: 0 -22px -22px;
+    padding: 12px 22px 22px;
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+}
+.connect__acts .reachrow__error {
+    flex: 1 0 100%;
+    margin: 0;
+}
+@media (max-width: 767px) {
+    .connect__acts {
+        bottom: -20px;
+        margin: 0 -20px -20px;
+        padding: 12px 20px 20px;
+    }
+}
+/* "Let another teammate ask …" is long with a long name: it wraps rather
+   than running off a phone. */
+.aboutpage__action--long {
+    height: auto;
+    min-height: 30px;
+    padding-block: 5px;
+    text-align: left;
 }
 .agentlist__row:hover .agentlist__title b {
     text-decoration: underline;
@@ -4660,25 +4670,88 @@ samp,
     color: var(--tone-bad) !important;
 }
 
-/* ── A box that hands its words to the Chat tab ─────────────────────── */
+/* ── A box that hands its words and its files to the Chat tab ───────── */
+/* Three lines, of which only the middle one is the box: files waiting above
+   it, the box, and under it the model and anything refused. */
 .askbox {
     display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+/* The same layout the conversation's composer uses, because it is the same
+   box: the row aligns to its bottom edge, so a growing draft pushes upward,
+   and every control centres on the textarea's last line — the line the
+   placeholder is on when the box is empty and the line being typed on when it
+   is not. */
+.askbox__row {
+    display: flex;
     align-items: flex-end;
-    gap: 8px;
-    padding: 8px 8px 8px 18px;
+    gap: 4px;
+    padding: 5px;
     border-radius: var(--r-xl);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
+    --askbox-line: 36px;
 }
-.askbox:focus-within {
+.askbox__row:focus-within {
     box-shadow: 0 0 0 1px var(--ink-3), 0 4px 16px rgb(0 0 0 / 0.05);
+}
+/* The whole form takes the drop, and the box is what lights up — the same as
+   the composer, which accepts the same drag. */
+.askbox--over .askbox__row {
+    background: var(--accent-soft);
+}
+.askbox__files {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+.askbox__picker {
+    display: none;
+}
+.askbox__attach {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    margin-block-end: calc((var(--askbox-line) - 34px) / 2);
+    border: 0;
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+.askbox__attach:hover {
+    background: var(--chrome);
+    color: var(--ink);
+}
+.askbox__foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 0 10px;
+}
+.askbox__foot:empty {
+    display: none;
+}
+.askbox__note {
+    min-width: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.askbox__note[data-bad] {
+    color: var(--bad);
 }
 .askbox textarea {
     flex: 1;
     min-width: 0;
-    min-height: 24px;
-    margin: 0 0 7px;
-    padding: 0;
+    min-height: var(--askbox-line);
+    max-height: min(200px, 28vh);
+    margin: 0;
+    padding: calc((var(--askbox-line) - 1.5em) / 2) 6px;
     border: 0;
     outline: none;
     resize: none;
@@ -4690,6 +4763,9 @@ samp,
 }
 .askbox textarea::placeholder {
     color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .askbox__send {
     flex: none;
@@ -4697,11 +4773,29 @@ samp,
     place-items: center;
     width: 36px;
     height: 36px;
+    margin-block-end: calc((var(--askbox-line) - 36px) / 2);
     border: 0;
     border-radius: 50%;
     background: var(--accent);
     color: var(--on-accent);
     cursor: pointer;
+}
+.askbox__wave {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    margin-block-end: calc((var(--askbox-line) - 32px) / 2);
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+.askbox__wave:hover {
+    color: var(--accent);
+    background: var(--accent-soft);
 }
 .askbox__send:disabled {
     background: var(--line-2);
@@ -6389,6 +6483,12 @@ samp,
     gap: 6px;
 }
 
+/* What a connected app is told about, one line each under its name. */
+.access__listens {
+    display: block;
+    margin-top: 2px;
+}
+
 /* Why a New page or a template did not happen, where it was asked for. */
 .all__error {
     display: flex;
@@ -6791,20 +6891,15 @@ samp,
 }
 /* Home lands level with the first face on the rail: the rail's mark (40),
    the rule and its gaps (17) and the list's inset (2), less the difference
-   between a 36px row and a 40px face slot. At the foot, no inset of its own,
-   so Settings ends where the rail's avatar does and the two share a line.
-   The places get space to breathe; chats sit well below them, a list you
-   scan rather than a continuation of the places. */
+   between a 36px row and a 40px face slot. The places get space to breathe;
+   chats sit well below them, a list you scan rather than a continuation of
+   the places. */
 .side__space .snav {
     padding: 21px 0 0;
     gap: 36px;
 }
 .side__space .snav__group {
     gap: 2px;
-}
-/* The avatar's height, so the two share a centre as well as a floor. */
-.side__space .snav__foot .side__item {
-    height: 32px;
 }
 /* A section's name is a heading over the words, so it sits on the same edge
    they do. */
@@ -7288,34 +7383,135 @@ samp,
     font-size: 13px;
     color: var(--bad);
 }
-.aboutpage__section {
-    padding-top: 28px;
-    /* Clear of the sticky row of jumps above it. */
-    scroll-margin-top: 52px;
+/* The overview's parts: two columns of wide tiles, each a mark, a name, one
+   line of what is true there now, and the way in. Quiet surfaces on the
+   page's own paper — identity colour stays on the face above them. */
+.aboutparts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 36px;
 }
-/* The page's sections as a row that stays put while the page scrolls under
-   it. Plain words, the tab look the Files view uses, and it scrolls sideways
-   on a phone rather than wrapping into a block. */
-.aboutpage__jumps {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    display: flex;
-    gap: 2px;
-    margin: 0 -8px;
-    padding: 8px;
+.aboutparts__tile {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 16px;
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 14px;
+    row-gap: 1px;
+    min-width: 0;
+    min-height: 72px;
+    padding: 14px 16px 14px 14px;
+    border: 0;
+    border-radius: var(--r-lg);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+.aboutparts__tile:hover {
+    background: var(--wash-b);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.aboutparts__tile:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+.aboutparts__mark {
+    grid-row: span 2;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--r-md);
+    background: var(--wash-b);
+    color: var(--ink-2);
+}
+.aboutparts__tile:hover .aboutparts__mark {
     background: var(--paper);
-    border-bottom: 1px solid var(--line);
-    overflow-x: auto;
-    scrollbar-width: none;
+    color: var(--ink);
 }
-.aboutpage__jumps::-webkit-scrollbar {
-    display: none;
+.aboutparts__label {
+    align-self: end;
+    font-size: 15px;
+    font-weight: 500;
 }
-.aboutpage__jumps button {
+.aboutparts__line {
+    grid-column: 2;
+    align-self: start;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-3);
+}
+.aboutparts__line > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.aboutparts__go {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    color: var(--ink-3);
+}
+.aboutparts__tile:hover .aboutparts__go {
+    color: var(--ink);
+}
+/* Something here is waiting on a person: the dot the sidebar uses for it. */
+.aboutparts__dot {
     flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wait);
+}
+@media (prefers-reduced-motion: reduce) {
+    .aboutparts__tile {
+        transition: none;
+    }
+}
+/* One column on a phone, and in a pane too narrow for two readable tiles. */
+@media (max-width: 720px) {
+    .aboutparts {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+        margin-top: 28px;
+    }
+    .aboutparts__tile {
+        min-height: 64px;
+        padding: 12px 14px 12px 12px;
+    }
+}
+/* What About no longer carries, and where it went: one quiet line. */
+.aboutpage__elsewhere {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    margin: 20px 2px 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.aboutpage__elsewhere .linkish {
+    font-size: 13px;
+}
+
+/* A part on its own page: the way back to the overview, then its heading
+   and note over the same component it has always been drawn with. */
+.aboutpart__back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     height: 30px;
-    padding: 0 12px;
+    margin: -6px 0 0 -8px;
+    padding: 0 10px 0 6px;
     border: 0;
     border-radius: 999px;
     background: transparent;
@@ -7324,17 +7520,31 @@ samp,
     font-size: 13.5px;
     cursor: pointer;
 }
-.aboutpage__jumps button:hover {
+.aboutpart__back:hover {
     color: var(--ink);
-    background: var(--accent-soft);
+    background: var(--wash-b);
 }
-.aboutpage__jumps button[aria-current="true"] {
-    color: var(--ink);
-    background: var(--line-2);
-}
-.aboutpage__jumps button:focus-visible {
+.aboutpart__back:focus-visible {
     outline: 2px solid var(--info);
     outline-offset: -2px;
+}
+.aboutpart__head {
+    margin: 20px 0 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+}
+.aboutpart__head h1 {
+    margin: 0 auto 0 0;
+    font-size: 26px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+}
+.aboutpart__head p {
+    max-width: 600px;
+    margin: 6px 0 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-3);
 }
 /* A count beside a tab label, quieter than the label. */
 .notes-view__count {
@@ -7345,28 +7555,10 @@ samp,
 .notes-view .all__scope-note {
     margin: 6px 2px 12px;
 }
-.aboutpage__section + .aboutpage__section {
-    margin-top: 12px;
-}
-.aboutpage__section > header {
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--line);
-}
 .aboutpage__heading {
     display: flex;
     align-items: center;
     gap: 12px;
-}
-.aboutpage__heading h2 {
-    margin: 0 auto 0 0;
-    font-size: 18px;
-    font-weight: 500;
-}
-.aboutpage__section header p {
-    margin: 4px 0 0;
-    font-size: 13.5px;
-    color: var(--ink-3);
 }
 .aboutpage__content {
     display: flex;
@@ -7478,19 +7670,32 @@ samp,
     color: var(--ink-3);
     font-variant-numeric: tabular-nums;
 }
-.aboutpage__foot {
-    margin: 36px 0 0;
+/* Deleting sits at the very foot of the page, after everything that says how
+   the teammate works, so it reads as its own decision rather than one more
+   section. Only the button is red: a red heading and rule would shout at
+   everybody who scrolls to the bottom, and most of them came for something
+   else. */
+.aboutpage__delete {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 48px;
     padding-top: 16px;
     border-top: 1px solid var(--line);
+}
+.aboutpage__delete > div {
+    flex: 1;
+    min-width: 0;
+}
+.aboutpage__delete h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+}
+.aboutpage__delete p {
+    margin: 2px 0 0;
     font-size: 13px;
     color: var(--ink-3);
-}
-/* Deleting sits clear of the footnote above it, so it reads as its own
-   decision rather than one more line about Settings. Only the button is
-   red: a red heading and rule would shout at everybody who scrolls to the
-   bottom, and most of them came for something else. */
-.aboutpage__delete {
-    margin-top: 40px;
 }
 .aboutpage__delete .btn--danger:disabled {
     opacity: 0.45;
@@ -7591,32 +7796,6 @@ samp,
     color: var(--ink-3);
 }
 
-.settings__elsewhere {
-    margin: 18px 10px 0;
-    font-size: 13px;
-    line-height: 1.45;
-    color: var(--ink-3);
-}
-/* A link in a sentence, not another item in the list above it. */
-.settings__nav .settings__elsewhere button {
-    display: inline;
-    width: auto;
-    height: auto;
-    margin: 0;
-    padding: 0;
-    border-radius: 0;
-    background: none;
-    color: var(--ink-2);
-    font-size: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--line-2);
-    text-underline-offset: 3px;
-}
-.settings__nav .settings__elsewhere button:hover {
-    background: none;
-    color: var(--ink);
-}
-
 /* Hiring is how a teammate arrives, so it wears the app's ink rather than
    the old accent it was drawn in. */
 .shelf .btn--primary,
@@ -7640,9 +7819,9 @@ samp,
     }
 }
 
-/* ── A channel's groups: where people outside the space meet its bot ──
-   Under the channel they belong to, indented past its mark. One row a
-   group: its name, who answers there, and the two things to do about it. */
+/* ── A bot's groups: where people outside the space meet it ──────────
+   Under the bot they belong to, indented past its mark. One row a group:
+   its name, which opens its channel, where everything about it is. */
 .sgroups {
     display: flex;
     flex-direction: column;
@@ -7732,70 +7911,6 @@ samp,
     background: var(--wash-a);
     color: var(--ink);
 }
-.sgroup__acts {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0 14px;
-    margin-top: 2px;
-}
-/* A switch is a checkbox that says so: `role="switch"`, and the accent
-   rather than a second design for on and off. */
-.sgroup__switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 32px;
-    font-size: 13px;
-    color: var(--ink-2);
-    cursor: pointer;
-}
-.sgroup__switch input {
-    flex: none;
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    accent-color: var(--accent);
-    cursor: pointer;
-}
-.sgroup__switch:has(input:disabled) {
-    opacity: 0.6;
-    cursor: default;
-}
-.sgroup__switch:has(input:disabled) input {
-    cursor: default;
-}
-.sgroup__take {
-    min-height: 32px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 13px;
-    text-decoration: underline;
-    text-decoration-color: var(--line-2);
-    text-underline-offset: 3px;
-    cursor: pointer;
-}
-.sgroup__take:hover:not(:disabled) {
-    color: var(--ink);
-    text-decoration-color: currentColor;
-}
-.sgroup__take:disabled {
-    opacity: 0.5;
-    cursor: default;
-}
-.sgroup__take:focus-visible,
-.sgroup__switch input:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-}
-.sgroup__problem {
-    font-size: 13px;
-    color: var(--bad);
-}
-
 /* ── A conversation that also lives on a chat platform ─────────────────
    Two ways to send, over the box: a note to the bot alone (the default in a
    group or a channel), or a reply the platform gets (the default in a
@@ -7867,6 +7982,22 @@ samp,
     font-size: 12px;
     white-space: nowrap;
 }
+/* Another teammate's side of a request, when it is the reader's to open: a
+   chip that reads as a link, because it is one. */
+.msg__chip--link {
+    text-decoration: none;
+    cursor: pointer;
+}
+.msg__chip--link:hover {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+.msg__chip--link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
 /* A note to the bot: over your bubble, on your side. */
 .msg__chip--note {
     margin: 0 3px 5px 0;
@@ -7889,4 +8020,144 @@ samp,
 .msg--guest .message-actions {
     right: auto;
     left: calc(100% + 6px);
+}
+
+/* The default model on a page of its own: every model the organization has,
+   grouped by where it comes from, one row each and the chosen one marked. */
+.modelchoice {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.modelchoice__list {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+.modelchoice__group {
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line);
+    overflow: hidden;
+}
+.modelchoice__label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--wash-b);
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.modelchoice__label em {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    font-style: normal;
+    color: var(--wait);
+}
+.modelchoice__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 52px;
+    padding: 10px 16px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.modelchoice__row + .modelchoice__row {
+    border-top: 1px solid var(--line);
+}
+.modelchoice__row:hover:not(:disabled) {
+    background: var(--wash-b);
+}
+.modelchoice__row:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+.modelchoice__row:disabled {
+    cursor: default;
+}
+/* The default stands on its own, above the groups it chooses among. */
+.modelchoice__row--default {
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+.modelchoice__row[aria-checked="true"] {
+    background: var(--wash-b);
+}
+.modelchoice__row--default[aria-checked="true"] {
+    box-shadow: inset 0 0 0 1.5px var(--ink-2);
+}
+.modelchoice__radio {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px var(--line-2);
+}
+.modelchoice__row[aria-checked="true"] .modelchoice__radio {
+    box-shadow: inset 0 0 0 5px var(--ink);
+}
+.modelchoice__mark {
+    display: grid;
+    place-items: center;
+    color: var(--ink-3);
+}
+.modelchoice__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 14.5px;
+}
+.modelchoice__body small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.modelchoice__id {
+    font-family: var(--mono);
+}
+.modelchoice__saving {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.modelchoice__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 4px 2px 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.modelchoice__foot .linkish {
+    font-size: 13px;
+}
+
+/* ── the conversation box: one line, and what is about it under it ──── */
+/* The box holds what is done to it — attach, type, call, send — and nothing
+   else. It was two rows (the words, then the paperclip, the model, voice and
+   send), which made an empty box as tall as a paragraph. The model and the
+   note on what the conversation is waiting on are on the line under it
+   (`.composer__foot`), files wait above it, and the box is one line until a
+   draft grows it. */
+.composer .composer__box {
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 5px;
+}
+.composer .composer__input {
+    padding-inline: 6px;
 }

@@ -29,14 +29,13 @@ from app.modules.agent.capabilities.outsider_gate import (
     OutsiderToolGateCapability,
 )
 from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
     OUTSIDER_TOOLSETS,
-    OUTSIDERS,
     OutsiderRunRefused,
     refuse_owner_workspace,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools import registry
+from app.modules.agent.tools.group_history import build_group_history_toolset
 from app.modules.agent.tools.contact_tools import build_contact_toolset
 from app.modules.agent.tools.form_tools import build_form_toolset
 from app.modules.agent.tools.context import BaseAgentContext
@@ -60,10 +59,11 @@ def _kept_tool_names() -> set[str]:
         static = registry._TOOLSET_BY_NAME.get(toolset)
         if static is not None:
             names |= set(static.tools)
-    # Built per run rather than registered: on a contact's run, and on a web
-    # visitor's run.
+    # Built per run rather than registered: on a contact's run, on a web
+    # visitor's run, and on a guest's run in a group.
     names |= set(build_contact_toolset(uow_factory=lambda: None).tools)
     names |= set(build_form_toolset(uow_factory=lambda: None).tools)
+    names |= set(build_group_history_toolset(uow_factory=lambda: None).tools)
     return names
 
 
@@ -118,7 +118,7 @@ def _stranger_deps(**overrides) -> BaseAgentContext:
         org_id=uuid4(),
         conversation_id=uuid4(),
         is_pod_default_agent=True,
-        audience=Audience.outsiders(),
+        audience=Audience.contact(uuid4()),
         **overrides,
     )
 
@@ -132,7 +132,8 @@ async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeyp
     deps = _stranger_deps()
     conversation = SimpleNamespace(
         id=deps.conversation_id,
-        metadata={AUDIENCE_KEY: OUTSIDERS},
+        metadata={},
+        contact_id=deps.audience.contact_id,
         is_pod_assistant=True,
         type=None,
         parent_id=None,
@@ -159,7 +160,42 @@ async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeyp
     assert offered, "the run was offered nothing at all"
     assert offered <= OUTSIDER_TOOL_NAMES, sorted(offered - OUTSIDER_TOOL_NAMES)
     assert "web_fetch" not in offered
-    assert "message_user" in offered
+    assert "ask_a_person" in offered
+
+
+def _tool_names(toolsets) -> set[str]:
+    return {name for toolset in toolsets for name in getattr(toolset, "tools", {})}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("conversation_kind", "offered"),
+    [("DM", True), ("EMAIL", True), ("CHANNEL", False)],
+    ids=["private-chat", "email-thread", "group"],
+)
+async def test_a_contact_is_offered_their_own_rows_only_where_they_alone_read_it(
+    conversation_kind, offered
+):
+    """In a group, everybody in it would read what the agent quoted back."""
+    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+
+    deps = _stranger_deps()
+    conversation = SimpleNamespace(
+        id=deps.conversation_id,
+        metadata={"conversation_kind": conversation_kind},
+        contact_id=deps.audience.contact_id,
+        is_pod_assistant=True,
+        type=None,
+        parent_id=None,
+    )
+
+    toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
+        agent=None, conversation=conversation
+    )
+
+    names = _tool_names(toolsets)
+    assert ("contact_records" in names) is offered
+    assert ("contact_function" in names) is offered
 
 
 @pytest.mark.anyio
@@ -230,5 +266,5 @@ async def test_no_workspace_is_opened_for_a_strangers_run():
 
 
 def test_a_members_run_reaches_its_workspace_as_before():
-    refuse_owner_workspace(SimpleNamespace(audience=Audience.member()))
-    refuse_owner_workspace(SimpleNamespace())
+    assert refuse_owner_workspace(SimpleNamespace(audience=Audience.member())) is None
+    assert refuse_owner_workspace(SimpleNamespace()) is None

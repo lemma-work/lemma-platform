@@ -45,9 +45,8 @@ class EncryptedColumn:
 #: that column is widened and the repository encrypts/decrypts it.
 REGISTRY: list[EncryptedColumn] = [
     EncryptedColumn("accounts", "credentials", "json", "accounts.credentials"),
-    EncryptedColumn(
-        "auth_configs", "provider_config", "json", "auth_configs.provider_config"
-    ),
+    # Renamed from `provider_config` by migration 0011.
+    EncryptedColumn("auth_configs", "config", "json", "auth_configs.config"),
     EncryptedColumn(
         "agent_runtime_profiles",
         "credentials",
@@ -56,6 +55,35 @@ REGISTRY: list[EncryptedColumn] = [
     ),
     EncryptedColumn(
         "agent_surfaces", "webhook_secret", "str", "agent_surfaces.webhook_secret"
+    ),
+    # Webhook signing secrets for MCP Events: the client's, for deliveries a
+    # pod sends it, and ours, for deliveries a connected server sends us.
+    EncryptedColumn(
+        "mcp_event_subscriptions",
+        "secret_ciphertext",
+        "str",
+        "mcp_event_subscriptions.secret_ciphertext",
+    ),
+    EncryptedColumn(
+        "connector_event_subscriptions",
+        "secret_ciphertext",
+        "str",
+        "connector_event_subscriptions.secret_ciphertext",
+    ),
+    # An organization's Slack app configuration token: what lets Lemma create
+    # a teammate's own Slack app. Lost with a retired key, it can only be
+    # pasted again.
+    EncryptedColumn(
+        "slack_configuration_tokens",
+        "access_token",
+        "str",
+        "slack_configuration_tokens.access_token",
+    ),
+    EncryptedColumn(
+        "slack_configuration_tokens",
+        "refresh_token",
+        "str",
+        "slack_configuration_tokens.refresh_token",
     ),
 ]
 

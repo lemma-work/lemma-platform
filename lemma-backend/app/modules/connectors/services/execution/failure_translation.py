@@ -129,9 +129,11 @@ def _status_classified(exc: Exception):
     """
     from app.modules.connectors.domain.errors import (
         OperationExecutionAccessDeniedError,
+        OperationExecutionConflictError,
         OperationExecutionInfrastructureError,
         OperationExecutionNotFoundError,
         OperationExecutionRateLimitedError,
+        OperationExecutionRejectedError,
         OperationExecutionUnauthorizedError,
         OperationExecutionValidationError,
     )
@@ -144,6 +146,7 @@ def _status_classified(exc: Exception):
         401: OperationExecutionUnauthorizedError,
         403: OperationExecutionAccessDeniedError,
         404: OperationExecutionNotFoundError,
+        409: OperationExecutionConflictError,
         422: OperationExecutionValidationError,
         # The provider is healthy and answering; the caller is asking too
         # often. Deliberately not an infrastructure error -- see the class,
@@ -152,6 +155,15 @@ def _status_classified(exc: Exception):
         # retried straight back into the limit.
         429: OperationExecutionRateLimitedError,
     }.get(status_code)
+    if error_cls is None and 400 <= status_code < 500:
+        # Any other 4xx is still the provider's deliberate answer. These used
+        # to reach the catch-all as our own 500: GitHub refusing a merge its
+        # branch rules block (405) read as a Lemma fault, marked its span as an
+        # error, and left the reason only in the details -- which the agent's
+        # connector tool never shows the model. Falling back on the 4xx range,
+        # rather than adding rows to the table above one incident at a time,
+        # is what keeps the next unfamiliar status from repeating that.
+        error_cls = OperationExecutionRejectedError
     if error_cls is None and 500 <= status_code < 600:
         # A provider outage, and the only classification the breaker counts.
         # Without this every 5xx fell through to the catch-all as
@@ -162,8 +174,9 @@ def _status_classified(exc: Exception):
         error_cls = OperationExecutionInfrastructureError
     if error_cls is None:
         return None
-    # The message is fixed by the error class; the exception's own text may
-    # carry provider request bodies or credentials and never travels.
+    # The error class writes the message. The exception's own text may carry
+    # provider request bodies or credentials, so it never travels as is; what
+    # the provider said reaches the message only through the scrubbed details.
     return error_cls("", details=_upstream_details(exc))
 
 

@@ -226,5 +226,11 @@ fn sample_run_spec() -> RunSpec {
         mcp: serde_json::json!({}),
         run_deadline: chrono::Utc::now(),
         system_prompt_delivery: Some("NEW_SESSION_ONLY".to_owned()),
+        pre_approvals: vec![lemma_agent_host::protocol::PreApproval {
+            approval_id: "agent-host-permission:call-1".to_owned(),
+            tool_name: "exec_command".to_owned(),
+            input: serde_json::json!({"command": "lemma --version"}),
+            decision: "APPROVE_ONCE".to_owned(),
+        }],
     }
 }

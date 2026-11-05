@@ -12,7 +12,7 @@ is a browser signed in as somebody. There is no equivalent of a shared team
 mailbox here: a session is one human's identity at a site, and lending it to
 another person's run would mean that site seeing actions it will attribute to
 the owner, with nothing at the site's end able to tell the difference. So there
-is no "pinned login" and no borrowing -- `delegated_by_user_id` decides, and the
+is no "pinned login" and no borrowing -- `delegating_user_id` decides, and the
 owner is the only answer.
 
 There is deliberately only *one* permission. An earlier version also declared
@@ -67,7 +67,7 @@ async def resolve_owner(
     if ctx is None:
         raise WebLoginAccessDenied("No authorization context")
 
-    owner = ctx.delegated_by_user_id or ctx.user_id
+    owner = ctx.delegating_user_id or ctx.user_id
     if owner is None:
         raise WebLoginAccessDenied("No person to resolve a saved login for")
 
@@ -81,7 +81,7 @@ async def resolve_owner(
     # A person acting for themselves needs no grant beyond being themselves --
     # the same early return `account_resolution_service` makes for an owned
     # account. A workload has to hold the permission.
-    if ctx.delegated_by_user_id is not None and not ctx.is_user_equivalent:
+    if ctx.is_named_workload:
         # No `ResourceRef`: the permission is pod-scoped and there is no
         # per-login grant to hold. Which login gets used is not a matter of
         # grants at all -- it is decided entirely by whose run this is, above.

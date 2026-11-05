@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from uuid import UUID
 
 import anyio
@@ -22,8 +23,9 @@ from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.value_objects import AgentRunStartResult, AgentRunStatus
+from app.modules.agent.domain.value_objects import AgentRunStartResult
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.realtime import run_ending_payload
 
 logger = get_logger(__name__)
 
@@ -31,9 +33,33 @@ logger = get_logger(__name__)
 async def start_and_stream_run(
     *,
     channel_service: ChannelServiceDep,
+    conversations: Callable[[], AbstractAsyncContextManager[ConversationService]],
     conversation_id: UUID,
-    start_run: Callable[[], Awaitable[AgentRunStartResult]],
+    user_id: UUID,
+    pod_id: UUID,
+    start_run: Callable[[ConversationService], Awaitable[AgentRunStartResult]],
 ) -> StreamingResponse:
+    """Send, then stream the run the send started or joined.
+
+    ``conversations`` opens a short-lived service: the auth context is built
+    there, not in a request-scoped dependency, because a StreamingResponse
+    keeps those (and their pooled connection) alive for the whole stream.
+    """
+
+    async def send() -> AgentRunStartResult:
+        async with conversations() as service:
+            return await start_run(service)
+
+    async def load_run(agent_run_id: UUID) -> AgentRun:
+        async with conversations() as service:
+            return await load_authorized_agent_run(
+                service,
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                user_id=user_id,
+                pod_id=pod_id,
+            )
+
     async def close_subscription(
         exc_type=None,
         exc=None,
@@ -51,7 +77,7 @@ async def start_and_stream_run(
     subscription = channel_service.subscribe([conversation_channel(conversation_id)])
     iterator = await subscription.__aenter__()
     try:
-        result = await start_run()
+        result = await send()
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         await close_subscription(type(exc), exc, exc.__traceback__)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
@@ -68,12 +94,30 @@ async def start_and_stream_run(
         # only ever thrown away here.
         yield encode_stream_chunk(
             event_type="status",
-            data={"started_new_run": result.started_new_run},
+            data={
+                "started_new_run": result.started_new_run,
+                "deduplicated": result.deduplicated,
+            },
             agent_run_id=result.agent_run_id,
         )
+        if result.deduplicated:
+            # A re-send joins the run its first copy started, which may have
+            # ended -- and published its ending -- before this subscription
+            # existed. Waiting for that ending again never ends: the stream sat
+            # on keepalives forever. Read once the subscription is open, so a
+            # run that ends after this read is still heard below.
+            ending = terminal_run_chunk(await load_run(result.agent_run_id))
+            if ending is not None:
+                yield ending
+                await close_subscription()
+                return
         try:
+
+            async def ended() -> str | None:
+                return terminal_run_chunk(await load_run(result.agent_run_id))
+
             async for chunk in with_keepalive(
-                iter_subscription(iterator, result.agent_run_id)
+                iter_subscription(iterator, result.agent_run_id), on_idle=ended
             ):
                 yield chunk
         except Exception:
@@ -123,31 +167,11 @@ async def load_authorized_agent_run(
 
 
 def terminal_run_chunk(agent_run: AgentRun) -> str | None:
-    if agent_run.status == AgentRunStatus.FAILED:
-        return encode_stream_chunk(
-            event_type="error",
-            data=agent_run.error or "Agent run failed",
-            agent_run_id=agent_run.id,
-        )
-    if agent_run.status == AgentRunStatus.STOPPED:
-        return encode_stream_chunk(
-            event_type="stopped",
-            data={
-                "conversation_id": str(agent_run.conversation_id),
-                "status": agent_run.status.value,
-            },
-            agent_run_id=agent_run.id,
-        )
-    if agent_run.status == AgentRunStatus.COMPLETED:
-        data: dict[str, object] = {
-            "conversation_id": str(agent_run.conversation_id),
-            "status": agent_run.status.value,
-        }
-        if agent_run.output_data is not None:
-            data["output_data"] = agent_run.output_data
-        return encode_stream_chunk(
-            event_type="completed",
-            data=data,
-            agent_run_id=agent_run.id,
-        )
-    return None
+    ending = run_ending_payload(agent_run)
+    if ending is None:
+        return None
+    return encode_stream_chunk(
+        event_type=str(ending["type"]),
+        data=ending["data"],
+        agent_run_id=agent_run.id,
+    )

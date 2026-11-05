@@ -1,8 +1,9 @@
 from uuid import UUID
+from app.core.infrastructure.work import WorkWriter
+from app.modules.workflow.execution.wait_work import write_admission
 from typing import List
 
 from app.core.authorization.context import (
-    ActorType,
     Context,
     ResourceRef,
     ResourceType,
@@ -83,6 +84,7 @@ class WorkflowService:
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
         run_title: List[str] | None = None,
+        max_concurrent_runs: int | None = None,
     ) -> WorkflowEntity:
         await self._require_action(
             requester_user_id=requester_user_id,
@@ -109,6 +111,7 @@ class WorkflowService:
             nodes=nodes or [],
             edges=edges or [],
             run_title=validate_run_title(run_title),
+            max_concurrent_runs=max_concurrent_runs,
         )
         # Validation raises GraphValidationError (422) listing every issue and
         # stamps entry_node_id. Empty shells skip validation until a graph is
@@ -183,6 +186,14 @@ class WorkflowService:
         if "visibility" in update_data.model_fields_set:
             flow.visibility = self._normalize_workflow_visibility(
                 update_data.visibility
+            )
+        if "max_concurrent_runs" in update_data.model_fields_set:
+            flow.max_concurrent_runs = update_data.max_concurrent_runs
+            # A raised or removed limit makes room no finishing run will hand
+            # on; parked runs are admitted into it by a work item in this
+            # transaction.
+            await write_admission(
+                WorkWriter(self.uow.session), pod_id=flow.pod_id, flow_id=flow.id
             )
 
         updated = await self.flow_repo.update(flow)
@@ -287,16 +298,9 @@ class WorkflowService:
     ) -> None:
         flow = await self.flow_repo.get(flow_id, ctx=ctx)
         old_icon_url = flow.icon_url if flow else None
-        # A delegated workload always routes through authz — workflow.delete is
-        # destructive and gated — so the owner shortcut can't let it bypass.
-        is_delegated = ctx is not None and (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        )
-        if (
-            flow
-            and requester_user_id is not None
-            and (is_delegated or flow.user_id != requester_user_id)
-        ):
+        # Always through the authorizer: its owner rule lets a creator delete
+        # their workflow while they are still in the pod, and gates a workload.
+        if flow and requester_user_id is not None:
             await self._require_action(
                 requester_user_id=requester_user_id,
                 action=Permissions.WORKFLOW_DELETE,

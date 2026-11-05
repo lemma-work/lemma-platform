@@ -28,7 +28,8 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
+# Mostly measurement, with fixed sleeps: nightly, not a pull-request gate.
+pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.slow]
 
 # The semantic regression this probe guards against is a completed command
 # waiting for the default 30-second yield window before returning. Shared CI

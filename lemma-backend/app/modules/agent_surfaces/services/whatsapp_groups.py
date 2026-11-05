@@ -19,6 +19,8 @@ addresses it -- by name, by an ``@`` of its number, or by replying to it.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
+
 import asyncio
 from time import monotonic
 from uuid import UUID
@@ -178,7 +180,7 @@ class WhatsAppGroupOpener:
             )
         # Meta is called with no connection held, as every platform call is.
         client = WhatsAppClient.from_credentials(credentials)
-        phone_number_id = str(credentials.get("phone_number_id") or "")
+        phone_number_id = WhatsAppCredentials.of(credentials).phone_number_id or ""
         try:
             request_id = await client.create_group(
                 phone_number_id=phone_number_id, subject=name, description=description
@@ -195,8 +197,7 @@ class WhatsAppGroupOpener:
         async with self.uow_factory() as uow:
             group = await SurfaceGroupRepository(uow.session).create_pending(
                 pod_id=surface.pod_id,
-                surface_id=surface.id,
-                platform=surface.surface_type.value,
+                surface=surface,
                 title=name,
                 owner_user_id=owner_user_id,
                 request_id=request_id,

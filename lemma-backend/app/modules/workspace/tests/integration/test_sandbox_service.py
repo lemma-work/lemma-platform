@@ -562,6 +562,52 @@ async def test_destroy_keeps_the_disk_unless_asked(
     assert provider.destroyed_volumes != []
 
 
+async def test_a_destroy_fenced_to_an_old_epoch_leaves_the_replacement_alone(
+    service: SandboxService, provider: FakeProvider
+) -> None:
+    """A caller still holding the handle to a replaced sandbox destroys nothing.
+
+    Without the fence, `destroy` acts on whatever is current, so a second
+    caller that saw the same dead sandbox destroyed its fresh replacement.
+    """
+    pod_id = uuid4()
+    sandbox = await service.resolve(
+        kind=SandboxKind.FUNCTION, owner_kind=SandboxOwnerKind.POD, owner_id=pod_id
+    )
+    stale = await service.ensure(sandbox.id)
+    assert await service.destroy(sandbox.id, expected_epoch=stale.epoch) is True
+    replacement = await service.ensure(sandbox.id)
+    assert replacement.epoch == stale.epoch + 1
+
+    assert await service.destroy(sandbox.id, expected_epoch=stale.epoch) is False
+
+    assert provider.destroyed == [stale.provider_id]
+    assert replacement.provider_id in provider.containers
+    service.forget(sandbox.id)
+    assert (await service.ensure(sandbox.id)).epoch == replacement.epoch
+
+
+async def test_two_destroys_fenced_to_the_same_epoch_claim_it_once(
+    service: SandboxService, provider: FakeProvider
+) -> None:
+    """The claim is one conditional update, so concurrent callers race on it."""
+    import asyncio
+
+    pod_id = uuid4()
+    sandbox = await service.resolve(
+        kind=SandboxKind.FUNCTION, owner_kind=SandboxOwnerKind.POD, owner_id=pod_id
+    )
+    handle = await service.ensure(sandbox.id)
+
+    outcomes = await asyncio.gather(
+        service.destroy(sandbox.id, expected_epoch=handle.epoch),
+        service.destroy(sandbox.id, expected_epoch=handle.epoch),
+    )
+
+    assert sorted(outcomes) == [False, True]
+    assert provider.destroyed == [handle.provider_id]
+
+
 async def test_describe_never_provisions(
     service: SandboxService, provider: FakeProvider
 ) -> None:

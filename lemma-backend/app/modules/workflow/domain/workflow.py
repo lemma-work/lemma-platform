@@ -47,6 +47,9 @@ class WorkflowEntity(AggregateRoot):
     mode: WorkflowMode = WorkflowMode.GLOBAL
     visibility: str = "POD"
     allowed_actions: list[str] = Field(default_factory=list)
+    # How many runs may be in progress at once; None is no limit. A run started
+    # past it waits its turn rather than failing -- see `run_admission.py`.
+    max_concurrent_runs: int | None = Field(default=None, ge=1, le=1000)
 
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -116,3 +119,4 @@ class WorkflowUpdateEntity(BaseModel):
     start: WorkflowStart | None = None
     run_title: list[str] | None = None
     visibility: str | None = None
+    max_concurrent_runs: int | None = Field(default=None, ge=1, le=1000)

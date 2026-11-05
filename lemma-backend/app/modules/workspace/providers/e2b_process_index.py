@@ -23,7 +23,14 @@ when a process completes.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+
+from sandbox_runtime.protocol import ProcessState
+
+from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
+from app.modules.workspace.providers.base import ProcessDescriptor
 
 PID_KEY_PREFIX = "workspace:e2b:pid:v1"
 INDEX_KEY_PREFIX = "workspace:e2b:procs:v1"
@@ -117,10 +124,23 @@ def decode_pid(raw) -> tuple[int, bool]:
     return entry.pid, entry.tty
 
 
-async def read_descriptors(redis, output, *, sandbox_id: str, now: float):
+#: Asks the sandbox itself which pids are alive, or None when it cannot say.
+#: Called only when an entry's watch was lost, because it is a round trip to
+#: E2B rather than to Redis.
+LivePids = Callable[[], Awaitable[frozenset[int] | None]]
+
+
+async def read_descriptors(
+    redis,
+    output,
+    *,
+    sandbox_id: str,
+    now: float,
+    live_pids: LivePids | None = None,
+) -> tuple[ProcessDescriptor, ...]:
     """Every process this platform started in one sandbox, with a live state.
 
-    Two corrections happen here, both driven by the recorded deadline.
+    Three corrections happen here, all driven by what outlives our own record.
 
     A process past its deadline is reported terminal even if our own record
     still says otherwise. Losing the watch on a process records UNKNOWN -- not
@@ -129,47 +149,99 @@ async def read_descriptors(redis, output, *, sandbox_id: str, now: float):
     for as long as the entry survived, doing no work the idle sweep could
     reclaim.
 
-    And an entry both finished and past its deadline is dropped. Nothing ever
-    removed these, while every new process refreshes the key's TTL, so the index
-    grew for the whole life of the sandbox: the list an agent uses to recover a
-    process id filled up with things that had ended hours earlier.
+    Inside its deadline, a lost watch is settled by asking E2B whether the pid
+    is still alive (``live_pids``). The exit is recorded only by a task in the
+    worker that started the command, so a restart of that worker otherwise left
+    a finished command reading as running for its whole lifetime.
+
+    And an entry is dropped once it is over: finished and past its deadline, or
+    with nothing recorded about it any more. Its state ages out of Redis on its
+    own clock, and one entry whose state had gone used to make this whole
+    listing raise -- every wait on every process in the sandbox read as
+    unreadable, and the idle sweep could never release it.
+
+    State is read on its own (`read_state`), never with the output: a listing
+    has no use for the output, and reading it renewed every abandoned buffer.
     """
-    from datetime import datetime, timezone
-
-    from sandbox_runtime.protocol import ProcessState
-
-    from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
-    from app.modules.workspace.providers.base import ProcessDescriptor
-
     key = index_key(sandbox_id)
     descriptors: list[ProcessDescriptor] = []
     stale: list[str] = []
+    unwatched: dict[str, int] = {}
     for raw_id, raw_entry in (await redis.hgetall(key)).items():
         process_id = raw_id.decode() if isinstance(raw_id, bytes) else str(raw_id)
-        snapshot = await output.read(process_id, after_sequence=0)
-        state = snapshot.state
         entry = decode_entry(raw_entry)
-        past_deadline = bool(entry.expires_at) and now > entry.expires_at
-        if past_deadline:
-            if state in TERMINAL_PROCESS_STATES:
-                stale.append(process_id)
-            else:
-                state = ProcessState.TIMED_OUT
-        descriptors.append(
-            ProcessDescriptor(
-                process_id=process_id,
-                state=state,
-                exit_code=snapshot.exit_code,
-                started_at=(
-                    datetime.fromtimestamp(entry.started_at, timezone.utc)
-                    if entry.started_at
-                    else None
-                ),
-                cwd=entry.cwd,
-                command=entry.command,
-                tty=entry.tty,
-            )
+        descriptor, over = _describe(
+            process_id, entry, await output.read_state(process_id), now=now
         )
+        if over:
+            stale.append(process_id)
+        if descriptor is None:
+            continue
+        if descriptor.state is ProcessState.UNKNOWN and entry.pid:
+            unwatched[process_id] = entry.pid
+        descriptors.append(descriptor)
     if stale:
         await redis.hdel(key, *stale)
+    if unwatched and live_pids is not None:
+        alive = await live_pids()
+        if alive is not None:
+            descriptors = [
+                _settled(descriptor, unwatched, alive) for descriptor in descriptors
+            ]
     return tuple(descriptors)
+
+
+def _describe(
+    process_id: str,
+    entry: ProcessEntry,
+    recorded: tuple[ProcessState, int | None] | None,
+    *,
+    now: float,
+) -> tuple[ProcessDescriptor | None, bool]:
+    """One entry as a descriptor, and whether it is over and can leave the index.
+
+    None when nothing about it is left to report.
+    """
+    past_deadline = bool(entry.expires_at) and now > entry.expires_at
+    if recorded is None:
+        if past_deadline or not entry.expires_at:
+            return None, True
+        # Inside its deadline with nothing recorded: E2B may still be running
+        # it, so the caller asks the sandbox.
+        recorded = (ProcessState.UNKNOWN, None)
+    state, exit_code = recorded
+    over = past_deadline and state in TERMINAL_PROCESS_STATES
+    if past_deadline and not over:
+        state = ProcessState.TIMED_OUT
+    descriptor = ProcessDescriptor(
+        process_id=process_id,
+        state=state,
+        exit_code=exit_code,
+        started_at=(
+            datetime.fromtimestamp(entry.started_at, timezone.utc)
+            if entry.started_at
+            else None
+        ),
+        cwd=entry.cwd,
+        command=entry.command,
+        tty=entry.tty,
+    )
+    return descriptor, over
+
+
+def _settled(
+    descriptor: ProcessDescriptor, unwatched: dict[str, int], alive: frozenset[int]
+) -> ProcessDescriptor:
+    """A lost watch, answered by the sandbox's own process table.
+
+    Alive reads as RUNNING, which it is. Absent reads as ended with no exit
+    code, which is all anyone can know. When the sandbox could not be asked the
+    caller leaves the entry UNKNOWN, so a reader that cannot tell says so rather
+    than guessing either way.
+    """
+    pid = unwatched.get(descriptor.process_id)
+    if pid is None:
+        return descriptor
+    if pid in alive:
+        return replace(descriptor, state=ProcessState.RUNNING)
+    return replace(descriptor, exited_unobserved=True)

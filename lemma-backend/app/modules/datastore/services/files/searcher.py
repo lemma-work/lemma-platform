@@ -137,12 +137,18 @@ class FileSearcher:
         search_service = self._search_factory_provider()(pod_id)
         # At most two passes, and the second is the exact one: widening
         # replaces the scope with the caller's complete readable set, which is
-        # enumerated, which is the loop's own exit condition.
+        # enumerated, which is the loop's own exit condition -- or, when it
+        # could not be enumerated in time, the loop stops with what it has.
         while True:
-            # An exact scope needs no headroom: every row the chunk query
+            # Only an exact scope needs no headroom: every row the chunk query
             # returns is one the caller may read, so asking for `limit` gets
-            # `limit`. An unnarrowed one does -- rows are dropped after the
-            # fact, and without slack to drop them a page comes back short.
+            # `limit`. Every other scope has rows dropped after the fact -- an
+            # unnarrowed one, and an excluding one too, since the hidden list
+            # names only searchable files and an orphan chunk or a file mid-
+            # reprocess passes it. Without slack to drop them a page comes back
+            # short with the pool full, and the loop below widens to the
+            # caller's whole readable set: the unbounded pushdown the ceiling
+            # is there to avoid.
             candidate_limit = (
                 limit if file_scope.enumerated else _candidate_limit(limit)
             )
@@ -171,22 +177,22 @@ class FileSearcher:
                     include_descendants=include_descendants,
                     file_scope=file_scope,
                 )
-            # One rule, both branches: nothing is returned whose id is not in a
-            # set the *platform* database just said this caller may read.
+            # One rule, every branch: nothing is returned whose id the
+            # *platform* database did not just say this caller may read.
             #
-            # When the scope was enumerated that set is the scope itself, and
-            # the check is belt and braces -- it costs one set membership test
-            # per row and it is the only thing standing between a future bug in
-            # the pushdown and a leaked file. When it was not, this is the
-            # authorization, and it is the only place it happens.
+            # A scope only narrows the chunk query. It can come from the Redis
+            # scope cache, keyed by the pod's authorization epoch, and a bump
+            # lost to a Redis blip -- or a change that never bumps -- would
+            # serve a stale readable side for the cache's TTL. So the page is
+            # authorized here, by primary key, at most `candidate_limit` rows,
+            # whatever the scope was; an enumerated scope also bounds it.
+            readable = await self.authorizer.readable_among(
+                pod_id=pod_id,
+                ctx=ctx,
+                file_ids={result.file_id for result in results},
+            )
             if file_scope.enumerated:
-                readable = file_scope.file_ids
-            else:
-                readable = await self.authorizer.readable_among(
-                    pod_id=pod_id,
-                    ctx=ctx,
-                    file_ids={result.file_id for result in results},
-                )
+                readable &= file_scope.file_ids
             visible_results = [
                 result for result in results if result.file_id in readable
             ][:limit]
@@ -210,9 +216,12 @@ class FileSearcher:
                 post_filtered=len(visible_results),
                 candidates=len(results),
             )
-            file_scope = await self.authorizer.readable_file_scope(
-                pod_id=pod_id, ctx=ctx
-            )
+            widened = await self.authorizer.readable_file_scope(pod_id=pod_id, ctx=ctx)
+            if not widened.enumerated:
+                # Enumerating ran out of time: the page in hand is authorized,
+                # just short, and asking again unnarrowed would not lengthen it.
+                break
+            file_scope = widened
 
         return [
             self._to_api_search_result(result, requester_user_id=requester_user_id)

@@ -10,8 +10,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import facts
+from app.modules.identity.contracts.organization_facts import OrganizationMemberRemoved
+from app.modules.identity.events.identity_work import stage_identity_work
 from app.modules.identity.domain.errors import (
     OrganizationConflictError,
     OrganizationInvitationNotFoundError,
@@ -53,14 +55,11 @@ class OrganizationRepository(OrganizationRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
-    def _collect_events(
+    async def _collect_events(
         self,
         entity: OrganizationEntity
         | OrganizationMemberEntity
@@ -70,6 +69,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
             events = entity.collect_events()
             if events:
                 self.uow.collect_events(events)
+                await stage_identity_work(self.uow, events)
 
     def _apply_invitation_status_filter(
         self,
@@ -101,12 +101,21 @@ class OrganizationRepository(OrganizationRepositoryPort):
 
         return query.where(OrganizationInvitation.status == status)
 
-    async def create(self, entity: OrganizationEntity) -> OrganizationEntity:
+    async def create(
+        self, entity: OrganizationEntity, *, created_by_user_id: UUID | None = None
+    ) -> OrganizationEntity:
         instance = Organization(**entity.model_dump())
         self.session.add(instance)
         await self.session.flush()
-        entity.add_event(OrganizationCreatedEvent(organization_id=instance.id))
-        self._collect_events(entity)
+        # Who created it rides on the event: without it the organization lands
+        # on nobody's timeline, and a sign-up cannot be followed into the
+        # organization it made.
+        entity.add_event(
+            OrganizationCreatedEvent(
+                organization_id=instance.id, created_by_user_id=created_by_user_id
+            )
+        )
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[OrganizationEntity]:
@@ -152,7 +161,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
         instance.email_domain = entity.email_domain
         instance.join_policy = entity.join_policy.value
         await self.session.flush()
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def get_email_domain_org(
@@ -222,7 +231,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
                 else str(member.role),
             )
         )
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return member.to_entity()
 
     async def get_member(
@@ -367,7 +376,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
 
         member.role = entity.role
         await self.session.flush()
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return member.to_entity()
 
     async def delete_member(self, member_id: UUID) -> bool:
@@ -377,6 +386,15 @@ class OrganizationRepository(OrganizationRepositoryPort):
         if not member:
             return False
         await self.session.delete(member)
+        # Announced in the same transaction: the membership's cascade takes the
+        # pod memberships silently, and what the person held in this
+        # organization -- their connector accounts -- has to go with it.
+        await facts.emit(
+            self.uow,
+            OrganizationMemberRemoved(
+                organization_id=member.organization_id, user_id=member.user_id
+            ),
+        )
         return True
 
     async def add_invitation(
@@ -397,7 +415,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
                     "An invitation already exists for this email"
                 ) from exc
             raise
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return invitation.to_entity()
 
     async def get_invitation_by_id(
@@ -503,7 +521,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
         invitation.revoked_at = entity.revoked_at
 
         await self.session.flush()
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return invitation.to_entity()
 
     async def delete_invitation(self, invitation_id: UUID) -> bool:
@@ -529,6 +547,6 @@ class OrganizationRepository(OrganizationRepositoryPort):
         if not invitation:
             raise OrganizationInvitationNotFoundError()
 
-        self._collect_events(entity)
+        await self._collect_events(entity)
         await self.session.delete(invitation)
         return True

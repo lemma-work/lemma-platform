@@ -109,8 +109,9 @@ Rules:
 - Handler signature is `(ctx: FunctionContext, data: <InputModel>) -> <OutputModel>`,
   async or sync.
 - `FunctionContext` fields: `ctx.pod_id`, `ctx.function_id`, `ctx.user_id`,
-  `ctx.user_email` (the **invoking** user — your delegated identity), `ctx.config`,
-  and `ctx.pod` (a ready `Pod` client — see below).
+  `ctx.user_email` (the **invoking** user — your delegated identity; both `None`
+  when a contact's conversation called it), `ctx.contact_id` (that contact, else
+  `None`), `ctx.config`, and `ctx.pod` (a ready `Pod` client — see below).
 - Keep input/output models small and JSON-serializable. Return ids and compact
   summaries, not big record lists.
 - A function is only runnable once it reaches **`READY`**, which happens when it is
@@ -312,7 +313,7 @@ urls.expires_at   # when urls.url stops working
 
 # 2) Public signed link — for anyone OUTSIDE the pod (no login). Expiring + hit-capped
 #    so a leaked link to a big file can't run up egress.
-link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 3h, 50 downloads
+link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 24h, 200 downloads
 link = pod.files.create_signed_url("/reports/summary.pdf",
                                    expires_seconds=604800, max_hits=5)           # 7d, 5 downloads
 link.signed_url   # https://<api>/public/s/<code>  — short, copy-pasteable
@@ -326,18 +327,20 @@ path into a message.
 
 ### Connector operations (calling external apps)
 
-`pod.connectors.execute(auth_config, operation, payload)` runs a third-party
-operation **through the invoking user's connected account** (delegated) — the
-function never touches raw credentials. Discover the exact operation id and payload
-from the CLI first (`lemma connectors operations search/details …` — see
-`connectors.md`); the payload shape is operation-specific. The response is
+`pod.connectors.execute(connector, operation, payload)` runs a third-party
+operation through one of the **pod's connectors**, named by its slug — the
+function never touches raw credentials. A PER_MEMBER connector runs as the
+invoking member's own account, a SHARED one as the account its owner shared.
+Discover the exact operation id and payload from the CLI first
+(`lemma connectors pod-operations <slug> …` — see `connectors.md`); the payload
+shape is operation-specific. The response is
 `{"result": …}` — unwrap with `.to_dict()["result"]`.
 
 ```python
 # Send an email via Gmail (then send a public file link from above)
 sent = pod.connectors.execute(
-    "workspace-gmail",                  # the AUTH CONFIG name (not the bare connector id)
-    "gmail_send_email",                 # operation id from `operations search`
+    "gmail",                            # the pod connector's slug
+    "gmail_send_email",                 # operation id from discovery
     {
         "recipient_email": data.to,
         "subject": "Your report is ready",
@@ -347,19 +350,18 @@ sent = pod.connectors.execute(
 
 # List the next calendar events
 events = pod.connectors.execute(
-    "workspace-gcal",
+    "gcal",
     "googlecalendar_events_list",
     {"calendarId": "primary", "maxResults": 10, "singleEvents": True, "orderBy": "startTime"},
 ).to_dict()["result"]
 ```
 
-Operation ids and payload keys differ between connector **kinds** (`package` vs
-`composio`) — always confirm with `operations details` for the kind your org
-installed. Don't
-resolve or pass `account_id` in code unless you must pin a specific account: the
-backend selects the configured fixed account or the **invoking user's** connected
-account from the workload token. The connector must be granted to the function
-(`resource_type: "connector"` — see Permissions below).
+Operation ids and payload keys differ between connector **kinds** (`http` vs
+`composio`) — always confirm with `lemma connectors run <slug> <operation> --dry-run`
+(prints the input schema) for the kind your org installed. Nothing takes an account: the pod connector decides it. A member
+with no account on a PER_MEMBER connector gets `CONNECTION_REQUIRED`, and the
+SDK error carries `err.connect_url` — let it surface. The pod connector must be
+granted to the function (`resource_type: "connector"` — see Permissions below).
 
 ### Workflows, agents, conversations
 
@@ -439,13 +441,11 @@ whatever pod you import into):
 | --- | --- | --- |
 | `datastore_table` | the table name | `expenses` |
 | `folder` | the **stored folder path, no prefix** | `/reports`, `/knowledge` |
-| `connector` | the connector id | `gmail` |
-| `connector_account` | a specific connected account | pin a shared account |
+| `connector` | the pod connector's slug | `gmail`, `support-inbox` |
 
-`connector` is what you want almost always: the workload resolves the *invoking
-user's* own account. `connector_account` is the exception — it pins one shared
-account (a team inbox, a bot token) so every caller acts through it regardless of
-who invoked. See `authorization-model.md` §8.
+A function is granted a pod connector, never an account: which account it runs
+as is the connector's mode (each member's own, or one shared account). See
+`authorization-model.md` §8.
 
 > **File grants take the bare path.** The grant `resource_name` for a folder is the
 > path as stored — `/knowledge`, `/reports` — with **no** `/pod` (or any) prefix.
@@ -478,6 +478,33 @@ runs do, held to its own grants, and receives the asking contact as `contact_id`
 its input — set by the platform, never by the model. Its output goes to the agent
 answering the contact, so return only what that person may be told. See
 `people-outside.md`.
+
+To match the person against your own records (orders placed by email, projects kept
+under a phone number), also declare `contact`. The platform fills it with the
+handles something **proved** they hold — a WhatsApp or Telegram sender, an
+authenticated email sender, an email code they entered, your site's signed token —
+and never one the model was told or a member typed in:
+
+```python
+class ProvedContact(BaseModel):
+    id: str
+    emails: list[str] = []        # lower-cased
+    phones: list[str] = []        # E.164, "+14155550100"
+    telegram_ids: list[str] = []
+    host_ids: list[str] = []      # "host:{issuer}:{your user id}"
+    slack_ids: list[str] = []
+    teams_ids: list[str] = []
+
+class OrderStatusInput(BaseModel):
+    contact_id: str | None = None
+    contact: ProvedContact | None = None   # None for an anonymous form submission
+    order_number: str | None = None
+```
+
+Match on `contact.emails` / `contact.phones`, not on an address in another field:
+anybody can type somebody else's. A function that does not declare `contact` is not
+sent it. Every list may be empty — an unconfirmed web visitor has no proved handle —
+so say "I can't find that under your details" rather than widening the search.
 
 ### Exposing a function as an agent's tool
 

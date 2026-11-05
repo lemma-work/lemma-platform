@@ -22,6 +22,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.api.dependencies import (
     build_connector_operation_service,
     get_connector_service,
@@ -65,28 +66,47 @@ async def resolve_account_connector(uow, account_id: UUID) -> tuple[str, str] | 
     return account.connector_id, auth_config.kind.value
 
 
+async def installation_for_bundle_name(
+    uow: SqlAlchemyUnitOfWork, *, organization_id: UUID, name: str
+) -> UUID | None:
+    """The organization's active installation a pod bundle means by ``name``.
+
+    A bundle's grant names a pod connector by slug, and a pod connector is
+    declared per pod: one exported before that, or from a pod whose connector
+    the importing pod has never declared, names it by what the exporting pod
+    called it -- the installation's name, or the catalog connector id the
+    slug was made from. The installation of that name wins; otherwise the
+    organization's default install of the catalog connector of that id.
+    ``None`` when the organization has neither.
+    """
+    auth_configs = get_connector_service(uow).auth_config_repository
+    install = await auth_configs.get_active_by_org_and_name(organization_id, name)
+    if install is None:
+        install = await auth_configs.get_active_by_org_and_app(organization_id, name)
+    return install.id if install is not None else None
+
+
 async def resolve_operation(
     uow,
     *,
-    connector_id: str,
+    ctx: Context,
+    pod_id: UUID,
+    connector: str,
     operation_name: str,
     payload: dict[str, object],
-    user_id: UUID,
-    actor: Context | None,
-    account_id: UUID | None,
 ) -> ResolvedConnectorExecution:
-    """Authorize an operation and resolve its plan, credentials included.
+    """Authorize an operation through a pod connector and resolve its plan.
 
-    The only half that touches the database. Leave the session's scope before
-    calling :func:`execute_resolved`.
+    ``connector`` is the pod connector's slug; the account follows from its
+    mode and from ``ctx``. The only half that touches the database. Leave the
+    session's scope before calling :func:`execute_resolved`.
     """
-    return await build_connector_operation_service(uow).resolve_execution(
-        connector_id=connector_id,
+    return await build_connector_operation_service(uow).resolve_pod_connector_execution(
+        ctx,
+        pod_id=pod_id,
+        slug=connector,
         operation_name=operation_name,
         payload=payload,
-        user_id=user_id,
-        actor=actor,
-        account_id=account_id,
     )
 
 
@@ -97,32 +117,11 @@ async def execute_resolved(
     return await build_connector_operation_service(uow).execute_resolved(resolved)
 
 
-async def execute_operation(
-    uow,
-    *,
-    connector_id: str,
-    operation_name: str,
-    payload: dict[str, object],
-    user_id: UUID,
-    actor: Context | None,
-    account_id: UUID | None,
-) -> OperationExecutionResponse:
-    """Resolve and run an operation, holding the session for the whole call."""
-    return await build_connector_operation_service(uow).execute_operation(
-        connector_id=connector_id,
-        operation_name=operation_name,
-        payload=payload,
-        user_id=user_id,
-        actor=actor,
-        account_id=account_id,
-    )
-
-
 __all__ = [
-    "execute_operation",
     "execute_resolved",
     "get_account",
     "get_account_kind",
+    "installation_for_bundle_name",
     "resolve_account_connector",
     "resolve_operation",
 ]

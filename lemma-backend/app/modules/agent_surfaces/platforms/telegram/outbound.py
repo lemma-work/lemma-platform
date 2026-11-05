@@ -20,7 +20,7 @@ from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retr
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TelegramApiError,
     TelegramClient,
-    classify_telegram_error,
+    classify_telegram_send_error,
     telegram_retry_after,
 )
 
@@ -60,7 +60,7 @@ async def upload(
             timeout=_UPLOAD_TIMEOUT_SECONDS,
         ),
         policy=policy,
-        classify=classify_telegram_error,
+        classify=classify_telegram_send_error,
         retry_after=telegram_retry_after,
     )
 

@@ -38,10 +38,23 @@ async def default_agent_runtime_for_pod(
     and every message failed with "no model is set up" beside a provider that
     was.
     """
-    config = await pod_config(uow, pod_id)
-    runtime = PodConfig.from_raw(config).resolved_default_runtime()
+    runtime = await pod_default_runtime(uow, pod_id=pod_id)
     if runtime is not None:
         return runtime
+    return await organization_or_system_runtime(uow, pod_id=pod_id)
+
+
+async def pod_default_runtime(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID
+) -> AgentRuntimeConfig | None:
+    """The runtime the pod itself names, or ``None`` when it names none."""
+    return PodConfig.from_raw(await pod_config(uow, pod_id)).resolved_default_runtime()
+
+
+async def organization_or_system_runtime(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID
+) -> AgentRuntimeConfig:
+    """What a pod with no default of its own falls back to."""
     organization_id = await pod_organization_id(uow, pod_id)
     if organization_id is not None:
         organization_runtime = await organization_default_runtime(

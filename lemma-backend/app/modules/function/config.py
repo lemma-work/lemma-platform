@@ -85,8 +85,43 @@ class FunctionSettings(BaseSettings):
         ge=1,
         le=100_000,
     )
-    function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
-    function_job_deadline_seconds: int = Field(default=600, ge=1, le=3_000)
+    function_api_deadline_seconds: int = Field(
+        default=120,
+        ge=1,
+        le=3600,
+        description=(
+            "Execution budget of an API function, counted from when the run "
+            "starts executing. A synchronous call also has this long to start."
+        ),
+    )
+    function_job_deadline_seconds: int = Field(
+        default=600,
+        ge=1,
+        le=3_000,
+        description="Execution budget of a JOB function, counted from its start.",
+    )
+    function_queued_start_deadline_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=86_400,
+        description=(
+            "How long an asynchronous run may wait to start -- in the queue, for "
+            "a free slot on its pod, and through a cold start -- before it fails "
+            "as never started. Separate from the execution budget so a burst "
+            "queues instead of spending its runs' budgets waiting."
+        ),
+    )
+    function_runtime_max_concurrent_runs_per_pod: int = Field(
+        default=32,
+        ge=1,
+        le=1024,
+        description=(
+            "Runs one pod may have executing at once. Keep equal to the "
+            "function sandbox's LEMMA_FUNCTION_MAX_WORKERS: past it, runs "
+            "wait here, before their execution budget starts, rather than "
+            "inside the sandbox where it is already running."
+        ),
+    )
     function_run_retention_days: int = Field(
         default=30,
         ge=1,
@@ -154,7 +189,15 @@ class FunctionRevisionSettings(BaseSettings):
     function_revision_keep_last: int = Field(default=10, ge=1)
     function_revision_keep_days: int = Field(default=30, ge=0)
     function_revision_max_keep: int = Field(default=20, ge=1)
-    function_revision_retention_cron: str = Field(default="40 4 * * *")
+    function_revision_retention_interval_seconds: int = Field(
+        default=86_400,
+        ge=60,
+        description=(
+            "How often the revision sweep runs, as a periodic work item (no "
+            "wall-clock alignment). Env: "
+            "``FUNCTION_REVISION_RETENTION_INTERVAL_SECONDS``."
+        ),
+    )
     function_revision_retention_batch: int = Field(
         default=200,
         ge=1,
@@ -186,3 +229,21 @@ class FunctionRevisionSettings(BaseSettings):
 
 function_settings = FunctionSettings()
 revision_settings = FunctionRevisionSettings()
+
+
+def execution_budget_seconds(*, is_job: bool) -> int:
+    """How long a run may execute once started, by function type."""
+    if is_job:
+        return function_settings.function_job_deadline_seconds
+    return function_settings.function_api_deadline_seconds
+
+
+def start_window_seconds(*, asynchronous: bool) -> int:
+    """How long a new run may take to start.
+
+    A synchronous caller is holding a request open, so it gets no more than the
+    API budget; an asynchronous run can afford to queue behind a burst.
+    """
+    if asynchronous:
+        return function_settings.function_queued_start_deadline_seconds
+    return function_settings.function_api_deadline_seconds

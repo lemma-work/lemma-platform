@@ -378,6 +378,76 @@ async def test_export_then_import_apply_roundtrip(
     assert greeter.status_code == status.HTTP_200_OK
 
 
+async def _export_url(client, pod_id: str) -> str:
+    start = await client.post(f"/pods/{pod_id}/bundle/exports", json={})
+    assert start.status_code == status.HTTP_202_ACCEPTED, start.text
+    export_id = start.json()["export_id"]
+
+    async def probe() -> dict:
+        return (await client.get(f"/pods/{pod_id}/bundle/exports/{export_id}")).json()
+
+    final = await wait_for_status(
+        label=f"pod {pod_id} bundle export {export_id}",
+        probe=probe,
+        expected={"READY", "FAILED"},
+        failed=set(),
+        timeout_seconds=60,
+        interval_seconds=0.15,
+    )
+    assert final["status"] == "READY", final
+    return final["download_url"]
+
+
+async def test_a_workflow_run_limit_survives_export_and_import(
+    authenticated_client, test_pod, fixed_test_org, worker
+):
+    """The limit was exported and then dropped on apply, so a copied workflow
+    ran unbounded however its source was capped."""
+    source_id = test_pod["id"]
+    name = f"capped_{uuid4().hex[:6]}"
+    created = await authenticated_client.post(
+        f"/pods/{source_id}/workflows",
+        json={
+            "name": name,
+            "start": {"type": "MANUAL"},
+            "mode": "GLOBAL",
+            "max_concurrent_runs": 3,
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    graph = await authenticated_client.put(
+        f"/pods/{source_id}/workflows/{name}/graph",
+        json={
+            "start": {"type": "MANUAL"},
+            "nodes": [{"id": "end", "type": "END", "label": "Done"}],
+            "edges": [],
+        },
+    )
+    assert graph.status_code == status.HTTP_200_OK, graph.text
+
+    download_url = await _export_url(authenticated_client, source_id)
+    target_id = await _new_pod(authenticated_client, fixed_test_org["id"])
+    res = await authenticated_client.post(
+        f"/pods/{target_id}/bundle/imports", json={"kind": "URL", "url": download_url}
+    )
+    assert res.status_code == status.HTTP_202_ACCEPTED, res.text
+    import_id = res.json()["import_id"]
+    await _wait(
+        authenticated_client, target_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
+    await authenticated_client.post(
+        f"/pods/{target_id}/bundle/imports/{import_id}/apply", json={}
+    )
+    final = await _wait(
+        authenticated_client, target_id, import_id, until={"COMPLETED", "FAILED"}
+    )
+    assert final["status"] == "COMPLETED", final
+
+    copied = await authenticated_client.get(f"/pods/{target_id}/workflows/{name}")
+    assert copied.status_code == status.HTTP_200_OK, copied.text
+    assert copied.json()["max_concurrent_runs"] == 3
+
+
 async def _create_function(client, pod_id, func_name):
     code = f"""#input_type_name: In
 #output_type_name: Out

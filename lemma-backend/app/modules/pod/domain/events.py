@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from app.core.domain.events import DomainEvent
@@ -16,6 +17,9 @@ class PodCreatedEvent(DomainEvent):
     organization_id: UUID
     creator_id: UUID
     name: str
+    #: ``PodCreationSource``: asked for, or provisioned. A string so an older
+    #: replica's event without it still validates.
+    source: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:
@@ -55,6 +59,9 @@ class PodDeletedEvent(DomainEvent):
     #: and attributing that to the creator would be a false statement rather than
     #: a missing one.
     deleted_by_user_id: UUID | None = None
+    #: When the pod was made, so how long it lived is known without reading a
+    #: row the deletion is about to make irrelevant.
+    pod_created_at: datetime | None = None
 
     @classmethod
     def stream_name(cls) -> str:

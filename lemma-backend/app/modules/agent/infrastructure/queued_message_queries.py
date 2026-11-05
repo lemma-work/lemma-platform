@@ -30,7 +30,7 @@ from app.modules.agent.domain.queued_messages import (
     STEER_UNDELIVERED,
     STEERED_INTO_RUN,
 )
-from app.modules.agent.domain.value_objects import MessageRole
+from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 
@@ -48,7 +48,11 @@ def in_order(rows) -> list[MessageEntity]:
 
 
 def unclaimed_queued_messages(
-    agent_run_id: UUID, *, notes: bool | None = None, as_run: bool = False
+    agent_run_id: UUID,
+    *,
+    notes: bool | None = None,
+    as_run: bool = False,
+    after_sequence: int | None = None,
 ):
     """Messages that arrived after this run started and nobody has read yet.
 
@@ -67,28 +71,42 @@ def unclaimed_queued_messages(
     steered into it: a private note must not shape an answer that goes to the
     platform, and a message meant for the platform must not be answered where
     nobody on it will see. ``notes`` asks for one kind outright -- for a
-    follow-up turn, which has not started yet.
+    follow-up turn, which has not started yet. Steering also needs the run to
+    still be answering: a message sent after Stop must not be taken into the
+    run being stopped, where nothing would answer it.
+
+    ``after_sequence`` keeps to messages sent after that point -- after Stop,
+    for the turn that answers what was said once the person had stopped.
     """
     criteria = (
         MessageModel.agent_run_id == agent_run_id,
         MessageModel.role == MessageRole.USER.value,
         MessageModel.message_metadata[DURING_ACTIVE_RUN].astext == "true",
         MessageModel.message_metadata[STEERED_INTO_RUN].astext.is_(None),
+        *(
+            (MessageModel.sequence > after_sequence,)
+            if after_sequence is not None
+            else ()
+        ),
     )
     if notes is not None:
         return (*criteria, _is_note() if notes else ~_is_note())
     if as_run:
-        run_is_private = (
+        run = (
             select(
                 func.coalesce(
                     AgentRunModel.run_metadata[PRIVATE_NOTE_KEY].astext == "true",
                     False,
-                )
+                ).label("private"),
+                AgentRunModel.status,
             )
             .where(AgentRunModel.id == agent_run_id)
-            .scalar_subquery()
+            .subquery()
         )
-        return (*criteria, _is_note() == func.coalesce(run_is_private, False))
+        answering = (
+            select(run.c.private).where(run.c.status == AgentRunStatus.RUNNING.value)
+        ).scalar_subquery()
+        return (*criteria, _is_note() == answering)
     return criteria
 
 

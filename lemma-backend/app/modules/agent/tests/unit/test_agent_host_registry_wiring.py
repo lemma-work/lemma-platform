@@ -13,7 +13,7 @@ cannot be caught by testing either side, only by asserting the wiring.
 from __future__ import annotations
 
 from app.modules.agent.domain.value_objects import HarnessKind
-from app.modules.agent.events.handlers import build_harness_registry
+from app.modules.agent.services.harness_wiring import build_harness_registry
 
 
 def test_the_remote_harness_is_built_with_an_artifact_writer() -> None:

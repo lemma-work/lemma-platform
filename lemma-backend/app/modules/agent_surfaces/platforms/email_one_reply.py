@@ -14,6 +14,8 @@ threads.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from app.core.log.log import get_logger
@@ -23,7 +25,8 @@ from app.modules.agent_surfaces.domain.envelope import (
     PartDelivery,
     SurfaceEnvelope,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.platforms.envelope_delivery import platform_message_id
 
 logger = get_logger(__name__)
 
@@ -66,7 +69,7 @@ class EmailOneReplyMixin:
     async def _render_one(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None,
@@ -98,13 +101,13 @@ class EmailOneReplyMixin:
         if attachments:
             send_metadata["attachments"] = attachments
         try:
-            await self.send_message(
+            email_id = await self.send_message(
                 credentials=credentials,
                 event=event,
                 message=body or " ",
                 metadata=send_metadata,
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.delivery.one_reply_reached_nobody.degraded",
                 platform=self.platform,
@@ -124,7 +127,9 @@ class EmailOneReplyMixin:
         for name in ("resources", "voice", "choices", "decision"):
             if name in parts:
                 parts[name] = PartDelivery.DEGRADED
-        return DeliveryReceipt(parts=parts)
+        return DeliveryReceipt(
+            parts=parts, external_message_id=platform_message_id(email_id)
+        )
 
 
 def _named_parts(envelope: SurfaceEnvelope) -> list[str]:

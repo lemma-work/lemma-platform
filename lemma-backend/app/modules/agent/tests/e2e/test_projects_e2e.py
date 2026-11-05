@@ -13,6 +13,12 @@ from __future__ import annotations
 import pytest
 
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
+from app.modules.test_support.e2e_authz import (
+    add_pod_member,
+    auth_headers,
+    invite_org_member,
+    signup_user,
+)
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.e2e]
@@ -89,3 +95,46 @@ async def test_root_conversation_records_own_cwd(authenticated_client, fixed_tes
     # Counted relative to the root, so this says "c/{date}/{slug}" however
     # deep the root itself is.
     assert cwd.removeprefix(f"{WORKSPACE_ROOT}/").count("/") == 2, cwd
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_cannot_be_filed_under_someone_elses(
+    authenticated_client, async_client, fixed_test_org
+):
+    """A child inherits its parent's directory and is listed under it, so a
+    parent must be the caller's own conversation in the same pod."""
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+    private_cwd = f"{WORKSPACE_ROOT}/projects/owners-private"
+    owners_project = await _create_conversation(
+        authenticated_client,
+        pod_id,
+        {"title": "Owner's", "type": "PROJECT", "metadata": {"cwd": private_cwd}},
+    )
+    teammate = await signup_user(async_client, "foreign-parent")
+    member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=teammate,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=member["id"],
+        role="POD_EDITOR",
+    )
+
+    foreign = await async_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={"title": "mine", "parent_id": owners_project["id"]},
+        headers=auth_headers(teammate),
+    )
+    assert foreign.status_code == 404, foreign.text
+    assert private_cwd not in foreign.text
+
+    other_pod = await _create_test_pod(authenticated_client, fixed_test_org)
+    cross_pod = await authenticated_client.post(
+        f"/pods/{other_pod}/conversations",
+        json={"title": "elsewhere", "parent_id": owners_project["id"]},
+    )
+    assert cross_pod.status_code == 404, cross_pod.text

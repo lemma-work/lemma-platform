@@ -10,7 +10,6 @@ from typing import AsyncGenerator, Protocol, runtime_checkable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.events.message_bus import get_message_bus
 
 
 @runtime_checkable
@@ -50,7 +49,7 @@ class SessionUnitOfWorkFactory:
     async def __call__(self) -> AsyncGenerator[SqlAlchemyUnitOfWork, None]:
         """Create UoW with auto-commit on success."""
         async with self._session_maker() as session:
-            uow = SqlAlchemyUnitOfWork(session, message_bus=get_message_bus())
+            uow = SqlAlchemyUnitOfWork(session)
             try:
                 yield uow
             except BaseException:
@@ -73,7 +72,7 @@ async def create_uow_from_session_maker(
     Used for FastAPI dependency injection and general usage.
     """
     async with session_maker() as session:
-        uow = SqlAlchemyUnitOfWork(session, message_bus=get_message_bus())
+        uow = SqlAlchemyUnitOfWork(session)
         try:
             yield uow
         except BaseException:

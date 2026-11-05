@@ -1,237 +1,232 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CallTransport } from "./transport";
+import { apiUrl, lemma } from "@/session/client";
 import { createPCMPlayer, startMicPCMStream, type MicStream, type PCMPlayer } from "./pcm-audio";
 import { foldTranscript, type CallLine } from "./call-transcript";
-import { UtteranceBuffer } from "./utterance-buffer";
-import type { VoiceEvent } from "./routing";
-import { VoiceEvents } from "./voice-events";
-import { instructionFor } from "./voice-instructions";
-import { siteRuntime } from "@/site/runtime";
-import { newId } from "./ids";
+import { canvasItemFrom, type CanvasItem } from "./canvas";
+import { callSocketUrl, openCallSocket, type CallConnection, type CallFrame, type CallStart } from "./call-socket";
+
+/** Times a dropped call is joined again before it is given up as ended. */
+const MAX_REJOINS = 2;
+/** The wait before the first rejoin, doubled for the next: a server
+ *  restarting or a network coming back is not there the instant it went. */
+const REJOIN_DELAY_MS = 1_000;
+/** How long a notice stays up: it says something once, it is not a state. */
+const NOTICE_MS = 12_000;
 
 export type CallStatus = "idle" | "connecting" | "live" | "ended" | "error";
 
-/** Which voice model holds the microphone. Both are wired; the difference is
- *  a different file under `src/call` and a different key on the server, and
- *  nothing below this line knows which one answered. */
-export type VoiceProvider = "gemini" | "gpt-live";
-
-/* Asked when a call starts rather than once at import: the answer comes from
-   `/site-config.js`, and a module-level read would freeze whatever was there
-   the first time any page imported this file. */
-function provider(): VoiceProvider {
-    return siteRuntime().voiceProvider === "gpt-live" ? "gpt-live" : "gemini";
-}
-
-export interface CallHandlers {
-    observeTranscript: (text: string) => void;
-    route: (id: string, text: string, transcript: string) => Promise<void>;
-    subscribe: (listener: (event: VoiceEvent) => void) => () => void;
-    history?: () => string | Promise<string>;
-    context?: () => string | Promise<string>;
-}
-
-export function useCall({ teammate, pod, handlers }: { teammate: string; pod: string; handlers: CallHandlers }) {
+/** One call, held by the server.
+ *
+ *  The browser is the microphone, the speaker and the screen. Which voice
+ *  talks, what the agents behind it are doing and what goes on the canvas are
+ *  all decided on the server, which keeps the call going whatever this tab
+ *  does; this hook only moves audio, shows what is said, and draws what the
+ *  agents put on the canvas.
+ *
+ *  The slide on screen lives here, not in the call screen: the screen
+ *  unmounts when the call is collapsed, and the voice was told which slide was
+ *  up -- so the screen must come back on that slide, not on the newest. */
+export function useCall() {
     const [status, setStatus] = useState<CallStatus>("idle");
     const [error, setError] = useState<string | null>(null);
+    /** Something the person should see, said once; it clears itself. */
+    const [notice, setNotice] = useState<string | null>(null);
     const [muted, setMuted] = useState(false);
-    /** What has been said, both ways. */
     const [transcript, setTranscript] = useState<CallLine[]>([]);
-    /** Reasoning is still running behind a turn that already ended. Only the
-     *  Gemini transport reports this; on GPT-Live it stays false, which is
-     *  the truth there rather than a gap. */
-    const [thinking, setThinking] = useState(false);
-    /** 0–1, for the orb. The face of the call is its own mark moving. */
+    /** Someone in the call -- the teammate or a sub-agent -- has a run going. */
+    const [working, setWorking] = useState(false);
+    /** Moves each time the call connects and each time work starts, so the
+     *  conversation on screen reattaches to the run that is now going. */
+    const [liveEpoch, setLiveEpoch] = useState(0);
+    const [canvas, setCanvas] = useState<CanvasItem[]>([]);
+    /** The canvas item on screen, by id; null shows the newest. */
+    const [showing, setShowing] = useState<string | null>(null);
     const [level, setLevel] = useState(0);
+    /** The last call the server has finished with, transcript saved, and a
+     *  count that moves each time so its conversation can reload on it. The
+     *  transcript is written as the server ends the call, after this tab has
+     *  stopped listening; the id goes with it because the next call may
+     *  already have started by then. */
+    const [settled, setSettled] = useState<{ callId: string; count: number } | null>(null);
+    const callIdRef = useRef<string | null>(null);
+    const rejoinsRef = useRef(0);
+    const startRef = useRef<((podId: string, callId: string, details: CallStart, rejoin?: boolean) => Promise<void>) | null>(null);
+    const settle = useCallback((callId: string | null) => {
+        if (callId) setSettled((last) => ({ callId, count: (last?.count ?? 0) + 1 }));
+    }, []);
 
     const attemptRef = useRef(0);
-    const utterancesRef = useRef<UtteranceBuffer | null>(null);
-    const unsubscribeRef = useRef<(() => void) | null>(null);
-    const eventTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const lastUserRef = useRef(0);
-    const lastVoiceRef = useRef(0);
-    const awaitingAudioRef = useRef(0);
-    const providerBusyRef = useRef(0);
-    const latestRequestRef = useRef<string | null>(null);
-    const spokenHistoryRef = useRef("");
-    const lastSpeakerRef = useRef<string | null>(null);
-    const startingRef = useRef(false);
-    const clientRef = useRef<CallTransport | null>(null);
+    const connectionRef = useRef<CallConnection | null>(null);
     const micRef = useRef<MicStream | null>(null);
     const playerRef = useRef<PCMPlayer | null>(null);
     const mutedRef = useRef(false);
-    const handlersRef = useRef(handlers);
-    handlersRef.current = handlers;
+    const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    /** Only the line to the server: a rejoin keeps the microphone. */
+    const dropSocket = useCallback(() => {
+        playerRef.current?.stop(); playerRef.current = null;
+        connectionRef.current = null;
+        setLevel(0);
+    }, []);
+
+    const teardown = useCallback(() => {
+        micRef.current?.stop(); micRef.current = null;
+        dropSocket();
+    }, [dropSocket]);
 
     const end = useCallback(() => {
         ++attemptRef.current;
-        utterancesRef.current?.close(); utterancesRef.current = null;
-        unsubscribeRef.current?.(); unsubscribeRef.current = null;
-        if (eventTimerRef.current) clearTimeout(eventTimerRef.current);
-        eventTimerRef.current = null;
-        spokenHistoryRef.current = ""; lastSpeakerRef.current = null;
-        startingRef.current = false;
-        awaitingAudioRef.current = 0;
-        providerBusyRef.current = 0;
-        micRef.current?.stop();
-        micRef.current = null;
-        playerRef.current?.stop();
-        playerRef.current = null;
-        clientRef.current?.disconnect();
-        clientRef.current = null;
-        setLevel(0);
-        setThinking(false);
-        setTranscript([]);
-        setMuted(false);
-        mutedRef.current = false;
+        const connection = connectionRef.current;
+        const callId = callIdRef.current;
+        teardown();
+        void connection?.close().then((saved) => { if (saved) settle(callId); });
+        setMuted(false); mutedRef.current = false;
+        setWorking(false);
+        setNotice(null);
         setStatus((current) => (current === "error" ? current : "ended"));
-    }, []);
+    }, [teardown, settle]);
 
     useEffect(() => end, [end]);
+    useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
 
-    const start = useCallback(async () => {
-        if (startingRef.current || clientRef.current) return;
-        startingRef.current = true;
+    const showNotice = useCallback((text: string) => {
+        setNotice(text);
+        if (noticeTimer.current) clearTimeout(noticeTimer.current);
+        noticeTimer.current = setTimeout(() => setNotice(null), NOTICE_MS);
+    }, []);
+
+    const onFrame = useCallback((frame: CallFrame) => {
+        switch (frame.type) {
+            case "ready":
+                playerRef.current?.stop();
+                playerRef.current = createPCMPlayer(frame.sample_rate);
+                setStatus("live");
+                setLiveEpoch((epoch) => epoch + 1);
+                break;
+            case "transcript":
+                setTranscript((lines) => foldTranscript(lines, { speaker: frame.speaker === "caller" ? "them" : "us", text: frame.text, final: frame.final }));
+                break;
+            case "clear":
+                // The caller cut in: what the voice had queued is not said late.
+                playerRef.current?.clear();
+                break;
+            case "work":
+                setWorking(frame.running);
+                if (frame.running) setLiveEpoch((epoch) => epoch + 1);
+                break;
+            case "notice":
+                // Beside the call's status, for a while; the call carries on.
+                showNotice(frame.text);
+                break;
+            case "canvas.item": {
+                const item = canvasItemFrom(frame.item);
+                if (!item) break;
+                setCanvas((items) => (items.some((one) => one.id === item.id) ? items : [...items, item]));
+                /* The newest takes the screen, replayed or new: after a rejoin
+                   the server tells the voice the newest is up, so the screen
+                   has to agree. */
+                setShowing(null);
+                break;
+            }
+        }
+    }, [showNotice]);
+
+    const start = useCallback(async (podId: string, callId: string, details: CallStart, rejoin = false) => {
+        if (connectionRef.current) return;
+        if (!rejoin) rejoinsRef.current = 0;
+        callIdRef.current = callId;
         const attempt = ++attemptRef.current;
-        setError(null);
-        setThinking(false);
-        setTranscript([]);
+        // A rejoin keeps what is on screen: the server replays the canvas and
+        // it lands on the same items, so the person never sees it blank out.
+        setError(null); setWorking(false);
+        if (!rejoin) { setTranscript([]); setCanvas([]); setShowing(null); setNotice(null); }
         setStatus("connecting");
         try {
-            const { Client, micSampleRate } =
-                provider() === "gpt-live"
-                    ? await import("./gpt-live-client").then((m) => ({ Client: m.GptLiveClient, micSampleRate: m.MIC_SAMPLE_RATE }))
-                    : await import("./gemini-live-client").then((m) => ({ Client: m.GeminiLiveClient, micSampleRate: m.MIC_SAMPLE_RATE }));
+            /* The microphone first, and once per call: asking after the socket
+               let the voice start talking before the person could be heard,
+               and asking again on every rejoin flickered the mic (and may
+               prompt again in Safari). */
+            if (!micRef.current) {
+                const mic = await startMicPCMStream((pcm) => {
+                    if (!mutedRef.current) connectionRef.current?.sendAudio(pcm);
+                });
+                if (attempt !== attemptRef.current) { mic.stop(); return; }
+                micRef.current = mic;
+            }
+            const token = await lemma(podId).auth.getAccessToken().catch(() => null);
             if (attempt !== attemptRef.current) return;
-
-            /* Before the session is built, because it goes in the system
-               instruction. A pod that cannot be read is a call without the
-               background — worse, not broken. */
-            const context = (await Promise.resolve(handlersRef.current.context?.()).catch(() => "")) ?? "";
-            if (attempt !== attemptRef.current) return;
-
-            const player = createPCMPlayer();
-            playerRef.current = player;
-
-            const client = new Client({
-                systemInstruction: instructionFor(teammate, pod, context),
-                onAudioChunk: (chunk) => {
-                    if (attempt !== attemptRef.current) return;
-                    awaitingAudioRef.current = 0;
-                    providerBusyRef.current = Date.now();
-                    lastVoiceRef.current = Date.now();
-                    player.push(chunk);
-                    /* Someone is speaking; the orb should show it. */
-                    setLevel(0.85);
-                    window.setTimeout(() => setLevel((current) => (current > 0.2 ? current * 0.5 : 0)), 180);
+            const connection = openCallSocket(
+                callSocketUrl(apiUrl(), podId, callId, token || null),
+                // Muted carries over a rejoin: the server enforces it too.
+                { ...details, muted: mutedRef.current },
+                {
+                    onFrame: (frame) => { if (attempt === attemptRef.current) onFrame(frame); },
+                    onAudio: (pcm) => {
+                        if (attempt !== attemptRef.current) return;
+                        playerRef.current?.push(pcm);
+                        setLevel(0.85);
+                        window.setTimeout(() => setLevel((current) => (current > 0.2 ? current * 0.5 : 0)), 180);
+                    },
+                    onClose: (reason, dropped) => {
+                        if (attempt !== attemptRef.current) return;
+                        ++attemptRef.current;
+                        /* A drop is not the end of the call: the server still
+                           holds its conversation, its agents and its canvas.
+                           Join it again, a couple of times at most, so a flaky
+                           network does not leave the person on a screen that
+                           has nothing to do with what the voice says. */
+                        if (dropped && rejoinsRef.current < MAX_REJOINS) {
+                            rejoinsRef.current += 1;
+                            dropSocket();
+                            setStatus("connecting");
+                            const again = attemptRef.current;
+                            window.setTimeout(() => {
+                                // Not if the person ended the call meanwhile.
+                                if (again !== attemptRef.current) return;
+                                void startRef.current?.(podId, callId, details, true);
+                            }, REJOIN_DELAY_MS * 2 ** (rejoinsRef.current - 1));
+                            return;
+                        }
+                        teardown();
+                        if (!reason) settle(callId);
+                        if (reason) { setError(reason); setStatus("error"); } else setStatus("ended");
+                    },
                 },
-                /* GPT-Live never fires this: it is full duplex and has no
-                   interruption event, so a barge-in there is the model simply
-                   stopping, and the queue drains on its own. */
-                onInterrupted: () => { providerBusyRef.current = 0; awaitingAudioRef.current = 0; player.clear(); },
-                onTurnComplete: () => { providerBusyRef.current = 0; awaitingAudioRef.current = 0; },
-                /* Extended thinking's one new state: the model has stopped
-                   speaking and has not stopped working. Worth a line in the
-                   call bar, because the alternative reading of that silence
-                   is that the call has died. */
-                onThinking: (working) => { if (attempt === attemptRef.current) { providerBusyRef.current = working ? Date.now() : 0; setThinking(working); } },
-                onTranscript: (chunk) => {
-                    if (attempt !== attemptRef.current) return;
-                    setTranscript((lines) => foldTranscript(lines, chunk));
-                    if (chunk.text) {
-                        const prefix = lastSpeakerRef.current === chunk.speaker ? "" : `\n${chunk.speaker === "them" ? "User" : "Voice"}: `;
-                        spokenHistoryRef.current = (spokenHistoryRef.current + prefix + chunk.text).slice(-90000);
-                        lastSpeakerRef.current = chunk.speaker;
-                        handlersRef.current.observeTranscript(spokenHistoryRef.current);
-                    }
-                    if (chunk.final) lastSpeakerRef.current = null;
-                    if (chunk.speaker === "them") {
-                        lastUserRef.current = Date.now();
-                        utterancesRef.current?.push(chunk.text, chunk.final);
-                    }
-                },
-                onOpen: () => { if (attempt === attemptRef.current) setStatus("live"); },
-                onClose: () => { if (attempt === attemptRef.current) end(); },
-                onError: (problem) => {
-                    if (attempt !== attemptRef.current) return;
-                    setError(problem instanceof Error ? problem.message : "The call dropped.");
-                    setStatus("error");
-                    end();
-                },
-            });
-            clientRef.current = client;
-            utterancesRef.current = new UtteranceBuffer(text => {
-                if (attempt !== attemptRef.current) return;
-                const id = newId(); latestRequestRef.current = id;
-                for (const context of events.beginRequest(id)) quietUpdates.set(id, context);
-                void handlersRef.current.route(id, text, spokenHistoryRef.current);
-            });
-            const events = new VoiceEvents();
-            const quietUpdates = new Map<string, string>();
-            const drain = () => {
-                eventTimerRef.current = null;
-                if (attempt !== attemptRef.current || (!events.waiting && !quietUpdates.size)) return;
-                if (events.needsClarification) {
-                    // A clarification is the direct response to the caller. It
-                    // must not wait behind a speculative voice turn or a stalled
-                    // background-response latch. Preserve the user's floor.
-                    if (Date.now() - lastUserRef.current < 500) {
-                        eventTimerRef.current = setTimeout(drain, 150); return;
-                    }
-                    player.clear(); awaitingAudioRef.current = 0;
-                } else if ((providerBusyRef.current && Date.now() - providerBusyRef.current < 8000) || (awaitingAudioRef.current && Date.now() - awaitingAudioRef.current < 15000) || player.isPlaying() || Date.now() - Math.max(lastUserRef.current, lastVoiceRef.current) < 1200) {
-                    eventTimerRef.current = setTimeout(drain, 350); return;
-                }
-                providerBusyRef.current = 0;
-                for (const context of quietUpdates.values()) client.sendHistory(context);
-                quietUpdates.clear();
-                const update = events.take();
-                if (update) { awaitingAudioRef.current = Date.now(); client.sendAgentReply(update); }
-                if (events.waiting) eventTimerRef.current = setTimeout(drain, 350);
-            };
-            const receiveEvent = (event: VoiceEvent) => {
-                if (attempt !== attemptRef.current) return;
-                if (event.kind === "clarify" && event.id !== latestRequestRef.current) return;
-                const quiet = events.receive(event);
-                if (quiet) quietUpdates.set(event.conversationId ?? event.id, quiet);
-                else if (event.speak) quietUpdates.delete(event.conversationId ?? event.id);
-                if ((events.waiting || quietUpdates.size) && !eventTimerRef.current) eventTimerRef.current = setTimeout(drain, 350);
-            };
-            await client.connect();
-            if (attempt !== attemptRef.current) { client.disconnect(); return; }
-            unsubscribeRef.current = handlersRef.current.subscribe(receiveEvent);
-
-            /* Before the microphone opens, so the first thing said already
-               lands in context rather than to a model that knows nothing. */
-            const history = await handlersRef.current.history?.();
-            if (attempt !== attemptRef.current) { client.disconnect(); return; }
-            if (history) client.sendHistory(history);
-
-            const mic = await startMicPCMStream((chunk) => {
-                if (!mutedRef.current) clientRef.current?.sendAudioChunk(chunk);
-            }, micSampleRate);
-            if (attempt !== attemptRef.current) { mic.stop(); return; }
-            micRef.current = mic;
-            startingRef.current = false;
+            );
+            connectionRef.current = connection;
         } catch (problem) {
             if (attempt !== attemptRef.current) return;
             setError(problem instanceof Error ? problem.message : "Could not start the call.");
             setStatus("error");
             end();
         }
-    }, [teammate, pod, end]);
+    }, [onFrame, end, teardown, dropSocket, settle]);
+    startRef.current = start;
 
+    /* The ref first, outside React's updater: the microphone callback reads it
+       on its own schedule, and an updater runs when React gets to it (twice in
+       Strict Mode), so audio could still go out after Mute was pressed. */
     const toggleMute = useCallback(() => {
-        setMuted((was) => {
-            mutedRef.current = !was;
-            return !was;
-        });
+        const next = !mutedRef.current;
+        mutedRef.current = next;
+        connectionRef.current?.send({ type: "mute", muted: next });
+        setMuted(next);
     }, []);
 
-    /** Tell the voice a widget is on the screen it is talking over. */
-    const announceWidget = useCallback((label: string) => {
-        clientRef.current?.sendAgentWidget(label);
+    /** The person paged to this item: shown, and the voice told what they see. */
+    const show = useCallback((item: CanvasItem) => {
+        setShowing(item.id);
+        connectionRef.current?.send({ type: "canvas.focus", tool_call_id: item.id });
     }, []);
 
-    return { status, error, muted, thinking, transcript, level, start, end, toggleMute, announceWidget, active: status === "live" || status === "connecting" };
+    /** An item could not draw on this screen; whoever drew it is told, to fix it. */
+    const renderFailed = useCallback((item: CanvasItem, problem: string) => {
+        connectionRef.current?.send({ type: "canvas.render_failed", tool_call_id: item.id, error: problem });
+    }, []);
+
+    return {
+        status, error, notice, muted, working, liveEpoch, transcript, canvas, showing, level, settled,
+        start, end, toggleMute, show, renderFailed,
+        active: status === "live" || status === "connecting",
+    };
 }

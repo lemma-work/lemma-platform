@@ -325,18 +325,6 @@
     line-height: 1.45;
     margin-top: -2px;
 }
-.fieldActions {
-    display: flex;
-    gap: 16px;
-    font-size: 13px;
-}
-.fieldActions a {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--accent) !important;
-    text-decoration: none;
-}
 
 .primary,
 .secondary {

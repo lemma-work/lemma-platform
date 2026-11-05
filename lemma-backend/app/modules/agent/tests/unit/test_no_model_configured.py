@@ -115,6 +115,26 @@ async def test_summaries_stay_on_the_runs_model_without_a_system_one(
 
 
 @pytest.mark.asyncio
+async def test_the_memory_pass_stays_on_the_runs_model_without_a_system_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset, the pass runs on the run's model; set with no system provider to
+    find it on, the same -- never a pass with no model."""
+    from app.modules.agent.services.memory_pass import configured_pass_model
+
+    _no_system_model(monkeypatch, kind="desktop")
+    run_model = object()
+
+    monkeypatch.setattr(agent_settings, "agent_memory_pass_model", None)
+    unset = await configured_pass_model(run_model, uuid4(), uuid4())
+    monkeypatch.setattr(agent_settings, "agent_memory_pass_model", "small-model")
+    unreachable = await configured_pass_model(run_model, uuid4(), uuid4())
+
+    assert unset is run_model
+    assert unreachable is run_model
+
+
+@pytest.mark.asyncio
 async def test_vision_without_an_organization_is_unavailable_not_a_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

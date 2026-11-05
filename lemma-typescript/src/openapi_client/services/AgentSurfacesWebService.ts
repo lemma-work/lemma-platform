@@ -6,6 +6,7 @@ import type { Accepted } from '../models/Accepted.js';
 import type { CodeRequest } from '../models/CodeRequest.js';
 import type { HistoryResponse } from '../models/HistoryResponse.js';
 import type { MessageRequest } from '../models/MessageRequest.js';
+import type { PublicRowsResponse } from '../models/PublicRowsResponse.js';
 import type { RowRequest } from '../models/RowRequest.js';
 import type { SessionRequest } from '../models/SessionRequest.js';
 import type { SessionResponse } from '../models/SessionResponse.js';
@@ -143,6 +144,43 @@ export class AgentSurfacesWebService {
         });
     }
     /**
+     * Web Read Rows
+     * Read a table the pod marked Public: every row, at most 500.
+     *
+     * The same reading the pod's chat does for this visitor -- Public, and
+     * nothing else. A booking page reads its free slots here.
+     * @param publicKey
+     * @param table
+     * @param orderBy
+     * @param desc
+     * @returns PublicRowsResponse Successful Response
+     * @throws ApiError
+     */
+    public static publicWebRowsRead(
+        publicKey: string,
+        table: string,
+        orderBy?: (string | null),
+        desc: boolean = false,
+    ): CancelablePromise<PublicRowsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/public/web/{public_key}/rows',
+            path: {
+                'public_key': publicKey,
+            },
+            query: {
+                'table': table,
+                'order_by': orderBy,
+                'desc': desc,
+            },
+            errors: {
+                404: `Not a Public table: missing, not Public, or per-member`,
+                422: `No such column to order by`,
+                429: `Too many reads`,
+            },
+        });
+    }
+    /**
      * Web Add Row
      * Add one row to a table the pod opened to visitors. Nothing is read back.
      * @param publicKey
@@ -170,6 +208,9 @@ export class AgentSurfacesWebService {
     /**
      * Web Start Session
      * Start a session, or come back to one: either way, a new access token.
+     *
+     * On a page Lemma hosts, a visitor nobody signed in comes back to their chat
+     * from its cookie when the page has no secret to send.
      * @param publicKey
      * @param requestBody
      * @returns SessionResponse Successful Response

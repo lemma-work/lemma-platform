@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.surface_connector import bound_account_ids
+from app.modules.agent_surfaces.domain.credentials import (
+    credentials_for,
+    SurfaceCredentials,
+    WhatsAppCredentials,
+)
+
 import hashlib
 import json
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from pydantic import JsonValue, TypeAdapter
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
@@ -16,6 +22,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     SurfaceCredentialMode,
 )
+from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfaceIngressRequest,
@@ -40,6 +47,10 @@ from app.modules.agent_surfaces.services.onboarding_submissions import (
 from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     PrivateDeliveryUnavailable,
 )
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    held_for_pods,
+    sender_team,
+)
 from app.modules.connectors.contracts.surfaces import account_with_secrets
 from app.modules.pod.contracts.agent_access import pod_organization_ids
 
@@ -49,7 +60,7 @@ class OnboardingTransport:
     event: ParsedInboundSurfaceEvent
     surface: AgentSurfaceEntity | None
     organization_id: UUID | None
-    credentials: dict[str, JsonValue] = field(repr=False)
+    credentials: SurfaceCredentials = field(repr=False)
     binding_key: str
     #: Which surfaces the bot that delivered this event serves, as the request
     #: gave them -- a native receiver (Telegram polling, the Slack socket) names
@@ -61,6 +72,24 @@ class OnboardingTransport:
     #: ingestion will use, or it answers for a bot that is not listening.
     receiver_surface_ids: list[UUID] | None = None
 
+    @property
+    def on_its_own_number(self) -> bool:
+        """A shared-bot platform reached through the org's own app, not Lemma's.
+
+        There the sender's number is only the app secret's holder's word, so
+        it proves nothing: the mailbox code alone does, no number is recorded
+        or given to the account, and the binding is the installation's.
+        """
+        return self.surface is not None and has_shared_system_bot(self.event.platform)
+
+
+def brings_its_own_number(surface: AgentSurfaceEntity) -> bool:
+    """A WhatsApp surface on the org's own Meta app, whose secret signs any number."""
+    return (
+        surface.surface_type is SurfacePlatform.WHATSAPP
+        and surface.pod_connector_slug is not None
+    )
+
 
 def platform_binding_key(
     event: ParsedInboundSurfaceEvent, installation_id: UUID | None
@@ -68,14 +97,21 @@ def platform_binding_key(
     actor = event.sender_external_user_id
     if not actor:
         raise PrivateDeliveryUnavailable("The platform did not identify the sender")
+    return binding_key_of(
+        event.platform.value,
+        event.tenant_id,
+        installation_id=installation_id,
+        actor=actor,
+    )
+
+
+def binding_key_of(
+    platform: str, tenant_id: str | None, *, installation_id: UUID | None, actor: str
+) -> str:
+    """The key a verified identity is kept under, from its parts."""
     return hashlib.sha256(
         json.dumps(
-            [
-                event.platform.value,
-                event.tenant_id or "",
-                str(installation_id or "shared"),
-                actor,
-            ],
+            [platform, tenant_id or "", str(installation_id or "shared"), actor],
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
@@ -119,11 +155,65 @@ async def resolve_onboarding_transport(
         and surface.status.accepts_inbound_events()
         and surface.matches_tenant(parsed.tenant_id)
     ]
-    if has_shared_system_bot(platform):
+    if _through_the_shared_bot(platform, surfaces):
         return await _shared_transport(
             request, surfaces, parsed, receiver_ids, uow_factory
         )
     return await _installation_transport(surfaces, parsed, uow_factory, receiver_ids)
+
+
+def _through_the_shared_bot(
+    platform: SurfacePlatform, surfaces: list[AgentSurfaceEntity]
+) -> bool:
+    """Is this signup the shared bot's, rather than one installation's?
+
+    The org's own WhatsApp app is an installation: it verifies people the way a
+    company's Slack or Teams one does -- privately, through itself, by a
+    mailbox code, the one proof a forger of its ``from`` cannot supply.
+    """
+    if not has_shared_system_bot(platform):
+        return False
+    return not (
+        surfaces and all(brings_its_own_number(surface) for surface in surfaces)
+    )
+
+
+def answers_its_own_contacts(transport: OnboardingTransport) -> bool:
+    """The org's own number, set to answer people outside the pod.
+
+    Ordinary routing answers them as contacts there, as it always has; asking
+    them for an email code first would take that away. A member who wants to
+    be known on such a number verifies where it asks nobody's contacts.
+    """
+    return (
+        transport.on_its_own_number
+        and transport.surface is not None
+        and transport.surface.config.contacts.answer is not ContactAnswer.OFF
+    )
+
+
+async def among_the_workspaces_people(
+    uow_factory: UnitOfWorkFactory, transport: OnboardingTransport
+) -> bool:
+    """A sender in a Slack workspace the installation's organization holds.
+
+    Nobody there is asked to sign up with an email code: ordinary routing
+    takes the message, where a member routes as themselves and anybody else
+    is answered as a contact if the bot answers contacts, or refused as
+    before. The same predicate the doors ask (``slack_workspace_people``), so
+    this never steps aside for a bot whose pod's organization does not hold
+    the workspace -- that would leave its sender no way in at all. Every
+    candidate's pod is the installation's organization's, or there is no
+    installation transport.
+    """
+    event, installation = transport.event, transport.surface
+    if event.platform is not SurfacePlatform.SLACK or installation is None:
+        return False
+    team = sender_team(event)
+    if team is None:
+        return False
+    async with uow_factory() as uow:
+        return await held_for_pods(uow, team, [installation.pod_id])
 
 
 async def _transport_candidates(
@@ -136,9 +226,13 @@ async def _transport_candidates(
             if direct is None:
                 return None
             platform = direct.surface_type
-            if has_shared_system_bot(platform) and (
-                direct.account_id is not None
-                or direct.credential_mode != SurfaceCredentialMode.SYSTEM
+            if (
+                has_shared_system_bot(platform)
+                and (
+                    direct.pod_connector_slug is not None
+                    or direct.credential_mode != SurfaceCredentialMode.SYSTEM
+                )
+                and not brings_its_own_number(direct)
             ):
                 return None
             surfaces = [direct]
@@ -184,14 +278,14 @@ async def _shared_transport(
         return None
     # A receiver scoped to a customer bot may not invoke shared signup.
     if isinstance(request, SurfaceDirectWebhookIngress) and any(
-        surface.account_id is not None for surface in surfaces
+        surface.pod_connector_slug is not None for surface in surfaces
     ):
         return None
     if (
         not isinstance(request, SurfaceDirectWebhookIngress)
         and request.receiver_surface_ids is not None
         and any(
-            surface.account_id is not None
+            surface.pod_connector_slug is not None
             or surface.credential_mode != SurfaceCredentialMode.SYSTEM
             for surface in surfaces
         )
@@ -215,21 +309,42 @@ async def _shared_transport(
             return None
         async with uow_factory() as uow:
             resolved = await SurfaceCredentialResolver(uow=uow).for_platform(
-                platform, None, surface=None, arrived_on=arrived_on
+                platform, surface=None, arrived_on=arrived_on
             )
-        if resolved.get("phone_number_id") != arrived_on:
+        if WhatsAppCredentials.of(resolved).phone_number_id != arrived_on:
             # Neither the settings number nor a pool row. The signature check
             # upstream proves Meta sent it; it does not prove it was meant for us.
             return None
-    credentials = TypeAdapter(dict[str, JsonValue]).validate_python(resolved)
     return OnboardingTransport(
         parsed,
         None,
         None,
-        credentials,
+        resolved,
         platform_binding_key(parsed, None),
         receiver_ids,
     )
+
+
+async def _one_account_behind(
+    uow, surfaces: list[AgentSurfaceEntity]
+) -> dict[UUID, UUID]:
+    """The account every surface runs as through its pod connector, read once
+    for all of them, refusing unless it is one account (or none, on system
+    credentials). A surface whose connector runs as nothing right now is
+    missing from the answer, and so cannot be the installation."""
+    running_as = await bound_account_ids(uow, surfaces)
+    if any(
+        surface.pod_connector_slug is not None and surface.id not in running_as
+        for surface in surfaces
+    ):
+        raise PrivateDeliveryUnavailable(
+            "The company installation's credentials are unavailable"
+        )
+    if len({running_as.get(surface.id) for surface in surfaces}) != 1:
+        raise PrivateDeliveryUnavailable(
+            "The company installation ownership is ambiguous"
+        )
+    return running_as
 
 
 async def _installation_transport(
@@ -253,22 +368,17 @@ async def _installation_transport(
             uow, {surface.pod_id for surface in surfaces}
         )
         organization_ids = {by_pod.get(surface.pod_id) for surface in surfaces}
-        account_ids = {surface.account_id for surface in surfaces}
-        if (
-            len(organization_ids) != 1
-            or None in organization_ids
-            or len(account_ids) != 1
-        ):
+        running_as = await _one_account_behind(uow, surfaces)
+        if len(organization_ids) != 1 or None in organization_ids:
             raise PrivateDeliveryUnavailable(
                 "The company installation ownership is ambiguous"
             )
         installation = min(surfaces, key=lambda surface: str(surface.id))
         organization_id = by_pod[installation.pod_id]
-        credentials = TypeAdapter(dict[str, JsonValue]).validate_python(
-            native_credentials(platform, surface=installation)
-        )
-        if installation.account_id is not None:
-            found = await account_with_secrets(uow, installation.account_id)
+        credentials = native_credentials(platform, surface=installation)
+        account_id = running_as.get(installation.id)
+        if account_id is not None:
+            found = await account_with_secrets(uow, account_id)
             if (
                 found is None
                 or found[0].organization_id != organization_id
@@ -277,12 +387,12 @@ async def _installation_transport(
                 raise PrivateDeliveryUnavailable(
                     "The installation credentials belong to another organization"
                 )
-            credentials = TypeAdapter(dict[str, JsonValue]).validate_python(found[1])
+            credentials = credentials_for(platform, found[1])
     return OnboardingTransport(
         parsed,
         installation,
         organization_id,
         credentials,
-        platform_binding_key(parsed, installation.account_id or installation.id),
+        platform_binding_key(parsed, account_id or installation.id),
         receiver_ids,
     )

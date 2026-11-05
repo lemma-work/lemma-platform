@@ -12,14 +12,16 @@
  *  what happened there.
  *
  *  Two facts about the payload shape this. A decision's arms are
- *  `config.rules[].next_node_id`, not edges; its one outgoing edge is the
- *  default for when no rule matched (`domain/nodes/decision.py`). A loop's
+ *  `config.rules[].next_node_id` — or, for one that asks a question, its
+ *  `config.question.routes` and `unsure_next_node_id` — not edges; its one
+ *  outgoing edge is the default for when nothing else routed
+ *  (`domain/nodes/decision.py`). A loop's
  *  body is `config.child_node_id` and the body's last step edges back to the
  *  loop (`domain/nodes/loop.py`). Neither throws here, and nothing is dropped:
  *  a node the walk never reaches is appended at the end rather than lost.
  */
 
-import { isRecord, str, type StepRow } from "./runs";
+import { isRecord, sayAnswer, str, type StepRow } from "./runs";
 
 export interface GraphNode {
     id: string;
@@ -37,7 +39,8 @@ export interface Graph {
 }
 
 export interface Arm {
-    /** "Rule 1", or the author's own label for the target, or "Otherwise". */
+    /** "Rule 1", or the author's own label for the target, "If yes" for a
+     *  question's answer, or "Otherwise". */
     label: string;
     /** The rule's condition; null for the default arm. */
     condition: string | null;
@@ -76,11 +79,40 @@ export function readGraph(raw: unknown): Graph | null {
     return { nodes, edges, order };
 }
 
-function rulesOf(node: GraphNode): { condition: string | null; next: string }[] {
+interface Route {
+    /** Set for a question's arm, which names the answers that take it; a rule
+     *  arm is named by its target and shows its condition instead. */
+    label: string | null;
+    condition: string | null;
+    next: string;
+}
+
+/** A decision's arms other than its default edge: its rules, or the routes of
+ *  the question it asks. Answers routed to the same node are one arm. */
+function routesOf(node: GraphNode): Route[] {
+    const question = isRecord(node.config.question) ? node.config.question : null;
+    if (question) return questionRoutesOf(question);
     const rules = Array.isArray(node.config.rules) ? node.config.rules : [];
     return rules
-        .map((rule) => (isRecord(rule) ? { condition: str(rule.condition), next: str(rule.next_node_id) ?? "" } : null))
-        .filter((rule): rule is { condition: string | null; next: string } => Boolean(rule && rule.next));
+        .map((rule): Route | null => (isRecord(rule) ? { label: null, condition: str(rule.condition), next: str(rule.next_node_id) ?? "" } : null))
+        .filter((rule): rule is Route => Boolean(rule && rule.next));
+}
+
+function questionRoutesOf(question: Record<string, unknown>): Route[] {
+    const answersTo = new Map<string, string[]>();
+    const routes = isRecord(question.routes) ? question.routes : {};
+    for (const [answer, target] of Object.entries(routes)) {
+        const next = str(target);
+        if (next) answersTo.set(next, [...(answersTo.get(next) ?? []), sayAnswer(answer)]);
+    }
+    const out: Route[] = [...answersTo].map(([next, answers]) => ({
+        label: "If " + answers.join(" or "),
+        condition: null,
+        next,
+    }));
+    const unsure = str(question.unsure_next_node_id);
+    if (unsure) out.push({ label: "If it cannot tell", condition: null, next: unsure });
+    return out;
 }
 
 function bodyOf(node: GraphNode): string | null {
@@ -91,7 +123,7 @@ function bodyOf(node: GraphNode): string | null {
 function successors(graph: Graph, id: string): string[] {
     const node = graph.nodes.get(id);
     const out = [...(graph.edges.get(id) ?? [])];
-    if (node?.kind === "DECISION") out.push(...rulesOf(node).map((rule) => rule.next));
+    if (node?.kind === "DECISION") out.push(...routesOf(node).map((rule) => rule.next));
     const body = node ? bodyOf(node) : null;
     if (body) out.push(body);
     return out.filter((next) => graph.nodes.has(next));
@@ -162,14 +194,14 @@ export function buildTree(graph: Graph): TreeItem[] {
             const node = graph.nodes.get(at)!;
             placed.add(at);
             if (node.kind === "DECISION") {
-                const rules = rulesOf(node);
+                const rules = routesOf(node);
                 const fallback = graph.edges.get(at)?.[0] ?? null;
                 const starts = [...rules.map((rule) => rule.next), ...(fallback ? [fallback] : [])];
                 const join = joinOf(graph, starts, distance);
                 const inner = new Set(stops);
                 if (join) inner.add(join);
                 const arms: Arm[] = rules.map((rule, index) => ({
-                    label: graph.nodes.get(rule.next)?.label ?? "Rule " + (index + 1),
+                    label: rule.label ?? graph.nodes.get(rule.next)?.label ?? "Rule " + (index + 1),
                     condition: rule.condition,
                     items: walk(rule.next, inner),
                 }));
@@ -258,4 +290,29 @@ export function leadOf(output: unknown): string | null {
         if (typeof value === "string" && value.trim()) return value.trim();
     }
     return null;
+}
+
+/** What a decision decided, in one sentence.
+ *
+ *  A rule decision records `matched_condition`. A question records `answer`
+ *  (null when the evidence did not support one), the provider's `confidence`
+ *  when it measures one, and the `route` it took (`decision_resume_service.py`).
+ *  `nameOf` turns that route's node id into what the page calls the node.
+ */
+export function sayDecided(output: unknown, nameOf: (id: string) => string = (id) => id): string {
+    /* Every decision that finished recorded an object; nothing yet is a
+       question still being weighed. */
+    if (!isRecord(output)) return "Not decided yet.";
+    if ("matched_condition" in output) {
+        const matched = output.matched_condition;
+        if (typeof matched === "string" && matched) return "Matched " + matched + ".";
+        return "No rule matched, so it took the default path.";
+    }
+    if (!("answer" in output)) return "Decided.";
+    const answer = output.answer;
+    const said = answer === null || answer === undefined ? "Could not tell from what it was given" : "Answered " + sayAnswer(answer);
+    const confidence = output.confidence;
+    const sure = typeof confidence === "number" && Number.isFinite(confidence) ? " (" + Math.round(confidence * 100) + "% sure)" : "";
+    const route = str(output.route);
+    return said + sure + (route ? ", so it went on to " + nameOf(route) + "." : ".");
 }

@@ -1,38 +1,38 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-import aiohttp
-from slack_sdk.errors import SlackApiError
-from slack_sdk.web.async_client import AsyncWebClient
+from app.modules.agent_surfaces.platforms.slack.errors import is_slack_api_error
+
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
 
 from app.modules.agent_surfaces.platforms.common import (
     UnsafeApiBaseError,
     assert_safe_api_base,
 )
-from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.modules.agent_surfaces.platforms.delivery import (
+    DeliveryClassification,
+    classify_transport_failure,
+)
+
+if TYPE_CHECKING:
+    from slack_sdk.web.async_client import AsyncWebClient
 
 
-def slack_access_token(credentials: dict[str, Any]) -> str | None:
-    if credentials.get("access_token"):
-        return str(credentials["access_token"])
-    if credentials.get("bot_token"):
-        return str(credentials["bot_token"])
-    raw_response = credentials.get("raw_response") or {}
-    token = raw_response.get("access_token")
-    return str(token) if token else None
+def slack_access_token(credentials: CredentialsLike) -> str | None:
+    """The Web API token, revealed for the call about to carry it."""
+    return reveal_secret(SlackCredentials.of(credentials).token) or None
 
 
-def slack_base_url(credentials: dict[str, Any]) -> str | None:
-    if credentials.get("api_base_url"):
-        return _refuse_a_private_literal(
-            _normalize_base_url(str(credentials["api_base_url"]))
-        )
-    raw_response = credentials.get("raw_response") or {}
-    value = raw_response.get("api_base_url")
-    return _refuse_a_private_literal(_normalize_base_url(str(value))) if value else None
+def slack_base_url(credentials: CredentialsLike) -> str | None:
+    value = SlackCredentials.of(credentials).api_base_url
+    return _refuse_a_private_literal(_normalize_base_url(value)) if value else None
 
 
 def _refuse_a_private_literal(base_url: str | None) -> str | None:
@@ -78,7 +78,7 @@ def _refuse_a_private_literal(base_url: str | None) -> str | None:
     return base_url
 
 
-async def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
+async def build_slack_client(credentials: CredentialsLike) -> AsyncWebClient:
     """A Slack client for these credentials, with its base URL vetted first.
 
     Async because vetting resolves DNS. `api_base_url` arrives from stored
@@ -88,6 +88,8 @@ async def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
     Teams — goes through `assert_safe_api_base` for exactly this; Slack was
     the one that did not, because this constructor used to be synchronous.
     """
+    from slack_sdk.web.async_client import AsyncWebClient
+
     kwargs: dict[str, Any] = {}
     token = slack_access_token(credentials)
     if token:
@@ -98,27 +100,16 @@ async def build_slack_client(credentials: dict[str, Any]) -> AsyncWebClient:
     return AsyncWebClient(**kwargs)
 
 
-def slack_scopes(credentials: dict[str, Any]) -> set[str]:
-    raw_values: list[str] = []
-    for candidate in (
-        credentials.get("scope"),
-        credentials.get("scopes"),
-        (credentials.get("raw_response") or {}).get("scope"),
-        (credentials.get("raw_response") or {}).get("scopes"),
-    ):
-        if isinstance(candidate, str):
-            raw_values.extend(candidate.split(","))
-        elif isinstance(candidate, list):
-            raw_values.extend(str(item) for item in candidate)
-    return {value.strip() for value in raw_values if value and value.strip()}
+def slack_scopes(credentials: CredentialsLike) -> frozenset[str]:
+    return SlackCredentials.of(credentials).scopes
 
 
-def slack_supports_customized_messages(credentials: dict[str, Any]) -> bool:
+def slack_supports_customized_messages(credentials: CredentialsLike) -> bool:
     return "chat:write.customize" in slack_scopes(credentials)
 
 
 def slack_customized_message_kwargs(
-    credentials: dict[str, Any],
+    credentials: CredentialsLike,
     agent_display_name: str | None,
     agent_icon_url: str | None = None,
 ) -> dict[str, Any]:
@@ -152,22 +143,21 @@ def classify_slack_error(exc: Exception) -> DeliveryClassification:
     Same shape as ``classify_telegram_error`` and ``classify_whatsapp_error``,
     so all four platforms are retried by one policy. Slack reports a rate limit
     as ``SlackApiError`` with HTTP 429 and a ``Retry-After`` header, and
-    ``SlackApiError`` is already a member of ``PLATFORM_TRANSPORT_ERRORS`` --
+    ``SlackApiError`` is already a member of ``platform_transport_errors()`` --
     so without this the answer was recorded as reaching nobody and dropped.
     """
-    if isinstance(exc, SlackApiError):
+    if is_slack_api_error(exc):
         status = getattr(exc.response, "status_code", None)
         if status == 429 or (isinstance(status, int) and status >= 500):
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
-    if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
-        return DeliveryClassification.TRANSIENT
-    return DeliveryClassification.PERMANENT
+    # A post is not idempotent: a timeout after it went out may have posted it.
+    return classify_transport_failure(exc)
 
 
 def slack_retry_after(exc: Exception) -> float | None:
     """Seconds Slack asked us to wait, from the ``Retry-After`` header."""
-    if not isinstance(exc, SlackApiError):
+    if not is_slack_api_error(exc):
         return None
     headers = getattr(exc.response, "headers", None) or {}
     raw = headers.get("Retry-After") or headers.get("retry-after")

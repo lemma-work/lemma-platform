@@ -2,8 +2,8 @@
 
 ``AgentRunCompletedEvent`` now carries this context on the event itself, captured
 by the finalizer that already holds it. This is the fallback for the runs that
-finish somewhere else: the stop-request handler and the two sweeps in
-``conversation_status_repair`` end a run from a row, not from a live
+finish somewhere else: the stop-request handler, the orphan sweep and
+``stuck_stops`` end a run from a row, not from a live
 ``RunIdentity``, and have no pod or organization to put on the event. Redelivered
 events published before those fields existed land here too.
 

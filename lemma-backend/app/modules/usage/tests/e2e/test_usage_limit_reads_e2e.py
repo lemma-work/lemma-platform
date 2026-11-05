@@ -1,6 +1,6 @@
 """The batched limit reads must return exactly what the serial ones did.
 
-``get_usage_limits`` runs on the spending path, so the two properties that
+``get_usage_limits`` answers every limits page, so the two properties that
 matter are opposite in kind and both asserted here against a real Postgres:
 the answers must be *identical* to the per-window reads they replace, and there
 must be *fewer* statements. Either one alone is satisfiable by a bug -- a

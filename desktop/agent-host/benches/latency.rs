@@ -322,6 +322,7 @@ fn start_command(state: &BenchState) -> Option<Command> {
                 mcp: state.mcp.clone(),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
                 system_prompt_delivery: None,
+                pre_approvals: Vec::new(),
             })
             .unwrap(),
         })
@@ -554,6 +555,7 @@ async fn start_host(
     .unwrap();
     let config = lemma_agent_host::config::HostConfig {
         legacy_host_execution: false,
+        max_runs_chosen: false,
         installation_id,
         targets: vec![target],
         max_runs: 1,

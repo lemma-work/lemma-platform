@@ -2,6 +2,9 @@
 
 from sqlalchemy.exc import DBAPIError
 
+from app.core.infrastructure.db.transient_errors import (
+    raise_if_transient_database_error,
+)
 from app.modules.datastore.domain.errors import (
     DatastoreQueryError,
     DatastoreQueryUnavailableError,
@@ -19,7 +22,13 @@ def raise_record_write_error(
     operation: str,
     ctx: TableContext | None = None,
 ) -> None:
-    """Map a write DB error without exposing SQL parameters."""
+    """Map a write DB error without exposing SQL parameters.
+
+    The database being unavailable, or a deadlock, is not the write's fault:
+    it is raised as it is -- a retryable 503 to an API caller, a retry to a
+    work item -- never mapped to a validation error that echoes the driver.
+    """
+    raise_if_transient_database_error(exc)
     raise_from_db_error(
         exc,
         table_name=ctx.table_name if ctx else None,
@@ -45,6 +54,7 @@ def raise_record_read_error(
     A mapper that returns a class and a caller that ignores it is a bug waiting
     for its second case, so this honours the class rather than listing them.
     """
+    raise_if_transient_database_error(exc)
     unavailable = _query_facility_is_absent(exc)
     if unavailable is not None:
         raise unavailable from exc
@@ -61,9 +71,9 @@ def raise_record_read_error(
 def _query_facility_is_absent(exc: Exception) -> Exception | None:
     """The deployment has no datastore query role, so no query can run.
 
-    `SET LOCAL ROLE "<datastore_query_role>"` is the first thing ad-hoc SQL
-    does, and on a deployment that never provisioned the role it is also the
-    last. Recognised here rather than in ``parse_db_error`` because the message
+    `SET LOCAL ROLE "<the pod's query role>"` is the first thing ad-hoc SQL
+    does, and on a deployment whose app role cannot create the role it is also
+    the last. Recognised here rather than in ``parse_db_error`` because the message
     names no table and no column: the generic path turned it into a 400 saying
     the person's SQL was wrong, when nothing they can write will help.
     See `PS-DATA-021`.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Collection, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -11,7 +11,11 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.identity.contracts import UserPreferences
+
+if TYPE_CHECKING:
+    from app.modules.channels.contracts import Source
 
 
 class SurfaceAccountInfo(BaseModel):
@@ -49,6 +53,24 @@ class SurfaceAccountPort(Protocol):
     ) -> dict[UUID, SurfaceAccountSummary]:
         """Batch counterpart of :meth:`get_account` for the read path — one
         query for a whole page of surfaces. Missing ids are simply absent."""
+        ...
+
+    async def account_for_binding(
+        self, *, pod_id: UUID, slug: str, platform: SurfacePlatform, ctx: object
+    ) -> UUID:
+        """The account binding a surface to ``slug`` would run as, checked
+        (SHARED, the platform's connector, usable by ``ctx`` when given)."""
+        ...
+
+    async def bound_account_id(self, surface: AgentSurfaceEntity) -> UUID | None:
+        """The account a surface runs as now; ``None`` on system credentials."""
+        ...
+
+    async def accounts_behind_connectors(
+        self, connectors: Sequence[tuple[UUID, str]]
+    ) -> dict[tuple[UUID, str], UUID]:
+        """The account each ``(pod_id, slug)`` SHARED pod connector runs as
+        now, for a page of surfaces. One that runs as none is absent."""
         ...
 
 
@@ -149,6 +171,8 @@ class SurfaceInstallationRepositoryPort(Protocol):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        also_paused: bool = False,
+        limit: int | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 
     async def list_active_native_receiver_surfaces(
@@ -156,12 +180,16 @@ class SurfaceInstallationRepositoryPort(Protocol):
         platforms: set[SurfacePlatform],
     ) -> list[AgentSurfaceEntity]: ...
 
-    async def get_by_platform_and_account_id(
+    async def get_bound_to_account(
         self,
-        *,
-        platform: str,
         account_id: UUID,
+        *,
+        platform: str | None = None,
         exclude_surface_id: UUID | None = None,
+    ) -> AgentSurfaceEntity | None: ...
+
+    async def get_sharing_account_with(
+        self, surface: AgentSurfaceEntity, *, platform: str | None = None
     ) -> AgentSurfaceEntity | None: ...
 
     async def get_system_credential_conflict_in_org(
@@ -181,14 +209,6 @@ class SurfaceInstallationRepositoryPort(Protocol):
         surface_identity_id: str,
         exclude_surface_id: UUID | None = None,
     ) -> PlatformIdentityHolder | None: ...
-
-    async def get_account_conflict_in_org(
-        self,
-        *,
-        pod_id: UUID,
-        account_id: UUID,
-        exclude_surface_id: UUID | None = None,
-    ) -> AgentSurfaceEntity | None: ...
 
     async def create(self, entity: AgentSurfaceEntity) -> AgentSurfaceEntity: ...
 
@@ -247,13 +267,14 @@ class SurfaceNotificationEgressPort(Protocol):
         self, surface: AgentSurfaceEntity
     ) -> str | None: ...
 
-    async def send_agent_message_for_conversation(
+    async def deliver_message(
         self,
         *,
         conversation_id: UUID,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> bool: ...
+        at: Source | None = None,
+    ) -> DeliveryReceipt | None: ...
 
     async def open_cold_email_thread(
         self,
@@ -345,15 +366,6 @@ class SurfaceUserDirectoryPort(Protocol):
         """The live user with this address, or nobody."""
         raise NotImplementedError
 
-    async def user_id_by_telegram_username(self, username: str) -> UUID | None:
-        """The live user holding this handle, or nobody.
-
-        A handle freed by a deactivated account must answer nobody: it can be
-        taken by someone else, and a surface resolving it is choosing whose
-        authority a run executes with.
-        """
-        raise NotImplementedError
-
     async def user_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool
     ) -> list[UUID]:
@@ -406,6 +418,13 @@ class SurfacePodMembershipPort(Protocol):
         kind of thing, and so removing someone from a pod takes their inbox
         entries with it.
         """
+
+    # The per-user form is one statement each, which is fine for a single
+    # recipient and wrong for a list: a group's roster asks about everyone who
+    # has spoken there, and a turn would pay a round trip per name.
+    async def pod_members_among(
+        self, pod_id: UUID, user_ids: Iterable[UUID]
+    ) -> set[UUID]: ...
 
     async def resolve_pod_recipient(
         self, *, pod_id: UUID, reference: str

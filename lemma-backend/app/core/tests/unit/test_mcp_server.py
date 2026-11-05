@@ -187,7 +187,7 @@ async def test_public_mount_challenges_a_request_without_a_token():
     challenge = dict(messages[0]["headers"])[b"www-authenticate"].decode()
     assert challenge.startswith("Bearer ")
     assert f"oauth-protected-resource/mcp/{pod_id}" in challenge
-    assert 'scope="pod:read pod:write"' in challenge
+    assert 'scope="pod:read pod:write pod:events"' in challenge
     assert forwarded == []
 
 

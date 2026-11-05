@@ -2,6 +2,21 @@ name: CI
 
 on:
   pull_request:
+  # The merge queue. A queued pull request is tested again on top of the
+  # latest main, and of anything queued ahead of it, and lands only if
+  # "CI passed" goes green there -- which is what lets a branch merge without
+  # first being brought up to date by hand.
+  #
+  # The queue runs the light suites only: lint, types, unit, the SDKs, the
+  # frontend, migrations and codegen. The four desktop suites -- the macOS and
+  # Windows builds, launch smoke and contracts, the slowest jobs here -- run on
+  # the pull request and again on the push to main, where a failure posts to
+  # Slack (notify-failure.yml), but not in between: a full rerun in the queue
+  # doubled the wait for every merge and caught nothing the pull request had
+  # not. Each of those jobs says so as `github.event_name != 'merge_group'`,
+  # which check_ci_job_results.py reads.
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch:
@@ -10,8 +25,16 @@ permissions:
   contents: read
   pull-requests: read
 
+# A merge group runs on its own `gh-readonly-queue/main/pr-<n>-<sha>` ref, so
+# it never cancels the pull request's run or another group's.
 concurrency:
-  group: ci-${{ github.ref }}
+  # Superseded pull request pushes are cancelled; pushes to main never are.
+  # Main's runs are the ones that warm every cache a pull request restores
+  # from, and a burst of merges used to cancel all but the last of them.
+  # On main the group is the commit itself, so no run there is ever queued
+  # behind, or cancelled by, the next merge. (From #796, which merged into a
+  # stacked branch and never reached main.)
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +56,24 @@ jobs:
       app_template: ${{ steps.filter.outputs.app_template }}
     steps:
       - uses: actions/checkout@v7
+      # On a merge group the action diffs `merge_group.base_sha..head_sha` by
+      # itself (since v4.0.1). `base_sha` is the group's parent -- main's tip,
+      # or the entry queued ahead -- so the diff is the queued pull request's
+      # own change, the same files its pull request run filtered on. What must
+      # never happen here is an empty diff: every suite would skip and "CI
+      # passed" would go green on a merge that tested nothing. The step after
+      # this one fails the run if it does.
+      #
+      # It is not main..head on purpose. A later entry's candidate also holds
+      # the entries ahead of it, but their suites already ran on their own
+      # candidates, and under ALLGREEN each of those had to pass. A suite this
+      # entry's own files do not touch sees the same inputs it saw there, so
+      # rerunning it would cost runners and find nothing new.
+      #
+      # Because each queue entry filters on its own change only, the queue's
+      # grouping strategy has to be ALLGREEN (every entry's run must pass), not
+      # HEADGREEN: under HEADGREEN a later entry that skipped the backend could
+      # carry an earlier entry's backend failure into main.
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -77,6 +118,12 @@ jobs:
             workspace:
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
+              - 'tests/scenarios/journeys/public_website/**'
+              # What that journey runs on: the suite's harness and environment.
+              - 'tests/scenarios/harness/**'
+              - 'tests/scenarios/conftest.py'
+              - 'tests/scenarios/pyproject.toml'
+              - 'tests/scenarios/uv.lock'
               - '.nvmrc'
               - '.github/workflows/ci.yml'
             codegen:
@@ -133,6 +180,8 @@ jobs:
               - 'desktop/permissions/**'
               - 'desktop/build.rs'
               - 'desktop/scripts/build-sidecar.ps1'
+              - 'desktop/scripts/build-sidecar.sh'
+              - 'desktop/**/*.plist'
               - 'desktop/scripts/tauri-cli-version.txt'
               - 'desktop/runtime/lemma-local.json'
               # See the note in the `desktop` filter above: ci.yml is left out
@@ -147,8 +196,25 @@ jobs:
             #
             # This one is cheap enough to list ci.yml, so a change to the
             # desktop CI steps finally runs something desktop-shaped.
+            #
+            # The backend half this job exercises, not all of it. It used to
+            # list `lemma-backend/**`, which made a 7-minute job and one of the
+            # 20 shared runner slots a cost of every backend pull request -- 79
+            # of 80 runs. What it runs is `make desktop-agent-host-e2e`: four
+            # agent-host e2e files marked `local_cli`, which every PR e2e lane
+            # and the protected lane exclude, so this job is the only one that
+            # runs them -- and so it must also start on the shared code they
+            # drive: the agent and workspace modules (conversation, streaming,
+            # host execution), the e2e harness, the database layer, and the
+            # backend's root conftest.
             desktop_contract:
-              - 'lemma-backend/**'
+              - 'lemma-backend/app/modules/agent/**'
+              - 'lemma-backend/app/modules/workspace/**'
+              - 'lemma-backend/app/modules/test_support/**'
+              - 'lemma-backend/app/core/infrastructure/db/**'
+              - 'lemma-backend/conftest.py'
+              - 'lemma-backend/pyproject.toml'
+              - 'lemma-backend/uv.lock'
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
               - 'desktop/runtime/frontend-launcher.mjs'
@@ -165,11 +231,17 @@ jobs:
             # and the backend half of the Agent Host. Like `desktop`, ci.yml is
             # left out -- this is a macOS job -- so validate a change to the job
             # itself with Actions -> CI -> Run workflow.
+            #
+            # The backend half is the Agent Host seam only, as for
+            # `desktop_contract` above; all of `agent/**` started a macOS
+            # runner on most backend pull requests for an exempt check.
             desktop_launch:
               - 'desktop/**'
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
-              - 'lemma-backend/app/modules/agent/**'
+              - 'lemma-backend/app/modules/**/*agent_host*'
+              - 'lemma-backend/app/modules/**/*agent_host*/**'
+              - 'lemma-backend/app/modules/**/*host_execution*'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -195,6 +267,8 @@ jobs:
               # cannot live in the backend-gated quality job.
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
+              - '.github/protected-e2e-shards.json'
+              - '.github/dependabot.yml'
               - 'scripts/check_ci_aggregators.py'
               - 'scripts/check_release_parity.py'
               - 'scripts/check_ci_job_results.py'
@@ -207,6 +281,21 @@ jobs:
               - 'scripts/_pytest_census_plugin.py'
               - 'scripts/check_host_pack.py'
               - 'scripts/plan_e2e_shards.py'
+            # Every file, so the step below can tell an empty diff from a
+            # change that no suite's filter covers. Not a job output: nothing
+            # gates on it.
+            any:
+              - '**'
+      # The empty diff the note above names, refused rather than trusted. Here
+      # it can only mean the action read the wrong range, so failing `changes`
+      # fails "CI passed" instead of letting every suite skip into a green one.
+      # One guard covers all three workflows: they run the same action over the
+      # same payload, and a merge group needs all three green.
+      - name: A merge group's diff is not empty
+        if: github.event_name == 'merge_group' && steps.filter.outputs.any != 'true'
+        run: |
+          echo "::error::paths-filter found no changed files between ${{ github.event.merge_group.base_sha }} and ${{ github.event.merge_group.head_sha }}, so every suite would skip."
+          exit 1
   backend-lint:
     name: lemma-backend quality gates
     timeout-minutes: 30
@@ -231,6 +320,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - name: Sync deps
         run: uv sync --extra local
       # One command, and it is the one the contributing guide tells a person to
@@ -279,6 +369,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - run: uv sync
       - name: Verify consolidated reliability migration
         run: uv run python scripts/verify_reliability_migration.py
@@ -524,7 +615,8 @@ jobs:
       - run: npm test
         working-directory: lemma-frontend
       - name: Cache the auth test browser
-        uses: actions/cache@v6
+        id: auth-browser-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cache/ms-playwright
@@ -538,6 +630,17 @@ jobs:
           if ! npx playwright install-deps chromium; then
             echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
           fi
+      # Saved from main only: a pull request restores main's copy and never
+      # writes its own, which kept the repository over its cache limit.
+      - name: Save the auth test browser
+        if: github.ref == 'refs/heads/main' && steps.auth-browser-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-auth-${{ runner.os }}-${{ hashFiles('lemma-frontend/package-lock.json') }}
       - name: Test auth journeys
         working-directory: lemma-frontend
         run: npm run test:auth-browser
@@ -553,6 +656,20 @@ jobs:
         env:
           NEXT_PUBLIC_DATA: sample
       - run: git diff --exit-code -- lemma-typescript/public/lemma-client.js lemma-typescript/public/lemma-ui.js
+      # The public website journey from the product scenarios. It ran in a
+      # job of its own on every pull request -- backend-only ones included --
+      # repeating both `npm ci`s this job has already done. Here it runs when
+      # the frontend changes, on the install above; nightly it still runs in
+      # the scenarios workflow.
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: tests/scenarios/uv.lock
+      - name: Public website journey
+        working-directory: tests/scenarios
+        run: |
+          uv sync
+          uv run pytest journeys/public_website -q
 
   # The dev-workflow tests assert on the env `make dev` hands the backend. They
   # had drifted badly enough to reference deleted targets, because nothing ran
@@ -580,6 +697,16 @@ jobs:
       # than a failure, and which is easy to skim past.
       - name: Run repo tooling tests
         run: uv run --with pytest --with pyyaml python -m pytest tests/ -q
+      # The backend's contract tests for .github itself, run here too because
+      # this is the job a .github change triggers. In the backend unit lane only,
+      # a change to dependabot.yml alone skipped them on the PR and in the
+      # queue, and a broken invariant reached main. They read files and nothing
+      # else, so --noconftest keeps the backend's own fixtures out of it.
+      - name: Run the .github contract tests
+        run: >-
+          uv run --no-project --with pytest --with pyyaml python -m pytest -q
+          --noconftest -p no:cacheprovider
+          lemma-backend/app/core/tests/unit/test_ci_configuration_contract.py
       # The two required checks are aggregator jobs, so their `needs:` lists
       # are the merge gate. This asserts nothing has fallen out of one -- the
       # failure ci.yml's own comment records -- and that every job still
@@ -593,6 +720,17 @@ jobs:
       # access. Each was green on its own terms.
       - name: Both DMG pipelines verify the same things
         run: uv run --no-project --with pyyaml python scripts/check_release_parity.py
+
+      # The scenario suite's own guards: no backend imports, no mocking, no
+      # sleeping. Seconds; it used to be a job of its own in the scenarios
+      # workflow, started by every pull request whatever it touched. (The
+      # traceability gate it sat beside runs in `make quality`, in the
+      # backend quality job, on every pull request.)
+      - name: Scenario suite guards
+        working-directory: tests/scenarios
+        run: |
+          uv sync
+          uv run pytest journeys/test_harness_contract.py -q
 
   windows-cli:
     name: Windows CLI smoke test
@@ -676,7 +814,9 @@ jobs:
     timeout-minutes: 30
     name: Desktop contracts
     needs: changes
-    if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
+    if: >-
+      (needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true') &&
+      github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -690,6 +830,11 @@ jobs:
         with:
           workspaces: desktop
           prefix-key: desktop-contract
+          # Saved from main only. A pull request's own copy held the same
+          # dependencies as main's (they differ only when Cargo.lock does), and
+          # those copies pushed the repository past its cache limit, evicting
+          # the main caches every pull request restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The host-pack layout locald hard-codes, and the guest protocol the
       # backend's stub stands in for. Both are pure assertions over committed
@@ -699,8 +844,9 @@ jobs:
         run: cargo test -p lemma-locald -p lemma-guestd --locked
 
       # The Rust half of the Agent Host's wire contract. This job runs on
-      # backend-only pull requests -- `lemma-backend/**` is in its filter --
-      # and it did not run the half that would notice. Both sides of
+      # backend pull requests that touch the Agent Host's side of the seam --
+      # the agent and workspace modules are in its filter -- and it did not
+      # run the half that would notice. Both sides of
       # `tests/fixtures/wire_contract.json` are assertions over a committed
       # file; only the named suites, because the rest of this crate's tests
       # spawn agents.
@@ -718,10 +864,26 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
 
       - name: Install backend dependencies
         working-directory: lemma-backend
         run: uv sync --locked --extra local
+
+      # The e2e worker preloads the local embedding model before it reports
+      # started, and the harness waits 20 seconds for that. Without this cache
+      # every run downloaded the model from the Hugging Face Hub, unauthenticated,
+      # inside those 20 seconds -- and on a slow fetch every test here failed with
+      # "Timed out waiting for streaq worker startup". The same cache Backend E2E
+      # restores; e2e.yml warms it on main.
+      - name: Restore the local embedding model
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/lemma/fastembed
+          key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
+          restore-keys: fastembed-
 
       - name: Real backend and Agent Host streaming
         run: make desktop-agent-host-e2e
@@ -743,7 +905,8 @@ jobs:
       # what it finds and fetches whatever is missing, so a bad cache costs a
       # download rather than the wrong browser.
       - name: Cache the Playwright browser
-        uses: actions/cache@v6
+        id: chat-ui-browser-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cache/ms-playwright
@@ -777,6 +940,17 @@ jobs:
           if ! npm exec --prefix desktop/ui-tests -- playwright install-deps chromium; then
             echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
           fi
+      # Saved from main only: a pull request restores main's copy and never
+      # writes its own, which kept the repository over its cache limit.
+      - name: Save the Playwright browser
+        if: github.ref == 'refs/heads/main' && steps.chat-ui-browser-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       - name: Chat UI with JSON ACP agents
         run: make desktop-agent-host-browser-e2e
@@ -800,7 +974,7 @@ jobs:
     name: Desktop workspace (fmt, clippy, tests, macOS build + codesign)
     timeout-minutes: 90
     needs: changes
-    if: needs.changes.outputs.desktop == 'true'
+    if: needs.changes.outputs.desktop == 'true' && github.event_name != 'merge_group'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
@@ -860,9 +1034,11 @@ jobs:
           prefix-key: desktop-native
           shared-key: ${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
-          # GitHub scopes PR caches to their merge ref: subsequent pushes can
-          # reuse dependencies without making them available to main/releases.
+          # Saved from main only; see the note on `desktop-contract`'s cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # The ref test is what keeps a merge group ad-hoc signed: its ref is the
+      # queue's `gh-readonly-queue/main/...` branch, not main.
       - name: Import Developer ID certificate
         id: apple-signing
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -920,7 +1096,8 @@ jobs:
       # what it finds and fetches whatever is missing, so a bad cache costs a
       # download rather than the wrong browser.
       - name: Cache the Playwright browser
-        uses: actions/cache@v6
+        id: macos-browser-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cache/ms-playwright
@@ -936,6 +1113,17 @@ jobs:
           npx --no-install playwright install chromium
           npm test
           npm run test:browser
+      # Saved from main only: a pull request restores main's copy and never
+      # writes its own, which kept the repository over its cache limit.
+      - name: Save the Playwright browser
+        if: github.ref == 'refs/heads/main' && steps.macos-browser-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       # desktop/runtime/lemma-local.json is committed as an online-shaped
       # placeholder: unresolvable URLs, zero digests, and `artifact_source:
@@ -968,24 +1156,26 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      # The .app always; the .dmg only where a broken one would be caught.
+      # The .app and the .dmg only where a broken one would be caught: a
+      # packaging change, and every push to main.
       #
-      # The same trade the Windows job already makes for NSIS, for the same
-      # reason: wrapping the .app in a disk image is the one step here whose
-      # output is discarded, and nothing outside `desktop_packaging` can change
-      # its result. It is also the flakiest thing in this job -- `bundle_dmg.sh`
-      # fails on a busy `hdiutil` often enough to have shown up twice in the
-      # last twenty runs -- so on an ordinary Rust pull request it is pure
-      # noise. Everything this job actually asserts (it compiles, it codesigns,
-      # the sidecars are embedded, the refusal marker survives) is asserted on
-      # the .app, which is built either way.
+      # The same trade the Windows job makes for NSIS. This step is a release
+      # compile plus an ad hoc codesign, half of this job's time on every
+      # desktop pull request, and what it and the two checks after it
+      # assert (the app codesigns, the sidecars are embedded with their
+      # entitlements, the refusal marker survives) is decided by the packaging
+      # inputs, which `desktop_packaging` lists, entitlements and the macOS
+      # sidecar script included. Clippy and the tests above still compile
+      # everything on every desktop change. `bundle_dmg.sh` is also the
+      # flakiest thing in this job -- a busy `hdiutil` fails it now and then --
+      # which is noise on an ordinary Rust pull request.
       - name: Build and codesign the online app
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         working-directory: desktop
         env:
-          BUNDLES: >-
-            ${{ (github.event_name == 'push'
-            || needs.changes.outputs.desktop_packaging == 'true')
-            && 'app,dmg' || 'app' }}
+          BUNDLES: 'app,dmg'
         run: |
           set -euo pipefail
           # Retried, and the detach between attempts is the part that matters.
@@ -1012,6 +1202,9 @@ jobs:
           done
 
       - name: Verify application signature
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -1073,6 +1266,9 @@ jobs:
       # artifact* still carries the marker. A packaging change that dropped it
       # would leave whoever tried it debugging a network error for an hour.
       - name: The build-check app refuses to install, and says why
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -1152,7 +1348,7 @@ jobs:
     name: Desktop launch smoke
     timeout-minutes: 30
     needs: changes
-    if: needs.changes.outputs.desktop_launch == 'true'
+    if: needs.changes.outputs.desktop_launch == 'true' && github.event_name != 'merge_group'
     runs-on: macos-14
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -1186,6 +1382,8 @@ jobs:
           workspaces: desktop
           prefix-key: desktop-launch
           cache-on-failure: true
+          # Saved from main only; see the note on `desktop-contract`'s cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Native, because there is no Docker here either: Docker Desktop needs
       # the same nested virtualization the guest does.
@@ -1206,7 +1404,7 @@ jobs:
       # are cached with the core.
       - name: Cache the SuperTokens core
         id: supertokens-cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: ~/supertokens
           key: supertokens-${{ runner.os }}-${{ runner.arch }}-${{ env.SUPERTOKENS_CORE }}-postgresql
@@ -1222,6 +1420,14 @@ jobs:
           rm -rf ~/supertokens/jre
           cd ~/supertokens
           "${JAVA_HOME_21_arm64:-$JAVA_HOME}/bin/java" -classpath "./downloader/*" io.supertokens.downloader.Main
+      # Saved from main only: a pull request restores main's copy and never
+      # writes its own, which kept the repository over its cache limit.
+      - name: Save the SuperTokens core
+        if: github.ref == 'refs/heads/main' && steps.supertokens-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/supertokens
+          key: supertokens-${{ runner.os }}-${{ runner.arch }}-${{ env.SUPERTOKENS_CORE }}-postgresql
 
       - name: Start SuperTokens
         run: |
@@ -1382,7 +1588,8 @@ jobs:
         with:
           workspaces: desktop
           prefix-key: desktop-guestd
-          # PR merge-ref caches cannot be restored by main or release refs.
+          # Saved from main only; see the note on `desktop-contract`'s cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Lint
         working-directory: desktop
@@ -1400,7 +1607,7 @@ jobs:
     name: Windows desktop build check
     timeout-minutes: 90
     needs: changes
-    if: needs.changes.outputs.desktop == 'true'
+    if: needs.changes.outputs.desktop == 'true' && github.event_name != 'merge_group'
     runs-on: windows-latest
     defaults:
       run:
@@ -1441,8 +1648,8 @@ jobs:
           prefix-key: desktop-native
           shared-key: ${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
-          # GitHub scopes PR caches to their merge ref: subsequent pushes can
-          # reuse dependencies without making them available to main/releases.
+          # Saved from main only; see the note on `desktop-contract`'s cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -1478,7 +1685,8 @@ jobs:
       # what it finds and fetches whatever is missing, so a bad cache costs a
       # download rather than the wrong browser.
       - name: Cache the Playwright browser
-        uses: actions/cache@v6
+        id: windows-browser-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cache/ms-playwright
@@ -1494,6 +1702,17 @@ jobs:
           npx --no-install playwright install chromium
           npm test
           npm run test:browser
+      # Saved from main only: a pull request restores main's copy and never
+      # writes its own, which kept the repository over its cache limit.
+      - name: Save the Playwright browser
+        if: github.ref == 'refs/heads/main' && steps.windows-browser-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       - name: Read the pinned Tauri CLI
         run: |
@@ -1562,6 +1781,11 @@ jobs:
   ci:
     name: CI passed
     timeout-minutes: 10
+    # `always()`, deliberately not `!cancelled()`: a required check that is
+    # *skipped* reports success, so a run cancelled on the pull request's
+    # current head would otherwise let it merge with nothing verified. A
+    # superseded run reports failure instead, which is noise on a commit the
+    # pull request no longer points at, not a gate anyone can pass through.
     if: always()
     needs:
       - changes

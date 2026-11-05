@@ -39,12 +39,6 @@ class UserRepositoryPort(Protocol):
     ) -> list[UUID]:
         raise NotImplementedError
 
-    async def get_id_by_telegram_lower(self, username_lower: str) -> Optional[UUID]: ...
-
-    async def get_live_id_by_telegram_lower(
-        self, username_lower: str
-    ) -> Optional[UUID]: ...
-
 
 class UserCachePort(Protocol):
     async def get(self, user_id: UUID) -> Optional[UserEntity]: ...
@@ -55,7 +49,9 @@ class UserCachePort(Protocol):
 
 
 class OrganizationRepositoryPort(Protocol):
-    async def create(self, entity: OrganizationEntity) -> OrganizationEntity: ...
+    async def create(
+        self, entity: OrganizationEntity, *, created_by_user_id: UUID | None = None
+    ) -> OrganizationEntity: ...
 
     async def get(self, id: UUID) -> Optional[OrganizationEntity]: ...
 
@@ -233,3 +229,10 @@ class PodMembershipPort(Protocol):
         user_name: Optional[str],
         pod_role: str,
     ) -> None: ...
+
+    async def leave_organization_pods(
+        self, *, organization_member_id: UUID, user_id: UUID
+    ) -> list[UUID]:
+        """Take a departing organization member out of each of its pods, each
+        announced as the pod's own removal."""
+        ...

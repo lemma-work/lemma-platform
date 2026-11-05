@@ -25,9 +25,11 @@ and a port-typed caller cannot reach it.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
-from app.modules.agent.domain import ports
+from app.modules.agent.domain import conversation_ports, ports
 from app.modules.agent.infrastructure.repositories.agent_repository import (
     AgentRepository,
 )
@@ -89,3 +91,21 @@ def test_the_port_declares_every_method_its_implementation_exposes(
         "`object` instead -- which is how this port lost nineteen declarations. "
         "Declare it on the port, or make it private to the implementation."
     )
+
+
+def _slices() -> list[type]:
+    return [getattr(conversation_ports, name) for name in conversation_ports.__all__]
+
+
+@pytest.mark.parametrize("slice_port", _slices(), ids=lambda port: port.__name__)
+def test_a_slice_is_the_full_port_narrowed_not_redeclared(slice_port: type) -> None:
+    """A slice repeats signatures from the full port, so it could drift from
+    them. Same names, same signatures, or the slice is a second contract."""
+    full = ports.ConversationRepository
+    for name in _public_methods(slice_port):
+        assert name in _public_methods(full), (
+            f"{slice_port.__name__}.{name} is not on ConversationRepository"
+        )
+        assert inspect.signature(getattr(slice_port, name)) == inspect.signature(
+            getattr(full, name)
+        ), f"{slice_port.__name__}.{name} differs from ConversationRepository.{name}"

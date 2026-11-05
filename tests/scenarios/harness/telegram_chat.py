@@ -192,17 +192,39 @@ class ForgedChat(Chat):
     can_forge = True
     lane = "the egress proxy standing in for Telegram"
 
-    def __init__(self, alice: Any, view: Any, *, handle: str, chat_id: int) -> None:
+    def __init__(
+        self,
+        alice: Any,
+        view: Any,
+        *,
+        handle: str,
+        chat_id: int,
+        sender_id: int | None = None,
+        phone: str | None = None,
+    ) -> None:
         self._alice = alice
         self._view = view
         self._handle = handle
         self.chat_id = chat_id
+        # A private chat's id is its person's id on Telegram; a second chat
+        # forged for the same person keeps the person.
+        self.sender_id = sender_id if sender_id is not None else chat_id
+        #: The number this person's own contact carries, for proving the account.
+        self._phone = phone
+        #: What the agent said before the scenario began -- the confirmation of
+        #: a proof -- which is not an answer to anything the scenario said.
+        self._heard_before = 0
         # Update ids are how a platform names a delivery, and Lemma discards one
         # it has already handled. Counting from the chat id keeps one scenario's
         # ids clear of another's without anybody having to remember which
         # numbers are taken — which is a bookkeeping mistake that used to show
         # up as a message silently deduplicated and a wait that never ended.
         self._next_id = count(chat_id * 1000)
+
+    @property
+    def handle(self) -> str:
+        """The @username this chat's sender writes as, without the @."""
+        return self._handle
 
     @property
     def webhook_path(self) -> str:
@@ -220,18 +242,49 @@ class ForgedChat(Chat):
             "date": 1700000000,
             "chat": {"id": self.chat_id, "type": "private"},
             "from": {
-                "id": self.chat_id,
+                "id": self.sender_id,
                 "is_bot": False,
                 "first_name": "Alice",
-                # What makes this a message from somebody rather than a stranger:
-                # a sender whose @username matches a user's telegram_username
-                # resolves to that user with no linking round trip.
+                # Real senders usually have one, and it proves nothing -- Lemma
+                # matches on it not at all. See `proves_who_they_are`.
                 **({"username": self._handle} if self._handle else {}),
             },
             "text": text,
         }
         message.update(extra)
         return {"update_id": update_id, "message": message}
+
+    async def proves_who_they_are(self) -> None:
+        """Share this person's own contact, as Telegram's button does, once.
+
+        A Telegram handle is something anybody can claim, so it is never what
+        makes a sender somebody; the number Telegram attests in a self-shared
+        contact is, matched against the one on the profile. Lemma confirms,
+        and the confirmation is set aside so a scenario's first wait is for an
+        answer to what it said.
+        """
+        assert self._phone, "a contact share needs the number on the profile"
+        update = self.update("")
+        message = update["message"]
+        del message["text"]
+        message["contact"] = {
+            "phone_number": self._phone,
+            "first_name": "Alice",
+            "user_id": self.sender_id,
+        }
+        delivered = await self.delivers(update)
+        assert delivered.status_code < 400, (
+            f"sharing a contact was rejected: {delivered.status_code} "
+            f"{delivered.text[:300]}"
+        )
+        confirmed = await self.waits_for_a_reply()
+        assert "linked" in confirmed.text.lower(), (
+            f"sharing the number on the profile should prove the account; Lemma "
+            f"said {confirmed.text!r}. A deployment matches an unverified profile "
+            f"number only with SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH on, which the "
+            f"suite's own stack sets."
+        )
+        self._heard_before = len(self._view.messages_to(self.chat_id))
 
     async def delivers(
         self, update: dict, *, secret: str | None = None, signed: bool = True
@@ -277,28 +330,26 @@ class ForgedChat(Chat):
     async def replies(self) -> list[Spoken]:
         return [
             Spoken(text=said.text, choices=tuple(said.native_choices))
-            for said in self._view.messages_to(self.chat_id)
+            for said in self._view.messages_to(self.chat_id)[self._heard_before :]
         ]
 
     def as_a_stranger(self) -> ForgedChat:
         """The same bot, messaged by somebody Lemma has never heard of.
 
-        A sender is recognised by an @username that matches a user's
-        `telegram_username`; leaving it off is what a real stranger looks like,
-        rather than what a broken message looks like. Its own chat, too — a
-        stranger writing into the colleague's conversation would be a different
-        and much more alarming scenario.
+        No @username and no proven account: what a real stranger looks like, rather than what a broken message looks like. Its
+        own chat, too — a stranger writing into the colleague's conversation
+        would be a different and much more alarming scenario.
         """
         stranger = ForgedChat(
             self._alice, self._view, handle="", chat_id=self.chat_id + 500
         )
         return stranger
 
-    def as_another_person(self, handle: str) -> ForgedChat:
+    def as_another_person(self, handle: str, *, phone: str | None = None) -> ForgedChat:
         """The same bot, messaged by a different Lemma user from their own chat.
 
-        Not a stranger: somebody with an account and an `@username` Lemma can
-        resolve, who simply has no business in this pod. Only a forged delivery
+        Not a stranger: somebody with an account and -- once they
+        `proves_who_they_are` with `phone` -- a Telegram account Lemma resolves, who simply has no business in this pod. Only a forged delivery
         can arrange that — a Telegram account belongs to one person
         deployment-wide, so a real one cannot be the member and the outsider in
         the same run, and the live lane has exactly one account which is already
@@ -309,7 +360,11 @@ class ForgedChat(Chat):
         to another.
         """
         return ForgedChat(
-            self._alice, self._view, handle=handle, chat_id=self.chat_id + 700
+            self._alice,
+            self._view,
+            handle=handle,
+            chat_id=self.chat_id + 700,
+            phone=phone,
         )
 
     def in_another_chat(self) -> ForgedChat:
@@ -323,6 +378,8 @@ class ForgedChat(Chat):
             self._view,
             handle=self._handle,
             chat_id=self.chat_id + 1,
+            sender_id=self.sender_id,
+            phone=self._phone,
         )
 
 

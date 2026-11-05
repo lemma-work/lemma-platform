@@ -26,14 +26,14 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Callable
 from uuid import UUID
 
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
-    accumulate_usage,
-)
+from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
+    response_budget_expiry,
     retry_after_seconds,
 )
 
@@ -53,6 +53,10 @@ class HarnessDriverCancelled(Exception):
 
 
 _RETRY_BACKOFF_CAP_SECONDS = 6.0
+
+#: The longest a provider's `Retry-After` may hold a run between attempts. The
+#: same ceiling the metered model applies to the retries it owns.
+RETRY_AFTER_CAP_SECONDS = 60.0
 
 
 def reraise_driver_failure(
@@ -117,7 +121,7 @@ async def drive_with_retry(
     stream_reset,
     stopped,
     should_stop,
-    emit_usage,
+    shorter_answer_settings: Callable[[], JsonObject | None],
 ) -> None:
     """Run one agent-graph pass, re-entering it after a transient stream drop.
 
@@ -126,18 +130,23 @@ async def drive_with_retry(
     streaming machinery it sits inside.
 
     `drive_once` publishes the live run and a pre-request history snapshot into
-    the `state` dict it is handed. Both are required to resume: the run carries
-    the usage already spent, and the snapshot is the history as it stood
+    the `state` dict it is handed. The snapshot is the history as it stood
     *before* the failing request, which is what keeps a retry from replaying a
     half-written response or re-executing a completed tool.
+
+    An answer that ran past the whole-response time budget is the exception to
+    "re-ask the same request": it would take as long again. It is re-asked at
+    most once, with `shorter_answer_settings()`, and not at all when that
+    returns None because the run has no time left for it.
     """
-    carried_usage: dict[str, int] = {}
     resume_history: list[object] | None = None
+    retry_settings: JsonObject | None = None
+    over_budget_retried = False
     attempt = 0
     while True:
         state: dict[str, object] = {}
         try:
-            await drive_once(resume_history, state, carried_usage)
+            await drive_once(resume_history, state, model_settings=retry_settings)
             return
         # Deliberately `Exception`, not `BaseException`: a CancelledError must
         # reach the caller untouched so pydantic-graph's scopes unwind in this
@@ -148,29 +157,26 @@ async def drive_with_retry(
         except Exception as exc:  # noqa: BLE001 — re-raised below when fatal
             run = state.get("run")
             snapshot = state.get("resume_from")
+            over_budget = response_budget_expiry(exc) is not None
+            if over_budget:
+                # Re-sending the identical request takes as long again, so it
+                # gets one retry, asking for less, and only while the run has
+                # the time left to make one.
+                retry_settings = (
+                    None if over_budget_retried else shorter_answer_settings()
+                )
+                over_budget_retried = True
             if (
                 run is None
                 or snapshot is None
                 or attempt + 1 >= max_attempts
-                or not is_retryable_stream_error(exc)
+                or (over_budget and retry_settings is None)
+                or not (over_budget or is_retryable_stream_error(exc))
             ):
-                # Ending for good, so bill before the exception leaves. Every
-                # non-retryable exit used to skip this: a provider error, retry
-                # exhaustion, and -- the common one -- a pausing tool raising to
-                # wait for a person. An approval-gated turn billed zero on every
-                # run that asked for one.
-                #
-                # Here rather than in a `finally` inside the loop because a
-                # retryable failure must NOT emit: its tokens are carried into
-                # the next attempt's total, and a second event would either
-                # double-count for a consumer that sums or make the "exactly one
-                # usage total per run" contract false.
-                emit_usage()
                 raise
             # Resuming re-asks only the request that failed. Completed tool
             # results are replayed from the snapshot rather than re-executed,
             # so no tool ever runs twice.
-            accumulate_usage(carried_usage, getattr(run, "usage", None))
             resume_history = list(snapshot)  # type: ignore[arg-type]
             attempt += 1
             logger.warning(
@@ -186,7 +192,22 @@ async def drive_with_retry(
             if await should_stop():
                 await queue.put(("event", stopped()))
                 return
-            await asyncio.sleep(retry_after_seconds(exc) or _retry_backoff(attempt))
+            await asyncio.sleep(_retry_delay(exc, attempt))
+
+
+def _retry_delay(exc: BaseException, attempt: int) -> float:
+    """How long to wait before re-entering, honouring the provider within reason.
+
+    A `Retry-After` is the provider's to set, and backing off less than it asks
+    just earns another refusal. But the header is untrusted input, and a run
+    asleep on it holds its conversation's one active slot the whole time: a
+    misbehaving value of hours would park the conversation for hours. So it is
+    honoured up to a ceiling, past which the attempt fails honestly instead.
+    """
+    asked = retry_after_seconds(exc)
+    if asked is not None:
+        return min(asked, RETRY_AFTER_CAP_SECONDS)
+    return _retry_backoff(attempt)
 
 
 def _retry_backoff(attempt: int) -> float:

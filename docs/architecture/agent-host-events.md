@@ -54,7 +54,7 @@ de-duplication are described in [agent-host.md](agent-host.md#the-link).
 | `tool_call_result` | call id | [tool result](#tool-results) | `MESSAGE` tool return |
 | `usage` | none | [token usage](#usage) | `USAGE` |
 | `session_update` | none | `title`, `mode`, `commands`, `context` | `STATUS` |
-| `config_update` | none | `kind` plus detail | `STATUS` |
+| `config_update` | none | `kind` or `status`, `detail`, `option` | `STATUS`, flat: `{status: "config_update", notice, detail, option?}` — `detail` is always the sentence |
 | `permission_request` | request id | [permission](#permission-requests) | `request_approval` call |
 | `steer_result` | Lemma message id | [steering](#steering) | marks the message delivered (no message) |
 | `terminal` | none | `state`, `error`, `supersedes_stream` | run end |
@@ -74,7 +74,10 @@ Text is unchanged from the previous version: chunks stream live, and the host
 seals what it has buffered into an `*_upsert` before any non-text event and at
 64 KiB. Replaying only the upserts rebuilds the exact text. An image or other
 rich block still travels as an `agent_message_chunk` whose `content` is the ACP
-content block; the backend's artifact writer turns it into a pod file.
+content block; the backend's artifact writer turns it into a pod file. Its
+bytes do not travel in the event: the host uploads them first and the block
+names them, `lemma_blob: {sha256, size}` in place of `data`, because the link
+takes no message past 1 MiB ([Bulk bytes](agent-host.md#bulk-bytes)).
 
 Thinking is flushed at every step boundary: a tool call, a permission request,
 or the end of the turn. It used to be saved once per run, so a run showed one
@@ -92,6 +95,8 @@ releases it when:
 - an update arrives carrying no new arguments (the adapter's own "input
   written" signal);
 - a permission request for the call arrives (the input is final by then);
+- Claude Code reports progress on it, which it does only while the tool runs
+  (see [progress beats](#claude-code-claude-agent-acp));
 - the call closes; or
 - the turn ends.
 
@@ -99,6 +104,22 @@ The same hold used to live in the backend (`tool_calls.py`). Moving it to the
 host means it can use adapter-specific knowledge. OpenCode, for example, reports
 the tool's name only in its *first* title and replaces it with a description
 afterwards.
+
+A call released because the turn ended arrives after the agent's closing words.
+That happens when a turn ends before a call's input settles, for example
+because it was cancelled or the adapter died. The backend seals words that come
+before a call as narration, so such a turn reaches `terminal` with nothing
+marked as its answer. A run that completes without an answer therefore takes
+its last words as the answer unless a tool result came after them, and marks
+them so in the transaction that records the run's end
+(`RunEventPump._answer_from_last_words`).
+
+Not every update is about a call the adapter opened. Claude Code reports
+progress on a running tool under ids of its own, `<call id>-heartbeat-<n>`.
+The host used to open a call for each one, with no input, so it never settled,
+and every long tool call ended its turn with empty cards after the answer, each
+closed with a made-up failed return. The host now reads these as progress, never
+as calls: see [progress beats](#claude-code-claude-agent-acp) under Claude Code.
 
 ```json
 {
@@ -214,6 +235,24 @@ every update.
 A result's `rawOutput` is the Anthropic tool-result content: a string for
 `Bash`, a list of content blocks for MCP tools.
 
+**Progress beats are not calls.** The adapter forwards each of the SDK's
+`tool_progress` messages as a `tool_call_update` that carries only
+`status: "in_progress"`, the tool's name and
+`_meta.claudeCode.toolResponse.elapsedTimeSeconds`, under the message's own id
+(`case "tool_progress"` in its `acp-agent.js`). That id is often not a call's.
+Claude Code beats every 30 seconds while a tool runs, under
+`<call id>-heartbeat-<n>`, and a sub-agent waiting out an API retry beats under
+an id of its own. An update with no input, for an id the run has not seen, is a
+beat when the id has the heartbeat shape or when the update reports running
+time. A beat never opens a call:
+
+- a heartbeat of a call that is still held releases that call, because the tool
+  is running and its input is final;
+- every other beat is dropped, including one that arrives after its call's
+  result.
+
+An update that carries input is a call, whatever its id.
+
 ### Codex (`codex-acp`)
 
 Codex names nothing except MCP calls. The rest is read from `kind`, `title`,
@@ -316,7 +355,21 @@ labels it with that option's name), and says when the request runs out. The
 host denies an unanswered request itself after 30 minutes
 (`PERMISSION_DECISION_TIMEOUT`), so a card past that point, or one whose run
 has ended, reads "Expired — the agent continued without it" instead of
-offering buttons.
+offering buttons. Lemma ends a turn parked on a request well before that, at
+its parked window (see [the link](agent-host.md#delivery)); that card stays
+open, and its decision resumes a new run instead of reaching the host.
+
+An approval given that late is carried into the resume run, so the person is
+not asked twice. The run's `START_RUN` spec lists it under `pre_approvals`
+(`approval_id`, the card's `tool_name` and `input`, and the `decision`), sent
+only to a harness that publishes the capability `pre_approval`. The first
+request in that run for exactly the same tool and input -- compared whole,
+never by prefix -- is answered on the host with the agent's own "allow once",
+and the approval is spent; a request that offers no "allow once" spends
+nothing and is asked. Denials are never carried. The host still emits the
+request, with `"pre_approved": { "approval_id": "…" }`, and the backend records
+it as a `request_approval` call already answered ("Allowed without asking
+again"), with no STATUS event, so no surface posts buttons for it.
 
 A request that gates one of Lemma's own MCP tools never reaches Lemma. The host
 answers it itself, because Lemma already authorizes those tools on every
@@ -377,3 +430,8 @@ UPDATE_GOLDEN=1 cargo test -p lemma-agent-host --test normalize_golden
 
 Review the diff of `*.expected.json` as you would review code. That diff shows
 exactly what users will see change.
+
+The `long` prompt holds a shell call and a Lemma MCP call open for longer than
+Claude Code's heartbeat interval (`sleep N` makes the stand-in server wait), so
+its transcript records the [progress beats](#claude-code-claude-agent-acp) an
+adapter sends while a tool runs. It takes a couple of minutes to record.

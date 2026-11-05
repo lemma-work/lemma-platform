@@ -197,9 +197,9 @@ class TestPdfPagesRespectTheMode:
         _pdf_services(monkeypatch)
         monkeypatch.delenv("VISION_MODEL", raising=False)
         monkeypatch.setattr(agent_settings, "vision_model", None)
-        # A deployment with its own model and no VISION_MODEL: the message
-        # names the setting. Without a system model the workspace is asked
-        # instead (test_workspace_model_fallback.py).
+        # A deployment with its own model and no VISION_MODEL: the message says
+        # no image model is set up (the log names the setting). Without a system
+        # model the workspace is asked instead (test_workspace_model_fallback.py).
         monkeypatch.setattr(
             "app.modules.agent.services.runtime_system_profiles."
             "system_profile_configured",
@@ -213,7 +213,8 @@ class TestPdfPagesRespectTheMode:
 
         assert not isinstance(result, ToolReturn)
         assert result["success"] is False
-        assert "VISION_MODEL" in result["error"]
+        assert "reads images" in result["error"]
+        assert "VISION_MODEL" not in result["error"]
         assert "pod_read_file" in result["error"]
 
 
@@ -321,11 +322,14 @@ def test_a_vision_capable_run_is_detected_from_its_stored_snapshot() -> None:
     from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 
     seeing = vision_mode_from_runtime_profile(
-        {"model_capabilities": ["TEXT", "TOOLS", "VISION"]}
+        {"model_capabilities": ["TEXT", "TOOLS", "VISION"]},
+        delegate_model_configured=True,
     )
     assert seeing is AgentVisionMode.DIRECT
 
-    text_only = vision_mode_from_runtime_profile({"model_capabilities": ["TEXT"]})
+    text_only = vision_mode_from_runtime_profile(
+        {"model_capabilities": ["TEXT"]}, delegate_model_configured=True
+    )
     assert text_only is not AgentVisionMode.DIRECT
 
 

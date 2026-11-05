@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from httpx import HTTPError
@@ -38,14 +40,14 @@ class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
         return self._parser.parse(payload, headers)
 
     async def fetch_sender_profile(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> SurfaceSenderProfile | None:
         return await ResendPlatformService(credentials).fetch_sender_profile(event)
 
     async def download_attachment(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
@@ -60,7 +62,7 @@ class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
         )
 
     async def enrich_inbound_event(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent | None:
         """Fetch the body when the webhook did not carry one.
 
@@ -118,17 +120,19 @@ class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
     async def send_message(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await ResendPlatformService(credentials).send_message(event, message, metadata)
+    ) -> str | None:
+        return await ResendPlatformService(credentials).send_message(
+            event, message, metadata
+        )
 
     async def send_cold_email(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         recipient_email: str,
         subject: str,
         message: str,
@@ -146,7 +150,7 @@ class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
     async def add_processing_indicator(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:

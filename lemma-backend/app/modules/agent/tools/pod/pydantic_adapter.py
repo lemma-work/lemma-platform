@@ -14,8 +14,10 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.tool_payload_limits import bounded_rows
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
     PodTablesRequest,
@@ -38,6 +40,7 @@ from app.modules.agent.tools.pod.pod_file_tools import (
 )
 from app.modules.datastore.contracts import (
     TableContext,
+    describe_column,
 )
 
 
@@ -47,26 +50,28 @@ def _table_summary(table: Any) -> JsonObject:
         "description": getattr(table, "description", None),
         "primary_key": table.primary_key_column,
         "rls_enabled": table.enable_rls,
-        "columns": [
-            {
-                "name": column.name,
-                "type": column.type.value
-                if hasattr(column.type, "value")
-                else str(column.type),
-                "required": column.required,
-                "description": column.description,
-                # ENUM columns only accept one of a fixed set; surface it here so
-                # a valid record can be built from the schema alone, without
-                # having to trip the validation error to learn the options.
-                **(
-                    {"options": getattr(column, "options", None)}
-                    if getattr(column, "options", None)
-                    else {}
-                ),
-            }
-            for column in table.columns
-        ],
+        # Everything a write depends on -- length, allowed values, default,
+        # uniqueness, the column it references, and whether its name must be
+        # quoted in `pod_query` -- so a valid record or query can be built from
+        # the schema alone rather than learned from the error.
+        "columns": [describe_column(column).as_json() for column in table.columns],
     }
+
+
+#: What reading and writing a table's records ask the authorizer for, in turn.
+#: Named up front so an agent refused one is told about both and the person is
+#: asked once (``run_pod_tool``'s ``needs``).
+_READS_RECORDS = frozenset(
+    {Permissions.DATASTORE_TABLE_READ, Permissions.DATASTORE_RECORD_READ}
+)
+_WRITES_RECORDS = frozenset(
+    {Permissions.DATASTORE_TABLE_READ, Permissions.DATASTORE_RECORD_WRITE}
+)
+#: A delete is its own permission, and a destructive one: an agent asks before
+#: it, whatever it may write.
+_DELETES_RECORDS = frozenset(
+    {Permissions.DATASTORE_TABLE_READ, Permissions.DATASTORE_RECORD_DELETE}
+)
 
 
 async def _table_context(services: PodServices, table_name: str) -> TableContext:
@@ -131,17 +136,19 @@ async def pod_get_records(
             sorts=[(s.column, s.direction) for s in request.sorts] or None,
             filters=[(f.column, f.op, f.value) for f in request.filters] or None,
         )
-        return {
-            "success": True,
-            "records": [to_json_value(record.data) for record in records],
-            "total": total,
-        }
+        shown, left_out = bounded_rows([to_json_value(r.data) for r in records])
+        result: JsonObject = {"success": True, "records": shown, "total": total}
+        if left_out:
+            result["truncated"] = True
+            result["note"] = _too_large_note(left_out, shown=len(shown))
+        return result
 
     return await run_pod_tool(
         ctx.deps,
         tool_name="pod_get_records",
         args=request.model_dump(),
         op=op,
+        needs=_READS_RECORDS,
     )
 
 
@@ -149,11 +156,13 @@ async def pod_write_record(
     ctx: RunContext[BaseAgentContext],
     request: PodWriteRecordRequest,
 ) -> JsonObject:
-    """Create, update, or delete a record in a pod table (requires record.write grant).
+    """Create, update, or delete a record in a pod table.
 
     - ``action="create"`` — needs ``data`` (column -> value).
     - ``action="update"`` — needs ``record_id`` and ``data``.
-    - ``action="delete"`` — needs ``record_id``.
+    - ``action="delete"`` — needs ``record_id``. Deleting is destructive: it
+      needs ``datastore.record.delete``, not ``record.write``, and asks the
+      person for approval unless that was granted.
     """
 
     async def op(services: PodServices) -> JsonObject:
@@ -179,8 +188,17 @@ async def pod_write_record(
 
         table_ctx = await _table_context(services, request.table_name)
         if request.action == "create":
+            # Keyed on the call: a resumed turn re-running this create under
+            # its recorded id gets the row back, not a second one (KEYED).
             record = await services.record.create_record(
-                table_ctx, dict(request.data or {}), services.ctx.user_id
+                table_ctx,
+                dict(request.data or {}),
+                services.ctx.user_id,
+                idempotency_key=(
+                    f"run:{ctx.deps.agent_run_id}:{ctx.tool_call_id}"
+                    if ctx.deps.agent_run_id and ctx.tool_call_id
+                    else None
+                ),
             )
             return {"success": True, "record": to_json_value(record.data)}
         if request.action == "update":
@@ -201,6 +219,7 @@ async def pod_write_record(
         tool_name="pod_write_record",
         args=request.model_dump(),
         op=op,
+        needs=_DELETES_RECORDS if request.action == "delete" else _WRITES_RECORDS,
     )
 
 
@@ -213,7 +232,8 @@ async def pod_query(
     Reads across tables (joins, aggregates, subqueries) including RLS-enabled
     tables; rows of an RLS table are always scoped to the agent's user (the same
     per-user view its other record reads get). Only a single read-only SELECT is
-    allowed.
+    allowed. A column shown in double quotes, or with `quote_required`, must be
+    written in double quotes here too: `SELECT "check" FROM audits`.
     """
 
     async def op(services: PodServices) -> JsonObject:
@@ -224,17 +244,20 @@ async def pod_query(
             table_service=services.table,
             ctx=services.ctx,
         )
+        shown, left_out = bounded_rows([to_json_value(row) for row in rows])
         result: JsonObject = {
             "success": True,
-            "rows": to_json_value(rows),
+            "rows": shown,
             # Not "total": this is how many rows came back, which is only the
             # total when nothing was cut. Reporting the capped count as a total
             # is how an agent tells someone they have 1000 orders when they have
             # forty thousand.
-            "row_count": row_count,
-            "truncated": truncated,
+            "row_count": len(shown),
+            "truncated": truncated or bool(left_out),
         }
-        if truncated:
+        if left_out:
+            result["note"] = _too_large_note(left_out, shown=len(shown))
+        elif truncated:
             result["note"] = (
                 f"Only the first {row_count} rows are shown; the result was cut "
                 "short by the row cap. Do not treat this count as a total -- "
@@ -245,6 +268,21 @@ async def pod_query(
 
     return await run_pod_tool(
         ctx.deps, tool_name="pod_query", args=request.model_dump(), op=op
+    )
+
+
+def _too_large_note(left_out: int, *, shown: int) -> str:
+    """Said when rows were cut for size, which the row cap never sees.
+
+    A row count bounds how many rows come back, not how large they are: rows
+    with a wide text or JSON column are megabytes long, and whatever a tool
+    returns rides in the conversation for the rest of the run.
+    """
+    return (
+        f"Only the first {shown} rows are shown: {left_out} more matched but "
+        "would have made the result too large to carry. Do not treat this as a "
+        "total -- select fewer or narrower columns, page with a smaller limit, "
+        "or aggregate in SQL."
     )
 
 

@@ -31,8 +31,11 @@ sandbox. Both of those are connection-ending events the caller knows about, and
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import time
-from typing import Awaitable, Callable
+from typing import AsyncIterator, Awaitable, Callable
+
+from sandbox_runtime.errors import SandboxUnavailable
 
 #: How long a connection is reused before it is re-made.
 #:
@@ -41,12 +44,26 @@ from typing import Awaitable, Callable
 #: burst is what was costing nineteen round trips.
 REARM_SECONDS = 30.0
 
+#: How long a caller waits behind another caller's connect to the same sandbox.
+#:
+#: The connect it waits on is bounded only by the SDK's own request timeout, and
+#: every operation on that sandbox queues behind it -- so a hung connect used to
+#: hold all of them, each pinning whatever its caller held, for as long as it
+#: hung. Past this the waiter gives up as unavailable, which callers retry.
+ACQUIRE_TIMEOUT_SECONDS = 60.0
+
 
 class SandboxConnections:
     """One live connection per sandbox id, with the clock that re-arms it."""
 
-    def __init__(self, *, rearm_seconds: float = REARM_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        rearm_seconds: float = REARM_SECONDS,
+        acquire_timeout_seconds: float = ACQUIRE_TIMEOUT_SECONDS,
+    ) -> None:
         self._rearm_seconds = rearm_seconds
+        self._acquire_timeout_seconds = acquire_timeout_seconds
         self._held: dict[str, tuple[float, object]] = {}
         self._opening: dict[str, asyncio.Lock] = {}
         #: How many `get` calls are inside the lock for an id, so the lock is
@@ -106,7 +123,7 @@ class SandboxConnections:
         lock = self._opening.setdefault(provider_id, asyncio.Lock())
         self._waiting[provider_id] = self._waiting.get(provider_id, 0) + 1
         try:
-            async with lock:
+            async with self._acquired(lock, provider_id):
                 fresh = self._fresh(provider_id)
                 if fresh is not None:
                     return fresh
@@ -137,6 +154,23 @@ class SandboxConnections:
                 if provider_id not in self._held:
                     self._epoch.pop(provider_id, None)
 
+    @asynccontextmanager
+    async def _acquired(
+        self, lock: asyncio.Lock, provider_id: str
+    ) -> AsyncIterator[None]:
+        try:
+            await asyncio.wait_for(lock.acquire(), self._acquire_timeout_seconds)
+        except TimeoutError:
+            raise SandboxUnavailable(
+                f"another connect to sandbox {provider_id} did not finish within "
+                f"{self._acquire_timeout_seconds:g}s",
+                retry_after_ms=1000,
+            ) from None
+        try:
+            yield
+        finally:
+            lock.release()
+
     def forget(self, provider_id: str) -> None:
         """Drop a connection to a sandbox that is no longer running.
 
@@ -154,4 +188,4 @@ class SandboxConnections:
         self._epoch[provider_id] = self._epoch.get(provider_id, 0) + 1
 
 
-__all__ = ["REARM_SECONDS", "SandboxConnections"]
+__all__ = ["ACQUIRE_TIMEOUT_SECONDS", "REARM_SECONDS", "SandboxConnections"]

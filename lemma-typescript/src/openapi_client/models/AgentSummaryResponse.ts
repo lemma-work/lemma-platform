@@ -5,6 +5,7 @@
 import type { AgentKind } from './AgentKind.js';
 import type { AgentResourcePermissionResponse } from './AgentResourcePermissionResponse.js';
 import type { AgentToolset } from './AgentToolset.js';
+import type { ResourceVisibility } from './ResourceVisibility.js';
 /**
  * Lean agent shape for list responses.
  *
@@ -28,5 +29,5 @@ export type AgentSummaryResponse = {
     toolsets?: Array<AgentToolset>;
     updated_at: string;
     user_id: string;
-    visibility?: string;
+    visibility?: ResourceVisibility;
 };

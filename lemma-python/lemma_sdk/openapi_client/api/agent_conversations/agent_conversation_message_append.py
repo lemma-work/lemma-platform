@@ -90,8 +90,7 @@ def sync_detailed(
     the conversation, the message joins that run and the next harness step sees it in persisted history
     -- any stream already subscribed to the conversation surfaces the resulting events, so callers
     steering an in-flight run should attach to that stream rather than opening a second one here. When
-    no run is active, this starts a new one exactly like the streaming send route, just without
-    attaching a stream to it.
+    no run is active, this starts a new one like the streaming send route, unstreamed.
 
     Args:
         pod_id (UUID):
@@ -132,8 +131,7 @@ def sync(
     the conversation, the message joins that run and the next harness step sees it in persisted history
     -- any stream already subscribed to the conversation surfaces the resulting events, so callers
     steering an in-flight run should attach to that stream rather than opening a second one here. When
-    no run is active, this starts a new one exactly like the streaming send route, just without
-    attaching a stream to it.
+    no run is active, this starts a new one like the streaming send route, unstreamed.
 
     Args:
         pod_id (UUID):
@@ -169,8 +167,7 @@ async def asyncio_detailed(
     the conversation, the message joins that run and the next harness step sees it in persisted history
     -- any stream already subscribed to the conversation surfaces the resulting events, so callers
     steering an in-flight run should attach to that stream rather than opening a second one here. When
-    no run is active, this starts a new one exactly like the streaming send route, just without
-    attaching a stream to it.
+    no run is active, this starts a new one like the streaming send route, unstreamed.
 
     Args:
         pod_id (UUID):
@@ -209,8 +206,7 @@ async def asyncio(
     the conversation, the message joins that run and the next harness step sees it in persisted history
     -- any stream already subscribed to the conversation surfaces the resulting events, so callers
     steering an in-flight run should attach to that stream rather than opening a second one here. When
-    no run is active, this starts a new one exactly like the streaming send route, just without
-    attaching a stream to it.
+    no run is active, this starts a new one like the streaming send route, unstreamed.
 
     Args:
         pod_id (UUID):

@@ -104,3 +104,123 @@ def test_parse_function_headers_stops_at_first_code_line():
 def test_file_path_key():
     assert _file_path_key(["a", "b", "c"]) == "a/b/c"
     assert _file_path_key([]) == ""
+
+
+def test_a_bundle_of_this_format_or_older_reads():
+    from lemma_pod_bundle import FORMAT_VERSION, check_format_version
+
+    assert check_format_version({"format_version": FORMAT_VERSION}) == FORMAT_VERSION
+    assert check_format_version({"format_version": 2}) == 2
+    # Written by hand, or before the field existed: the oldest format.
+    assert check_format_version({}) == 0
+
+
+def test_a_bundle_of_a_newer_format_is_refused_up_front():
+    """A reader of an older format would skip what the newer one added --
+    format 4's connectors -- and import everything naming them bound to
+    nothing, so it says so instead."""
+    from lemma_pod_bundle import FORMAT_VERSION, check_format_version
+
+    with pytest.raises(ValueError, match=f"reads up to format {FORMAT_VERSION}"):
+        check_format_version({"format_version": FORMAT_VERSION + 1})
+    with pytest.raises(ValueError, match="whole number"):
+        check_format_version({"format_version": "four"})
+
+
+def test_a_bundle_is_written_as_format_4_only_when_it_declares_a_connector(tmp_path):
+    """4 added ``connectors/`` and nothing else, so a bundle declaring none is
+    written as 3 and an older reader still reads every bundle it could. An
+    empty ``connectors/`` -- every exporter makes one -- declares nothing."""
+    from lemma_pod_bundle import (
+        FORMAT_VERSION,
+        FORMAT_VERSION_WITHOUT_CONNECTORS,
+        bundle_format_version,
+    )
+
+    assert FORMAT_VERSION_WITHOUT_CONNECTORS == 3
+    assert bundle_format_version(tmp_path) == 3
+    (tmp_path / "connectors").mkdir()
+    (tmp_path / "connectors" / ".DS_Store").write_text("")
+    assert bundle_format_version(tmp_path) == 3
+    (tmp_path / "connectors" / "crm").mkdir()
+    assert bundle_format_version(tmp_path) == FORMAT_VERSION == 4
+
+
+@pytest.mark.parametrize(
+    ("ref_key", "sidecar_name", "sidecar_contents"),
+    [
+        ("$file", "secret.md", "sensitive local text"),
+        ("$json_file", "secret.json", '{"sensitive": true}'),
+    ],
+)
+def test_load_resource_payload_rejects_parent_directory_file_refs(
+    tmp_path: Path, ref_key: str, sidecar_name: str, sidecar_contents: str
+):
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    outside_file = tmp_path / sidecar_name
+    outside_file.write_text(sidecar_contents, encoding="utf-8")
+    (resource_dir / "helper.json").write_text(
+        json.dumps(
+            {"name": "helper", "instruction": {ref_key: f"../../{sidecar_name}"}}
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its resource directory"):
+        load_resource_payload(resource_dir, "helper")
+
+
+@pytest.mark.parametrize("ref_key", ["$file", "$json_file"])
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_load_resource_payload_rejects_absolute_file_refs(
+    tmp_path: Path, ref_key: str, target_exists: bool
+):
+    # `base_dir / "/abs/path"` is `/abs/path`: an absolute ref replaces the
+    # resource folder outright. A missing target is refused the same way, so
+    # the error can't be used to learn which files exist.
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    outside_file = tmp_path / "secret.json"
+    if target_exists:
+        outside_file.write_text('{"sensitive": true}', encoding="utf-8")
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {ref_key: str(outside_file)}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its resource directory"):
+        load_resource_payload(resource_dir, "helper")
+
+
+def test_load_resource_payload_missing_sidecar_inside_resource_still_fails(
+    tmp_path: Path,
+):
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {"$file": "instruction.md"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        load_resource_payload(resource_dir, "helper")
+
+
+def test_load_resource_payload_rejects_symlink_to_outside_resource(tmp_path: Path):
+    resource_dir = tmp_path / "agents" / "helper"
+    resource_dir.mkdir(parents=True)
+    outside_file = tmp_path / "secret.md"
+    outside_file.write_text("sensitive local text", encoding="utf-8")
+    sidecar_link = resource_dir / "instruction.md"
+    try:
+        sidecar_link.symlink_to(outside_file)
+    except NotImplementedError, OSError:
+        pytest.skip("symlinks are not available on this platform")
+    (resource_dir / "helper.json").write_text(
+        json.dumps({"name": "helper", "instruction": {"$file": "instruction.md"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="escapes its resource directory"):
+        load_resource_payload(resource_dir, "helper")

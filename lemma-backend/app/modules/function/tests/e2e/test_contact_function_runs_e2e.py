@@ -7,6 +7,9 @@ What that proves:
 
 * the run row has no user and names the contact, and the function is told
   that contact whatever the model wrote;
+* a function that declares ``contact`` is told the handles something proved
+  the contact holds -- never one a member typed, never the model's -- and a
+  merged contact's are the survivor's;
 * the run's token reaches the pod's data on the function's grants alone -- not
   the owner's -- and nothing that needs a member;
 * a replayed tool call does not start a second run, and the daily allowance
@@ -38,7 +41,11 @@ from app.modules.agent.tools.contact_tools import (
     build_contact_toolset,
 )
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.contacts.infrastructure.models import ContactModel
+from app.modules.contacts.domain.kinds import IdentityKind, IdentityStrength
+from app.modules.contacts.infrastructure.models import (
+    ContactIdentityModel,
+    ContactModel,
+)
 from app.modules.function.config import function_settings
 from app.modules.function.contracts.contact_functions import (
     ContactFunctionUnavailable,
@@ -54,6 +61,7 @@ from app.modules.test_support.e2e.function_helpers import (
     create_table,
     replace_function_resource_grants,
 )
+from app.modules.test_support.e2e.row_bound_records import row_bound_records
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
@@ -112,6 +120,29 @@ async def _seed_contact(db_manager, *, pod_id: str) -> UUID:
     return contact.id
 
 
+async def _seed_handles(
+    db_manager,
+    *,
+    pod_id: str,
+    contact_id: UUID,
+    handles: list[tuple[IdentityKind, str, IdentityStrength]],
+) -> None:
+    async with db_manager.session_factory() as session:
+        session.add_all(
+            ContactIdentityModel(
+                id=uuid7(),
+                contact_id=contact_id,
+                pod_id=UUID(pod_id),
+                kind=kind.value,
+                value=value,
+                strength=strength.value,
+                verified_at=datetime.now(timezone.utc),
+            )
+            for kind, value, strength in handles
+        )
+        await session.commit()
+
+
 async def _runs(db_manager, function_id: UUID) -> list[FunctionRunModel]:
     async with db_manager.session_factory() as session:
         return list(
@@ -149,7 +180,12 @@ async def test_a_contacts_call_runs_for_nobody_and_is_told_its_contact(
         ctx,
         ContactFunctionRequest(
             name=function.name,
-            input={"subject": "Late", "contact_id": str(uuid4())},
+            input={
+                "subject": "Late",
+                "contact_id": str(uuid4()),
+                # Not declared by this function, so not passed on at all.
+                "contact": {"emails": ["somebody@example.com"]},
+            },
         ),
     )
 
@@ -170,6 +206,112 @@ async def test_a_contacts_call_runs_for_nobody_and_is_told_its_contact(
     assert item["user_id"] is None
     assert item["contact_id"] == str(contact_id)
     assert item["actor"] == f"contact:{contact_id}"
+
+
+_HANDLES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "order": {"type": "string"},
+        "contact_id": {},
+        "contact": {"type": ["object", "null"]},
+    },
+}
+
+
+async def test_a_function_that_asks_is_told_only_the_handles_something_proved(
+    db_manager, test_pod, fixed_test_user, short_wait
+):
+    """Where's my order: the function matches by the address the contact
+    proved, not the one the model was told -- here, somebody else's."""
+    pod_id = test_pod["id"]
+    function = await _seed_function(
+        db_manager,
+        pod_id=pod_id,
+        owner_id=fixed_test_user["id"],
+        input_schema=_HANDLES_SCHEMA,
+    )
+    contact_id = await _seed_contact(db_manager, pod_id=pod_id)
+    await _seed_handles(
+        db_manager,
+        pod_id=pod_id,
+        contact_id=contact_id,
+        handles=[
+            (IdentityKind.EMAIL, "dana@example.com", IdentityStrength.CODE),
+            (IdentityKind.PHONE, "+14155550100", IdentityStrength.CHANNEL),
+            (IdentityKind.HOST, "host:acme:42", IdentityStrength.HOST),
+            # Typed in by a member, and the browser's session: proof of neither.
+            (IdentityKind.EMAIL, "dana.typed@example.com", IdentityStrength.MEMBER),
+            (IdentityKind.WEB, str(uuid4()), IdentityStrength.SESSION),
+        ],
+    )
+
+    await run_function_for_contact(
+        SessionUnitOfWorkFactory(db_manager.session_factory),
+        pod_id=UUID(pod_id),
+        name=function.name,
+        contact_id=contact_id,
+        input_data={
+            "order": "A-1001",
+            "contact": {"id": str(uuid4()), "emails": ["victim@example.com"]},
+        },
+    )
+
+    [run] = await _runs(db_manager, function.id)
+    assert run.input_data == {
+        "order": "A-1001",
+        "contact_id": str(contact_id),
+        "contact": {
+            "id": str(contact_id),
+            "emails": ["dana@example.com"],
+            "phones": ["+14155550100"],
+            "telegram_ids": [],
+            "host_ids": ["host:acme:42"],
+            "slack_ids": [],
+            "teams_ids": [],
+        },
+    }
+
+
+async def test_a_merged_contact_is_told_as_the_contact_it_became(
+    db_manager, test_pod, fixed_test_user, short_wait
+):
+    """A conversation may still name the merged id for a moment after a
+    merge: the handles, which moved to the survivor, come with the survivor."""
+    pod_id = test_pod["id"]
+    function = await _seed_function(
+        db_manager,
+        pod_id=pod_id,
+        owner_id=fixed_test_user["id"],
+        input_schema=_HANDLES_SCHEMA,
+    )
+    survivor = await _seed_contact(db_manager, pod_id=pod_id)
+    await _seed_handles(
+        db_manager,
+        pod_id=pod_id,
+        contact_id=survivor,
+        handles=[(IdentityKind.EMAIL, "dana@example.com", IdentityStrength.CHANNEL)],
+    )
+    merged = ContactModel(
+        id=uuid7(), pod_id=UUID(pod_id), display_name=None, merged_into_id=survivor
+    )
+    async with db_manager.session_factory() as session:
+        session.add(merged)
+        await session.commit()
+
+    await run_function_for_contact(
+        SessionUnitOfWorkFactory(db_manager.session_factory),
+        pod_id=UUID(pod_id),
+        name=function.name,
+        contact_id=merged.id,
+        input_data={"order": "A-1002"},
+    )
+
+    [run] = await _runs(db_manager, function.id)
+    told = run.input_data["contact"]
+    assert told["id"] == str(survivor)
+    assert told["emails"] == ["dana@example.com"]
+    # Who the conversation named is unchanged: it is what the run is for.
+    assert run.input_data["contact_id"] == str(merged.id)
 
 
 async def test_a_replayed_tool_call_does_not_run_twice(
@@ -377,7 +519,9 @@ async def test_a_runs_token_sees_only_its_contacts_rows_of_a_contact_owned_table
 
     Record reads run where the contact policy does not hold, so they are
     refused; a query reads under the policy and sees this contact's rows only;
-    a row the run adds names its contact whatever the input said.
+    a row the run adds names its contact whatever the input said -- and is
+    written as that contact, under a role the policy binds, as a deployment's
+    is.
     """
     pod_id = test_pod["id"]
     function = await _seed_function(
@@ -414,30 +558,32 @@ async def test_a_runs_token_sees_only_its_contacts_rows_of_a_contact_owned_table
             }
         ],
     )
-    theirs = await authenticated_client.post(
-        f"/pods/{pod_id}/datastore/tables/{orders}/records",
-        json={"data": {"item": "theirs", "contact_id": str(someone_else)}},
-    )
-    assert theirs.status_code == status.HTTP_201_CREATED, theirs.text
     _claims, headers = _token(function, run_id, contact_id)
 
-    mine = await async_client.post(
-        f"/pods/{pod_id}/datastore/tables/{orders}/records",
-        json={"data": {"item": "mine", "contact_id": str(someone_else)}},
-        headers=headers,
-    )
-    assert mine.status_code == status.HTTP_201_CREATED, mine.text
+    async with row_bound_records(UUID(pod_id)):
+        mine = await async_client.post(
+            f"/pods/{pod_id}/datastore/tables/{orders}/records",
+            json={"data": {"item": "mine", "contact_id": str(someone_else)}},
+            headers=headers,
+        )
+        assert mine.status_code == status.HTTP_201_CREATED, mine.text
 
-    listed = await async_client.get(
-        f"/pods/{pod_id}/datastore/tables/{orders}/records", headers=headers
-    )
-    assert listed.status_code == status.HTTP_403_FORBIDDEN, listed.text
+        theirs = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/{orders}/records",
+            json={"data": {"item": "theirs", "contact_id": str(someone_else)}},
+        )
+        assert theirs.status_code == status.HTTP_201_CREATED, theirs.text
 
-    queried = await async_client.post(
-        f"/pods/{pod_id}/datastore/query",
-        json={"query": f"SELECT item, contact_id FROM {orders}"},
-        headers=headers,
-    )
+        listed = await async_client.get(
+            f"/pods/{pod_id}/datastore/tables/{orders}/records", headers=headers
+        )
+        assert listed.status_code == status.HTTP_403_FORBIDDEN, listed.text
+
+        queried = await async_client.post(
+            f"/pods/{pod_id}/datastore/query",
+            json={"query": f"SELECT item, contact_id FROM {orders}"},
+            headers=headers,
+        )
     assert queried.status_code == status.HTTP_200_OK, queried.text
     assert queried.json()["items"] == [{"item": "mine", "contact_id": str(contact_id)}]
 

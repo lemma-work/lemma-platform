@@ -18,13 +18,14 @@ import pytest
 from app.core.web_search.search_client import (
     BraveSearchClient,
     DuckDuckGoSearchClient,
+    ProviderAnswer,
     SearchClient,
     SearchFreshness,
     SearchVertical,
     SearXNGSearchClient,
     apply_domain_operators,
 )
-from app.modules.agent.tools.web import capture_result
+from app.modules.agent.tools.web import browser_capture, capture_result
 from app.modules.agent.tools.web import web_fetch as web_fetch_module
 from pydantic import ValidationError
 
@@ -97,7 +98,7 @@ class TestUnsupportedVerticalDegradesHonestly:
 
         async def fake_search(query, max_results=5, *, vertical, freshness):
             captured["vertical"] = vertical
-            return []
+            return ProviderAnswer([])
 
         client.search_engine.search = fake_search
 
@@ -117,7 +118,7 @@ class TestUnsupportedVerticalDegradesHonestly:
         client._pinned = "searxng"
 
         async def fake_search(query, max_results=5, *, vertical, freshness):
-            return []
+            return ProviderAnswer([])
 
         client.search_engine.search = fake_search
 
@@ -141,6 +142,7 @@ class _FakeSession:
         browser_writes_nothing: bool = False,
     ):
         self.commands: list[str] = []
+        self.terminated: list[str] = []
         self.files: dict[str, bytes] = {}
         self._responses = responses or {}
         self._write_error = write_error
@@ -200,6 +202,10 @@ class _FakeSession:
                     + b"Body text that is long enough to read. " * 5
                 )
 
+    async def terminate_process(self, process_id: str):
+        self.terminated.append(process_id)
+        return {"success": True}
+
     async def exec_command(self, *, cmd: str, timeout: int = 60, **_kwargs):
         self.commands.append(cmd)
         for marker, response in self._responses.items():
@@ -229,6 +235,9 @@ def _patch_extraction(
     status: int = 200,
     verdict=None,
     refusal_status: int | None = None,
+    raw: bool = False,
+    content_type: str = "text/html",
+    unreachable: bool = False,
 ):
     """Stand in for the network fetch + trafilatura extraction.
 
@@ -240,6 +249,10 @@ def _patch_extraction(
     from app.modules.agent.tools.web import page_extract
 
     async def fake_fetch(url: str):
+        if unreachable:
+            raise page_extract.PageUnreachableFetchError(
+                "The page could not be reached (ConnectTimeout)."
+            )
         if markdown is None:
             raise page_extract.PageFetchError(
                 "No readable article was found — the page probably renders its "
@@ -251,16 +264,36 @@ def _patch_extraction(
             url=url,
             title=title,
             markdown=markdown,
-            content_type="text/html",
+            content_type=content_type,
             status=status,
             verdict=verdict or page_extract.NOT_BLOCKED,
+            raw=raw,
         )
 
     monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
 
 
-def _patch_session(monkeypatch, session) -> None:
+def _ctx(*, workspace_readable: bool = True) -> SimpleNamespace:
+    """The one thing `web_fetch` reads off the run: can it read a saved file."""
+    return SimpleNamespace(workspace_readable=workspace_readable)
+
+
+def _patch_session(
+    monkeypatch,
+    session,
+    *,
+    raises: Exception | None = None,
+    budget_seconds: float | None = None,
+) -> None:
+    """The workspace, and the call's time budget, for one test.
+
+    One helper for both, for the same reason as `_patch_extraction`: every
+    patch site counts against the module's ceiling.
+    """
+
     async def fake_get(ctx, *, session_id, close_on_exit):
+        if raises is not None:
+            raise raises
         return session
 
     monkeypatch.setattr(web_fetch_module, "get_workspace_session", fake_get)
@@ -269,6 +302,8 @@ def _patch_session(monkeypatch, session) -> None:
         "workspace_runtime_context",
         lambda ctx: SimpleNamespace(default_shell_session_id="shell-1"),
     )
+    if budget_seconds is not None:
+        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", budget_seconds)
 
 
 class TestWebFetch:
@@ -285,7 +320,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://example.com/a"], formats=["markdown"]),
         )
 
@@ -317,7 +352,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown=big)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://en.wikipedia.org/wiki/X"]),
         )
 
@@ -337,7 +372,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://example.com/a"]),
         )
 
@@ -379,7 +414,7 @@ class TestWebFetch:
         monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(5)]),
         )
 
@@ -392,7 +427,7 @@ class TestWebFetch:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://example.com/a"], formats=["markdown", "jpeg"]
             ),
@@ -412,7 +447,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown=None)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://spa.example/app"], formats=["markdown"]),
         )
 
@@ -428,7 +463,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown="Body text here. " * 40)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://good.example/a", "ftp://bad.example/b"],
                 formats=["markdown"],
@@ -449,7 +484,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown="Body text here. " * 40)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://example.com/a"]),
         )
 
@@ -470,7 +505,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown="Body text here. " * 40)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://a.example/one", "https://b.example/two"],
                 out_dir="notes",
@@ -510,7 +545,7 @@ class TestWebFetch:
         monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://ok.example/a", "https://boom.example/b"]),
         )
 
@@ -536,7 +571,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown=None)  # forces the browser
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://www.britannica.com/biography/X"]),
         )
 
@@ -564,7 +599,7 @@ class TestWebFetch:
         _patch_extraction(monkeypatch, markdown=None)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://spa.example/app"]),
         )
 
@@ -577,7 +612,7 @@ class TestWebFetch:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://example.com/a"], formats=["markdown", "pdf"]
             ),
@@ -589,7 +624,7 @@ class TestWebFetch:
         empty = _FakeSession(browser_writes_nothing=True)
         _patch_session(monkeypatch, empty)
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://example.com/a"], formats=["markdown", "pdf"]
             ),
@@ -610,24 +645,25 @@ class TestBrowserCaptureHelpers:
     """
 
     def test_needs_browser_for_a_render_request_regardless_of_formats(self) -> None:
-        assert web_fetch_module._needs_browser(["markdown"], render=True) is True
+        assert browser_capture.needs_browser(["markdown"], render=True) is True
 
     def test_needs_browser_for_a_pdf_or_image_format(self) -> None:
-        assert web_fetch_module._needs_browser(["pdf"], render=False) is True
-        assert web_fetch_module._needs_browser(["jpeg"], render=False) is True
-        assert web_fetch_module._needs_browser(["png"], render=False) is True
+        assert browser_capture.needs_browser(["pdf"], render=False) is True
+        assert browser_capture.needs_browser(["jpeg"], render=False) is True
+        assert browser_capture.needs_browser(["png"], render=False) is True
 
     def test_markdown_alone_does_not_need_a_browser(self) -> None:
-        assert web_fetch_module._needs_browser(["markdown"], render=False) is False
-        assert web_fetch_module._needs_browser([], render=False) is False
+        assert browser_capture.needs_browser(["markdown"], render=False) is False
+        assert browser_capture.needs_browser([], render=False) is False
 
     def test_browser_script_shape(self) -> None:
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             "https://example.com/a", "research", "example-a", ["markdown", "pdf"]
         )
         assert cmd == (
             'PATH="/opt/lemma-runtime/current/bin:$PATH"; '
-            "mkdir -p research && save-webpage https://example.com/a "
+            "mkdir -p research && SAVE_WEBPAGE_TIMEOUT=65 "
+            "AGENT_BROWSER_CAPTURE_LOCK_WAIT=40 save-webpage https://example.com/a "
             "--formats markdown,pdf --out research --name example-a"
         )
 
@@ -648,7 +684,7 @@ class TestBrowserCaptureHelpers:
             script.write_text(f"#!/bin/sh\necho {who}\n", encoding="utf-8")
             script.chmod(0o755)
 
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             "https://example.com/a", str(tmp_path / "out"), "a", ["markdown"]
         ).replace("/opt/lemma-runtime/current/bin", str(overlay))
 
@@ -675,7 +711,7 @@ class TestBrowserCaptureHelpers:
         sandbox shell a second command to run.
         """
         hostile_url = "https://example.com/a?x=1;rm -rf / && echo pwned"
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             hostile_url, "research", "safe-name", ["markdown"]
         )
         # shlex.split proves the shell would see it as one argument, not as
@@ -685,7 +721,7 @@ class TestBrowserCaptureHelpers:
         assert "rm" not in parts and "pwned" not in parts
 
     def test_browser_script_quotes_a_hostile_out_dir_and_name(self) -> None:
-        cmd = web_fetch_module._browser_script(
+        cmd = browser_capture.browser_script(
             "https://example.com/a",
             "research/$(whoami)",
             "name`id`",
@@ -747,7 +783,7 @@ class TestTheBatchDoesNotRepeatItself:
         _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=[
                     "https://example.com/a",
@@ -790,7 +826,7 @@ class TestUrlsWeWillNotRequestAtAll:
         self._refuse(monkeypatch)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://internal.example.com/"]),
         )
 
@@ -811,7 +847,7 @@ class TestUrlsWeWillNotRequestAtAll:
         self._refuse(monkeypatch, reason="link_local_address")
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["http://169.254.169.254/latest/meta-data/"], render=True
             ),
@@ -836,7 +872,7 @@ class TestUrlsWeWillNotRequestAtAll:
         monkeypatch.setattr(web_fetch_module, "assert_safe_url", fake_assert)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://internal.example.com/", "https://example.com/a"]
             ),
@@ -862,8 +898,7 @@ class TestTheToolAlwaysReturns:
         self, monkeypatch
     ) -> None:
         session = _FakeSession()
-        _patch_session(monkeypatch, session)
-        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 0.3)
+        _patch_session(monkeypatch, session, budget_seconds=0.3)
 
         from app.modules.agent.tools.web import page_extract
 
@@ -881,7 +916,7 @@ class TestTheToolAlwaysReturns:
 
         result = await asyncio.wait_for(
             web_fetch_module.web_fetch_internal(
-                SimpleNamespace(),
+                _ctx(),
                 WebFetchRequest(
                     urls=["https://slow.example/a", "https://slow.example/b"]
                 ),
@@ -902,7 +937,7 @@ class TestTheToolAlwaysReturns:
     ) -> None:
         """The whole point of a partial answer: three of four beats nothing."""
         session = _FakeSession()
-        _patch_session(monkeypatch, session)
+        _patch_session(monkeypatch, session, budget_seconds=2.0)
         # 2s, not the 0.5s this used to run with. The budget has to outlast
         # acquiring the session and capturing the quick page, and on a loaded
         # CI runner under `coverage run` line tracing that setup does not
@@ -912,7 +947,6 @@ class TestTheToolAlwaysReturns:
         # behaviour under test, and the margin is the only thing that decided
         # it. Production allows 240s; the point here is that the budget is
         # finite, not what it is.
-        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 2.0)
         monkeypatch.setattr(web_fetch_module, "_MAX_CONCURRENT_FETCHES", 1)
 
         from app.modules.agent.tools.web import page_extract
@@ -944,7 +978,7 @@ class TestTheToolAlwaysReturns:
 
         result = await asyncio.wait_for(
             web_fetch_module.web_fetch_internal(
-                SimpleNamespace(),
+                _ctx(),
                 WebFetchRequest(
                     urls=["https://quick.example/a", "https://slow.example/b"]
                 ),
@@ -971,7 +1005,7 @@ class TestTheToolAlwaysReturns:
             item.max_length for item in accepted if hasattr(item, "max_length")
         )
 
-        assert max_urls == web_fetch_module._MAX_BROWSER_RENDERS
+        assert max_urls == browser_capture.MAX_BROWSER_RENDERS
 
     @pytest.mark.asyncio
     async def test_a_full_batch_of_js_pages_skips_nothing(self, monkeypatch) -> None:
@@ -986,11 +1020,11 @@ class TestTheToolAlwaysReturns:
         _patch_extraction(monkeypatch, markdown=None)  # everything needs a browser
         urls = [
             f"https://spa{index}.example/app"
-            for index in range(web_fetch_module._MAX_BROWSER_RENDERS)
+            for index in range(browser_capture.MAX_BROWSER_RENDERS)
         ]
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(), WebFetchRequest(urls=urls)
+            _ctx(), WebFetchRequest(urls=urls)
         )
 
         rendered = sum("save-webpage" in cmd for cmd in session.commands)
@@ -1003,18 +1037,12 @@ class TestTheToolAlwaysReturns:
     ) -> None:
         """The failure must name the pages, not just the workspace."""
 
-        async def no_session(ctx, *, session_id, close_on_exit):
-            raise RuntimeError("sandbox is not available")
-
-        monkeypatch.setattr(web_fetch_module, "get_workspace_session", no_session)
-        monkeypatch.setattr(
-            web_fetch_module,
-            "workspace_runtime_context",
-            lambda ctx: SimpleNamespace(default_shell_session_id="shell-1"),
+        _patch_session(
+            monkeypatch, None, raises=RuntimeError("sandbox is not available")
         )
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://a.example/1", "https://b.example/2"]),
         )
 
@@ -1024,7 +1052,7 @@ class TestTheToolAlwaysReturns:
 
     def test_the_url_list_is_capped(self) -> None:
         """At exactly what the tool can render -- see test_web_fetch_limits_agree."""
-        limit = web_fetch_module._MAX_BROWSER_RENDERS
+        limit = browser_capture.MAX_BROWSER_RENDERS
         WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit)])
         with pytest.raises(ValidationError):
             WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit + 1)])
@@ -1058,7 +1086,7 @@ class TestAnEmptyBrowserCapture:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://example.com/shell"], formats=["markdown"]),
         )
 
@@ -1082,7 +1110,7 @@ class TestAnEmptyBrowserCapture:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://example.com/chart"], formats=["markdown", "jpeg"]
             ),
@@ -1099,7 +1127,7 @@ class TestAnEmptyBrowserCapture:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://example.com/real"], formats=["markdown", "jpeg"]
             ),
@@ -1138,7 +1166,7 @@ class TestTellingABlockFromAPage:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://g2.com/x"], formats=["markdown"]),
         )
 
@@ -1169,7 +1197,7 @@ class TestTellingABlockFromAPage:
         _patch_session(monkeypatch, session)
 
         await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://stackoverflow.com/q/1"], formats=["markdown"]
             ),
@@ -1188,7 +1216,7 @@ class TestTellingABlockFromAPage:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(
                 urls=["https://reuters.com/technology/"], formats=["markdown"]
             ),
@@ -1209,7 +1237,7 @@ class TestTellingABlockFromAPage:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://example.com/gone"], formats=["markdown"]),
         )
 
@@ -1228,7 +1256,7 @@ class TestTellingABlockFromAPage:
         _patch_session(monkeypatch, session)
 
         await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://example.com/app"], formats=["markdown"]),
         )
 
@@ -1247,7 +1275,7 @@ class TestTellingABlockFromAPage:
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
+            _ctx(),
             WebFetchRequest(urls=["https://example.com/walled"], formats=["markdown"]),
         )
 
@@ -1255,3 +1283,223 @@ class TestTellingABlockFromAPage:
         assert page.success is False
         assert page.blocked_by == "unnamed"
         assert "bot check" in (page.error or "")
+
+
+class TestACaptureThatRanOutOfTime:
+    """A capture outliving its window kept running and kept the browser lock,
+    so every capture behind it overran too -- and each was reported as a site
+    that "refuses automated clients", which sent agents to other sources for
+    pages that were fine."""
+
+    @pytest.mark.asyncio
+    async def test_an_unfinished_capture_is_stopped_and_reported_as_time(
+        self, monkeypatch
+    ) -> None:
+        _patch_extraction(monkeypatch, markdown=None)
+        session = _FakeSession(
+            responses={
+                "save-webpage": {
+                    "completed": False,
+                    "process_id": "capture-1",
+                    "exit_code": None,
+                    "stdout": "",
+                }
+            }
+        )
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(), WebFetchRequest(urls=["https://example.com/slow"])
+        )
+
+        page = result.pages[0]
+        assert session.terminated == ["capture-1"]
+        assert page.success is False
+        assert "did not finish" in (page.error or "")
+        assert "refuse" not in (page.error or "")
+
+    @pytest.mark.asyncio
+    async def test_a_capture_stopped_by_its_own_ceiling_says_so(
+        self, monkeypatch
+    ) -> None:
+        _patch_extraction(monkeypatch, markdown=None)
+        session = _FakeSession(
+            responses={"save-webpage": {"completed": True, "exit_code": 124}}
+        )
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(), WebFetchRequest(urls=["https://example.com/slow"])
+        )
+
+        assert "did not finish" in (result.pages[0].error or "")
+        assert session.terminated == []
+
+    @pytest.mark.asyncio
+    async def test_a_render_that_cannot_finish_in_time_is_not_started(
+        self, monkeypatch
+    ) -> None:
+        """Five renders cannot fit a budget a few of them fill. One started
+        with too little time left is abandoned mid-flight by the deadline."""
+        _patch_extraction(monkeypatch, markdown=None)
+        session = _FakeSession()
+        _patch_session(
+            monkeypatch,
+            session,
+            budget_seconds=browser_capture.BROWSER_TIMEOUT_SECONDS + 1,
+        )
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(), WebFetchRequest(urls=["https://example.com/app"])
+        )
+
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+        assert "too little of this call's time" in (result.pages[0].error or "")
+
+
+class TestPagesThatAreNotArticles:
+    """JSON, plain text and files went to a 75 s Chrome render, which can only
+    wrap them in a viewer; an unreachable host went there too, to learn the
+    same thing more slowly."""
+
+    @pytest.mark.asyncio
+    async def test_a_json_answer_is_saved_as_it_came_without_a_browser(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(
+            monkeypatch,
+            markdown='{"ok": true}',
+            content_type="application/json",
+            raw=True,
+        )
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(), WebFetchRequest(urls=["https://api.example.com/status"])
+        )
+
+        page = result.pages[0]
+        assert page.success, page
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+        assert page.files == {"text": "research/api.example.com-status.json"}
+        assert session.writes[page.files["text"]] == b'{"ok": true}'
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_host_is_not_retried_in_the_browser(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown=None, unreachable=True)
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(), WebFetchRequest(urls=["https://down.example.com/"])
+        )
+
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+        assert "could not be reached" in (result.pages[0].error or "")
+
+    @pytest.mark.asyncio
+    async def test_a_pdf_is_classified_before_any_browser(self) -> None:
+        from app.core.net.impersonating_client import FetchedBody
+        from app.modules.agent.tools.web import page_extract
+
+        async def pdf(url: str) -> FetchedBody:
+            return FetchedBody(
+                body=b"%PDF-1.7", content_type="application/pdf", final_url=url
+            )
+
+        with pytest.raises(page_extract.NotAWebPageError) as raised:
+            await page_extract.fetch_and_clean("https://example.com/a.pdf", fetch=pdf)
+
+        assert raised.value.content_type == "application/pdf"
+
+    @pytest.mark.asyncio
+    async def test_a_text_body_comes_back_verbatim(self) -> None:
+        from app.core.net.impersonating_client import FetchedBody
+        from app.modules.agent.tools.web import page_extract
+
+        async def text(url: str) -> FetchedBody:
+            return FetchedBody(
+                body=b"a,b\n1,2\n", content_type="text/csv", final_url=url
+            )
+
+        page = await page_extract.fetch_and_clean(
+            "https://example.com/data.csv", fetch=text
+        )
+
+        assert page.raw is True
+        assert page.markdown == "a,b\n1,2\n"
+
+
+class TestAnAgentThatCannotReadTheWorkspace:
+    """`web_fetch` comes with the default toolsets and `exec_command` does not,
+    so a default agent was handed paths it had no tool to open and a 400
+    character preview -- and fetched the same pages again."""
+
+    @pytest.mark.asyncio
+    async def test_the_text_comes_back_inline_without_a_sandbox(
+        self, monkeypatch
+    ) -> None:
+        # Any use of the workspace fails the batch: the cheap path must not
+        # provision a sandbox to hand back text the backend already holds.
+        _patch_session(monkeypatch, None, raises=AssertionError("no sandbox"))
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(workspace_readable=False),
+            WebFetchRequest(urls=["https://example.com/a"]),
+        )
+
+        page = result.pages[0]
+        assert page.success, result
+        assert page.files == {}
+        assert "Real article body." in (page.content or "")
+        assert "exec_command" not in (result.message or "")
+
+    @pytest.mark.asyncio
+    async def test_inline_text_is_bounded(self, monkeypatch) -> None:
+        _patch_session(monkeypatch, None, raises=AssertionError("no sandbox"))
+        _patch_extraction(monkeypatch, markdown="x" * 500_000)
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(workspace_readable=False),
+            WebFetchRequest(urls=["https://example.com/long"]),
+        )
+
+        content = result.pages[0].content or ""
+        assert len(content) < 50_000
+        assert "not shown" in content
+
+    @pytest.mark.asyncio
+    async def test_a_rendered_page_is_read_back_inline(self, monkeypatch) -> None:
+        _patch_extraction(monkeypatch, markdown=None)
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            _ctx(workspace_readable=False),
+            WebFetchRequest(urls=["https://example.com/app"]),
+        )
+
+        assert "Body text that is long enough to read." in (
+            result.pages[0].content or ""
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_file_url_is_not_answered_with_a_tool_the_agent_lacks(
+        self,
+    ) -> None:
+        from app.modules.agent.tools.web import http_capture, page_extract
+
+        refusal = http_capture.refusal_for(
+            "https://example.com/a.pdf",
+            page_extract.NotAWebPageError(
+                "pdf", status=200, content_type="application/pdf"
+            ),
+            can_download=False,
+        )
+
+        assert refusal is not None
+        assert "exec_command" not in refusal.message

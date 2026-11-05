@@ -15,6 +15,7 @@ cancellation) are re-raised untouched so the framework still handles them. Argum
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import re
 import time
 
@@ -24,6 +25,11 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import ToolsetTool, WrapperToolset
 
 from app.core.log.log import get_logger
+from app.modules.agent.services.run_metrics import (
+    AgentRunMetrics,
+    ToolKind,
+    agent_run_metrics,
+)
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.tool_errors import (
     format_tool_error,
@@ -100,8 +106,43 @@ def _mark_tool_failure(span: Span, payload: object) -> None:
     span.set_status(Status(StatusCode.ERROR, description or None))
 
 
+def tool_kind_of(name: str, toolset: object) -> ToolKind:
+    """Which family of tool a call reached, for the tool-call counter.
+
+    Dynamic tools are told apart by the prefix ``callable_tool_factory`` gives
+    them; the connector and sandbox tools by the toolset that holds them.
+    Imported here, not at module scope, because those toolsets import half the
+    agent module and this file is imported by the assembler that builds them.
+    """
+    from app.modules.agent.tools.browser.vm_browser import vm_browser_toolset
+    from app.modules.agent.tools.connectors.pydantic_adapter import (
+        connectors_toolset,
+    )
+    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+        is_workspace_cli_toolset,
+    )
+
+    if name.startswith("function_"):
+        return "function"
+    if name.startswith("agent_"):
+        return "agent"
+    if toolset is connectors_toolset:
+        return "connector"
+    if is_workspace_cli_toolset(toolset) or toolset is vm_browser_toolset:
+        return "sandbox"
+    return "builtin"
+
+
+@dataclass
 class GracefulToolset[DepsT](WrapperToolset[DepsT]):
-    """Delegate to the wrapped toolset, but never let a tool body crash the run."""
+    """Delegate to the wrapped toolset, but never let a tool body crash the run.
+
+    Also where every in-process tool call is counted, because it is the one
+    place that sees each call end -- including the ones that end by returning
+    a failure.
+    """
+
+    run_metrics: AgentRunMetrics = field(default=agent_run_metrics, kw_only=True)
 
     async def call_tool(
         self,
@@ -117,6 +158,7 @@ class GracefulToolset[DepsT](WrapperToolset[DepsT]):
         # sent, so marking only ours leaves every pause looking like a failure
         # in the place the error rate is actually read.
         caller_span = trace.get_current_span()
+        tool_kind = tool_kind_of(name, self.wrapped)
         # The span now wraps the handlers rather than sitting inside them, so a
         # call that fails by *returning* can still be marked. It is the only way
         # to see the common failure: almost nothing here raises.
@@ -137,6 +179,7 @@ class GracefulToolset[DepsT](WrapperToolset[DepsT]):
                 # Re-raised bare: cancellation is the framework's to handle, and
                 # swallowing it here is how a truncated run reports success.
                 _mark_tool_outcome(span, "cancelled")
+                self.run_metrics.tool_call(tool_kind=tool_kind, outcome="cancelled")
                 logger.warning(
                     "agent.graceful_toolset.tool_cancelled_mid_flight.degraded",
                     tool_name=name,
@@ -153,6 +196,9 @@ class GracefulToolset[DepsT](WrapperToolset[DepsT]):
                     # the opposite of what this workstream is for. The exception
                     # event is still recorded either way.
                     _mark_tool_outcome(span, "control_flow")
+                    self.run_metrics.tool_call(
+                        tool_kind=tool_kind, outcome="control_flow"
+                    )
                     _mark_control_flow_not_an_error(span)
                     _mark_control_flow_not_an_error(caller_span)
                     raise
@@ -162,9 +208,12 @@ class GracefulToolset[DepsT](WrapperToolset[DepsT]):
                 )
                 payload = format_tool_error(name, exc)
                 _mark_tool_failure(span, payload)
+                self.run_metrics.tool_call(tool_kind=tool_kind, outcome="error")
                 return payload
             if result_is_failure(result):
                 _mark_tool_failure(span, result)
+                self.run_metrics.tool_call(tool_kind=tool_kind, outcome="error")
             else:
                 _mark_tool_outcome(span, "ok")
+                self.run_metrics.tool_call(tool_kind=tool_kind, outcome="ok")
             return result

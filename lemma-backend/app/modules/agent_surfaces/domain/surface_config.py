@@ -8,6 +8,7 @@ to the inbound/outbound event shapes the rest of that module describes.
 from __future__ import annotations
 
 
+import re
 from enum import StrEnum
 from uuid import UUID
 
@@ -102,9 +103,66 @@ class SurfaceSlackConfig(BaseModel):
     because one Slack app could serve several agents and ``surface.agent_id``
     could not say which of them it really was. One app is one agent now, so the
     question has one answer and neither field has anything left to decide.
+
+    Whether Lemma made the app is not here: it is a fact about the app, so it
+    is on the app's install (``SurfaceAuthConfig.made_by_lemma``), where a
+    surface re-pointed at another app cannot carry it along.
     """
 
     app_name: str | None = None
+
+
+#: Meta's template names: lowercase letters, digits and underscores.
+_TEMPLATE_NAME = re.compile(r"^[a-z0-9_]{1,512}$")
+
+
+def whatsapp_template_name(value: str | None) -> str | None:
+    """A template name as Meta spells them, None for blank, or ValueError."""
+    name = (value or "").strip()
+    if not name:
+        return None
+    if not _TEMPLATE_NAME.match(name):
+        raise ValueError(
+            "A WhatsApp template name is lowercase letters, digits and underscores."
+        )
+    return name
+
+
+class ReengageTemplate(BaseModel):
+    """An approved WhatsApp message template, by name and language.
+
+    The one kind of message WhatsApp lets a business start once the person has
+    not written for 24 hours. It carries no content of ours: it only asks them
+    to reply, and the reply reopens the window for what was really meant.
+    """
+
+    name: str
+    language: str = "en_US"
+
+
+class SurfaceWhatsAppConfig(BaseModel):
+    """WhatsApp-only settings for a surface.
+
+    ``reengage_template`` names a template approved on this number's business
+    account. Set, a message to a member whose 24-hour window has closed sends
+    it and holds the message until they reply; unset, such a message is
+    refused, because Meta accepts it and then drops it.
+    """
+
+    reengage_template: str | None = None
+    language: str = "en_US"
+
+    @field_validator("reengage_template")
+    @classmethod
+    def _template_name(cls, value: str | None) -> str | None:
+        return whatsapp_template_name(value)
+
+    def template(self) -> ReengageTemplate | None:
+        if self.reengage_template is None:
+            return None
+        return ReengageTemplate(
+            name=self.reengage_template, language=self.language or "en_US"
+        )
 
 
 class SurfaceGroupPolicy(BaseModel):
@@ -156,5 +214,6 @@ class SurfaceConfig(BaseModel):
     send_policy: SurfaceSendPolicy = Field(default_factory=SurfaceSendPolicy)
     telegram: SurfaceTelegramConfig = Field(default_factory=SurfaceTelegramConfig)
     slack: SurfaceSlackConfig = Field(default_factory=SurfaceSlackConfig)
+    whatsapp: SurfaceWhatsAppConfig = Field(default_factory=SurfaceWhatsAppConfig)
     groups: SurfaceGroupPolicy = Field(default_factory=SurfaceGroupPolicy)
     contacts: SurfaceContactPolicy = Field(default_factory=SurfaceContactPolicy)

@@ -70,6 +70,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                 adapter: manifest.resolve(&agent).unwrap(),
                 agent_environment: std::collections::BTreeMap::default(),
                 own_settings: false,
+                lemma_cli_bin: None,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id,
@@ -95,6 +96,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),
                     system_prompt_delivery: None,
+                    pre_approvals: Vec::new(),
                 },
                 scratch_directory: scratch.clone(),
                 mcp_server: None,

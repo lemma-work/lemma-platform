@@ -26,13 +26,7 @@ from sqlalchemy.dialects import postgresql
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.datastore.infrastructure.repositories.file_repository import (
     DatastoreFileRepository,
-    _file_actions_expr,
 )
-from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
-    has_unreadable_ancestor,
-)
-from app.core.authorization.permissions import Permissions
-from app.core.authorization.sql_actions import allowed_actions_contains
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.datastore.infrastructure.models import DatastoreFile
 from app.modules.datastore.tests.e2e.harness import DatastoreApi, signup_user
@@ -135,7 +129,8 @@ async def _seed_large_tree(
     await session.execute(text("ANALYZE datastore_files"))
 
 
-def _visibility_statement(
+async def _visibility_statement(
+    db_session,
     ctx,
     pod_id: UUID,
     *,
@@ -143,16 +138,21 @@ def _visibility_statement(
     among: list[UUID] | None = None,
     limit: int | None = None,
 ):
-    """The exact statement ``visible_file_ids`` issues, every branch."""
-    actions = _file_actions_expr(ctx)
-    stmt = select(DatastoreFile.id).where(
-        DatastoreFile.pod_id == pod_id,
-        allowed_actions_contains(actions, Permissions.FOLDER_READ),
+    """The exact statement ``visible_file_ids`` issues over the pod, every branch.
+
+    The caller's authority is resolved first, as production does, so what is
+    explained is the one statement that reads the pod.
+    """
+    repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
+    readable = await repository.readable_where(
+        pod_id=pod_id,
+        ctx=ctx,
+        walk_ancestors=walk_ancestors,
+        per_row_walk=among is not None,
     )
+    stmt = select(DatastoreFile.id).where(DatastoreFile.pod_id == pod_id, readable)
     if among is not None:
         stmt = stmt.where(DatastoreFile.id.in_(among))
-    if walk_ancestors:
-        stmt = stmt.where(~has_unreadable_ancestor(ctx, pod_id))
     if limit is not None:
         stmt = stmt.limit(limit)
     return stmt
@@ -170,7 +170,8 @@ def _scan_nodes(plan: dict, out: list[str] | None = None) -> list[str]:
 
 async def _explain(db_session, ctx, pod_id: UUID, **kwargs) -> dict:
     """Run the real statement under EXPLAIN ANALYZE and return its plan."""
-    compiled = _visibility_statement(ctx, pod_id, **kwargs).compile(
+    statement = await _visibility_statement(db_session, ctx, pod_id, **kwargs)
+    compiled = statement.compile(
         dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
     )
     explained = await db_session.execute(
@@ -238,20 +239,14 @@ async def test_visibility_stays_index_driven_on_a_large_pod(
     repeated = await _repeated_inner_nodes(db_session, ctx, pod_id)
     print(f"\n  per-row plan nodes: {sorted(set(repeated))}")
 
-    rescans = [
-        node
-        for node in repeated
-        if node.startswith("Materialize") or node == "Seq Scan on datastore_files"
-    ]
+    rescans = [node for node in repeated if node.endswith("datastore_files")]
+    rescans += [node for node in repeated if node.startswith("Materialize")]
     assert not rescans, (
-        "the ancestor check re-reads the whole file table once per row: "
-        f"{sorted(set(rescans))}. That is the shape that took 6.6s on a "
-        "16,000-file pod — ancestors must be probed through the (pod_id, path) "
-        f"index instead.\n  all per-row nodes: {sorted(set(repeated))}"
-    )
-    assert any(node.startswith("Index Scan on datastore_files") for node in repeated), (
-        "nothing in the plan probes the file table per row, so the ancestor "
-        f"check is not resolving ancestors by path at all:\n  {sorted(set(repeated))}"
+        "visibility re-enters the file table once per row: "
+        f"{sorted(set(rescans))}. The quadratic ancestor check took 6.6s on a "
+        "16,000-file pod; the caller's blocked folders are resolved up front so "
+        "the pod is read once.\n"
+        f"  all per-row nodes: {sorted(set(repeated))}"
     )
 
     # A second, softer signal. Deliberately generous — this is a smoke bound
@@ -356,11 +351,20 @@ async def test_authorizing_a_candidate_pool_does_not_touch_the_rest_of_the_pod(
     service = AuthorizationDataService(db_session)
     ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
 
+    # A pool like a search's: some rows the caller may read, some not. Chosen
+    # by owner, not by whatever `LIMIT` returns first -- after the module's
+    # earlier tests that was sometimes forty of the stranger's personal files,
+    # and nothing to authorize.
     candidates = list(
         (
             await db_session.execute(
-                text("SELECT id FROM datastore_files WHERE pod_id = :pod LIMIT 40"),
-                {"pod": pod_id},
+                text(
+                    "(SELECT id FROM datastore_files WHERE pod_id = :pod "
+                    "AND owner_user_id = :me ORDER BY id LIMIT 20) UNION ALL "
+                    "(SELECT id FROM datastore_files WHERE pod_id = :pod "
+                    "AND owner_user_id <> :me ORDER BY id LIMIT 20)"
+                ),
+                {"pod": pod_id, "me": user_id},
             )
         ).scalars()
     )

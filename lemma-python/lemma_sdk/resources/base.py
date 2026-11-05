@@ -5,12 +5,18 @@ from uuid import UUID
 
 import httpx
 
-from ..errors import LemmaConfigError
+from ..errors import LemmaConfigError, LemmaInvalidIdError
 from ..transport import MISSING, LemmaTransport
 
 
 def as_uuid(value: str | UUID) -> UUID:
-    return value if isinstance(value, UUID) else UUID(str(value))
+    """The id as a UUID, or `LemmaInvalidIdError` naming what was given."""
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value).strip())
+    except ValueError:
+        raise LemmaInvalidIdError(value) from None
 
 
 def compact(values: dict[str, Any]) -> dict[str, Any]:

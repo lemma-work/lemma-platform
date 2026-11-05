@@ -55,11 +55,8 @@ GMAIL_NATIVE_CAPABILITIES = [
         # *set* is still resolved per request, which is what
         # `system_default_available` reports.
         "system_oauth": {
-            "client_id_env": ["CONNECTOR_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID"],
-            "client_secret_env": [
-                "CONNECTOR_GOOGLE_CLIENT_SECRET",
-                "GOOGLE_CLIENT_SECRET",
-            ],
+            "client_id_env": ["CONNECTOR_GOOGLE_CLIENT_ID"],
+            "client_secret_env": ["CONNECTOR_GOOGLE_CLIENT_SECRET"],
         },
     }
 ]
@@ -685,11 +682,11 @@ async def test_gmail_system_default_connect_request_uses_env_google_client(
     """Native Gmail must also be connectable with the system Google OAuth client.
 
     When an org picks config_source=SYSTEM_DEFAULT for the Lemma provider, the
-    backend resolves GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET from env and combines
+    backend resolves CONNECTOR_GOOGLE_CLIENT_ID/CONNECTOR_GOOGLE_CLIENT_SECRET from env and combines
     them with the registry OAuth defaults to build the Google authorization URL.
     """
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "system-google-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "system-google-client-secret")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_ID", "system-google-client-id")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_SECRET", "system-google-client-secret")
 
     app = Connector(
         id="gmail",
@@ -733,7 +730,7 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
 ):
     """The connector API resolves system availability live.
 
-    `system_default_available` follows GOOGLE_CLIENT_ID/SECRET env presence on
+    `system_default_available` follows CONNECTOR_GOOGLE_CLIENT_ID/SECRET env presence on
     each request rather than a stale DB value, and the row's own OAuth endpoints
     are surfaced while the env var *names* behind them are not.
     """
@@ -747,8 +744,8 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
     db_session.add(app)
     await db_session.commit()
 
-    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
-    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("CONNECTOR_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CONNECTOR_GOOGLE_CLIENT_SECRET", raising=False)
     response = await authenticated_client.get("/connectors/gmail")
     assert response.status_code == 200, response.text
     capability = response.json()["kinds"][0]
@@ -765,8 +762,8 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
         settings.api_url.rstrip("/") + "/connectors/connect-requests/oauth/callback"
     )
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "system-google-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "system-google-client-secret")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_ID", "system-google-client-id")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_SECRET", "system-google-client-secret")
     response = await authenticated_client.get("/connectors/gmail")
     assert response.status_code == 200, response.text
     capability = response.json()["kinds"][0]
@@ -780,10 +777,10 @@ async def test_delete_account_removes_account_and_404s_on_repeat(
     db_session,
 ):
     """Regression: DELETE .../connectors/accounts/{account_id} previously 400'd
-    with "organization_id is required". The route's `reject_delegated_workload`
-    dependency resolves org context via `get_org_context`, which only read the
-    `{org_id}` path param while this router is mounted under
-    `{organization_id}` -- so the org id was never found. Exercised end-to-end
+    with "organization_id is required". The route's workload guard resolved org
+    context via `get_org_context`, which only read the `{org_id}` path param
+    while this router is mounted under `{organization_id}` -- so the org id was
+    never found. Exercised end-to-end
     (real HTTP + real dependency chain) rather than via the service directly,
     since the bug lived in path-param resolution, not the service layer.
     """
@@ -1211,7 +1208,7 @@ async def test_default_pod_agent_cannot_delete_account(
         headers=agent_headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
-    assert response.json()["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert response.json()["code"] == "WORKLOAD_NOT_ALLOWED"
 
     # Control: the account is untouched and the human can still delete it.
     still_there = await authenticated_client.get(
@@ -1276,7 +1273,7 @@ async def test_default_pod_agent_cannot_delete_auth_config(
         headers=agent_headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
-    assert response.json()["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert response.json()["code"] == "WORKLOAD_NOT_ALLOWED"
 
     # Control: the auth config is untouched and the human can still delete it.
     still_there = await authenticated_client.get(
@@ -1563,3 +1560,63 @@ async def test_a_credential_is_rotated_without_replacing_the_account(
         f"/organizations/{org_id}/connectors/accounts/{account_id}"
     )
     assert still_there.status_code == 200, "the account survived a rejected rotation"
+
+
+@pytest.mark.asyncio
+async def test_an_install_name_already_active_in_the_org_is_a_conflict_not_an_error(
+    authenticated_client,
+    fixed_test_org,
+    db_session,
+):
+    """A second install of a connector takes its name by default, and that
+    name is one active install's: creating one, or renaming another onto it,
+    is refused with a 409 until the first stops being active."""
+    connector_id = f"twice-{uuid4().hex[:8]}"
+    db_session.add(
+        Connector(
+            id=connector_id,
+            title="Installed twice",
+            description="An API-key connector installed more than once",
+            kinds=[{"kind": "http", "auth_scheme": "API_KEY"}],
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+    base = f"/organizations/{fixed_test_org['id']}/connectors/auth-configs"
+
+    async def install(**extra) -> object:
+        return await authenticated_client.post(
+            base,
+            json={
+                "connector_id": connector_id,
+                "kind": "http",
+                "config_source": "ORG_CUSTOM",
+                **extra,
+            },
+        )
+
+    first = await install()
+    assert first.status_code == 200, first.text
+    assert first.json()["name"] == connector_id
+
+    unnamed = await install()
+    assert unnamed.status_code == 409, unnamed.text
+    assert unnamed.json()["code"] == "CONNECTOR_CONFLICT"
+    assert "INSERT" not in unnamed.text
+
+    second = await install(name=f"{connector_id}-eu")
+    assert second.status_code == 200, second.text
+
+    renamed = await authenticated_client.patch(
+        f"{base}/{connector_id}-eu", json={"name": connector_id}
+    )
+    assert renamed.status_code == 409, renamed.text
+
+    disabled = await authenticated_client.patch(
+        f"{base}/{connector_id}", json={"status": "DISABLED"}
+    )
+    assert disabled.status_code == 200, disabled.text
+    took_the_name = await authenticated_client.patch(
+        f"{base}/{connector_id}-eu", json={"name": connector_id}
+    )
+    assert took_the_name.status_code == 200, took_the_name.text

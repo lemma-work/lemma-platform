@@ -11,7 +11,14 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.core.api.exception_handlers import register_exception_handlers
-from app.core.authorization.context import ActorType, Context, PrincipalRef
+from app.core.authorization.context import (
+    Actor,
+    Context,
+    Person,
+    PrincipalRef,
+    Workload,
+    WorkloadKind,
+)
 from app.core.authorization.dependencies import get_pod_context
 from app.modules.decisions.api.controllers.decision_controller import router
 from app.modules.decisions.api.dependencies import (
@@ -57,9 +64,9 @@ class _Service:
         )
 
 
-def _context(*, actor_type: ActorType, actor_id: str, member: bool) -> Context:
+def _context(*, actor: Actor, actor_id: str, member: bool) -> Context:
     return Context(
-        actor_type=actor_type,
+        actor=actor,
         actor_id=actor_id,
         authorizer=object(),  # type: ignore[arg-type]
         user_id=USER,
@@ -87,7 +94,7 @@ def _client(service: _Service, context: Context) -> AsyncClient:
 
 @pytest.fixture
 async def member(service: _Service) -> AsyncIterator[AsyncClient]:
-    context = _context(actor_type=ActorType.USER, actor_id=f"user:{USER}", member=True)
+    context = _context(actor=Person(user_id=USER), actor_id=f"user:{USER}", member=True)
     async with _client(service, context) as client:
         yield client
 
@@ -114,7 +121,9 @@ async def test_a_function_is_attributed_to_its_person_and_tagged(
     service: _Service,
 ) -> None:
     context = _context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor=Workload(
+            kind=WorkloadKind.FUNCTION, workload_id=FUNCTION, for_user_id=USER
+        ),
         actor_id=f"function:{FUNCTION}",
         member=False,
     )
@@ -129,7 +138,9 @@ async def test_a_function_is_attributed_to_its_person_and_tagged(
 
 
 async def test_a_person_outside_the_pod_is_refused(service: _Service) -> None:
-    context = _context(actor_type=ActorType.USER, actor_id=f"user:{USER}", member=False)
+    context = _context(
+        actor=Person(user_id=USER), actor_id=f"user:{USER}", member=False
+    )
     async with _client(service, context) as client:
         response = await client.post(f"/pods/{POD}/decisions", json=BODY)
 

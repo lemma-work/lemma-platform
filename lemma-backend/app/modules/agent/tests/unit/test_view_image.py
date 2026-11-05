@@ -51,10 +51,19 @@ def test_request_never_raises_on_construction():
     # The model must never raise: a raising validator is an argument-validation
     # error that bypasses the graceful tool boundary and can abort the run. The
     # "exactly one path" rule is enforced in the tool body instead.
-    ViewImageRequest()
-    ViewImageRequest(pod_file_path="/me/a.png")
-    ViewImageRequest(workspace_file_path="a.png")
-    ViewImageRequest(pod_file_path="/me/a.png", workspace_file_path="a.png")
+    built = [
+        ViewImageRequest(),
+        ViewImageRequest(pod_file_path="/me/a.png"),
+        ViewImageRequest(workspace_file_path="a.png"),
+        ViewImageRequest(pod_file_path="/me/a.png", workspace_file_path="a.png"),
+    ]
+
+    assert [(r.pod_file_path, r.workspace_file_path) for r in built] == [
+        (None, None),
+        ("/me/a.png", None),
+        (None, "a.png"),
+        ("/me/a.png", "a.png"),
+    ]
 
 
 @pytest.mark.asyncio

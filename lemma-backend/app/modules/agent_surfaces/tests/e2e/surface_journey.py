@@ -44,6 +44,9 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.composition import build_surface_ingress
+from app.modules.agent_surfaces.services.progress_observer import (
+    SurfaceAgentRunProgressObserver,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _ensure_connector_account,
@@ -68,6 +71,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     resume_latest_scripted_run,
 )
+from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentModel
 
 #: Every chat platform the "every platform gets the full product" promise
@@ -129,7 +133,14 @@ class SurfaceStage:
     # ── saying something ──────────────────────────────────────────────────
 
     async def say(
-        self, text: str, *, script: list[ScriptTurn] | None = None
+        self,
+        text: str,
+        *,
+        script: list[ScriptTurn] | None = None,
+        expected_status: AgentRunStatus = AgentRunStatus.COMPLETED,
+        observer_class: type[
+            SurfaceAgentRunProgressObserver
+        ] = SurfaceAgentRunProgressObserver,
     ) -> SurfaceChatContext:
         """Deliver one inbound message and drive the run it starts."""
         self._turn += 1
@@ -141,6 +152,8 @@ class SurfaceStage:
                 headers={},
             ),
             script=script,
+            expected_status=expected_status,
+            observer_class=observer_class,
         )
         assert isinstance(context, SurfaceChatContext), (
             f"{self.platform.value}: the message did not become a conversation"
@@ -407,7 +420,10 @@ _CONTROL_READERS = {
 
 _PRESS_BUILDERS = {
     SurfacePlatform.SLACK: lambda stage, control: slack_payloads.button_press(
-        value=control.value, action_id=control.action, sender=stage.sender_id
+        value=control.value,
+        action_id=control.action,
+        sender=stage.sender_id,
+        thread_ts=stage._thread or None,
     ),
     SurfacePlatform.TEAMS: lambda stage, control: teams_payloads.card_submit(
         service_url=stage.surface["_service_url"], values=control.data
@@ -568,10 +584,20 @@ async def stage_surface(
         db_session, agent_id=agent["id"], organization_id=fixed_test_org["id"]
     )
 
-    # How each platform's sender becomes the test's Lemma user. Slack and Teams
-    # resolve through the fetched profile's email, so nothing is seeded; the
+    # How each platform's sender becomes the test's Lemma user. Teams resolves
+    # through the UPN its profile carries, so nothing is seeded. A Slack
+    # profile email names nobody (an admin can set it), so the sender is
+    # already known in the workspace, as a proof would have left them; the
     # shared-bot platforms resolve by id or by number.
-    if platform is SurfacePlatform.TELEGRAM:
+    if platform is SurfacePlatform.SLACK:
+        await _seed_external_user(
+            db_session,
+            platform="SLACK",
+            tenant_id=slack_payloads.TEAM_ID,
+            external_user_id=sender_id,
+            resolved_user_id=UUID(fixed_test_user["id"]),
+        )
+    elif platform is SurfacePlatform.TELEGRAM:
         await _seed_external_user(
             db_session,
             platform="TELEGRAM",

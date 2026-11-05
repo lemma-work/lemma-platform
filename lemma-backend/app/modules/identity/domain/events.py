@@ -15,6 +15,12 @@ class UserSignedUpEvent(DomainEvent):
     user_id: UUID
     email: str
     first_name: str | None = None
+    #: How the person signed up, when the path that finished it can say: the
+    #: OAuth provider's id (``google``, ``active-directory``) or ``email_code``.
+    #: ``None`` from the email-verification link, which a password sign-up, an
+    #: OAuth account with an unverified address and a code sign-in that takes
+    #: back a preregistered address all end on.
+    method: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:

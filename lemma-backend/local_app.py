@@ -1,7 +1,7 @@
 """Managed-local Lemma application entrypoint.
 
 The two-process desktop/backend topology: one Python process owns the API,
-Streaq worker, scheduler and sandbox provisioning, while the Next frontend is
+work runtime and sandbox provisioning, while the Next frontend is
 the only other Lemma application process. Infrastructure and sandbox compute
 remain outside this process.
 """
@@ -25,9 +25,7 @@ from app.standalone import build_standalone_app  # noqa: E402
 
 
 def create_local_app() -> FastAPI:
-    from app.events import streaq_worker
-
-    return build_standalone_app(create_api_app(), streaq_worker)
+    return build_standalone_app(create_api_app())
 
 
 install_locald_parent_watchdog()
@@ -37,11 +35,14 @@ app = create_local_app()
 if __name__ == "__main__":
     import uvicorn
 
+    from app.core.server_limits import WS_MAX_BYTES
+
     uvicorn.run(
         "local_app:app",
         host="0.0.0.0",
         port=8711,
         reload=False,
         ws="websockets-sansio",
+        ws_max_size=WS_MAX_BYTES,
         access_log=False,
     )

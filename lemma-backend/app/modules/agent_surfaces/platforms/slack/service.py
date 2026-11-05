@@ -1,12 +1,23 @@
 from __future__ import annotations
 
-import mimetypes
-from typing import Any
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import httpx
+
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 from app.modules.agent_surfaces.platforms.slack.reply_blocks import reply_blocks
-from slack_sdk.errors import SlackApiError
-from slack_sdk.web.async_client import AsyncWebClient
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -17,10 +28,6 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
-)
-from app.modules.agent_surfaces.platforms.common import (
-    payload_first,
-    payload_text,
 )
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
@@ -38,9 +45,14 @@ from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     PROCESSING_LOADING_TEXT,
     PROCESSING_STATUS_TEXT,
     _question_blocks,
+    question_blocks_fit,
     slack_acknowledgement_body,
 )
-from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
+from app.modules.agent_surfaces.platforms.delivery import (
+    RetryPolicy,
+    note_partial_delivery,
+    with_retry,
+)
 from app.modules.agent_surfaces.platforms.slack.streaming import (
     remove_processing_reaction,
 )
@@ -52,11 +64,19 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     slack_retry_after,
     slack_scopes,
 )
-from app.core.log.log import get_logger
-from app.core.net.capped_read import read_capped
-from app.modules.agent_surfaces.platforms.attachment_limits import (
-    INBOUND_ATTACHMENT_BYTE_CAP,
+from app.modules.agent_surfaces.platforms.slack.decision_cards import (
+    remember_slack_card,
+    retire_slack_card,
 )
+from app.modules.agent_surfaces.platforms.slack.files import SlackFilesMixin
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
+from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from slack_sdk.web.async_client import AsyncWebClient
 
 logger = get_logger(__name__)
 
@@ -76,22 +96,24 @@ def _ephemeral_target(metadata: dict[str, object] | None) -> str:
     return str((metadata or {}).get("ephemeral_to") or "").strip()
 
 
-class SlackPlatformService(SlackChannelReadsMixin):
-    def __init__(self, *, credentials: dict[str, Any], parser=None) -> None:
+class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
+    def __init__(self, *, credentials: CredentialsLike, parser=None) -> None:
         if parser is None:
             from app.modules.agent_surfaces.platforms.slack.parser import (
                 SlackMessageParser,
             )
 
             parser = SlackMessageParser()
-        self.credentials = credentials
+        self.credentials = SlackCredentials.of(credentials)
         self.parser = parser
         self._retry_policy = RetryPolicy()
 
     async def _post_message(
         self, client: AsyncWebClient, payload: SlackMessagePayload
-    ) -> None:
+    ) -> str | None:
         """Post one message, retrying the failures Slack expects us to retry.
+
+        Returns the posted message's ``ts``, or None for an ephemeral.
 
         Slack limits ``chat.postMessage`` per channel and answers a throttled
         call with 429 and a ``Retry-After`` header. Without this the throttle
@@ -109,17 +131,27 @@ class SlackPlatformService(SlackChannelReadsMixin):
         wrong one for anything that has to be answered later.
         """
         user = str(payload.pop("ephemeral_user", "") or "")
+        if not user:
+            # One id for every attempt at this message, so a retry after a
+            # 5xx Slack had in fact accepted names the post it repeats.
+            payload.setdefault("client_msg_id", str(uuid4()))
         send = (
             (lambda: client.chat_postEphemeral(user=user, **payload))
             if user
             else (lambda: client.chat_postMessage(**payload))
         )
-        await with_retry(
+        response = await with_retry(
             send,
             policy=self._retry_policy,
             classify=classify_slack_error,
             retry_after=slack_retry_after,
         )
+        # The message's `ts` is how it is edited later (a card's buttons taken
+        # away with `chat.update`). An ephemeral has none worth keeping.
+        if user:
+            return None
+        ts = response.get("ts") if response is not None else None
+        return str(ts) if ts else None
 
     async def fetch_sender_profile(
         self,
@@ -184,9 +216,11 @@ class SlackPlatformService(SlackChannelReadsMixin):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Post the message; the ``ts`` of its first part (None for an
+        ephemeral), which a reply in its thread names."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             if (metadata or {}).get("private_onboarding"):
                 raise RuntimeError(
@@ -198,7 +232,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             raise unsendable("Slack", access_token=token, channel=channel)
 
         client = await build_slack_client(self.credentials)
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         identity_kwargs = slack_customized_message_kwargs(
             self.credentials,
             (metadata or {}).get("agent_display_name"),
@@ -209,6 +243,8 @@ class SlackPlatformService(SlackChannelReadsMixin):
         chunks = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or [message]
         # Empty for a normal channel post; `_post_message` decides on it.
         ephemeral_user = _ephemeral_target(metadata)
+        index = 0
+        first: str | None = None
         try:
             for index, chunk in enumerate(chunks):
                 blocks = reply_blocks(
@@ -226,8 +262,11 @@ class SlackPlatformService(SlackChannelReadsMixin):
                     payload["thread_ts"] = thread_ts
                 payload.update(identity_kwargs)
                 payload["ephemeral_user"] = ephemeral_user
-                await self._post_message(client, payload)
+                ts = await self._post_message(client, payload)
+                first = first or ts
         except Exception:
+            if index:
+                note_partial_delivery()
             logger.debug(
                 "agent_surfaces.service.slack_send_message_channel_s.propagated",
                 exc_info=True,
@@ -235,6 +274,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             raise
         if not ephemeral_user:
             await remove_processing_reaction(self.credentials, event)
+        return first
 
     async def acknowledge_interaction(
         self,
@@ -263,7 +303,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
         if not response_url:
             return
         try:
-            async with httpx.AsyncClient(timeout=10.0) as http_client:
+            async with outbound_http(10.0) as http_client:
                 await http_client.post(
                     response_url,
                     json=slack_acknowledgement_body(
@@ -286,7 +326,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
     ) -> bool:
         """Post a resource as a Block Kit card. Always a card, so always True."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             raise unsendable("Slack", access_token=token, channel=channel)
 
@@ -299,7 +339,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 "text": render_plan.to_caption(),
                 "blocks": _display_resource_blocks(render_plan),
             }
-            thread_ts = event.reply_target.get("thread_ts")
+            thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
             if thread_ts:
                 payload["thread_ts"] = thread_ts
             payload.update(
@@ -327,8 +367,8 @@ class SlackPlatformService(SlackChannelReadsMixin):
     ) -> bool:
         """Render ask_user questions as Block Kit selects + a Submit button."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
-        if not token or not channel:
+        channel = reply_target_as(event, SlackReplyTarget).channel
+        if not token or not channel or not question_blocks_fit(question_plan):
             return False
         client = await build_slack_client(self.credentials)
         payload: dict[str, Any] = {
@@ -336,7 +376,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             "text": question_plan.title,
             "blocks": _question_blocks(question_plan),
         }
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if thread_ts:
             payload["thread_ts"] = thread_ts
         payload.update(
@@ -346,7 +386,8 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 (metadata or {}).get("agent_icon_url"),
             )
         )
-        await self._post_message(client, payload)
+        ts = await self._post_message(client, payload)
+        await remember_slack_card(question_plan.callback_id, ts, payload)
         return True
 
     async def _render_decision(
@@ -358,7 +399,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
     ) -> bool:
         """Render a request_approval prompt as Block Kit Approve/Deny buttons."""
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
             return False
         client = await build_slack_client(self.credentials)
@@ -367,7 +408,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
             "text": f"Approval needed: {approval_plan.title}",
             "blocks": _approval_blocks(approval_plan),
         }
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if thread_ts:
             payload["thread_ts"] = thread_ts
         payload.update(
@@ -377,8 +418,17 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 (metadata or {}).get("agent_icon_url"),
             )
         )
-        await self._post_message(client, payload)
+        ts = await self._post_message(client, payload)
+        await remember_slack_card(approval_plan.callback_id, ts, payload)
         return True
+
+    async def retire_decision_card(
+        self, handle: DecisionCardHandle, reason: CardRetirement
+    ) -> None:
+        """Rewrite a finished pause's card without its controls."""
+        await retire_slack_card(
+            await build_slack_client(self.credentials), handle, reason
+        )
 
     async def add_processing_indicator(
         self,
@@ -388,9 +438,9 @@ class SlackPlatformService(SlackChannelReadsMixin):
     ) -> None:
         del metadata  # Part of the adapter interface; the bubble text is fixed.
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
+        channel = reply_target_as(event, SlackReplyTarget).channel
         timestamp = event.external_message_id
-        thread_ts = event.reply_target.get("thread_ts")
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         if not token or not channel or not timestamp:
             logger.debug(
                 "agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic"
@@ -412,7 +462,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                         loading_messages=[PROCESSING_LOADING_TEXT],
                     )
                     return
-                except SlackApiError as exc:
+                except slack_api_error() as exc:
                     error_code = str((exc.response or {}).get("error") or "")
                     if error_code in {
                         "missing_scope",
@@ -434,7 +484,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 name="eyes",
                 timestamp=str(timestamp),
             )
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             error_code = str((exc.response or {}).get("error") or "")
             if error_code in {"already_reacted", "missing_scope", "not_reactable"}:
                 logger.debug(
@@ -447,150 +497,3 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 exc_info=True,
             )
             raise
-
-    async def download_attachment_bytes(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        attachment: dict[str, Any],
-    ) -> tuple[bytes, str, str] | None:
-        """Download a single inbound Slack attachment (no RunContext)."""
-        del event
-        token = slack_access_token(self.credentials)
-        if not token:
-            return None
-        download_url, file_item = await self._resolve_attachment_url(attachment)
-        if not download_url:
-            return None
-        file_name = self._attachment_file_name(attachment, file_item, download_url)
-        content = await self._download_capped(download_url, token)
-        return (
-            content,
-            file_name,
-            _attachment_mime_type(attachment, file_item, file_name),
-        )
-
-    async def _resolve_attachment_url(
-        self, attachment: dict[str, Any]
-    ) -> tuple[str, dict[str, Any]]:
-        """The URL to fetch, asking Slack for it when the event carried none."""
-        download_url = payload_text(attachment, "download_url").strip()
-        if download_url:
-            return download_url, {}
-        file_id = payload_text(attachment, "id").strip()
-        if not file_id:
-            return "", {}
-        client = await build_slack_client(self.credentials)
-        response = await client.files_info(file=file_id)
-        file_item = response.get("file") or {}
-        return (
-            payload_first(file_item, "url_private_download", "url_private").strip(),
-            file_item,
-        )
-
-    def _attachment_file_name(
-        self,
-        attachment: dict[str, Any],
-        file_item: dict[str, Any],
-        download_url: str,
-    ) -> str:
-        """A name for the file: from the event, from Slack, or from the URL."""
-        return (
-            payload_text(attachment, "name").strip()
-            or payload_text(file_item, "name").strip()
-            or self._filename_from_url(download_url)
-            or "slack_file"
-        )
-
-    async def _download_capped(self, url: str, token: str) -> bytes:
-        """Fetch the file, streamed and capped.
-
-        The caller checked ``attachment["size"]`` first, but Slack does not
-        always send one, and a declared size is the sender's claim rather than a
-        limit on what actually arrives.
-        """
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
-            async with http_client.stream(
-                "GET",
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-            ) as response:
-                response.raise_for_status()
-                return await read_capped(
-                    response.aiter_bytes(), max_bytes=INBOUND_ATTACHMENT_BYTE_CAP
-                )
-
-    async def send_file_bytes(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        *,
-        file_name: str,
-        file_bytes: bytes,
-        mime_type: str,
-        caption: str | None = None,
-    ) -> bool:
-        """Upload + share raw file bytes to the inbound channel (egress)."""
-        del mime_type  # Slack infers the type from the filename.
-        token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
-        if not token or not channel:
-            return False
-        thread_ts = event.reply_target.get("thread_ts")
-        client = await build_slack_client(self.credentials)
-        upload_ticket = await client.files_getUploadURLExternal(
-            filename=file_name, length=len(file_bytes)
-        )
-        upload_url = str(upload_ticket["upload_url"])
-        file_id = str(upload_ticket["file_id"])
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
-            upload_response = await http_client.post(
-                upload_url, files={"file": (file_name, file_bytes)}
-            )
-            upload_response.raise_for_status()
-
-        completion_payload: dict[str, Any] = {
-            "files": [{"id": file_id, "title": caption or file_name}],
-            "channel_id": channel,
-        }
-        if caption:
-            completion_payload["initial_comment"] = caption
-        if thread_ts:
-            completion_payload["thread_ts"] = thread_ts
-        completion_payload.update(
-            slack_customized_message_kwargs(self.credentials, None)
-        )
-        try:
-            await client.files_completeUploadExternal(**completion_payload)
-        except SlackApiError as exc:
-            if not _slack_rejected_customized_identity(exc):
-                raise
-            fallback_payload: dict[str, Any] = {
-                "files": completion_payload["files"],
-                "channel_id": channel,
-            }
-            if thread_ts:
-                fallback_payload["thread_ts"] = thread_ts
-            await client.files_completeUploadExternal(**fallback_payload)
-        return True
-
-    def _filename_from_url(self, value: str) -> str:
-        return str(value or "").rstrip("/").split("/")[-1].strip()
-
-
-def _slack_rejected_customized_identity(exc: SlackApiError) -> bool:
-    error_code = str((exc.response or {}).get("error") or "")
-    if error_code in {"invalid_arguments", "invalid_arg_name"}:
-        return True
-    messages = (exc.response or {}).get("response_metadata", {}).get("messages") or []
-    return any("username" in str(message).lower() for message in messages)
-
-
-def _attachment_mime_type(
-    attachment: dict[str, Any], file_item: dict[str, Any], file_name: str
-) -> str:
-    """The content type: from the event, from Slack, or guessed from the name."""
-    return (
-        payload_first(attachment, "mime_type", "content_type").strip()
-        or payload_text(file_item, "mimetype").strip()
-        or mimetypes.guess_type(file_name)[0]
-        or "application/octet-stream"
-    )

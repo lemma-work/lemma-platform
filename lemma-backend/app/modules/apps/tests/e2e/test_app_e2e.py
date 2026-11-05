@@ -89,6 +89,22 @@ async def test_app_assets_support_private_and_public_asset_routes(
     )
     assert upload_res.status_code == status.HTTP_200_OK, upload_res.text
 
+    # New apps are private to the pod: nobody signed out sees the build until
+    # someone opens it to everyone.
+    assert create_res.json()["visibility"] == "POD"
+    private_res = await async_client.get(
+        "/",
+        headers={"host": host_of(public_slug)},
+    )
+    assert marker not in private_res.text
+
+    publish_res = await authenticated_client.patch(
+        f"/pods/{pod_id}/apps/{app_name}",
+        json={"visibility": "PUBLIC"},
+    )
+    assert publish_res.status_code == status.HTTP_200_OK, publish_res.text
+    assert publish_res.json()["url"] == expected_url.format(slug=public_slug)
+
     unlisted_public_res = await async_client.get(
         "/",
         headers={"host": host_of(public_slug)},
@@ -97,13 +113,6 @@ async def test_app_assets_support_private_and_public_asset_routes(
         unlisted_public_res.text
     )
     assert marker in unlisted_public_res.text
-
-    publish_res = await authenticated_client.patch(
-        f"/pods/{pod_id}/apps/{app_name}",
-        json={"visibility": "PUBLIC"},
-    )
-    assert publish_res.status_code == status.HTTP_200_OK, publish_res.text
-    assert publish_res.json()["url"] == expected_url.format(slug=public_slug)
 
     asset_res = await authenticated_client.get(f"/pods/{pod_id}/apps/{app_name}/assets")
     assert asset_res.status_code == status.HTTP_200_OK, asset_res.text

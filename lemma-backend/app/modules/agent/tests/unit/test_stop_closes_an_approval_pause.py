@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-import app.modules.agent.services.conversation_turns as turns
+import app.modules.agent.services.conversation_stop as stops
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import (
@@ -75,7 +75,7 @@ def _coordinator(
     *,
     superseded: list[Message],
     published: list[tuple],
-) -> tuple[turns.TurnCoordinator, _Uow, list[object]]:
+) -> tuple[stops.StopCoordinator, _Uow, list[object]]:
     statuses: list[object] = []
     uow = _Uow()
 
@@ -91,15 +91,14 @@ def _coordinator(
     async def _publish(conversation_id, frame):
         published.append((conversation_id, frame))
 
-    monkeypatch.setattr(turns, "publish_conversation_event", _publish)
+    monkeypatch.setattr(stops, "publish_conversation_event", _publish)
 
-    coordinator = turns.TurnCoordinator(
+    coordinator = stops.StopCoordinator(
         uow,
         conversations,
         SimpleNamespace(),
         approvals,
         SimpleNamespace(),
-        None,
     )
     return coordinator, uow, statuses
 
@@ -170,7 +169,10 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
     async def _deny_pauses(*, conversation, user_id):
         closed.append("pauses")
 
-    coordinator = turns.TurnCoordinator(
+    async def _hold_decided(*, conversation):
+        closed.append("decided")
+
+    coordinator = stops.StopCoordinator(
         SimpleNamespace(),
         SimpleNamespace(
             get_conversation=AsyncMock(return_value=conversation),
@@ -179,14 +181,16 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         SimpleNamespace(),
         SimpleNamespace(),
         SimpleNamespace(),
-        None,
     )
     monkeypatch.setattr(
-        turns, "validate_conversation_access", lambda loaded, **_kwargs: loaded
+        stops, "validate_conversation_access", lambda loaded, **_kwargs: loaded
     )
-    monkeypatch.setattr(turns, "require_agent_action", AsyncMock())
+    monkeypatch.setattr(stops, "require_agent_action", AsyncMock())
     monkeypatch.setattr(coordinator, "_cancel_active_wait", _cancel_wait)
     monkeypatch.setattr(coordinator, "_deny_unresolved_pauses", _deny_pauses)
+    monkeypatch.setattr(
+        coordinator, "_keep_a_decided_pause_from_resuming", _hold_decided
+    )
 
     result = await coordinator.stop_conversation(
         conversation_id=conversation.id,
@@ -194,10 +198,10 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         pod_id=conversation.pod_id,
     )
 
-    assert closed == ["wait", "pauses"]
+    assert closed == ["wait", "pauses", "decided"]
     assert result is conversation
-    turns.require_agent_action.assert_awaited_once()
+    stops.require_agent_action.assert_awaited_once()
     assert (
-        turns.require_agent_action.await_args.kwargs["action"]
+        stops.require_agent_action.await_args.kwargs["action"]
         is Permissions.AGENT_EXECUTE
     )

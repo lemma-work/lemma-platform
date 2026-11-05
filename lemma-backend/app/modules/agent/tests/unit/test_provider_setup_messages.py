@@ -14,8 +14,10 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
+import httpx2
 import pytest
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.infrastructure.transport_errors import (
     local_model_server_down_message,
 )
@@ -27,9 +29,9 @@ pytestmark = pytest.mark.unit
 
 def _refused(url: str) -> Exception:
     """What the OpenAI SDK raises when nothing listens: its own wrapper around
-    httpx's `ConnectError`."""
-    request = httpx.Request("POST", url)
-    cause = httpx.ConnectError("All connection attempts failed", request=request)
+    httpx2's `ConnectError`."""
+    request = httpx2.Request("POST", url)
+    cause = httpx2.ConnectError("All connection attempts failed", request=request)
 
     class APIConnectionError(Exception):
         pass
@@ -65,6 +67,15 @@ class TestLocalModelServerDown:
         assert message.startswith("Ollama isn't running on this computer.")
         assert "kept dropping" not in message
 
+    def test_a_refused_loopback_on_the_httpx_stack_is_named_too(self) -> None:
+        """Tools and other callers still raise `httpx`, not `httpx2`."""
+        request = httpx.Request("POST", "http://127.0.0.1:11434/v1/chat/completions")
+        refused = httpx.ConnectError("refused", request=request)
+
+        assert local_model_server_down_message(refused) == (
+            "Ollama isn't running on this computer. Start it, then send again."
+        )
+
     def test_a_remote_provider_is_not_called_a_local_server(self) -> None:
         assert (
             local_model_server_down_message(
@@ -89,7 +100,7 @@ class TestDiscovery:
         assert discovery._anthropic_models_url(base_url) == expected
 
     def test_an_unreadable_list_names_the_provider_and_the_way_out(self) -> None:
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(RuntimeProfileValidationError) as caught:
             discovery._provider_model_catalog(
                 discovered_models=[],
                 fallback_model_names=[],
@@ -170,7 +181,7 @@ class TestSharedInstallation:
         monkeypatch.setattr(settings, "environment", "local")
         monkeypatch.setattr(exposure_settings, "installation_shared", True)
 
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(RuntimeProfileValidationError) as caught:
             asyncio.run(
                 discovery._validate_public_base_url("http://127.0.0.1:11434/v1")
             )

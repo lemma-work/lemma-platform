@@ -214,16 +214,6 @@ TELEGRAM_CHAT = Capability(
     ),
 )
 
-TELEGRAM_HANDLE = Capability(
-    name="the Telegram account the cast is known by",
-    requires=("SCENARIOS_TELEGRAM_HANDLE",),
-    how=(
-        "the @username (without the @) of the Telegram account that messages "
-        "the bot. It is what turns an inbound message into a message from "
-        "somebody rather than from a stranger"
-    ),
-)
-
 GITHUB_REPO = Capability(
     name="a GitHub repository to write to",
     # The repository only. A PAT was required here too, from when this scenario

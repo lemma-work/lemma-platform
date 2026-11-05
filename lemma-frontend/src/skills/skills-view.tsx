@@ -39,7 +39,7 @@ import { sayUnloadable, type SkillCard } from "./skills";
  *  sideways at 375px, and a skill whose SKILL.md could not be read still gets
  *  a card saying so instead of being quietly left out of the deck.
  */
-export function SkillsView({ podId, teammate, onFile, onCreate }: {
+export function SkillsView({ podId, teammate, onFile, onCreate, layout = "hand" }: {
     podId: string;
     /** Whose skills these are, so an empty deck can say whose. */
     teammate: string;
@@ -56,6 +56,10 @@ export function SkillsView({ podId, teammate, onFile, onCreate }: {
      *  A dialog here would be this app inventing a worse version of a skill
      *  the teammate already has. */
     onCreate?: () => void;
+    /** A hand you move along, where the deck shares a page with other
+     *  things; a grid that wraps, where the skills have a page to themselves
+     *  and every card can be on screen at once. */
+    layout?: "hand" | "grid";
 }) {
     const cache = useQueryClient();
     const [open, setOpen] = useState<string | null>(null);
@@ -115,6 +119,7 @@ export function SkillsView({ podId, teammate, onFile, onCreate }: {
                 offer, and it was the one case that rendered nothing at all. */}
             {(cards.length > 0 || onCreate) && (
                 <Deck
+                    layout={layout}
                     cards={cards}
                     teammate={teammate}
                     onRead={(card) => (onFile ? onFile(card.file) : setOpen(card.folder))}
@@ -147,7 +152,7 @@ function stillnessWanted(): boolean {
  *  column gives it. What is left to write is the parts a scroll container does
  *  not do — arrows, a mouse drag, and the arrow keys.
  */
-function Deck({ cards, teammate, onRead, onCreate }: { cards: SkillCard[]; teammate: string; onRead: (card: SkillCard) => void; onCreate?: () => void }) {
+function Deck({ cards, teammate, onRead, onCreate, layout }: { cards: SkillCard[]; teammate: string; onRead: (card: SkillCard) => void; onCreate?: () => void; layout: "hand" | "grid" }) {
     const track = useRef<HTMLUListElement>(null);
     const [edges, setEdges] = useState({ start: true, end: false });
 
@@ -199,7 +204,7 @@ function Deck({ cards, teammate, onRead, onCreate }: { cards: SkillCard[]; teamm
         /* Only a mouse. A touch or a pen already scrolls this natively, and
            taking the pointer away from the browser means reimplementing
            momentum badly. */
-        if (event.pointerType !== "mouse" || event.button !== 0) return;
+        if (event.pointerType !== "mouse" || event.button !== 0 || layout === "grid") return;
         const rail = track.current;
         if (!rail) return;
         drag.current = { from: event.clientX, at: rail.scrollLeft };
@@ -249,7 +254,7 @@ function Deck({ cards, teammate, onRead, onCreate }: { cards: SkillCard[]; teamm
     }
 
     return (
-        <div className="skill-hand">
+        <div className={layout === "grid" ? "skill-hand skill-hand--grid" : "skill-hand"}>
             <ul
                 className="skill-track"
                 ref={track}
@@ -288,7 +293,7 @@ function Deck({ cards, teammate, onRead, onCreate }: { cards: SkillCard[]; teamm
             {/* Below the hand rather than over it: an arrow floating on the
                 first and last card covers the thing it is there to help you
                 reach, and at 375px there is no margin to put it in. */}
-            <div className="skill-oars">
+            {layout === "hand" && <div className="skill-oars">
                 <button
                     className="skill-oar"
                     onClick={() => nudge(-1)}
@@ -304,7 +309,7 @@ function Deck({ cards, teammate, onRead, onCreate }: { cards: SkillCard[]; teamm
                     disabled={edges.end}
                     aria-label="Later skills"
                 ><ChevronRightIcon size={16} /></button>
-            </div>
+            </div>}
         </div>
     );
 }

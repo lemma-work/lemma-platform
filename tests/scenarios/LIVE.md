@@ -117,8 +117,11 @@ answered by pressing a button, an approval offered as something to press.
 
 Two things that account needs, and both are what a real colleague has anyway:
 
-* **a @username** — Lemma resolves a Telegram sender by it, and without one every
-  message is from a stranger. The scenarios skip and say so.
+* **its number verified on the holder's Lemma profile** — a Telegram handle is
+  a claim anybody can make, so Lemma matches on it not at all. The live fixture shares the account's own contact, which Telegram attests, and
+  Lemma matches it to the number verified on the profile. Verify it once, signed
+  in as the holder (account settings → verify with Telegram); the scenarios skip
+  and say so until then.
 * **to have messaged the bot once** — a bot cannot open a conversation, which is
   why the surface it talks to stands between runs (`tenant.STANDING_REACH`).
 
@@ -135,14 +138,12 @@ organizations sharing a display name, which is a state nothing reports.
 
 It matters most here, because Telegram identity is deployment-wide:
 
-* `telegram_username` is unique across the deployment, so only one of the two
-  Daniels can hold `@you`. Whichever cast ran last owns it, and the other is
-  refused with a 409. The live fixture skips with that explanation rather than
-  erroring.
+* a mobile number is unique across the deployment, so only one of the two
+  Daniels can verify the account's number, and only that one is recognised.
 * the resolution itself is **sticky by design** (`PS-SURF-012`: "shall keep
   that resolution stable across later messages"). Once a Telegram account has
-  resolved to a user, changing `telegram_username` does not re-point it — so a
-  cast built after the link was made can never be recognised.
+  proven it is a user's, nothing re-points it — so a cast built after the link
+  was made can never be recognised.
 
 So: **export `SCENARIOS_MAILBOX` in every command that touches a deployment**,
 including `make scenarios-provision`, and use the same answer every time. If a
@@ -180,7 +181,7 @@ public, and a fork must not be able to read them.
 ```python
 @scenario("A person connects GitHub and Lemma knows whose account it is")
 @proves("PS-CONN-011")
-@covers("connector.account.create", "connector.operation.execute")
+@covers("connector.account.create", "pod.connector.operation.execute")
 async def test_connecting_github_identifies_the_account(github):
     needs(GITHUB_REPO, REAL_MODEL)
     ...

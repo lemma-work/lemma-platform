@@ -30,6 +30,10 @@ export type WorkflowCreateRequest = {
      */
     icon_url?: (string | null);
     /**
+     * How many runs of this workflow may be in progress at once. A run started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run finishes. Null means no limit.
+     */
+    max_concurrent_runs?: (number | null);
+    /**
      * Workflow schedule ownership mode. `GLOBAL` means one pod-level workflow schedule is allowed; `USER` is reserved for per-user schedule ownership.
      */
     mode?: WorkflowMode;

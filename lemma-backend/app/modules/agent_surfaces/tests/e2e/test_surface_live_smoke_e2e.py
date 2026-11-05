@@ -65,13 +65,15 @@ async def test_live_telegram_minimal_send():
     env = _required_env("TELEGRAM_BOT_TOKEN", "LEMMA_SURFACE_LIVE_TELEGRAM_CHAT_ID")
     service = TelegramPlatformService({"bot_token": env["TELEGRAM_BOT_TOKEN"]})
 
-    await service.send_message(
+    sent = await service.send_message(
         event=_event(
             "TELEGRAM",
             target={"chat_id": env["LEMMA_SURFACE_LIVE_TELEGRAM_CHAT_ID"]},
         ),
         message="Lemma surface live smoke: Telegram",
     )
+
+    assert sent, "Telegram accepted the message without returning its id"
 
 
 async def test_live_whatsapp_minimal_send():
@@ -87,7 +89,7 @@ async def test_live_whatsapp_minimal_send():
         }
     )
 
-    await service.send_message(
+    sent = await service.send_message(
         event=_event(
             "WHATSAPP",
             target={
@@ -97,6 +99,9 @@ async def test_live_whatsapp_minimal_send():
         ),
         message="Lemma surface live smoke: WhatsApp",
     )
+
+    # Raises on any refusal; returning is the send being accepted.
+    assert sent is None
 
 
 async def test_live_slack_minimal_send():
@@ -108,13 +113,16 @@ async def test_live_slack_minimal_send():
         credentials={"access_token": env["LEMMA_SURFACE_LIVE_SLACK_BOT_TOKEN"]}
     )
 
-    await service.send_message(
+    sent = await service.send_message(
         event=_event(
             "SLACK",
             target={"channel": env["LEMMA_SURFACE_LIVE_SLACK_CHANNEL_ID"]},
         ),
         message="Lemma surface live smoke: Slack",
     )
+
+    # Raises on any refusal; returning is the send being accepted.
+    assert sent is None
 
 
 async def test_live_teams_minimal_send():
@@ -125,7 +133,7 @@ async def test_live_teams_minimal_send():
     )
     adapter = TeamsSurfaceAdapter()
 
-    await adapter.send_message(
+    sent = await adapter.send_message(
         credentials={},
         event=_event(
             "TEAMS",
@@ -136,6 +144,9 @@ async def test_live_teams_minimal_send():
         ).model_copy(update={"tenant_id": env["LEMMA_SURFACE_LIVE_TEAMS_TENANT_ID"]}),
         message="Lemma surface live smoke: Teams",
     )
+
+    # Raises on any refusal; returning is the send being accepted.
+    assert sent is None
 
 
 async def test_live_resend_minimal_send():
@@ -152,7 +163,7 @@ async def test_live_resend_minimal_send():
         }
     )
 
-    await service.send_message(
+    sent = await service.send_message(
         event=_event(
             "RESEND",
             target={
@@ -162,3 +173,6 @@ async def test_live_resend_minimal_send():
         ),
         message="Lemma surface live smoke: Resend",
     )
+
+    # Raises on any refusal; returning is the send being accepted.
+    assert sent is None

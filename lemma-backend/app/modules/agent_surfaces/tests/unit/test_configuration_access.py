@@ -47,7 +47,9 @@ def _access(
         pod_membership_port=pod_membership_port or SimpleNamespace(),
         identity_service=identity_service or SimpleNamespace(),
         external_user_repository=external_user_repository or SimpleNamespace(),
-        credential_resolver=SimpleNamespace(),
+        credential_resolver=SimpleNamespace(
+            installation_identity=AsyncMock(side_effect=lambda surface: surface.id)
+        ),
     )
 
 
@@ -57,6 +59,7 @@ def _surface(*, pod_id, surface_id=None):
         pod_id=pod_id,
         surface_type=SurfacePlatform.SLACK,
         external_workspace_id="T1",
+        pod_connector_slug=None,
         agent_id=uuid4(),
         name="slack",
     )
@@ -82,6 +85,9 @@ async def test_configuration_candidates_are_scoped_to_verified_receiver_and_memb
             get_by_identity=AsyncMock(
                 return_value=SimpleNamespace(resolved_user_id=user_id)
             )
+        ),
+        identity_service=SimpleNamespace(
+            resolve=AsyncMock(return_value=SimpleNamespace(internal_user_id=user_id))
         ),
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[member_pod])
@@ -135,6 +141,9 @@ async def test_configuration_requires_the_same_agent_permission_as_http(
                 return_value=SimpleNamespace(resolved_user_id=user_id)
             )
         ),
+        identity_service=SimpleNamespace(
+            resolve=AsyncMock(return_value=SimpleNamespace(internal_user_id=user_id))
+        ),
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[pod_id])
         ),
@@ -160,6 +169,69 @@ async def test_configuration_requires_the_same_agent_permission_as_http(
 
     assert authorized == []
     context.can.assert_awaited_once_with(Permissions.AGENT_UPDATE)
+
+
+async def test_a_cached_actor_whose_account_is_gone_configures_nothing():
+    """The cache row is asked through identity resolution, never read raw.
+
+    A deactivated person's external-user row survives them, and it used to be
+    returned straight from the table -- so they could still open the setup
+    modal and repoint a channel while their pod membership row lingered.
+    """
+    from app.modules.agent_surfaces.services.identity_resolution_service import (
+        SurfaceIdentityResolutionService,
+    )
+
+    departed = uuid4()
+    # Telegram's menu asks the same question as Slack's App Home; it is used
+    # here because its verified-identity lookup is the injectable one.
+    surface = SimpleNamespace(
+        **{**vars(_surface(pod_id=uuid4())), "surface_type": SurfacePlatform.TELEGRAM}
+    )
+    cached_row = SimpleNamespace(
+        resolved_user_id=departed,
+        external_user_id="U1",
+        email=None,
+        phone=None,
+        display_name=None,
+    )
+    external_users = SimpleNamespace(
+        get_by_identity=AsyncMock(return_value=cached_row),
+        upsert=AsyncMock(return_value=cached_row),
+    )
+
+    async def nobody_verified(event):
+        return None
+
+    async def gone(user_id):
+        return None
+
+    identity = SurfaceIdentityResolutionService(
+        uow=SimpleNamespace(session=object()),
+        external_user_repository=external_users,
+        user_directory=SimpleNamespace(
+            user_id_by_email=AsyncMock(return_value=None),
+            user_ids_by_mobile_numbers=AsyncMock(return_value=[]),
+        ),
+        verified_identity_lookup=nobody_verified,
+        live_user_lookup=gone,
+    )
+    harness = _access(
+        external_user_repository=external_users, identity_service=identity
+    )
+    harness.credential_resolver = SimpleNamespace(
+        for_surface=AsyncMock(return_value={}),
+        installation_identity=AsyncMock(side_effect=lambda surface: surface.id),
+    )
+    harness.uow = SimpleNamespace(session=None)
+
+    actor = await harness._resolve_configuration_actor(
+        candidates=[surface],
+        actor_external_user_id="U1",
+        adapter=SimpleNamespace(fetch_sender_profile=AsyncMock(return_value=None)),
+    )
+
+    assert actor is None
 
 
 async def test_explicit_or_default_surface_replaces_first_row_selection():
@@ -196,7 +268,7 @@ def _whatsapp_surface(*, pod_id):
         name="whatsapp",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         config=SurfaceConfig(),
         is_active=True,
     )
@@ -206,14 +278,22 @@ class _SetupHarness(SurfaceSetupReadMixin, SurfaceConsentMixin):
     pass
 
 
-def _setup_harness(surface):
+def _setup_harness(surface, monkeypatch):
+    # Nothing has arrived through it, and nothing is wrong with it: the
+    # checklist is what is left to do.
+    setup_read = "app.modules.agent_surfaces.services.surface_setup_read"
+    monkeypatch.setattr(
+        f"{setup_read}.surface_heard_from", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(f"{setup_read}.surface_problem", AsyncMock(return_value=None))
     harness = _SetupHarness()
+    harness.surface_repository = SimpleNamespace(uow=None)
     harness.get_surface_by_name_in_pod = AsyncMock(return_value=surface)
     harness.get_platform_setup_guide = lambda platform: None
     harness._surface_admin_consent = AsyncMock(return_value=None)
     harness._surface_uses_org_custom_app = AsyncMock(return_value=True)
     harness._credential_resolver = SimpleNamespace(
-        for_account=AsyncMock(return_value={"verify_token": _A_VERIFY_TOKEN})
+        for_surface=AsyncMock(return_value={"verify_token": _A_VERIFY_TOKEN})
     )
     return harness
 
@@ -239,10 +319,10 @@ async def test_a_reader_who_cannot_change_the_surface_is_not_given_its_verify_to
         lambda: True,
     )
     pod_id = uuid4()
-    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id))
+    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id), monkeypatch)
 
     setup = await harness.get_surface_setup_by_name(
-        pod_id=pod_id, name="whatsapp", reveal_secrets=False
+        pod_id=pod_id, name="whatsapp", reveal_secrets=False, connection=None
     )
 
     assert _A_VERIFY_TOKEN not in _copyable_values(setup)
@@ -259,10 +339,10 @@ async def test_a_reader_who_can_change_the_surface_still_gets_the_verify_token(
         lambda: True,
     )
     pod_id = uuid4()
-    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id))
+    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id), monkeypatch)
 
     setup = await harness.get_surface_setup_by_name(
-        pod_id=pod_id, name="whatsapp", reveal_secrets=True
+        pod_id=pod_id, name="whatsapp", reveal_secrets=True, connection=None
     )
 
     assert _A_VERIFY_TOKEN in _copyable_values(setup)

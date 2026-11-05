@@ -45,6 +45,12 @@ from app.modules.agent.tools.callable_tool_factory import (
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
+from app.modules.agent.tools.final_answer.rejections import (
+    LocalRejectionCounter,
+    RedisRejectionCounter,
+    RejectionCounter,
+    count_rejection,
+)
 
 logger = get_logger(__name__)
 
@@ -85,8 +91,12 @@ def build_final_answer_toolset(
     *,
     agent: Agent | None,
     uow_factory: UnitOfWorkFactory | None = None,
+    rejections: RejectionCounter | None = None,
 ) -> FunctionToolset[BaseAgentContext]:
-    """Build the one-tool toolset exposing ``final_answer`` over MCP."""
+    """Build the one-tool toolset exposing ``final_answer`` over MCP.
+
+    ``rejections`` counts schema rejections per run; see `rejections`.
+    """
     output_schema = agent_output_schema(agent)
     schema = _final_answer_input_schema(output_schema)
     validator = (
@@ -94,7 +104,8 @@ def build_final_answer_toolset(
         if _is_validatable_schema(output_schema)
         else None
     )
-    rejections = {"count": 0}
+    counter = rejections or RedisRejectionCounter()
+    fallback = LocalRejectionCounter()
 
     async def _final_answer(
         ctx: RunContext[BaseAgentContext],
@@ -113,8 +124,11 @@ def build_final_answer_toolset(
 
         violation = _schema_violation(validator, output)
         if violation is not None:
-            rejections["count"] += 1
-            if rejections["count"] <= _MAX_SCHEMA_REJECTIONS:
+            run_id = getattr(ctx.deps, "agent_run_id", None)
+            count = await count_rejection(
+                counter, fallback, run_id if isinstance(run_id, UUID) else None
+            )
+            if count <= _MAX_SCHEMA_REJECTIONS:
                 return {
                     "success": False,
                     "error": (
@@ -122,7 +136,7 @@ def build_final_answer_toolset(
                         f"{violation}. Fix it and call final_answer again."
                     ),
                 }
-            logger.debug("agent.final_answer.schema_violation_accepted.diagnostic")
+            logger.warning("agent.final_answer.schema_violation_accepted.degraded")
 
         result = FinalAgentResult(
             status=cast(Any, status),

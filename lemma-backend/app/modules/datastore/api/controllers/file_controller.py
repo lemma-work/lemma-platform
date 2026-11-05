@@ -3,13 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from fastapi import (
-    APIRouter,
-    Query,
-    Request,
-    Response,
-    status,
-)
+from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.core.api.pagination import parse_uuid_page_token
@@ -131,6 +125,8 @@ async def upload_file(
             directory_path=form.text("directory_path", "/") or "/",
             search_enabled=bool(form.boolean("search_enabled", True)),
             visibility=form.text("visibility"),
+            # The name came with the file: a taken one becomes `name (1).ext`.
+            rename_on_conflict=True,
         )
     return await _file_detail_response(file_entity, user.id)
 

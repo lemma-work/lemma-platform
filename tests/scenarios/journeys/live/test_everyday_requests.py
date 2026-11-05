@@ -20,6 +20,7 @@ import json
 import re
 import time
 import zipfile
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -28,6 +29,7 @@ from harness.environment import MODEL_IS_REAL
 from harness.credentials import needs
 from harness.run import a_name_for
 from harness.steps.datastore import column
+from harness.waiting import UNTIL_BACKGROUND_WORK_LANDS, eventually
 
 pytestmark = [
     journey("Agents and conversations"),
@@ -327,6 +329,68 @@ async def test_something_is_remembered(desk):
     assert found, f"{marker} is in no memory file"
 
 
+#: Where the pod's assistant keeps memory: the two indexes, and its two folders.
+_MEMORY_FOLDERS = (
+    "/me",
+    "/me/agents/pod-default",
+    "/memory",
+    "/memory/agents/pod-default",
+)
+
+
+def _names_memory(tool_args: object) -> bool:
+    text = json.dumps(tool_args or {})
+    return "/memory" in text or "/me/agents" in text or "AGENTS.md" in text
+
+
+async def _memory_text(person, pod) -> str:
+    """Every memory file the pod's assistant could have written, run together."""
+    texts = []
+    for folder in _MEMORY_FOLDERS:
+        for path in await person.paths_in(pod, directory=folder):
+            if path.endswith(".md"):
+                texts.append(
+                    (await person.downloads(path, in_pod=pod)).decode("utf-8", "replace")
+                )
+    return "\n".join(texts)
+
+
+@scenario("Something mentioned in passing is answered first, and remembered after")
+@proves("PS-AGENT-016")
+@covers(
+    "agent.conversation.create",
+    "agent.conversation.message.append",
+    "agent.conversation.get",
+)
+async def test_something_mentioned_in_passing_is_remembered_after_the_answer(desk):
+    """Saving it first cost the person extra model calls before their answer,
+    for a fact they had only mentioned."""
+    person, pod, _ = desk
+
+    transcript = await _asks(
+        person,
+        pod,
+        "I run a 12-person design studio. Give me a short checklist (max 6 "
+        "items) for onboarding a new client project.",
+        budget=QUICK,
+    )
+
+    before_the_answer = [
+        message.get("tool_args")
+        for message in json.loads(transcript)
+        if message.get("kind") == "TOOL_CALL" and _names_memory(message.get("tool_args"))
+    ]
+    assert not before_the_answer, (
+        f"memory was touched before the answer: {before_the_answer}"
+    )
+    await eventually(
+        lambda: _memory_text(person, pod),
+        lambda text: "design studio" in text.lower(),
+        describe="the design studio to be remembered after the answer",
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
+    )
+
+
 async def _the_widget(person, pod, transcript: str) -> str:
     """The HTML of the widget the run displayed, read back from the pod."""
     shown = [
@@ -385,3 +449,47 @@ async def test_a_widget_of_its_own_design(desk):
     widget = await _the_widget(person, pod, transcript)
     # Live from the table, or the seven orders carried in the page: both show them.
     assert table in widget or all(o["customer"] in widget for o in ORDERS), widget
+
+
+@scenario("A widget opens through its own link, and for nobody else")
+@proves("PS-AGENT-031")
+@covers("widget.embed_token")
+async def test_a_widget_opens_only_through_the_link_its_owner_was_given(world, desk):
+    """The fast lane can only ask for a result that does not exist; this is the
+    half that needs a real one. Expiry is a clock and is pinned in the module
+    suite (`test_widget_serve_e2e.py`), not waited out here."""
+    person, pod, table = desk
+    transcript = await _asks(
+        person, pod, f"Show me units by status in {table} as a widget.", budget=QUICK
+    )
+    shown = next(
+        (
+            m
+            for m in json.loads(transcript)
+            if m.get("kind") == "TOOL_CALL"
+            and m.get("tool_name") == "display_resource"
+            and str((m.get("tool_args") or {}).get("type")).upper() == "WIDGET"
+        ),
+        None,
+    )
+    assert shown is not None, f"no widget was displayed:\n{transcript[-1500:]}"
+    minting = (
+        f"/pods/{pod['id']}/widgets/{shown['conversation_id']}"
+        f"/{shown['tool_call_id']}/embed-token"
+    )
+
+    link = urlsplit((await person.api.post(minting))["url"])
+    anybody = await world.new_person("anybody", sign_up=False)
+    opened = await anybody.api.call("GET", f"{link.path}?{link.query}")
+    forged = await anybody.api.call("GET", f"{link.path}?{link.query[:-2]}xx")
+    bare = await anybody.api.call("GET", link.path)
+
+    assert opened.status_code == 200, opened.text[:300]
+    assert forged.status_code == 401, forged.status_code
+    assert bare.status_code == 401, bare.status_code
+    # Someone who is not in this conversation is refused a link of their own:
+    # 403 outside the pod, 404 inside it, so a result's existence is not told
+    # to a member who does not own it. Never a link.
+    colleague = await world.person("hannah")
+    refused = await colleague.api.call("POST", minting)
+    assert refused.status_code in (403, 404), refused.status_code

@@ -8,6 +8,7 @@ rather than raising.
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock
@@ -103,7 +104,9 @@ def test_pod_toolset_exposes_exactly_these_tools():
 
 @pytest.mark.asyncio
 async def test_pod_tables_lists_then_describes(monkeypatch):
-    column = SimpleNamespace(
+    from app.modules.datastore.contracts import ColumnSchema
+
+    column = ColumnSchema(
         name="id", type="UUID", required=True, description="Primary key"
     )
     table = SimpleNamespace(
@@ -918,6 +921,54 @@ class TestPodQueryNeverOverstatesItsResult:
         )
 
         assert "total" not in result
+
+    @pytest.mark.asyncio
+    async def test_wide_rows_are_bounded_by_size_not_only_by_count(self, monkeypatch):
+        """A row cap does not bound a result: wide rows are megabytes, and the
+        result rides in the conversation for the rest of the run."""
+        rows = [{"n": index, "body": "x" * 50_000} for index in range(1000)]
+        _patch_services(monkeypatch, _query_services(rows, 1000, False))
+
+        result = await pod_adapter.pod_query(
+            _run_ctx(), QueryRequest(sql="select * from documents")
+        )
+
+        assert len(json.dumps(result)) < 60_000
+        assert result["truncated"] is True
+        assert result["row_count"] == len(result["rows"]) < 1000
+        assert "too large" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_listed_records_are_bounded_by_size(monkeypatch):
+    records = [
+        SimpleNamespace(data={"id": str(index), "notes": "y" * 50_000})
+        for index in range(200)
+    ]
+    services = SimpleNamespace(
+        record=SimpleNamespace(list_records=AsyncMock(return_value=(records, 200))),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+    monkeypatch.setattr(
+        pod_adapter, "_table_context", AsyncMock(return_value=SimpleNamespace())
+    )
+
+    listed = await pod_adapter.pod_get_records(
+        _run_ctx(), PodGetRecordsRequest(table_name="documents")
+    )
+
+    assert len(json.dumps(listed)) < 60_000
+    assert listed["total"] == 200
+    assert listed["truncated"] is True
+    assert "too large" in listed["note"]
+
+
+def test_a_single_read_cannot_ask_for_most_of_a_window():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        PodReadFileRequest(path="/me/big.txt", max_chars=400_000)
 
 
 def _edit_services(stored: list[bytes], checksums: list[str]) -> SimpleNamespace:

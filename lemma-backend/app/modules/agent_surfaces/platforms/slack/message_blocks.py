@@ -79,6 +79,43 @@ def _question_select_element(question: SurfaceQuestion) -> dict[str, Any] | None
     }
 
 
+#: Slack's own ceilings on a message's Block Kit: blocks per message, the length
+#: of a ``block_id``/``action_id``, an option's ``value``, and the options one
+#: select may hold. A message past any of them is refused whole
+#: (``invalid_blocks``), which is a question nobody was shown.
+_MAX_BLOCKS = 50
+_MAX_ID_CHARS = 255
+_MAX_OPTION_VALUE_CHARS = 150
+_MAX_SELECT_OPTIONS = 100
+
+
+def question_blocks_fit(plan: SurfaceQuestionRenderPlan) -> bool:
+    """Whether Block Kit can carry this plan exactly as it will be answered.
+
+    The submission comes back keyed by ``block_id`` with each option's
+    ``value``, and those are the question header and the option label verbatim
+    -- that is how the answer reaches the run. Shortening either would hand the
+    run an answer it never offered, so a plan that does not fit is not cut to
+    fit: it is asked in words instead, where every part survives.
+    """
+    per_question = 2 if plan.allow_other else 1
+    if 2 + per_question * len(plan.questions) > _MAX_BLOCKS:
+        return False
+    headers = [question.header for question in plan.questions]
+    if len(set(headers)) != len(headers):
+        return False
+    suffix = len(_OTHER_SUFFIX) if plan.allow_other else 0
+    for question in plan.questions:
+        if not question.header or len(question.header) + suffix > _MAX_ID_CHARS:
+            return False
+        labels = [option.label for option in question.options]
+        if len(labels) > _MAX_SELECT_OPTIONS or len(set(labels)) != len(labels):
+            return False
+        if any(not label or len(label) > _MAX_OPTION_VALUE_CHARS for label in labels):
+            return False
+    return True
+
+
 def _question_blocks(plan: SurfaceQuestionRenderPlan) -> list[dict[str, Any]]:
     """Build Block Kit select blocks (+ optional Other text) + a Submit button."""
     blocks: list[dict[str, Any]] = [

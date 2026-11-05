@@ -32,9 +32,10 @@ module or a vendor provides, it declares a `Protocol` it can be satisfied with,
 and something outside both binds an implementation to it. The consumer names the
 shape; the provider fits it.
 
-**Collaboration that can be asynchronous should be.** A domain event, written in
-the same transaction as the state it describes and consumed through an
-idempotent inbox, outlives the process that emitted it. A direct call does not.
+**Collaboration that can be asynchronous should be.** A fact, written in the
+same transaction as the state it describes as one work item per subscriber, and
+handled idempotently, outlives the process that emitted it. A direct call does
+not.
 
 ### The canonical example
 
@@ -267,20 +268,26 @@ grep -rn "limit: int = \|offset: int = " app/modules/*/services/*.py app/modules
 
 ## Events
 
-### DES-15 — every cross-module consumer is inbox-backed and idempotent
+### DES-15 — every cross-module reaction is a work item written with its cause
 
-Redis Streams and streaq are at-least-once. A consumer that is not idempotent is
-a duplicate side effect waiting for a redelivery, and the redelivery arrives on
-the day the system is already under stress.
+Work that must follow a change is a row in `work_items`, written in the
+transaction that makes the change: `WorkWriter.add` for your own module's kind,
+`facts.emit` for a fact other modules subscribe to
+(`app/core/infrastructure/work/facts.py`). An item enqueued after the commit
+is the gap this rules out, and a domain event collected on the unit of work is
+not a substitute: it goes only to the after-commit sink, which is best effort.
 
-Persist state and its domain event in one transaction through the unit of work,
-and consume through `InboxConsumer`.
+A job can run again — a lease that expires puts it back — so its effects must
+be idempotent. A FAST handler's database effects, and a JOB's writes in
+`ctx.complete_work()`, commit with the item's deletion and are exactly once.
+Anything outside the database needs its own key.
 
 *Check:*
 ```bash
-grep -rln "inbox" app/modules/*/events/*.py | wc -l   # vs the number of handler files
+grep -rn "after_commit\|create_background_task" app/modules --include=*.py | grep -v tests
 ```
-*Today:* **7** of 14 handler files — ratchet
+Each hit must be a cache invalidation, a display, or a live frame — never work
+the product depends on.
 
 ### DES-16 — capture context where it exists; never re-derive it in the consumer
 
@@ -324,8 +331,9 @@ names for "adapter". Pick one and DES-08 becomes a single grep.
    else should be operations.
 4. Depend on the type in the consumer, and bind the factory in its
    `api/dependencies.py`; never import the implementation (DES-01).
-5. If the collaboration can tolerate latency, use a domain event instead of steps
-   1–4, and make the consumer idempotent (DES-15).
+5. If the collaboration can tolerate latency, emit a fact the other module
+   subscribes to, instead of steps 1–4, and make its handler idempotent
+   (DES-15).
 
 ## Related
 

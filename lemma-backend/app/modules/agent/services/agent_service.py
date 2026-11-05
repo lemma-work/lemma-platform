@@ -7,7 +7,6 @@ from uuid import UUID
 
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.core.authorization.context import (
-    ActorType,
     Context,
     ResourceRef,
     ResourceType,
@@ -30,6 +29,10 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.services.runtime_availability import (
+    SaveRuntimeCheck,
+    check_runtime_for_pod,
+)
 
 #: What `create_agent` does besides making the row. Both default to the real
 #: thing; both are here so a test can watch one without patching this module.
@@ -46,6 +49,17 @@ def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
     except ValueError as exc:
         raise AgentValidationError(f"Invalid visibility: {value}") from exc
     return visibility.value
+
+
+def _editor_id(
+    agent: Agent, requester_user_id: UUID | None, ctx: Context | None
+) -> UUID:
+    """Whose view of the organization's models an edit is checked against."""
+    if requester_user_id is not None:
+        return requester_user_id
+    if ctx is not None and ctx.user_id is not None:
+        return ctx.user_id
+    return agent.user_id
 
 
 def _refuse_pod_default(agent: Agent, *, verb: str) -> None:
@@ -74,6 +88,7 @@ class AgentService:
         authorization_service: object,
         memory_grant_deriver: MemoryGrantDeriver | None = None,
         email_surface_provisioner: EmailSurfaceProvisioner | None = None,
+        runtime_check: SaveRuntimeCheck = check_runtime_for_pod,
     ):
         self.uow = uow
         self.agent_repository = agent_repository
@@ -84,6 +99,7 @@ class AgentService:
         # double in front of half of this service's own behaviour.
         self._derive_memory_grant_for = memory_grant_deriver
         self._provision_email_surface = email_surface_provisioner
+        self._check_runtime = runtime_check
 
     async def _require_action(
         self,
@@ -147,6 +163,12 @@ class AgentService:
         )
         if existing is not None:
             raise AgentAlreadyExistsError(normalized_name)
+        await self._check_runtime(
+            self.uow,
+            agent_runtime,
+            pod_id=pod_id,
+            user_id=user_id,
+        )
 
         agent = await self.agent_repository.create(
             Agent(
@@ -314,6 +336,15 @@ class AgentService:
             agent.visibility = _normalize_agent_visibility(visibility)
         if not isinstance(metadata, UnsetType):
             agent.metadata = metadata
+        if not isinstance(agent_runtime, UnsetType):
+            # Only when the runtime is what changed: a rename of a teammate on a
+            # retired model should not be held hostage to it.
+            await self._check_runtime(
+                self.uow,
+                agent.agent_runtime,
+                pod_id=pod_id,
+                user_id=_editor_id(agent, requester_user_id, ctx),
+            )
 
         updated = await self.agent_repository.update(agent)
         if ctx is not None:
@@ -341,15 +372,9 @@ class AgentService:
     ) -> None:
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
         _refuse_pod_default(agent, verb="deleted")
-        # A delegated workload must always route through authz — agent.delete is
-        # destructive and gated — so the owner shortcut (creator deletes their
-        # own agent) never lets a workload bypass it.
-        is_delegated = ctx is not None and (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        )
-        if requester_user_id is not None and (
-            is_delegated or agent.user_id != requester_user_id
-        ):
+        # Always through the authorizer: its owner rule lets a creator delete
+        # their agent while they are still in the pod, and gates a workload.
+        if requester_user_id is not None:
             await self._require_action(
                 requester_user_id=requester_user_id,
                 action=Permissions.AGENT_DELETE,

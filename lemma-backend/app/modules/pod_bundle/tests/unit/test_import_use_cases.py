@@ -33,6 +33,9 @@ class FakeStore:
     async def reopen_import(self, state: ImportState):
         await self.save_import(state)
 
+    async def stage_import(self, uow, state: ImportState, *, reopen=False):
+        await self.save_import(state)
+
     async def get_import(self, import_id):
         return self.imports.get(import_id)
 
@@ -57,17 +60,26 @@ class FakeQueue:
         self.calls: list = []
         self._duplicate = duplicate
 
-    async def enqueue(self, name, *, context, _job_id):
-        self.calls.append((name, context, _job_id))
-        return None if self._duplicate else object()
+    async def queue_job(self, uow, kind, payload, *, pod_id, dedup_key):
+        self.calls.append((kind, payload.model_dump(mode="json"), dedup_key))
+        return not self._duplicate
 
-    async def abort(self, job_id, **kw):
-        return True
+    async def drop_queued(self, uow, kinds, *, pod_id, dedup_key):
+        return False
 
 
 class FakeUow:
     def __init__(self):
         self.session = object()
+
+    async def commit(self):
+        return None
+
+    async def rollback(self):
+        return None
+
+    def after_commit(self, callback):
+        del callback
 
 
 class FakeUowFactory:
@@ -160,7 +172,7 @@ async def test_start_import_url_verifies_token_and_enqueues():
     assert state.status == ImportStatus.QUEUED
     assert state.source.kind == BundleSourceKind.URL
     assert state.source.url == url
-    call = next(c for c in queue.calls if c[0] == "import_pod_url")
+    call = next(c for c in queue.calls if c[0] == "pod_bundle.import_url")
     assert call[1]["source_kind"] == "pod-imports"
     assert call[1]["source_id"]
     assert call[2] == import_plan_job_id(state.import_id)
@@ -201,22 +213,23 @@ async def test_start_import_url_missing_url_rejected():
 
 async def test_start_import_github_enqueues():
     uc, store, _, queue = _use_cases()
-    pod_id, user_id, account_id = uuid4(), uuid4(), uuid4()
+    pod_id, user_id = uuid4(), uuid4()
     state = await uc.start_import(
         pod_id=pod_id,
         user_id=user_id,
         kind=BundleSourceKind.GITHUB,
         url="https://github.com/acme/crm",
         ref="main",
-        account_id=account_id,
     )
     assert state.status == ImportStatus.QUEUED
     assert state.source.kind == BundleSourceKind.GITHUB
     assert state.source.repo_url.endswith("acme/crm")
-    assert state.account_id == account_id
-    call = next(c for c in queue.calls if c[0] == "import_pod_github")
+    call = next(c for c in queue.calls if c[0] == "pod_bundle.import_github")
     assert call[1]["owner"] == "acme" and call[1]["repo"] == "crm"
-    assert call[1]["account_id"] == str(account_id)
+    # The account is the pod's `github` connector's decision, made when the
+    # job fetches; nothing about one travels with the job.
+    assert "account_id" not in call[1]
+    assert "account_id" not in state.model_dump()
 
 
 async def test_start_import_github_bad_repo_rejected():
@@ -306,7 +319,7 @@ async def test_apply_enqueues_with_dedup_id():
     )
 
     assert result.status == ImportStatus.APPLYING
-    assert queue.calls[0][0] == "apply_pod_import"
+    assert queue.calls[0][0] == "pod_bundle.apply"
     assert queue.calls[0][2] == import_apply_job_id(state.import_id)
 
 
@@ -421,3 +434,73 @@ def _make_async_noop():
         return None
 
     return _noop
+
+
+async def test_apply_is_refused_while_the_plan_holds_a_grant_the_importer_cannot_make():
+    """The plan said so; the apply must not go ahead and fail at its last step
+    with the pod half-imported. Nothing is queued."""
+    from app.modules.pod_bundle.domain.errors import BundleGrantsRefusedError
+    from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+
+    uc, store, _, queue = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+    state = _awaiting_state(
+        pod_id,
+        user_id,
+        steps=[
+            PlanStep(
+                index=0, kind=StepKind.AGENT, name="triage", action=StepAction.CREATE
+            ),
+            PlanStep(
+                index=1,
+                kind=StepKind.AGENT_GRANTS,
+                name="triage",
+                action=StepAction.UPDATE,
+                detail={
+                    "refused": ["datastore.record.delete on datastore_table 'leads'"]
+                },
+            ),
+        ],
+    )
+    await store.save_import(state)
+    with pytest.raises(BundleGrantsRefusedError) as raised:
+        await uc.apply_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
+    assert raised.value.details == {
+        "refused": [
+            "agent 'triage': datastore.record.delete on datastore_table 'leads'"
+        ]
+    }
+    assert queue.calls == []
+    stored = await store.get_import(state.import_id)
+    assert stored.status is ImportStatus.AWAITING_CONFIRMATION
+
+
+@pytest.mark.parametrize("operation", ["get", "apply", "replan", "cancel"])
+async def test_only_the_starter_may_read_apply_replan_or_cancel_an_import(operation):
+    """The plan was computed with its starter's authority and lists their own
+    accounts. Another editor of the pod who learns the id gets 404, and the
+    import is left as it was."""
+    from app.modules.pod_bundle.domain.errors import BundleJobNotFoundError
+
+    uc, store, _, queue = _use_cases()
+    pod_id, starter = uuid4(), uuid4()
+    state = _awaiting_state(pod_id, starter)
+    await store.save_import(state)
+    act = {
+        "get": uc.get_import,
+        "apply": uc.apply_import,
+        "replan": uc.replan_import,
+        "cancel": uc.cancel_import,
+    }[operation]
+
+    with pytest.raises(BundleJobNotFoundError) as raised:
+        await act(pod_id=pod_id, import_id=state.import_id, user_id=uuid4())
+    assert raised.value.status_code == 404
+    assert queue.calls == []
+    stored = await store.get_import(state.import_id)
+    assert stored.status is ImportStatus.AWAITING_CONFIRMATION
+
+    # The starter still may.
+    assert (
+        await act(pod_id=pod_id, import_id=state.import_id, user_id=starter)
+    ).import_id == state.import_id

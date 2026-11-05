@@ -31,7 +31,7 @@ from app.modules.identity.infrastructure.supertokens_auth.duplicate_session_cook
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
-from app.modules.test_support.e2e_base import _reset_supertokens_testing_state
+from app.modules.test_support.e2e_base import supertokens_state_restored
 
 pytestmark = pytest.mark.unit
 
@@ -84,23 +84,17 @@ def _configure(monkeypatch, *, desktop: bool) -> None:
 @pytest.fixture
 def desktop(monkeypatch) -> Iterator[FastAPI]:
     _configure(monkeypatch, desktop=True)
-    _reset_supertokens_testing_state()
-    initialize_supertokens()
-    try:
+    with supertokens_state_restored():
+        initialize_supertokens()
         yield _app()
-    finally:
-        _reset_supertokens_testing_state()
 
 
 @pytest.fixture
 def sharing(monkeypatch) -> Iterator[FastAPI]:
     _configure(monkeypatch, desktop=False)
-    _reset_supertokens_testing_state()
-    initialize_supertokens()
-    try:
+    with supertokens_state_restored():
+        initialize_supertokens()
         yield _app()
-    finally:
-        _reset_supertokens_testing_state()
 
 
 async def _call(

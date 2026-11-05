@@ -6,6 +6,7 @@ from typing import Any
 import typer
 from lemma_sdk.openapi_client.models.pod_create_request import PodCreateRequest
 from rich import box
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
@@ -15,7 +16,7 @@ from ..context import (
     remember_pod,
     render_session_selection,
     resolve_pod,
-    selected_org,
+    selected_org_id,
     selected_pod,
 )
 from ..confirm import confirm_destructive
@@ -74,7 +75,7 @@ def resolve_pod_id(client, state, explicit: str | None = None) -> str:  # type: 
     if _is_uuid(selector):
         return selector
 
-    org_id = selected_org(state, required=False)
+    org_id = selected_org_id(client, state, required=False)
     # Page through pods so a name beyond the first page still resolves (and so
     # ambiguity is detected across the set, not just page one) — but BOUNDED. An
     # unbounded `while True` makes one CLI command's cost depend on how many pods
@@ -145,7 +146,7 @@ def list_pods(
     result = run_with_client(
         ctx,
         lambda client, s: _mark_current(
-            client.pods.list(org_id=selected_org(s, org), limit=limit),
+            client.pods.list(org_id=selected_org_id(client, s, org), limit=limit),
             selected_pod(s, required=False),
         ),
     )
@@ -185,7 +186,7 @@ def select_pod(
     state = state_from_ctx(ctx)
 
     def run(client, s):  # type: ignore[no-untyped-def]
-        org_id = selected_org(s, org, required=False)
+        org_id = selected_org_id(client, s, org, required=False)
         if name:
             return resolve_pod(client, s, name, org=org_id)
         items = list_items(client.pods.list(org_id=org_id, limit=limit))
@@ -293,7 +294,7 @@ def create_pod(
             build_request(
                 PodCreateRequest,
                 {
-                    "organization_id": selected_org(s, org) or client.org_id,
+                    "organization_id": selected_org_id(client, s, org) or client.org_id,
                     "name": name,
                     "description": description,
                 },
@@ -727,8 +728,10 @@ def doctor_pod(
                 )
             if str(
                 surf.get("credential_mode") or ""
-            ).upper() == "CUSTOM" and not surf.get("account_id"):
-                warnings.append(f"surface '{plat}' is CUSTOM but has no account_id.")
+            ).upper() == "CUSTOM" and not surf.get("pod_connector"):
+                warnings.append(
+                    f"surface '{plat}' is CUSTOM but names no pod_connector."
+                )
 
         return {
             "errors": errors,
@@ -758,9 +761,9 @@ def doctor_pod(
             raise typer.Exit(1)
         return
     for msg in errors:
-        console.print(f"[red]error[/red]  {msg}")
+        console.print(f"[red]error[/red]  {escape(str(msg))}")
     for msg in warnings:
-        console.print(f"[yellow]warn[/yellow]   {msg}")
+        console.print(f"[yellow]warn[/yellow]   {escape(str(msg))}")
     if not errors and not warnings:
         console.print("[green]ok[/green] pod wiring looks healthy.")
     elif not errors:
@@ -903,6 +906,17 @@ def _parse_import_variables(var: list[str], values: Path | None) -> dict[str, st
     return merged
 
 
+def _parse_slug_pairs(items: list[str], *, flag: str) -> dict[str, str]:
+    """Repeated SLUG=VALUE flags as one map."""
+    pairs: dict[str, str] = {}
+    for item in items:
+        slug, sep, value = item.partition("=")
+        if not sep or not slug.strip() or not value.strip():
+            raise typer.BadParameter(f"{flag} must be SLUG=VALUE, got: {item!r}")
+        pairs[slug.strip()] = value.strip()
+    return pairs
+
+
 @app.command("import")
 def import_pod(
     ctx: typer.Context,
@@ -952,19 +966,46 @@ def import_pod(
         help="Also apply the bundle's pod name/description/icon (off by default "
         "so importing never renames the target pod).",
     ),
+    connector: list[str] = typer.Option(
+        [],
+        "--connector",
+        help="Map a bundled connector to one of your org's installations: "
+        "SLUG=INSTALLATION (name or id). Default: the org's default "
+        "installation of its catalog connector.",
+    ),
+    share_account: list[str] = typer.Option(
+        [],
+        "--share-account",
+        help="Share one of your own accounts for a bundled SHARED connector: "
+        "SLUG=ACCOUNT_ID. Left out, it imports needing an account.",
+    ),
+    create_installations: bool = typer.Option(
+        False,
+        "--create-installations",
+        help="Install Lemma's own app for a bundled connector your org has no "
+        "installation of (needs permission to manage installations).",
+    ),
 ) -> None:
     """Import a local bundle into the pod.
 
-    Non-portable ids (workflow assignees, schedule/surface accounts) are exported
-    as ${name} variables listed under `variables` in pod.json. Resolve them with
+    Non-portable ids (workflow assignees, app slugs) are exported as ${name}
+    variables listed under `variables` in pod.json. Resolve them with
     `--var name=value` or a `--values file.json`; pod-member variables default to
-    your own membership, and any unresolved account variable simply drops its
-    field so the import still succeeds (wire the account up afterwards).
+    your own membership.
+
+    The bundle's pod connectors (`connectors/<slug>/`) are declared first. Each
+    maps to your org's default installation of its catalog connector unless
+    `--connector slug=installation` picks another; a SHARED one runs as an
+    account you share with `--share-account slug=account_id`, or imports
+    needing one. No installation at all stops the import before anything is
+    written, unless `--create-installations`.
     """
     state = state_from_ctx(ctx)
     from ...cli_app.pod_bundle import import_pod_bundle
 
     variables = _parse_import_variables(var, values)
+    connector_installations = _parse_slug_pairs(connector, flag="--connector")
+    share_accounts = _parse_slug_pairs(share_account, flag="--share-account")
 
     result = run_with_client(
         ctx,
@@ -979,6 +1020,9 @@ def import_pod(
             with_files=with_files,
             variables=variables,
             set_pod_meta=set_pod_meta,
+            connector_installations=connector_installations,
+            share_accounts=share_accounts,
+            create_installations=create_installations,
         ),
     )
     if result is not None:
@@ -994,7 +1038,8 @@ def _emit_import_result(result: dict[str, Any]) -> None:
     """Render an import/dry-run result with full error messages and plan."""
     dry_run = bool(result.get("dry_run"))
     header = "Import plan (dry run)" if dry_run else "Import"
-    console.print(f"[bold]{header}[/bold]  [dim]{result.get('source_dir', '')}[/dim]")
+    source_dir = escape(str(result.get("source_dir", "")))
+    console.print(f"[bold]{header}[/bold]  [dim]{source_dir}[/dim]")
 
     summary = result.get("summary") or {}
     actions = [
@@ -1009,7 +1054,7 @@ def _emit_import_result(result: dict[str, Any]) -> None:
         view.add_column("Name")
         for resource_type, action in actions:
             verb, _, name = str(action).partition(":")
-            view.add_row(resource_type, verb, name)
+            view.add_row(escape(str(resource_type)), escape(verb), escape(name))
         console.print(view)
     elif not result.get("errors"):
         console.print("[dim]Nothing to import.[/dim]")
@@ -1018,14 +1063,14 @@ def _emit_import_result(result: dict[str, Any]) -> None:
     for error in errors:
         path = error.get("path") if isinstance(error, dict) else ""
         message = error.get("message") if isinstance(error, dict) else str(error)
-        console.print(f"[red]error[/red] {path}: {message}")
+        console.print(f"[red]error[/red] {escape(f'{path}: {message}')}")
 
     # Non-fatal findings (connector grants are env-specific, destructive grants
     # are standing authority, SUBAGENTS without agent grants, ...). During a
     # real import these were already streamed; a dry run surfaces them here.
     if dry_run:
         for advisory in result.get("advisories") or []:
-            console.print(f"[yellow]advisory[/yellow] {advisory}")
+            console.print(f"[yellow]advisory[/yellow] {escape(str(advisory))}")
 
     if result.get("ok", True):
         console.print("[green]OK[/green]" if dry_run else "[green]Imported[/green]")
@@ -1080,7 +1125,7 @@ def _render_table(
         view.add_column(heading, overflow="fold")
     if rows:
         for row in rows:
-            view.add_row(*(_short(row.get(key)) for _heading, key in columns))
+            view.add_row(*(escape(_short(row.get(key))) for _heading, key in columns))
     else:
         view.add_row(*([""] * len(columns)))
     console.print(view)
@@ -1112,11 +1157,11 @@ def _render_pod_description(
     pod = data.get("pod") if isinstance(data.get("pod"), dict) else {}
     pod_title = str(pod.get("name") or pod.get("id") or "Pod")
     pod_lines = [
-        f"[bold]{pod_title}[/bold]",
-        f"id: {pod.get('id', '')}",
+        f"[bold]{escape(pod_title)}[/bold]",
+        f"id: {escape(str(pod.get('id', '')))}",
     ]
     if pod.get("description"):
-        pod_lines.append(str(pod["description"]))
+        pod_lines.append(escape(str(pod["description"])))
     console.print(Panel("\n".join(pod_lines), title="Pod", box=box.ROUNDED))
 
     tables = [
@@ -1249,7 +1294,7 @@ def _add_file_tree_children(
         # pod data — dozens of nodes that push the pod's own folders off screen.
         if not include_skills and path == SYSTEM_SKILLS_ROOT_PATH:
             continue
-        name = str(child.get("name") or path)
+        name = escape(str(child.get("name") or path))
         kind = str(child.get("kind") or "").upper()
         label = f"[cyan]{name}/[/cyan]" if kind == "FOLDER" else name
         if kind != "FOLDER":

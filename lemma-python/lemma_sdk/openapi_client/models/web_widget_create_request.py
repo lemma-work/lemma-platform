@@ -21,6 +21,10 @@ class WebWidgetCreateRequest:
         agent_name (None | str | Unset): The agent that answers. The pod's assistant if omitted.
         allowed_origins (list[str] | Unset):
         answer (WidgetAnswer | Unset): Whom a widget answers. Mirrors a bot's ``contacts.answer``.
+        host_issuer (None | str | Unset): The product whose users the widget's host tokens name, such as `acme-app`:
+            give two widgets of one product the same issuer, and widgets of two products different ones, so their user 42s
+            are two people. Letters, digits, dots, dashes and underscores. Fixed once the widget is made; `default` if
+            omitted.
         looked_after_by (None | Unset | UUID):
     """
 
@@ -28,6 +32,7 @@ class WebWidgetCreateRequest:
     agent_name: None | str | Unset = UNSET
     allowed_origins: list[str] | Unset = UNSET
     answer: WidgetAnswer | Unset = UNSET
+    host_issuer: None | str | Unset = UNSET
     looked_after_by: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -47,6 +52,12 @@ class WebWidgetCreateRequest:
         answer: str | Unset = UNSET
         if not isinstance(self.answer, Unset):
             answer = self.answer.value
+
+        host_issuer: None | str | Unset
+        if isinstance(self.host_issuer, Unset):
+            host_issuer = UNSET
+        else:
+            host_issuer = self.host_issuer
 
         looked_after_by: None | str | Unset
         if isinstance(self.looked_after_by, Unset):
@@ -69,6 +80,8 @@ class WebWidgetCreateRequest:
             field_dict["allowed_origins"] = allowed_origins
         if answer is not UNSET:
             field_dict["answer"] = answer
+        if host_issuer is not UNSET:
+            field_dict["host_issuer"] = host_issuer
         if looked_after_by is not UNSET:
             field_dict["looked_after_by"] = looked_after_by
 
@@ -97,6 +110,15 @@ class WebWidgetCreateRequest:
         else:
             answer = WidgetAnswer(_answer)
 
+        def _parse_host_issuer(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        host_issuer = _parse_host_issuer(d.pop("host_issuer", UNSET))
+
         def _parse_looked_after_by(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -119,6 +141,7 @@ class WebWidgetCreateRequest:
             agent_name=agent_name,
             allowed_origins=allowed_origins,
             answer=answer,
+            host_issuer=host_issuer,
             looked_after_by=looked_after_by,
         )
 

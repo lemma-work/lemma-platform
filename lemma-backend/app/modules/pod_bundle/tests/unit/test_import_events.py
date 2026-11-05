@@ -80,7 +80,13 @@ async def test_first_frame_is_snapshot_then_live_frames():
     )
     frames = _frames(
         await _collect(
-            import_event_stream(FakeStore(state), channel, pod_id, state.import_id)
+            import_event_stream(
+                FakeStore(state),
+                channel,
+                pod_id,
+                state.import_id,
+                user_id=state.user_id,
+            )
         )
     )
 
@@ -95,7 +101,9 @@ async def test_expired_when_state_missing():
     pod_id = uuid4()
     frames = _frames(
         await _collect(
-            import_event_stream(FakeStore(None), FakeChannel([]), pod_id, uuid4())
+            import_event_stream(
+                FakeStore(None), FakeChannel([]), pod_id, uuid4(), user_id=uuid4()
+            )
         )
     )
     assert frames == [{"type": "expired"}]
@@ -106,7 +114,29 @@ async def test_pod_mismatch_is_expired():
     frames = _frames(
         await _collect(
             import_event_stream(
-                FakeStore(state), FakeChannel([]), uuid4(), state.import_id
+                FakeStore(state),
+                FakeChannel([]),
+                uuid4(),
+                state.import_id,
+                user_id=state.user_id,
+            )
+        )
+    )
+    assert frames == [{"type": "expired"}]
+
+
+async def test_someone_elses_import_is_expired():
+    """The plan lists its starter's own accounts; nobody else sees it."""
+    pod_id = uuid4()
+    state = _state(pod_id)
+    frames = _frames(
+        await _collect(
+            import_event_stream(
+                FakeStore(state),
+                FakeChannel([json.dumps({"type": "step", "seq": 9})]),
+                pod_id,
+                state.import_id,
+                user_id=uuid4(),
             )
         )
     )
@@ -119,7 +149,13 @@ async def test_terminal_state_closes_after_snapshot():
     channel = FakeChannel([json.dumps({"type": "step", "seq": 99})])
     frames = _frames(
         await _collect(
-            import_event_stream(FakeStore(state), channel, pod_id, state.import_id)
+            import_event_stream(
+                FakeStore(state),
+                channel,
+                pod_id,
+                state.import_id,
+                user_id=state.user_id,
+            )
         )
     )
     # An already-terminal import emits only the snapshot; no live frames follow.

@@ -26,10 +26,12 @@ MAX_WAIT_SECONDS = 24 * 60 * 60
 # conversation, so a tight loop is a token bonfire rather than a wait.
 MIN_WAIT_SECONDS = 30
 
-# Default ceiling for a wait on something else's progress. Matches the sandbox
-# runtime's own `process_max_lifetime_seconds`, so a process wait cannot outlive
-# the process it is watching by design rather than by coincidence.
-DEFAULT_TARGET_DEADLINE_SECONDS = 60 * 60
+# Default ceiling for a wait on something else's progress. Short enough that an
+# agent hears back while the person is still around to act on what it says; a
+# longer build asks for more with `max_seconds`. A wake at the ceiling costs one
+# history replay, and the agent can check and wait again, so a short default is
+# cheap and a long one was an hour of silence whenever anything went wrong.
+DEFAULT_TARGET_DEADLINE_SECONDS = 15 * 60
 
 # How long between two checks of a target nobody publishes an event for. Starts
 # responsive because a fast finish is the common case, then backs off, because a
@@ -77,7 +79,9 @@ class WaitForRequest(BaseModel):
         description=(
             "Give up waiting after this long and wake anyway, for "
             "`process_id` / `subagent_run_id`. Defaults to "
-            f"{DEFAULT_TARGET_DEADLINE_SECONDS // 60} minutes."
+            f"{DEFAULT_TARGET_DEADLINE_SECONDS // 60} minutes; at least "
+            f"{MIN_WAIT_SECONDS}s, at most {MAX_WAIT_SECONDS // 3600}h. Set it "
+            "longer for a build or test suite you expect to run past the default."
         ),
     )
     note_to_self: str | None = Field(
@@ -97,6 +101,8 @@ class WaitForResponse(BaseToolResponse):
             "DEADLINE",
             "ANSWERED",
             "CANCELLED",
+            "TARGET_NEEDS_INPUT",
+            "TARGET_UNREADABLE",
         ]
         | None
     ) = Field(default=None, description="Why this wait ended.")
@@ -133,9 +139,16 @@ _WAKE_MESSAGES: dict[tuple[AgentWaitType, AgentWaitWakeReason], str] = {
         "runtime stopped tracking it. Its outcome is unknown, not bad. Anything "
         "it wrote to the pod survives; anything in the sandbox may not."
     ),
+    (AgentWaitType.PROCESS, AgentWaitWakeReason.TARGET_UNREADABLE): (
+        "You woke because the process could not be read for several minutes: "
+        "the sandbox running it did not answer. Whether it is still running or "
+        "has finished is not known. Check it yourself (`manage_process` or "
+        "`exec_command`) before deciding anything; if the sandbox still cannot "
+        "be reached, say so rather than waiting on it again."
+    ),
     (AgentWaitType.PROCESS, AgentWaitWakeReason.ANSWERED): (
-        "Everyone you reached with message_user has now replied, which is why "
-        "you woke early. Read them with check_messages. Your process is still "
+        "Everyone you asked with channel_post has now answered, which is why "
+        "you woke early. Read them with channel_read(asked_by_me=True). Your process is still "
         "running — nothing about it has changed."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED): (
@@ -147,17 +160,24 @@ _WAKE_MESSAGES: dict[tuple[AgentWaitType, AgentWaitWakeReason], str] = {
         "still be running — check with query_subagents before deciding it "
         "failed."
     ),
+    (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT): (
+        "The sub-agent has not finished: it stopped to ask a question and is "
+        "waiting for an answer, and nobody but you can see it. Read what it "
+        "asked with query_subagents(mode='messages'), answer it with "
+        "interact_subagent(action='send') -- or ask the person, if only they "
+        "can answer -- then wait for it again."
+    ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE): (
         "That sub-agent run can no longer be found, so its outcome is unknown."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.ANSWERED): (
-        "Everyone you reached with message_user has now replied, which is why "
-        "you woke early. Read them with check_messages. The sub-agent is still "
+        "Everyone you asked with channel_post has now answered, which is why "
+        "you woke early. Read them with channel_read(asked_by_me=True). The sub-agent is still "
         "running — nothing about it has changed."
     ),
     (AgentWaitType.TIME, AgentWaitWakeReason.ANSWERED): (
-        "Everyone you reached with message_user has now replied, which is why "
-        "you woke before your time was up. Read them with check_messages. "
+        "Everyone you asked with channel_post has now answered, which is why "
+        "you woke before your time was up. Read them with channel_read(asked_by_me=True). "
         "Nothing else you were waiting on is known to have happened."
     ),
 }
@@ -173,7 +193,19 @@ _UNKNOWN_MESSAGE = (
 )
 
 
-def wake_message(wait_type: AgentWaitType, reason: AgentWaitWakeReason) -> str:
+_NO_EXIT_CODE_NOTE = (
+    " Its exit code was not recorded -- it was stopped, or it ended while "
+    "nothing was watching -- so read its output or check its effects to learn "
+    "how it ended."
+)
+
+
+def wake_message(
+    wait_type: AgentWaitType,
+    reason: AgentWaitWakeReason,
+    *,
+    exit_code: int | None = None,
+) -> str:
     """What to tell the model, for any pairing the system can produce.
 
     A lookup with a truthful fallback rather than a `KeyError`: `ANSWERED` and
@@ -183,7 +215,16 @@ def wake_message(wait_type: AgentWaitType, reason: AgentWaitWakeReason) -> str:
     """
     if reason is AgentWaitWakeReason.CANCELLED:
         return _CANCELLED_MESSAGE
-    return _WAKE_MESSAGES.get((wait_type, reason), _UNKNOWN_MESSAGE)
+    message = _WAKE_MESSAGES.get((wait_type, reason), _UNKNOWN_MESSAGE)
+    if (
+        wait_type is AgentWaitType.PROCESS
+        and reason is AgentWaitWakeReason.TARGET_FINISHED
+        and exit_code is None
+    ):
+        # "Read its exit code" with no exit code to read sends the agent
+        # looking for something that does not exist.
+        message += _NO_EXIT_CODE_NOTE
+    return message
 
 
 def build_wait_result(
@@ -193,7 +234,7 @@ def build_wait_result(
     waited_seconds: int,
     note_to_self: str | None,
     exit_code: int | None = None,
-) -> dict:
+) -> dict[str, object]:
     """The tool return replayed for a resolved wait, whatever resolved it."""
     return WaitForResponse(
         success=reason is not AgentWaitWakeReason.CANCELLED,
@@ -201,17 +242,20 @@ def build_wait_result(
         waited_seconds=waited_seconds,
         note_to_self=note_to_self,
         exit_code=exit_code,
-        message=wake_message(wait_type, reason),
+        message=wake_message(wait_type, reason, exit_code=exit_code),
     ).model_dump(mode="json")
 
 
-def elapsed_seconds(started_at: object) -> int:
-    """Seconds since a spec's ISO ``started_at``; 0 when it is unusable."""
-    if not isinstance(started_at, str):
-        return 0
-    try:
-        started = datetime.fromisoformat(started_at)
-    except ValueError:
+def elapsed_seconds(started_at: datetime | str | None) -> int:
+    """Seconds since a spec's ``started_at``; 0 when it is unusable."""
+    if isinstance(started_at, datetime):
+        started = started_at
+    elif isinstance(started_at, str):
+        try:
+            started = datetime.fromisoformat(started_at)
+        except ValueError:
+            return 0
+    else:
         return 0
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)

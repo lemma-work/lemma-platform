@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -14,7 +16,7 @@ from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapte
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
@@ -27,7 +29,7 @@ logger = get_logger(__name__)
 async def _reply(
     *,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     context: SurfaceChatContext,
     message: str,
 ) -> None:
@@ -44,7 +46,7 @@ async def _reply(
             event=context.event,
             message=message,
         )
-    except (AgentSurfaceError, *PLATFORM_TRANSPORT_ERRORS):
+    except (AgentSurfaceError, *platform_transport_errors()):
         logger.warning(
             "agent_surfaces.telegram_command.reply_failed.degraded",
             conversation_id=str(context.conversation_id),
@@ -56,7 +58,7 @@ async def handle_telegram_command(
     *,
     context: SurfaceChatContext,
     adapter: SurfacePlatformAdapterPort,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
     uow_factory: UnitOfWorkFactory,
 ) -> bool:
     if context.platform is not SurfacePlatform.TELEGRAM:
@@ -104,6 +106,42 @@ async def handle_telegram_command(
     return True
 
 
+#: What a person types to re-run a request that failed. Exact words only: a
+#: sentence that merely contains "retry" is a message for the agent.
+_TYPED_RETRY = frozenset({"retry", "try again", "/retry"})
+
+
+async def handle_typed_retry(
+    *,
+    context: SurfaceChatContext,
+    adapter: SurfacePlatformAdapterPort,
+    credentials: SurfaceCredentials,
+    uow_factory: UnitOfWorkFactory,
+) -> bool:
+    """A typed "retry" re-runs the conversation's failed request, on any platform.
+
+    The failure notice tells the person to reply "retry" wherever there is no
+    button to tap -- email, or a notice too long for one -- so the word has to
+    work there. True only when a failed run was actually retried; otherwise the
+    message is an ordinary one, and goes to the agent like any other.
+
+    Never for somebody outside the pod: the conversation is the member's, and a
+    retry would re-run their request under their authority.
+    """
+    text = str(context.message_text or "").strip().rstrip(".!").lower()
+    if context.audience.answers_outsiders or text not in _TYPED_RETRY:
+        return False
+    if not await _retry_failed_conversation(context, uow_factory=uow_factory):
+        return False
+    await _reply(
+        adapter=adapter,
+        credentials=credentials,
+        context=context,
+        message="Retrying the last failed request.",
+    )
+    return True
+
+
 async def _telegram_mini_app_for_context(
     context: SurfaceChatContext, *, uow_factory: UnitOfWorkFactory
 ) -> TelegramMiniApp | None:
@@ -143,7 +181,14 @@ async def _retry_failed_conversation(
                 agent_name=context.agent_name,
             )
             return True
-        except DomainError, RuntimeError, SQLAlchemyError, TypeError, ValueError:
+        except (
+            DomainError,
+            RuntimeError,
+            SQLAlchemyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise_if_database_unavailable(exc)
             return False
 
     async with uow_factory() as scoped_uow:

@@ -50,6 +50,12 @@ RUN_TITLE_DESCRIPTION = (
     "carry no title."
 )
 
+MAX_CONCURRENT_RUNS_DESCRIPTION = (
+    "How many runs of this workflow may be in progress at once. A run started "
+    "past the limit is not refused: it waits, with a `QUEUED` active wait, and "
+    "starts when an earlier run finishes. Null means no limit."
+)
+
 
 def _checked_run_title(value: list[str] | None) -> list[str] | None:
     return None if value is None else validate_run_title(value)
@@ -96,6 +102,9 @@ class WorkflowCreateRequest(BaseModel):
     run_title: list[str] = Field(
         default_factory=list, description=RUN_TITLE_DESCRIPTION
     )
+    max_concurrent_runs: int | None = Field(
+        default=None, ge=1, le=1000, description=MAX_CONCURRENT_RUNS_DESCRIPTION
+    )
 
     _run_title = field_validator("run_title")(_checked_run_title)
 
@@ -122,6 +131,12 @@ class WorkflowUpdateRequest(BaseModel):
         description=RUN_TITLE_DESCRIPTION + " Send `[]` to remove the title.",
     )
     visibility: ResourceVisibility | None = None
+    max_concurrent_runs: int | None = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description=MAX_CONCURRENT_RUNS_DESCRIPTION + " Send null to remove it.",
+    )
 
     _run_title = field_validator("run_title")(_checked_run_title)
 
@@ -238,6 +253,9 @@ class WorkflowResponse(BaseModel):
     is_active: bool = True
     mode: WorkflowMode = WorkflowMode.GLOBAL
     visibility: str = "POD"
+    max_concurrent_runs: int | None = Field(
+        default=None, description=MAX_CONCURRENT_RUNS_DESCRIPTION
+    )
 
     model_config = ConfigDict(from_attributes=True, title="WorkflowResponse")
 

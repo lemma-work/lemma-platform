@@ -45,7 +45,7 @@ from app.modules.agent.domain.value_objects import AgentToolset  # noqa: E402
 from app.modules.agent.tools.final_answer.final_answer_tool import (  # noqa: E402
     get_final_answer_tool,
 )
-from app.modules.agent.tools.messaging.respond import respond_toolset  # noqa: E402
+from app.modules.agent.tools.messaging.answer import answer_toolset  # noqa: E402
 from app.modules.agent.tools.registry import resolve_agent_toolsets  # noqa: E402
 
 
@@ -60,11 +60,10 @@ def _build_toolsets() -> list[tuple[str, AbstractToolset[Any]]]:
     - ``TODO`` is capability-only (realized per-conversation), so it is built
       directly. ``uow_factory``/``conversation_id`` are never exercised during
       schema extraction — the tool is not invoked — so placeholders are fine.
-    - ``respond_to_notification`` is likewise capability-only: it is attached by
-      ``OpenNotificationsCapability`` only when the conversation actually has an
-      open request, so it never appears in the registry. Without this entry its
-      docstring — which is the whole of what teaches an agent not to invent an
-      answer — would drift unnoticed.
+    - ``answer_question`` is likewise capability-only: it is attached by
+      ``OpenQuestionsCapability`` only when something waits on the
+      conversation's person, so it never appears in the registry. Without this
+      entry its docstring would drift unnoticed.
     - ``final_answer`` is a per-agent factory; with no output schema it degrades
       to a plain string output, which is all we need to describe its shape.
     """
@@ -81,7 +80,7 @@ def _build_toolsets() -> list[tuple[str, AbstractToolset[Any]]]:
             build_todo_toolset(uow_factory=None, conversation_id=UUID(int=0)),  # type: ignore[arg-type]
         )
     )
-    labelled.append((AgentToolset.MESSAGING.value, respond_toolset))
+    labelled.append((AgentToolset.MESSAGING.value, answer_toolset))
     labelled.append(
         (
             "FINAL_ANSWER",

@@ -244,7 +244,7 @@ async def test_a_whole_turn_survives_the_trip_from_host_to_conversation(
     )
     messages = [event.data for event in events if event.type is AgentEventType.MESSAGE]
     # kind == TEXT: the agent's thinking ("Checking the file.") is correctly
-    # persisted too, as its own MessageKind.THINKING draft (_flush_messages) --
+    # persisted too, as its own MessageKind.THINKING draft (flush_messages) --
     # a real, separate record, not part of the answer. streamed already
     # excludes it via its own kind == "text" filter above; persisted must
     # match, or a thought landing between the two message chunks looks like a

@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.workflow.domain.context import TriggerContext
+from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
@@ -80,6 +81,30 @@ def test_machine_suspend_keeps_run_running_and_resumes_open_step():
     assert run.execution_context.to_view()["agent"] == {"answer": 42}
 
 
+def test_a_run_remembers_it_waited_on_a_form_after_the_form_is_answered():
+    """Answering the form completes the step, which is the only other place the
+    wait showed. Whether the run needed a person outlives that."""
+    run = _run()
+    step = run.begin_step("intake")
+    run.suspend_step(step, None, human_wait=True)
+    run.resume("intake", {"amount": 1})
+    run.complete()
+
+    assert run.step_history[-1].status == StepStatus.COMPLETED
+    assert WorkflowRunTerminalEvent.from_run(run).waited_on_form is True
+
+
+def test_waiting_on_platform_work_is_not_waiting_on_a_form():
+    run = _run()
+    step = run.begin_step("agent")
+    run.current_node_id = "agent"
+    run.suspend_step(step, None, human_wait=False)
+    run.resume("agent", {"answer": 42})
+    run.complete()
+
+    assert WorkflowRunTerminalEvent.from_run(run).waited_on_form is False
+
+
 def test_cancel_from_waiting_cancels_step():
     run = _run()
     step = run.begin_step("intake")
@@ -106,6 +131,54 @@ def test_fail_marks_last_open_step_and_truncates():
     assert run.failed_node_id == "intake"
     assert len(run.error) <= 2000
     assert run.step_history[-1].status == StepStatus.FAILED
+
+
+def test_reopen_at_failed_node_returns_to_running_there_and_keeps_earlier_output():
+    run = _run()
+    run.record_node_output("draft", {"answer": 42})
+    run.begin_step("record")
+    run.fail("function runtime returned 500", node_id="record")
+
+    node_id = run.reopen_at_failed_node()
+
+    assert node_id == "record"
+    assert run.status == WorkflowRunStatus.RUNNING
+    assert run.current_node_id == "record"
+    assert run.error is None and run.failed_node_id is None
+    assert run.completed_at is None
+    assert run.execution_context.node_output("draft") == {"answer": 42}
+    # The failed attempt stays in the history; a retry is a new step.
+    assert run.step_history[-1].status == StepStatus.FAILED
+
+
+def test_a_run_retried_by_another_person_continues_as_them():
+    run = _run()
+    starter = run.user_id
+    retrier = uuid4()
+    run.begin_step("record")
+    run.fail("function runtime returned 500", node_id="record")
+
+    run.reopen_at_failed_node(by_user_id=retrier)
+
+    # The steps still to come run with the retrier's access, not the starter's.
+    assert run.user_id == retrier != starter
+
+
+def test_a_run_retried_by_nobody_in_particular_keeps_its_person():
+    run = _run()
+    starter = run.user_id
+    run.begin_step("record")
+    run.fail("function runtime returned 500", node_id="record")
+
+    run.reopen_at_failed_node()
+
+    assert run.user_id == starter
+
+
+def test_reopen_refuses_a_run_that_did_not_fail_at_a_node():
+    run = _run()
+    with pytest.raises(ValueError, match="failed at a node"):
+        run.reopen_at_failed_node()
 
 
 def test_summarize_error_keeps_head_and_tail():

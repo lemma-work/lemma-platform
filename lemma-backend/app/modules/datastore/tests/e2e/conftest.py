@@ -15,12 +15,8 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
-from app.core.test_utils import shared_kreuzberg
-from app.modules.datastore.infrastructure.session import get_datastore_session_maker
-from app.modules.datastore.infrastructure.transactional_events import (
-    ensure_datastore_event_outbox,
+from app.core.test_shared_containers import (
+    shared_kreuzberg,
 )
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
@@ -39,6 +35,7 @@ from app.modules.datastore.composition import (
 )
 from app.modules.test_support.embeddings import DeterministicTestEmbedder
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.test_support.e2e.worker_hold import worker_held
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
 pytestmark = pytest.mark.e2e
@@ -99,23 +96,16 @@ test_app = e2e_fixtures.test_app
 db_session = e2e_fixtures.db_session
 async_client = e2e_fixtures.async_client
 e2e_process_clients = e2e_fixtures.e2e_process_clients
-fixed_test_user = e2e_fixtures.fixed_test_user
+# One user and organization per module, reset to their snapshot before
+# each test (see `module_identity`); a module that needs its own per test
+# rebinds these to `fresh_test_user` / `fresh_test_org`.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
 authenticated_client = e2e_fixtures.authenticated_client
-fixed_test_org = e2e_fixtures.fixed_test_org
+fixed_test_org = e2e_fixtures.module_test_org
 scenario = e2e_fixtures.scenario
 
 DocumentProcessorName = Literal["kreuzberg", "docling", "xberg"]
-
-
-@pytest_asyncio.fixture
-async def datastore_outbox_dispatcher(e2e_settings, db_manager):
-    """Run the production datastore outbox publisher for realtime API tests."""
-    del e2e_settings, db_manager
-    await ensure_datastore_event_outbox()
-    message_bus = get_message_bus()
-    await message_bus.connect()
-    async with outbox_dispatcher_lifespan(get_datastore_session_maker(), message_bus):
-        yield
 
 
 @pytest.fixture(autouse=True)
@@ -157,23 +147,39 @@ def document_worker(
             "E2E_DISABLE_WORKER_FILE_AUTOINDEX": "false",
             "DOCUMENT_PROCESSOR": processor,
             "KREUZBERG_URL": fake_document_processor_server.base_url,
-            "KREUZBERG_REQUEST_TIMEOUT_SECONDS": "1",
-            "KREUZBERG_CONNECT_TIMEOUT_SECONDS": "0.2",
+            # Generous on purpose. A client-side timeout is judged by the
+            # health check, so on a loaded runner a 1 s budget turned a fake
+            # that had already answered into "extractor down" whenever a test
+            # had the health check failing. The hang test sets its own.
+            "KREUZBERG_REQUEST_TIMEOUT_SECONDS": "10",
+            "KREUZBERG_CONNECT_TIMEOUT_SECONDS": "2",
             "KREUZBERG_TRANSIENT_RETRY_ATTEMPTS": "2",
             "KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS": "0.01",
             "KREUZBERG_CIRCUIT_FAILURE_THRESHOLD": "20",
             "DOCLING_SERVE_URL": fake_document_processor_server.base_url,
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
+            # One attempt, so a document failure is terminal within the test
+            # rather than after the production backoff.
+            "DOCUMENT_PROCESSING_MAX_ATTEMPTS": "1",
         }
-        async with production_worker_process(
-            e2e_settings,
-            log_prefix=f"lemma_datastore_{processor}_worker",
-            extra_env=extra_env,
-            # Module path, not `module:attribute` — the worker is started with
-            # `python -m` so it runs every lane, matching production.
-            worker_entrypoint=("app.modules.datastore.tests.e2e.worker_entrypoint"),
-        ) as process:
+        # Hold the session's worker for as long as this one runs. Both claim from
+        # the same work table, and the session worker has no fake extractor:
+        # when it won the race for a test's upload, it found its extractor
+        # unreachable and parked the file as waiting, so the test timed out on
+        # a document its own worker never saw. Which tests that hit depended on
+        # what else in the shard had started the session worker, and when.
+        async with (
+            worker_held(),
+            production_worker_process(
+                e2e_settings,
+                log_prefix=f"lemma_datastore_{processor}_worker",
+                extra_env=extra_env,
+                # Module path, not `module:attribute` — the worker is started
+                # with `python -m` so it runs every lane, matching production.
+                worker_entrypoint=("app.modules.datastore.tests.e2e.worker_entrypoint"),
+            ) as process,
+        ):
             yield process
 
     return _start
@@ -184,7 +190,7 @@ def kreuzberg_url(tmp_path_factory, worker_id):
     """URL of the single Kreuzberg shared across all xdist workers + the worker.
 
     Shared so the heavy embedding container runs once (see
-    ``app.core.test_utils.shared_kreuzberg``). The streaq worker uses the same
+    ``app.core.test_shared_containers.shared_kreuzberg``). The streaq worker uses the same
     container via the ``worker`` fixture, which is why this lives in shared
     test_utils rather than inline here.
     """

@@ -283,6 +283,7 @@ pub(super) fn spec_resuming(resume_session_id: Option<&str>) -> RunSpec {
         mcp: serde_json::Value::Null,
         run_deadline: chrono::Utc::now(),
         system_prompt_delivery: None,
+        pre_approvals: Vec::new(),
     }
 }
 

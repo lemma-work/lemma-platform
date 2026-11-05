@@ -10,12 +10,21 @@ pipeline and the agent tool factory:
   because platform adapters read identity data from them.
 - WhatsApp/Telegram can run on system credentials from environment settings
   when no account is connected.
+
+What leaves here is the platform's credentials model (`domain.credentials`):
+secrets stay `SecretStr` until the HTTP call that sends them.
 """
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    WhatsAppReplyTarget,
+    reply_target_of,
+)
+
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from app.core.config import reveal_secret
@@ -24,6 +33,15 @@ from app.modules.agent_surfaces.config import (
     surface_settings,
 )
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialPayload,
+    ResendCredentials,
+    SurfaceCredentials,
+    TelegramCredentials,
+    WhatsAppCredentials,
+    as_secret,
+    credentials_for,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -39,6 +57,13 @@ from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repo
     WhatsAppNumberRepository,
 )
 from app.modules.connectors.contracts import AuthConfigSource
+from app.modules.agent_surfaces.services.surface_connector import (
+    bound_account_id,
+    bound_account_ids,
+)
+from app.modules.connectors.contracts.pod_connectors import (
+    resolve_standing_pod_connector,
+)
 from app.modules.connectors.contracts.surfaces import (
     SurfaceAccount,
     account,
@@ -71,8 +96,8 @@ class SlackWebhookCredentials:
 
 
 def with_surface_identity(
-    credentials: dict[str, Any], surface: "AgentSurfaceEntity | None"
-) -> dict[str, Any]:
+    credentials: SurfaceCredentials, surface: "AgentSurfaceEntity | None"
+) -> SurfaceCredentials:
     """Add the credential parts that belong to the surface row, not the platform.
 
     Resend's ``from_address`` is the address *that surface* was provisioned
@@ -88,49 +113,46 @@ def with_surface_identity(
     """
     if (
         surface is not None
-        and surface.surface_type is SurfacePlatform.RESEND
+        and isinstance(credentials, ResendCredentials)
         and surface.surface_identity_email
     ):
-        return {**credentials, "from_address": surface.surface_identity_email}
+        return credentials.sending_as(surface.surface_identity_email)
     return credentials
 
 
 def native_credentials(
-    platform: str | SurfacePlatform | None,
+    platform: str | SurfacePlatform,
     *,
     surface: "AgentSurfaceEntity | None" = None,
-) -> dict[str, Any]:
+) -> SurfaceCredentials:
     """System credentials from environment settings (WhatsApp/Telegram/Resend).
 
     Pass ``surface`` whenever one is in hand: the surface-derived parts are
     applied on the way out, so the fast path stays correct without a database
-    round trip.
+    round trip. The settings' secrets go into the model as secrets; nothing here
+    reveals them.
     """
-    normalized = str(platform or "").upper()
-    if normalized == SurfacePlatform.WHATSAPP:
-        credentials = {
-            "access_token": reveal_secret(surface_settings.whatsapp_access_token) or "",
-            "phone_number_id": surface_settings.whatsapp_phone_number_id or "",
-            "waba_id": surface_settings.whatsapp_waba_id or "",
-        }
-        app_secret = reveal_secret(surface_settings.whatsapp_app_secret)
-        if app_secret:
-            credentials["app_secret"] = app_secret
-        return with_surface_identity(credentials, surface)
-    if normalized == SurfacePlatform.TELEGRAM:
-        return with_surface_identity(
-            {"bot_token": reveal_secret(surface_settings.telegram_bot_token) or ""},
-            surface,
+    normalized = SurfacePlatform(str(platform).upper())
+    credentials: SurfaceCredentials
+    if normalized is SurfacePlatform.WHATSAPP:
+        credentials = WhatsAppCredentials(
+            access_token=as_secret(surface_settings.whatsapp_access_token),
+            phone_number_id=surface_settings.whatsapp_phone_number_id or None,
+            waba_id=surface_settings.whatsapp_waba_id or None,
+            app_secret=as_secret(surface_settings.whatsapp_app_secret),
         )
-    if normalized == SurfacePlatform.RESEND:
-        return with_surface_identity(
-            {
-                "api_key": resolve_resend_api_key() or "",
-                "from_name": surface_settings.resend_from_name or "Lemma",
-            },
-            surface,
+    elif normalized is SurfacePlatform.TELEGRAM:
+        credentials = TelegramCredentials(
+            bot_token=as_secret(surface_settings.telegram_bot_token)
         )
-    return with_surface_identity({}, surface)
+    elif normalized is SurfacePlatform.RESEND:
+        credentials = ResendCredentials(
+            api_key=as_secret(resolve_resend_api_key()),
+            from_name=surface_settings.resend_from_name or "Lemma",
+        )
+    else:
+        credentials = credentials_for(normalized, {})
+    return with_surface_identity(credentials, surface)
 
 
 def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
@@ -161,8 +183,8 @@ def arrival_number(event: ParsedInboundSurfaceEvent | None) -> str | None:
     """
     if event is None:
         return None
-    arrived = event.reply_target.get("phone_number_id")
-    return str(arrived) if arrived else None
+    target = reply_target_of(event)
+    return target.phone_number_id if isinstance(target, WhatsAppReplyTarget) else None
 
 
 class PooledNumberReader(Protocol):
@@ -188,18 +210,14 @@ class SurfaceCredentialResolver:
 
     async def _pooled_overrides(
         self,
-        platform: str | SurfacePlatform | None,
         surface: AgentSurfaceEntity | None,
         arrived_on: str | None = None,
     ) -> dict[str, str]:
         """What the number this surface holds answers with, if it holds one.
 
-        Returns only overrides, so the caller merges rather than this wrapping:
-        that keeps the signature `dict[str, str]` end to end. The credentials
-        currency of this module is `dict[str, Any]`, honestly so -- provider
-        payloads are genuinely shapeless -- but a pooled number's four fields
-        are all strings, and taking the looser type here would have added two
-        untyped escapes to buy nothing.
+        Returns only overrides, laid over the settings answer by
+        `_with_pooled_number`, so a number that leaves a field out keeps the
+        deployment's value for it.
 
         `native_credentials` is a pure function over settings and stays that
         way: it is called from synchronous code and from paths with no unit of
@@ -225,20 +243,11 @@ class SurfaceCredentialResolver:
         The surface still wins where it has an answer. A deliberately allocated
         number is a property of the surface and holds for messages it starts,
         which have no inbound event to have arrived on at all.
-
-        ``platform`` stands in for the surface when there is none: the worker
-        acting on an inbound message holds only the run's context, and the
-        number it arrived on is still the one whose token may mark it read.
         """
-        if surface is not None:
-            platform = surface.surface_type
         phone_number_id = (
             surface.surface_identity_id if surface is not None else None
         ) or arrived_on
-        if (
-            str(platform or "").upper() != SurfacePlatform.WHATSAPP.value
-            or not phone_number_id
-        ):
+        if not phone_number_id:
             return {}
         number = await self._numbers().get_by_phone_number_id(phone_number_id)
         if number is None:
@@ -261,6 +270,25 @@ class SurfaceCredentialResolver:
             return {}
         return number.credential_overrides()
 
+    async def _with_pooled_number(
+        self,
+        credentials: SurfaceCredentials,
+        surface: AgentSurfaceEntity | None,
+        arrived_on: str | None,
+    ) -> SurfaceCredentials:
+        """System credentials, answering from the pooled number where one holds.
+
+        WhatsApp only: no other platform has a pool. The platform stands in for
+        the surface when there is none -- the worker acting on an inbound
+        message holds only the run's context, and the number it arrived on is
+        still the one whose token may mark it read.
+        """
+        if not isinstance(credentials, WhatsAppCredentials):
+            return credentials
+        return credentials.overlaid_with(
+            await self._pooled_overrides(surface, arrived_on)
+        )
+
     async def for_surface(
         self,
         surface: AgentSurfaceEntity,
@@ -268,38 +296,81 @@ class SurfaceCredentialResolver:
         prefer_native: bool = False,
         force_refresh: bool = False,
         arrived_on: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> SurfaceCredentials:
         # Every branch returns through ``with_surface_identity``; see there for
         # why that is a property of the function rather than of the caller.
-        if prefer_native and has_native_credentials(surface.surface_type):
-            return {
-                **native_credentials(surface.surface_type, surface=surface),
-                **await self._pooled_overrides(
-                    surface.surface_type, surface, arrived_on
-                ),
-            }
-        if surface.account_id is None:
-            return {
-                **native_credentials(surface.surface_type, surface=surface),
-                **await self._pooled_overrides(
-                    surface.surface_type, surface, arrived_on
-                ),
-            }
+        if surface.pod_connector_slug is None or (
+            prefer_native and has_native_credentials(surface.surface_type)
+        ):
+            return await self._with_pooled_number(
+                native_credentials(surface.surface_type, surface=surface),
+                surface,
+                arrived_on,
+            )
         credentials = await self.for_account(
-            surface.account_id, force_refresh=force_refresh
+            await self.account_id_for(surface),
+            platform=surface.surface_type,
+            force_refresh=force_refresh,
         )
         return with_surface_identity(credentials, surface)
+
+    async def account_id_for(self, surface: AgentSurfaceEntity) -> UUID | None:
+        """The account this surface runs as right now, or ``None`` on system
+        credentials.
+
+        Resolved through its pod connector on every call, never stored: an
+        owner withdrawing the account, the connector being removed, the
+        installation disabled or the account needing reauth each raise the
+        connector's typed error here, so the surface stops at once and says
+        why instead of running on a credential nobody offers any more.
+        """
+        return await bound_account_id(self._uow, surface)
+
+    async def for_connector(
+        self,
+        platform: str | SurfacePlatform,
+        *,
+        pod_id: UUID,
+        slug: str,
+        force_refresh: bool = False,
+    ) -> SurfaceCredentials:
+        """The credentials of the account a pod connector runs as now.
+
+        For a step that carries the surface's connector rather than the
+        surface row (``SurfaceConnectorRef``).
+        """
+        resolved = await resolve_standing_pod_connector(
+            self._uow, pod_id=pod_id, slug=slug
+        )
+        return await self.for_account(
+            resolved.account_id, platform=platform, force_refresh=force_refresh
+        )
+
+    async def _verifying_account(self, surface: AgentSurfaceEntity) -> UUID | None:
+        """The account a delivery to this surface is verified against, read
+        with no side effect: this runs for every candidate of every webhook, in
+        the request. A connector that runs as nothing right now verifies
+        nothing -- the surface is skipped as a candidate, exactly as one whose
+        account row is gone."""
+        return (await bound_account_ids(self._uow, [surface])).get(surface.id)
+
+    async def installation_identity(self, surface: AgentSurfaceEntity) -> UUID:
+        """What a verified binding through this surface is keyed on: the bot's
+        own account where it runs as one, the surface itself on the
+        deployment's shared credentials."""
+        return await self.account_id_for(surface) or surface.id
 
     async def for_platform(
         self,
         platform: str | SurfacePlatform,
-        account_id: UUID | str | None,
         *,
         surface: AgentSurfaceEntity | None,
-        force_refresh: bool = False,
         arrived_on: str | None = None,
-    ) -> dict[str, Any]:
-        """Credentials when the caller may not have a surface row.
+    ) -> SurfaceCredentials:
+        """The deployment's own credentials, for a step with no surface row.
+
+        A surface that runs as a pod connector is never resolved here: its
+        account comes from the connector, through ``for_surface``.
 
         ``surface`` is required and may be ``None`` — deliberately not
         defaulted. Some credential values live on the surface rather than the
@@ -316,20 +387,31 @@ class SurfaceCredentialResolver:
         settings token -- which belongs to another number and, under another
         WABA, is refused outright.
         """
-        if not account_id:
-            return {
-                **native_credentials(platform, surface=surface),
-                **await self._pooled_overrides(platform, surface, arrived_on),
-            }
-        credentials = await self.for_account(account_id, force_refresh=force_refresh)
-        return with_surface_identity(credentials, surface)
+        return await self._with_pooled_number(
+            native_credentials(platform, surface=surface), surface, arrived_on
+        )
 
     async def for_account(
         self,
-        account_id: UUID | str,
+        account_id: UUID | str | None,
+        *,
+        platform: str | SurfacePlatform,
+        force_refresh: bool = False,
+    ) -> SurfaceCredentials:
+        """The account's credentials, read as the platform's model."""
+        return credentials_for(
+            platform,
+            await self._account_payload(account_id, force_refresh=force_refresh),
+        )
+
+    async def _account_payload(
+        self,
+        account_id: UUID | str | None,
         *,
         force_refresh: bool = False,
-    ) -> dict[str, Any]:
+    ) -> CredentialPayload:
+        if account_id is None:
+            return {}
         found = await account_with_secrets(self._uow, UUID(str(account_id)))
         if found is None:
             return {}
@@ -345,9 +427,13 @@ class SurfaceCredentialResolver:
                     )
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic",
-                    account_id=account_id,
+                # The stored token is used instead, and if it has expired every
+                # call it makes is refused -- which reads as a broken surface
+                # unless this line says why.
+                logger.warning(
+                    "agent_surfaces.credential_resolver.credential_refresh_failed.degraded",
+                    account_id=str(account_id),
+                    exc_info=True,
                 )
                 payload = dict(stored)
 
@@ -357,12 +443,11 @@ class SurfaceCredentialResolver:
 
         provider = await self._provider_for_account(connected)
         if provider:
-            # Platform adapters branch on this to choose Composio operations vs
-            # native provider API calls (Composio never exposes a usable token).
+            # Which kind of auth config the account was connected through.
             payload["provider"] = provider
         return payload
 
-    async def slack_signing_secret(self, surface: Any) -> str | None:
+    async def slack_signing_secret(self, surface: AgentSurfaceEntity) -> str | None:
         """The signing secret of the Slack app this surface's workspace runs on.
 
         Stored on the org's auth config beside the client id and secret, because
@@ -372,7 +457,7 @@ class SurfaceCredentialResolver:
 
         None means this workspace uses the deployment's Slack app.
         """
-        account_id = getattr(surface, "account_id", None)
+        account_id = await self._verifying_account(surface)
         if account_id is None:
             return None
         connected = await account(self._uow, account_id)
@@ -383,14 +468,18 @@ class SurfaceCredentialResolver:
     async def slack_webhook_credentials(
         self, surface: AgentSurfaceEntity
     ) -> SlackWebhookCredentials:
-        account_id = surface.account_id
-        if account_id is None:
+        if surface.pod_connector_slug is None:
             return SlackWebhookCredentials(
                 app_id=None,
                 signing_secret=reveal_secret(surface_settings.slack_signing_secret),
                 uses_custom_app=False,
             )
-        found = await account_with_secrets(self._uow, account_id)
+        account_id = await self._verifying_account(surface)
+        found = (
+            await account_with_secrets(self._uow, account_id)
+            if account_id is not None
+            else None
+        )
         if found is None:
             return SlackWebhookCredentials(
                 app_id=None,
@@ -419,9 +508,9 @@ class SurfaceCredentialResolver:
         )
 
     @staticmethod
-    def _slack_app_id(credentials: dict[str, Any]) -> str | None:
+    def _slack_app_id(credentials: Mapping[str, object]) -> str | None:
         raw_response = credentials.get("raw_response") or {}
-        if not isinstance(raw_response, dict):
+        if not isinstance(raw_response, Mapping):
             return None
         return (
             str(
@@ -455,8 +544,10 @@ class SurfaceCredentialResolver:
         try:
             install = await auth_config(self._uow, connected.auth_config_id)
         except Exception:
-            logger.debug(
-                "agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic"
+            logger.warning(
+                "agent_surfaces.credential_resolver.provider_lookup_failed.degraded",
+                auth_config_id=str(connected.auth_config_id),
+                exc_info=True,
             )
             return None
         if install is None:

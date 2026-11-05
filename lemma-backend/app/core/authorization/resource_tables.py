@@ -20,6 +20,10 @@ from sqlalchemy.orm import InstrumentedAttribute
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.modules.agent.infrastructure.models import AgentModel, ConversationModel
 from app.modules.apps.infrastructure.models import AppModel
+from app.modules.connectors.infrastructure.models.pod_connector import (
+    PodAccount,
+    PodConnector,
+)
 from app.modules.datastore.infrastructure.models import DatastoreFile, DatastoreTable
 from app.modules.function.infrastructure.models import FunctionModel
 from app.modules.schedule.infrastructure.models.schedule import Schedule
@@ -129,6 +133,22 @@ RESOURCE_TABLES: dict[ResourceType, ResourceTable] = {
         Schedule.user_id,
         Schedule.visibility,
     ),
+    # The pod's own rows standing for an org installation and an org account.
+    # They replaced a connector "resource" that was a uuid5 of a catalog slug,
+    # with no pod and no owner, and an account whose visibility was guessed per
+    # calling pod from whether some grant happened to exist.
+    ResourceType.CONNECTOR: _table(
+        PodConnector.id,
+        PodConnector.pod_id,
+        PodConnector.created_by_user_id,
+        PodConnector.visibility,
+    ),
+    ResourceType.CONNECTOR_ACCOUNT: _table(
+        PodAccount.id,
+        PodAccount.pod_id,
+        PodAccount.owner_user_id,
+        PodAccount.visibility,
+    ),
 }
 
 #: Types hydrated by a method of their own rather than by a table lookup.
@@ -140,11 +160,6 @@ HYDRATED_BY_METHOD = frozenset(
         # the method because it needs the path as well.
         ResourceType.FOLDER,
         ResourceType.DOCUMENT,
-        # Org-scoped tables with no pod column; see the methods for why that is
-        # the right answer rather than a gap.
-        ResourceType.CONNECTOR,
-        ResourceType.CONNECTOR_ACCOUNT,
-        ResourceType.CONNECTOR_AUTH_CONFIG,
     }
 )
 
@@ -167,6 +182,9 @@ NO_REFS_CONSTRUCTED = frozenset(
         # user_id and no caller builds a ref. Listed so the clamp denies
         # rather than skips if one ever is.
         ResourceType.WEB_LOGIN,
+        # An org installation. Managing one is `org.installation.manage`, an
+        # org permission checked without a resource; nothing builds a ref.
+        ResourceType.CONNECTOR_AUTH_CONFIG,
     }
 )
 

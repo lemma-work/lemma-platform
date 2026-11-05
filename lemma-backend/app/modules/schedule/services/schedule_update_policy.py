@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from app.core.authorization.context import Context
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.services.time_schedule_policy import (
+    refuse_new_time_schedule_filter,
     validated_time_schedule_config,
 )
 
@@ -33,6 +34,10 @@ async def validate_schedule_update_policies(
     ``session`` is forwarded so the TIME branch can hand the pooled connection
     back across its cron walk; see `validated_time_schedule_config`.
     """
+    if existing.schedule_type == ScheduleType.TIME:
+        refuse_new_time_schedule_filter(
+            existing.filter_instruction, existing.filter_output_schema, update_data
+        )
     if existing.schedule_type == ScheduleType.TIME and (
         "config" in update_data or update_data.get("is_active") is True
     ):

@@ -123,14 +123,6 @@ def embedding_model_is_loading(exc: BaseException) -> bool:
     return any(marker in raw for marker in _EMBEDDING_MODEL_MARKERS)
 
 
-def unavailable_facility(exc: Exception) -> tuple[str, str | None]:
-    """For a refunded claim: which facility was missing, and the note to leave
-    on the row while it waits (``None`` keeps whatever it had)."""
-    if embedding_model_is_loading(exc):
-        return "embedding_model", sanitize_processing_error(exc)
-    return "extractor", None
-
-
 def sanitize_processing_error(exc: Exception) -> str:
     """The user-facing string persisted as a file's ``last_processing_error``.
 

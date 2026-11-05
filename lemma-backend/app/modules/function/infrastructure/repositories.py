@@ -17,7 +17,6 @@ from app.core.authorization.sql_actions import (
     allowed_actions_contains,
     allowed_actions_expr,
 )
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.domain.entities import (
     FunctionEntity,
@@ -55,12 +54,9 @@ class FunctionRepository(FunctionRevisionRepositoryMixin, FunctionRepositoryPort
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def create(self, entity: FunctionEntity) -> FunctionEntity:
         payload = entity.model_dump(exclude_unset=True, exclude={"allowed_actions"})

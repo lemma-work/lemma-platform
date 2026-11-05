@@ -109,7 +109,13 @@ export function History({
                                     {...(entry.id === conversationId ? {} : prefetchOnIntent(pod.id, entry.id))}
                                 >
                                     <span className="history__name">{entry.title}</span>
-                                    <span className="history__at">{entry.at}</span>
+                                    {/* In the time's place rather than beside
+                                        it: a row waiting on you is about now,
+                                        and when it last moved is the least of
+                                        it. */}
+                                    <span className="history__at" data-waiting={entry.waitingOnYou ? "" : undefined}>
+                                        {entry.waitingOnYou ? "Needs you" : entry.at}
+                                    </span>
                                 </button>
                                 <ConversationTitle podId={pod.id} conversationId={entry.id} title={entry.title} />
                                 {(

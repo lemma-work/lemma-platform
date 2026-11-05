@@ -213,9 +213,13 @@ class _LegacyCursorRepository(_ConversationRepository):
 
 @pytest.fixture
 def allowed():
-    """A caller the authorizer lets through, installed the way a request is."""
-    token = set_current_context(allow_all_context())
-    yield
+    """A caller the authorizer lets through, installed the way a request is.
+
+    Yields that caller's id: the check authorizes the person it is asked
+    about, so the request must be theirs."""
+    user_id = uuid4()
+    token = set_current_context(allow_all_context(user_id=user_id))
+    yield user_id
     reset_current_context(token)
 
 
@@ -225,13 +229,12 @@ def _legacy_service(repository):
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("allowed")
-async def test_a_bare_id_page_token_continues_after_that_row() -> None:
+async def test_a_bare_id_page_token_continues_after_that_row(allowed) -> None:
     position = ConversationListCursor(
         last_activity_at=datetime(2026, 9, 25, tzinfo=timezone.utc), id=uuid4()
     )
     repository = _LegacyCursorRepository(found=position)
-    user_id, pod_id = uuid4(), uuid4()
+    user_id, pod_id = allowed, uuid4()
 
     await _legacy_service(repository).list_conversations(
         pod_id=pod_id,
@@ -250,15 +253,14 @@ async def test_a_bare_id_page_token_continues_after_that_row() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("allowed")
-async def test_a_bare_id_nobody_can_find_is_a_bad_page_token() -> None:
+async def test_a_bare_id_nobody_can_find_is_a_bad_page_token(allowed) -> None:
     repository = _LegacyCursorRepository(found=None)
 
     with pytest.raises(BadRequestError):
         await _legacy_service(repository).list_conversations(
             pod_id=uuid4(),
             agent_selection=ConversationAgentSelection.all(),
-            user_id=uuid4(),
+            user_id=allowed,
             cursor=uuid4(),
         )
 

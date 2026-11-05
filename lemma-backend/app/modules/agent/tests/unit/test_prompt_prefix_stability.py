@@ -2,12 +2,14 @@
 
 Both providers cache a prefix. An OpenAI-compatible one caches on the literal
 bytes, so everything after the first changed byte is re-read; Anthropic marks
-explicit breakpoints over `[tools, system, messages]`. Either way the rule is
-the same: the things that change often go last, behind the things that do not.
+explicit breakpoints over `[tools, system, messages]`. Either way the system
+prompt sits in front of the whole replayed history, so a byte of it that changes
+between two runs of one conversation re-reads every message behind it.
 
-The prompt used to put the conversation's task list a third of the way in, so
-every `write_todos` — the most frequent write there is — re-read everything
-after it, which was most of the prompt.
+So nothing that changes run to run is in it. The task list -- rewritten by
+every `write_todos`, the most frequent write there is -- the attached doc,
+memory and open requests ride in the run's context part instead
+(`domain/run_context_prompt`).
 """
 
 from __future__ import annotations
@@ -19,74 +21,72 @@ import pytest
 
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.domain.run_context_prompt import task_list_section
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.capabilities.prompt_caching import (
     _ANTHROPIC_CACHE_TTL,
     PromptCachingCapability,
 )
+from app.modules.agent.tools.toolset_selection import resolve_toolset_names
 
 pytestmark = pytest.mark.unit
 
 
-def _conversation_with_todos() -> Conversation:
+def _conversation(todo: str | None = "Render the video") -> Conversation:
     return Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"todos": [{"content": "Render the video", "done": False}]},
+        agent_id=uuid4(),
+        metadata={"todos": [{"content": todo, "done": False}]} if todo else {},
     )
 
 
 def _agent(conversation: Conversation) -> Agent:
+    # A configuration an agent can actually be saved with: TODO is always on and
+    # never declared, which an earlier version of this test did.
     return Agent(
         pod_id=conversation.pod_id,
         user_id=conversation.user_id,
         name="butler",
         instruction="Answer briefly.",
-        toolsets=["TODO"],
+        toolsets=["WEB_SEARCH"],
     )
 
 
-class TestTheTaskListComesLast:
-    def _instructions(self) -> str:
-        conversation = _conversation_with_todos()
+class TestNothingThatChangesBetweenRunsIsInTheSystemPrompt:
+    def _instructions(self, conversation: Conversation, **ctx: object) -> str:
         return build_agent_instructions(
             agent=_agent(conversation),
             conversation=conversation,
-            ctx=SimpleNamespace(),
+            ctx=SimpleNamespace(**ctx),
         )
 
-    def test_the_task_list_is_rendered_at_all(self) -> None:
-        assert "Render the video" in self._instructions()
+    def test_the_task_list_is_rendered_for_the_run(self) -> None:
+        conversation = _conversation()
+        run_toolsets, _ = resolve_toolset_names(_agent(conversation), conversation)
 
-    def test_nothing_stable_sits_behind_it(self) -> None:
-        """Anything after the rendered list is re-read on every `write_todos`.
+        assert "Render the video" in task_list_section(
+            conversation, toolsets=run_toolsets
+        )
+        assert "Render the video" not in self._instructions(conversation)
 
-        Matched on the rendered text, not the `# Task list` heading: the todo
-        guidance fragment opens with the same heading, and it is static.
-        """
-        text = self._instructions()
-        start = text.index("This conversation already has a task list")
+    def test_a_checklist_update_leaves_the_system_prompt_byte_identical(self) -> None:
+        before = _conversation("Render the video")
+        after = before.model_copy(
+            update={"metadata": {"todos": [{"content": "Render", "done": True}]}}
+        )
 
-        assert "# Agent Instructions" not in text[start:]
-        # And it is genuinely the final section, not merely ahead of one other
-        # marker. The previous version asserted on `# Runtime Context`, which
-        # appears nowhere in this prompt, so it could never have failed.
-        sections = text.split("\n\n---\n\n")
-        assert "This conversation already has a task list" in sections[-1]
+        assert self._instructions(before) == self._instructions(after)
+
+    def test_a_doc_edit_leaves_the_system_prompt_byte_identical(self) -> None:
+        conversation = _conversation()
+
+        assert self._instructions(
+            conversation, attached_document="# The open doc\nv1"
+        ) == self._instructions(conversation, attached_document="# The open doc\nv2")
 
     def test_the_agent_instruction_still_arrives(self) -> None:
-        assert "Answer briefly." in self._instructions()
-
-    def test_a_conversation_with_no_plan_adds_nothing(self) -> None:
-        conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-
-        text = build_agent_instructions(
-            agent=_agent(conversation),
-            conversation=conversation,
-            ctx=SimpleNamespace(),
-        )
-
-        assert "This conversation already has a task list" not in text
+        assert "Answer briefly." in self._instructions(_conversation())
 
 
 class TestAnthropicCachesToolDefinitionsToo:
@@ -110,6 +110,12 @@ class TestAnthropicCachesToolDefinitionsToo:
 
         assert settings["anthropic_cache_instructions"] == _ANTHROPIC_CACHE_TTL
 
+    def test_the_message_history_gets_a_breakpoint(self) -> None:
+        """Without one, every step of a run re-read every message before it."""
+        settings = self._settings(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
+
+        assert settings["anthropic_cache_messages"] == _ANTHROPIC_CACHE_TTL
+
     def test_an_openai_compatible_run_gets_affinity_keys_instead(self) -> None:
         """Those providers cache on the literal prefix; what they need is sticky
         routing so the turn lands on the replica holding it."""
@@ -117,3 +123,28 @@ class TestAnthropicCachesToolDefinitionsToo:
 
         assert "openai_user" in settings
         assert "anthropic_cache_instructions" not in settings
+
+
+def test_no_heading_is_said_twice_across_the_prompt_and_the_run_context() -> None:
+    """The todo guidance and the stored list both opened `# Task list`, so the
+    model read one section title over two different things."""
+    from app.modules.agent.domain.run_context_prompt import render_run_context
+
+    conversation = _conversation()
+    run_toolsets, _ = resolve_toolset_names(None, conversation)
+    system_prompt = build_agent_instructions(
+        agent=_agent(conversation),
+        conversation=conversation,
+        ctx=SimpleNamespace(run_toolsets=run_toolsets),
+    )
+    run_context = render_run_context(
+        sections=[task_list_section(conversation, toolsets=run_toolsets)]
+    )
+
+    headings = [
+        line
+        for line in f"{system_prompt}\n{run_context}".splitlines()
+        if line.startswith("# ")
+    ]
+    assert "# Your current task list" in headings
+    assert len(headings) == len(set(headings)), headings

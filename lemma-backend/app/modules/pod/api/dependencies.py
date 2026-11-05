@@ -5,7 +5,6 @@ from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import pod_from_path, require_action
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.plan_limits import build_plan_limits
 from app.modules.pod.services.pod_service import PodService
 from app.modules.pod.services.pod_member_service import PodMemberService
@@ -32,11 +31,10 @@ def get_pod_service(
     uow: UoWDep,
 ) -> PodService:
     """Provide PodService with UoW-backed repositories."""
-    message_bus = get_message_bus()
     plan_limits = build_plan_limits(uow)
     return PodService(
-        pod_repository=PodRepository(uow, message_bus=message_bus),
-        pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
+        pod_repository=PodRepository(uow),
+        pod_member_repository=PodMemberRepository(uow),
         organization_repository=build_organization_membership(uow),
         pod_role_service=PodRoleService(uow),
         authorization_service=create_authorization_data_service(uow),
@@ -52,10 +50,9 @@ def get_pod_member_service(
     uow: UoWDep,
 ) -> PodMemberService:
     """Provide PodMemberService."""
-    message_bus = get_message_bus()
     return PodMemberService(
-        pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
-        pod_repository=PodRepository(uow, message_bus=message_bus),
+        pod_member_repository=PodMemberRepository(uow),
+        pod_repository=PodRepository(uow),
         organization_repository=build_organization_membership(uow),
         pod_role_service=PodRoleService(uow),
     )
@@ -75,13 +72,10 @@ PodRoleServiceDep = Annotated[PodRoleService, Depends(get_pod_role_service)]
 def get_pod_join_request_service(
     uow: UoWDep,
 ) -> PodJoinRequestService:
-    message_bus = get_message_bus()
     return PodJoinRequestService(
-        pod_join_request_repository=PodJoinRequestRepository(
-            uow, message_bus=message_bus
-        ),
-        pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
-        pod_repository=PodRepository(uow, message_bus=message_bus),
+        pod_join_request_repository=PodJoinRequestRepository(uow),
+        pod_member_repository=PodMemberRepository(uow),
+        pod_repository=PodRepository(uow),
         organization_repository=build_organization_membership(uow),
         pod_role_service=PodRoleService(uow),
     )

@@ -18,6 +18,9 @@ from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
 from app.modules.agent.domain.ports import (
     AgentRepository,
     ConversationRepository,
@@ -30,11 +33,14 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
 )
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pending_interactions import (
+    PendingInteraction,
+    PendingInteractionCursor,
+)
 from app.modules.agent.services.conversation_access import (
     authorized_conversation,
     require_agent_action,
     resolve_expected_agent_id,
-    validate_conversation_access,
 )
 
 
@@ -65,6 +71,7 @@ class ConversationQueries:
         search: str | None = None,
         cursor: ConversationListCursor | UUID | None = None,
         limit: int = 20,
+        in_channel: bool | None = None,
     ) -> tuple[list[Conversation], ConversationListCursor | None]:
         """`cursor` may be a bare conversation id: a page token from before
         the list was ordered by activity. It continues after that row."""
@@ -86,7 +93,10 @@ class ConversationQueries:
             )
             if cursor is None:
                 raise BadRequestError("Invalid page_token")
-        return await self.conversation_repository.list_conversations(
+        (
+            conversations,
+            next_cursor,
+        ) = await self.conversation_repository.list_conversations(
             user_id=user_id,
             pod_id=pod_id,
             agent_selection=resolved_selection,
@@ -98,6 +108,44 @@ class ConversationQueries:
             search=search,
             cursor=cursor,
             limit=limit,
+            in_channel=in_channel,
+        )
+        # One query for the page rather than one per row. Not inferable from
+        # the status: a WAITING conversation may be waiting on a timer, and an
+        # Agent Host permission request waits inside a RUNNING one.
+        waiting = (
+            await self.conversation_repository.conversations_with_pending_interaction(
+                [conversation.id for conversation in conversations]
+            )
+            if conversations
+            else set()
+        )
+        for conversation in conversations:
+            conversation.has_pending_interaction = conversation.id in waiting
+        return conversations, next_cursor
+
+    async def list_pending_interactions(
+        self,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        cursor: PendingInteractionCursor | None = None,
+        limit: int = 50,
+    ) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]:
+        """Every pause waiting on this person in this pod, longest-waiting first.
+
+        Authorized the way the pod-wide history list is, and scoped the same
+        way: to conversations the caller owns, so nobody's pause is listed to
+        anybody but the person it is waiting on.
+        """
+        await require_agent_action(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=None,
+            action=Permissions.AGENT_READ,
+        )
+        return await self.conversation_repository.list_pending_interactions(
+            user_id=user_id, pod_id=pod_id, cursor=cursor, limit=limit
         )
 
     async def get_conversation(
@@ -109,35 +157,51 @@ class ConversationQueries:
         agent_name: str | None = None,
         require_read_grant: bool = True,
     ) -> Conversation:
-        expected_agent_id = await resolve_expected_agent_id(
-            self.agent_repository,
-            pod_id=pod_id,
-            agent_name=agent_name,
-        )
         # The latest run carries the failure diagnostics and the retry decision.
-        conversation = validate_conversation_access(
-            await self.conversation_repository.get_conversation(
-                conversation_id,
-                include_runs=True,
-            ),
+        # require_read_grant is False only for self-spawn (an agent operating on
+        # its own conversation tree).
+        conversation = await authorized_conversation(
+            self.conversation_repository,
+            self.agent_repository,
+            conversation_id=conversation_id,
             user_id=user_id,
             pod_id=pod_id,
-            agent_id=expected_agent_id,
+            agent_name=agent_name,
+            action=Permissions.AGENT_READ,
+            include_runs=True,
+            require_grant=require_read_grant,
         )
-        # require_read_grant is False only for self-spawn (an agent operating on
-        # its own conversation tree): ownership is validated above, but the agent
-        # holds no agent.read grant on itself, so skip the cross-agent grant check.
-        if require_read_grant:
-            await require_agent_action(
-                user_id=user_id,
-                pod_id=pod_id,
-                agent_id=conversation.agent_id,
-                action=Permissions.AGENT_READ,
-            )
         conversation.last_run_retryable = await self._latest_run_is_retryable(
             conversation
         )
+        conversation.has_pending_interaction = conversation.id in (
+            await self.conversation_repository.conversations_with_pending_interaction(
+                [conversation.id]
+            )
+        )
+        if conversation.status == ConversationStatus.WAITING:
+            conversation.waiting_on_work = await AgentConversationWaitRepository(
+                self.uow
+            ).has_active(conversation.id)
         return conversation
+
+    async def _authorized(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+        agent_name: str | None,
+    ) -> Conversation:
+        return await authorized_conversation(
+            self.conversation_repository,
+            self.agent_repository,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+            action=Permissions.AGENT_READ,
+        )
 
     async def _latest_run_is_retryable(self, conversation: Conversation) -> bool:
         """Whether the newest run can be replayed without duplicating output.
@@ -151,7 +215,7 @@ class ConversationQueries:
         latest = conversation.agent_runs[-1] if conversation.agent_runs else None
         if latest is None or latest.status != AgentRunStatus.FAILED:
             return False
-        return await self.conversation_repository.run_has_only_user_messages(latest.id)
+        return await self.conversation_repository.run_is_replay_safe(latest.id)
 
     async def list_messages(
         self,
@@ -164,22 +228,11 @@ class ConversationQueries:
         after_sequence: int | None = None,
         limit: int = 100,
     ) -> tuple[list[Message], int | None]:
-        expected_agent_id = await resolve_expected_agent_id(
-            self.agent_repository,
+        await self._authorized(
+            conversation_id=conversation_id,
+            user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-        )
-        conversation = validate_conversation_access(
-            await self.conversation_repository.get_conversation(conversation_id),
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_id=expected_agent_id,
-        )
-        await require_agent_action(
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_id=conversation.agent_id,
-            action=Permissions.AGENT_READ,
         )
         return await self.conversation_repository.list_messages(
             conversation_id=conversation_id,
@@ -196,22 +249,11 @@ class ConversationQueries:
         pod_id: UUID,
         agent_name: str | None = None,
     ) -> AgentRun | None:
-        expected_agent_id = await resolve_expected_agent_id(
-            self.agent_repository,
+        await self._authorized(
+            conversation_id=conversation_id,
+            user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-        )
-        conversation = validate_conversation_access(
-            await self.conversation_repository.get_conversation(conversation_id),
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_id=expected_agent_id,
-        )
-        await require_agent_action(
-            user_id=user_id,
-            pod_id=pod_id,
-            agent_id=conversation.agent_id,
-            action=Permissions.AGENT_READ,
         )
         return await self.conversation_repository.get_active_agent_run(conversation_id)
 
@@ -223,14 +265,11 @@ class ConversationQueries:
         pod_id: UUID,
         agent_name: str | None = None,
     ) -> list[Message]:
-        conversation = await authorized_conversation(
-            self.conversation_repository,
-            self.agent_repository,
+        conversation = await self._authorized(
             conversation_id=conversation_id,
             user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-            action=Permissions.AGENT_READ,
         )
         # A pausing call stays listed until its synthesized return is durable --
         # the approved tool runs asynchronously, and a repeated click is how a

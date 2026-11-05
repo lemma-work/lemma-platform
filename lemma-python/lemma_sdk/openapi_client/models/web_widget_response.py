@@ -23,6 +23,8 @@ class WebWidgetResponse:
         answer (WidgetAnswer): Whom a widget answers. Mirrors a bot's ``contacts.answer``.
         created_at (datetime.datetime):
         embed (str): The script tag that puts the chat on a page.
+        host_issuer (str): The product whose users this widget's host tokens name: a host contact is known as that
+            product's user. Widgets of one product share it.
         id (UUID):
         looked_after_by (None | UUID):
         name (str):
@@ -35,6 +37,7 @@ class WebWidgetResponse:
     answer: WidgetAnswer
     created_at: datetime.datetime
     embed: str
+    host_issuer: str
     id: UUID
     looked_after_by: None | UUID
     name: str
@@ -52,6 +55,8 @@ class WebWidgetResponse:
         created_at = self.created_at.isoformat()
 
         embed = self.embed
+
+        host_issuer = self.host_issuer
 
         id = str(self.id)
 
@@ -76,6 +81,7 @@ class WebWidgetResponse:
                 "answer": answer,
                 "created_at": created_at,
                 "embed": embed,
+                "host_issuer": host_issuer,
                 "id": id,
                 "looked_after_by": looked_after_by,
                 "name": name,
@@ -98,6 +104,8 @@ class WebWidgetResponse:
         created_at = isoparse(d.pop("created_at"))
 
         embed = d.pop("embed")
+
+        host_issuer = d.pop("host_issuer")
 
         id = UUID(d.pop("id"))
 
@@ -128,6 +136,7 @@ class WebWidgetResponse:
             answer=answer,
             created_at=created_at,
             embed=embed,
+            host_issuer=host_issuer,
             id=id,
             looked_after_by=looked_after_by,
             name=name,

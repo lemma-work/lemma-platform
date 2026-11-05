@@ -11,16 +11,20 @@ import pytest
 from app.modules.datastore.infrastructure import kreuzberg_helper as kreuzberg_module
 from app.modules.datastore.infrastructure import kreuzberg_spool
 from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+    get_kreuzberg_circuit,
     reset_kreuzberg_circuit,
 )
 from app.modules.datastore.domain.errors import (
     DocumentExtractionUnavailableError,
+    ExtractorFailedOnDocument,
 )
 from app.modules.datastore.infrastructure.kreuzberg_helper import (
     KreuzbergCompatibilityError,
     KreuzbergExtractionResult,
     KreuzbergHelper,
-    KreuzbergTransientError,
+    KreuzbergRateLimited,
+    KreuzbergUnhealthy,
+    KreuzbergUnreachable,
 )
 
 
@@ -99,6 +103,52 @@ class _FakeContent:
             if self._yield_between:
                 await asyncio.sleep(0)
             yield self._body[start : start + self._chunk]
+
+
+class _Health:
+    """``session.get(/health)``: what Kreuzberg says about itself."""
+
+    def __init__(self, status: int | None):
+        self.status = status
+        self.asked = 0
+
+    def __call__(self, *args, **kwargs):
+        owner = self
+
+        class _Context:
+            async def __aenter__(self):
+                owner.asked += 1
+                if owner.status is None:
+                    raise aiohttp.ClientConnectionError("connection refused")
+                return SimpleNamespace(status=owner.status)
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        return _Context()
+
+
+class _StatusPost:
+    def __init__(self, status: int, body: str = "", headers=None):
+        self.response = SimpleNamespace(
+            status=status,
+            text=AsyncMock(return_value=body),
+            headers=headers or {},
+        )
+        self.attempts = 0
+
+    def __call__(self, *args, **kwargs):
+        owner = self
+
+        class _Context:
+            async def __aenter__(self):
+                owner.attempts += 1
+                return owner.response
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        return _Context()
 
 
 def _json_response(body) -> SimpleNamespace:
@@ -491,19 +541,38 @@ async def test_extract_retries_transient_connection_error_then_succeeds() -> Non
 
 
 @pytest.mark.asyncio
-async def test_extract_does_not_immediately_retry_timeout():
+async def test_a_timeout_while_healthy_is_this_documents_failure():
+    """Not retried in-request (the extraction may still be running), and
+    charged to the document: Kreuzberg says it is fine."""
     post = _AlwaysTimeoutPost()
+    health = _Health(200)
     helper = KreuzbergHelper()
 
-    with pytest.raises(KreuzbergTransientError, match="timed out"):
+    with pytest.raises(ExtractorFailedOnDocument, match="timed out"):
         await helper._extract(
-            SimpleNamespace(post=post),
+            SimpleNamespace(post=post, get=health),
             file_content=b"bytes",
             filename="book.pdf",
             mime_type="application/pdf",
         )
 
     assert post.attempts == 1
+    assert health.asked == 1
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_while_the_health_check_fails_is_unavailability():
+    helper = KreuzbergHelper()
+
+    with pytest.raises(KreuzbergUnhealthy) as excinfo:
+        await helper._extract(
+            SimpleNamespace(post=_AlwaysTimeoutPost(), get=_Health(None)),
+            file_content=b"bytes",
+            filename="book.pdf",
+            mime_type="application/pdf",
+        )
+
+    assert excinfo.value.evidence == "health_check_failing"
 
 
 @pytest.mark.asyncio
@@ -530,10 +599,10 @@ async def test_config_fallback_only_handles_schema_compatibility(monkeypatch):
 @pytest.mark.asyncio
 async def test_config_fallback_does_not_multiply_transient_failure(monkeypatch):
     helper = KreuzbergHelper()
-    extract = AsyncMock(side_effect=KreuzbergTransientError("service busy"))
+    extract = AsyncMock(side_effect=KreuzbergUnreachable("service busy"))
     monkeypatch.setattr(helper, "_extract", extract)
 
-    with pytest.raises(KreuzbergTransientError, match="service busy"):
+    with pytest.raises(KreuzbergUnreachable, match="service busy"):
         await helper._extract_with_config_fallback(
             SimpleNamespace(),
             file_content=b"bytes",
@@ -545,16 +614,82 @@ async def test_config_fallback_does_not_multiply_transient_failure(monkeypatch):
     assert extract.await_count == 1
 
 
+@pytest.mark.parametrize("status", [500, 502, 503, 408, 413])
 @pytest.mark.asyncio
-async def test_http_503_is_transient_but_not_same_request_retried():
+async def test_a_failure_status_on_one_document_while_healthy_is_charged(status):
+    """The loop this replaces: every 5xx was "the extractor is unavailable",
+    refunded, and re-driven forever. Kreuzberg serving its health check while
+    failing this document makes it the document's failure."""
+    post = _StatusPost(status, "thread panicked: Invalid buffer length")
     helper = KreuzbergHelper()
-    response = SimpleNamespace(
-        status=503,
-        text=AsyncMock(return_value="busy"),
+
+    with pytest.raises(ExtractorFailedOnDocument, match=f"status {status}"):
+        await helper._extract(
+            SimpleNamespace(post=post, get=_Health(200)),
+            file_content=b"bytes",
+            filename="poison.pdf",
+            mime_type="application/pdf",
+        )
+
+    assert post.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_a_poison_document_counts_once_against_the_circuit():
+    helper = KreuzbergHelper()
+    session = SimpleNamespace(post=_StatusPost(500, "panic"), get=_Health(200))
+    circuit = get_kreuzberg_circuit()
+    threshold = kreuzberg_module.datastore_settings.kreuzberg_circuit_failure_threshold
+
+    for _ in range(threshold * 3):
+        with pytest.raises(ExtractorFailedOnDocument):
+            await _extract_as(helper, session, "poison-file")
+
+    assert not circuit.is_open
+
+
+async def _extract_as(helper, session, document_key: str):
+    from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+        document_scope,
     )
 
-    with pytest.raises(KreuzbergTransientError, match="status 503"):
-        await helper._raise_for_status(response)
+    with document_scope(document_key):
+        return await helper._extract(
+            session,
+            file_content=b"bytes",
+            filename="doc.pdf",
+            mime_type="application/pdf",
+        )
+
+
+@pytest.mark.asyncio
+async def test_failures_from_distinct_documents_open_the_circuit():
+    helper = KreuzbergHelper()
+    session = SimpleNamespace(post=_StatusPost(500, "panic"), get=_Health(200))
+    threshold = kreuzberg_module.datastore_settings.kreuzberg_circuit_failure_threshold
+
+    for index in range(threshold):
+        with pytest.raises(ExtractorFailedOnDocument):
+            await _extract_as(helper, session, f"doc-{index}")
+
+    assert get_kreuzberg_circuit().is_open
+
+
+@pytest.mark.asyncio
+async def test_429_is_rate_limiting_with_the_servers_retry_after():
+    helper = KreuzbergHelper()
+    post = _StatusPost(429, "busy", headers={"Retry-After": "12"})
+
+    with pytest.raises(KreuzbergRateLimited) as excinfo:
+        await helper._extract(
+            SimpleNamespace(post=post, get=_Health(200)),
+            file_content=b"bytes",
+            filename="doc.pdf",
+            mime_type="application/pdf",
+        )
+
+    assert excinfo.value.evidence == "rate_limited"
+    assert excinfo.value.retry_after_seconds == 12
 
 
 @pytest.mark.asyncio
@@ -603,7 +738,7 @@ async def test_extract_raises_after_exhausting_transient_retries() -> None:
     session = SimpleNamespace(post=_FlakyPost(fail_times=99, response=None))
 
     helper = KreuzbergHelper(sleep=_fake_sleep)
-    with pytest.raises(KreuzbergTransientError, match="connection failed"):
+    with pytest.raises(KreuzbergUnreachable, match="connection failed") as excinfo:
         await helper._extract(
             session,
             file_content=b"bytes",
@@ -617,6 +752,7 @@ async def test_extract_raises_after_exhausting_transient_retries() -> None:
     )
     assert session.post.attempts == expected_attempts
     assert len(sleeps) == expected_attempts - 1
+    assert excinfo.value.evidence == "connection_refused"
 
 
 # --- Wire-format compatibility -------------------------------------------

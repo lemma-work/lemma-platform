@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import { isLandingPreview } from "@/marketing/preview-mode";
 import type { Message, Pod } from "@/data";
 import type { ApprovalDecision } from "./approval";
 import { NEW_CONVERSATION } from "@/data";
+import type { Choice } from "@/data/runtimes";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { Transcript } from "./transcript";
 import { Composer } from "./composer";
+import { ModelPicker, useSavingModel } from "./model-picker";
 import { InteractionDock } from "./interaction-dock";
 import { toAttachments, type Attachment } from "./attachments";
 import { useChannelReply } from "./use-channel-reply";
@@ -46,10 +48,11 @@ export function ConversationPane({
     onOpenApp?: (name: string) => void;
     onOpenFile?: (path: string) => void;
     onOpenTable?: (name: string) => void;
-    /** The same composer fill the live pane takes. Wired here too so the
-     *  sample source demonstrates the whole path with no backend behind it —
-     *  a widget asks, the box fills, and only the send is pretend. */
-    fill?: { text: string; id: number } | null;
+    /** The same composer fill the live pane takes, with any files that were
+     *  handed over with it. Wired here too so the sample source demonstrates
+     *  the whole path with no backend behind it — a widget asks, the box
+     *  fills, and only the send is pretend. */
+    fill?: { text: string; id: number; files?: File[] } | null;
     onFilled?: () => void;
     onCreated?: (id: string) => void;
 }) {
@@ -61,6 +64,16 @@ export function ConversationPane({
        the chips, the drop target and the size refusal unlooked-at, since this
        is the only mode that opens without a session. */
     const [attachments, setAttachments] = useState<Attachment[]>([]);
+    /* Files handed over with the words, into the same state the drop fills —
+       the box on Home has somewhere to put them, so the chips it drew have to
+       land here rather than disappearing on the way. */
+    const seededId = useRef<number | null>(null);
+    useEffect(() => {
+        const handed = fill?.files;
+        if (!handed?.length || seededId.current === fill?.id) return;
+        seededId.current = fill?.id ?? null;
+        setAttachments(was => [...was, ...toAttachments(handed)]);
+    }, [fill]);
 
     /* The sample has no cursor to walk, so it walks its own history: the pane
        holds how far back it has been asked to go and hands the transcript the
@@ -108,6 +121,10 @@ export function ConversationPane({
     const waitingOn = useMemo(() => openInteraction(turns), [turns]);
     const signingIn = useMemo(() => openSignIn(turns), [turns]);
     const [crowded, setCrowded] = useState(false);
+    /* The same pick the live pane holds: this pane is the one that opens
+       without a session, and a control that exists only where a session does
+       is a control nobody looks at until a run is already going. */
+    const [pickedModel, setPickedModel] = useState<Choice | null>(null);
 
     const open = conversationId && conversationId !== NEW_CONVERSATION ? conversationId : conversation.data?.id ?? null;
 
@@ -122,6 +139,21 @@ export function ConversationPane({
         [bot, pod.teammate],
     );
     const reply = useChannelReply(conversation.data?.metadata, teammate.name, open);
+
+    /* Memoised for the same reason the live pane's is: the box around it is. */
+    const savingModel = useSavingModel();
+    const modelPicker = useMemo(
+        () => (bot?.pinnedRuntime ? null : (
+            <ModelPicker
+                podId={pod.id}
+                orgId={pod.orgId}
+                conversationId={open}
+                picked={pickedModel}
+                onPicked={setPickedModel}
+            />
+        )),
+        [bot?.pinnedRuntime, pod.id, pod.orgId, open, pickedModel],
+    );
 
     return (
         <>
@@ -177,7 +209,7 @@ export function ConversationPane({
                     ? "sending a message skips this request"
                     : waitingOn || signingIn || isLandingPreview() ? undefined : pod.waiting || undefined}
                 onTall={setCrowded}
-                busy={false}
+                busy={savingModel}
                 canStop={false}
                 fill={fill}
                 onFilled={onFilled}
@@ -185,6 +217,7 @@ export function ConversationPane({
                 onAttach={(files) => setAttachments(was => [...was, ...toAttachments(files)])}
                 onRemoveAttachment={(key) => setAttachments(was => was.filter(one => one.key !== key))}
                 onSend={() => setError("This is the sample source — connect a session to send anything.")}
+                model={modelPicker}
             />
         </>
     );

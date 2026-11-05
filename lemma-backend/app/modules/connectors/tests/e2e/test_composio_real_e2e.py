@@ -326,8 +326,9 @@ async def test_composio_account_flips_to_reauth_on_unauthorized(
             ops_url,
             json={"payload": {"q": "London"}, "account_id": account_id},
         )
-        # The provider rejects the bad key; our API surfaces an auth failure.
-        assert exec_resp.status_code in (401, 403), exec_resp.text
+        # The provider rejects the bad key; our API answers 424 for its 401 (a
+        # 401 would read as the caller's own session ending) and passes a 403.
+        assert exec_resp.status_code in (424, 403), exec_resp.text
 
         # ...and the account is auto-flagged for re-authentication.
         get_resp = await authenticated_client.get(f"{accounts_url}/{account_id}")

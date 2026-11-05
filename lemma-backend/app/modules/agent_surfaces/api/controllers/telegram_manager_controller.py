@@ -11,26 +11,29 @@ from app.core.authorization.permissions import Permissions
 from app.modules.agent.contracts.agents import agent_id_for_name
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_surface_agent_action,
+)
+from app.modules.agent_surfaces.services.surface_config_input import (
     resolve_telegram_config,
 )
-from app.modules.agent_surfaces.api.dependencies import TelegramManagerServiceDep
+from app.modules.agent_surfaces.api.dependencies import (
+    SurfaceServiceDep,
+    TelegramManagerServiceDep,
+)
 from app.modules.agent_surfaces.api.schemas import (
     TelegramManagedBotSetupRequest,
     TelegramManagedBotSetupResponse,
+)
+from app.modules.agent_surfaces.domain.surface_representation import (
     surface_config_from_input,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.services.pod_scope import pod_scope
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAlreadyExistsError,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceRepository,
-)
-from app.modules.pod.contracts.agent_access import pod_organization_id
-from app.modules.pod.contracts.members import pod_name as pod_name_of
 
 router = APIRouter(
     prefix="/pods/{pod_id}/telegram-bot-setups",
@@ -53,7 +56,7 @@ async def _response(service, setup) -> TelegramManagedBotSetupResponse:
         launch_url=launch_url,
         manager_bot_username=manager_username or "",
         expires_at=setup.expires_at.isoformat(),
-        account_id=setup.account_id,
+        pod_connector=setup.pod_connector_slug,
         surface_id=setup.surface_id,
         bot_username=setup.bot_username,
         bot_launch_url=(
@@ -77,15 +80,12 @@ async def start_telegram_managed_bot_setup(
     uow: UoWDep,
     ctx: PodContextDep,
     service: TelegramManagerServiceDep,
+    surfaces: SurfaceServiceDep,
 ) -> TelegramManagedBotSetupResponse:
     surface_name = (request.name or "").strip() or AgentSurfaceEntity.default_name_for(
         SurfacePlatform.TELEGRAM
     )
-    existing = await SurfaceRepository(uow).get_by_pod_and_name(
-        pod_id=pod_id,
-        name=surface_name,
-    )
-    if existing is not None:
+    if await surfaces.surface_name_taken(pod_id=pod_id, name=surface_name):
         raise AgentSurfaceAlreadyExistsError(surface_name)
 
     agent_name_id = (
@@ -107,10 +107,7 @@ async def start_telegram_managed_bot_setup(
         action=Permissions.AGENT_UPDATE,
     )
 
-    organization_id = await pod_organization_id(uow, pod_id)
-    pod_name = await pod_name_of(uow.session, pod_id)
-    if organization_id is None or pod_name is None:
-        raise ValueError(f"Pod {pod_id} not found")
+    organization_id, pod_name = await pod_scope(uow, pod_id)
 
     surface_config = surface_config_from_input(
         request.config,

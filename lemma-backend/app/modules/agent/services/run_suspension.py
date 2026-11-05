@@ -13,6 +13,11 @@ statement made twice: :func:`suspend_remote_run` says "stop, this run is going
 to wait", and :func:`run_suspended_on` is how the harness reads that back when
 the run's terminal state arrives and it has to decide whether a stopped turn
 means STOPPED or WAITING.
+
+A turn parked on a person (``ask_user``, an approval, an ACP permission
+request) is ended the same way once it has waited past the parked window
+(``harnesses/agent_host/parked_window.py``); :func:`run_suspended_while_parked`
+is its read-back, keyed on the mark that window writes on the run.
 """
 
 from __future__ import annotations
@@ -20,10 +25,16 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.pausing_tools import (
+    ParkedSuspension,
+    parked_suspension_of,
+)
+from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.wait import AgentConversationWaitEntity
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
+from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -62,3 +73,22 @@ async def run_suspended_on(
     stop talking. Neither answers the question being asked.
     """
     return await AgentConversationWaitRepository(uow).find_active_for_run(agent_run_id)
+
+
+async def run_suspended_while_parked(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    agent_run_id: UUID,
+) -> ParkedSuspension | None:
+    """The pause this run's turn was ended for, if Lemma ended it for one.
+
+    The other half of :func:`run_suspended_on`, for a turn parked on a person
+    rather than asleep on a timer: the host reports the stop it was asked for
+    as ``CANCELLED`` (or ``SUCCEEDED``, when the agent finished first), and
+    this is what says the run is in fact waiting. ``None`` once a Stop has been
+    requested on top: Stop means stop, and wins.
+    """
+    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+    if run is None or run.status != AgentRunStatus.RUNNING:
+        return None
+    return parked_suspension_of(run.metadata)

@@ -34,6 +34,7 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest:
         model_names (list[str] | None | Unset):
         model_settings (None | Unset | UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0):
         name (None | str | Unset):
+        reasoning_model_names (list[str] | None | Unset):
         refresh_models (bool | Unset):  Default: False.
         source (Literal['ANTHROPIC_COMPATIBLE'] | Unset):  Default: 'ANTHROPIC_COMPATIBLE'.
     """
@@ -47,6 +48,7 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest:
         None | Unset | UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0
     ) = UNSET
     name: None | str | Unset = UNSET
+    reasoning_model_names: list[str] | None | Unset = UNSET
     refresh_models: bool | Unset = False
     source: Literal["ANTHROPIC_COMPATIBLE"] | Unset = "ANTHROPIC_COMPATIBLE"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -106,6 +108,15 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest:
         else:
             name = self.name
 
+        reasoning_model_names: list[str] | None | Unset
+        if isinstance(self.reasoning_model_names, Unset):
+            reasoning_model_names = UNSET
+        elif isinstance(self.reasoning_model_names, list):
+            reasoning_model_names = self.reasoning_model_names
+
+        else:
+            reasoning_model_names = self.reasoning_model_names
+
         refresh_models = self.refresh_models
 
         source = self.source
@@ -127,6 +138,8 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest:
             field_dict["model_settings"] = model_settings
         if name is not UNSET:
             field_dict["name"] = name
+        if reasoning_model_names is not UNSET:
+            field_dict["reasoning_model_names"] = reasoning_model_names
         if refresh_models is not UNSET:
             field_dict["refresh_models"] = refresh_models
         if source is not UNSET:
@@ -236,6 +249,25 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest:
 
         name = _parse_name(d.pop("name", UNSET))
 
+        def _parse_reasoning_model_names(data: object) -> list[str] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                reasoning_model_names_type_0 = cast(list[str], data)
+
+                return reasoning_model_names_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(list[str] | None | Unset, data)
+
+        reasoning_model_names = _parse_reasoning_model_names(
+            d.pop("reasoning_model_names", UNSET)
+        )
+
         refresh_models = d.pop("refresh_models", UNSET)
 
         source = cast(Literal["ANTHROPIC_COMPATIBLE"] | Unset, d.pop("source", UNSET))
@@ -252,6 +284,7 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest:
             model_names=model_names,
             model_settings=model_settings,
             name=name,
+            reasoning_model_names=reasoning_model_names,
             refresh_models=refresh_models,
             source=source,
         )

@@ -814,3 +814,48 @@ Do not reintroduce:
 - default localhost rewriting in the backend;
 - Podman/Docker/Kreuzberg requirements in the Desktop journey;
 - service health that accepts non-2xx or the wrong runtime generation.
+
+### Rotating the update signing key
+
+An installed app trusts exactly one public key: the one it was built with, in
+`desktop/tauri.conf.json`. It has no way to learn a new one except by being
+replaced, and it will only install a replacement signed by the key it already
+trusts. So the order is fixed, and the wrong order strands every installed copy
+permanently.
+
+1. Generate the new pair with `tauri signer generate`. Keep the old private key
+   until step 3 has shipped and been installed — it is the only thing that can
+   still reach the installed base.
+2. Commit the **new public key** to `desktop/tauri.conf.json`, but leave
+   `TAURI_UPDATER_PRIVATE_KEY` set to the **old private key**. Cut a release.
+   That release is signed with the old key, so installed apps accept it, and it
+   carries the new public key forward.
+3. Wait for that release to be installed. Until an app has taken it, it still
+   verifies with the old key.
+4. Replace `TAURI_UPDATER_PRIVATE_KEY` with the new private key. From the next
+   release on, the pair agrees again.
+
+   An installation that never took the step 2 release still trusts the old
+   public key, so it rejects every release from here on and stays where it is.
+   Updating cannot bring it back: it needs a fresh download from
+   [lemma.work/download](https://lemma.work/download), which keeps its data.
+   Say so in the release notes of the first release signed with the new key.
+
+`desktop/scripts/check_updater_key.py` runs in both release workflows and
+compares the key that signed the payload with the key committed in
+`tauri.conf.json`. It is deliberately a comparison of minisign key ids, not of
+key material: the private key is never decrypted and never leaves the runner.
+
+Between steps 2 and 4 the two disagree on purpose, and the check would
+otherwise refuse the release -- and fail the nightly every night. Both checks
+read the repository variable `LEMMA_UPDATER_KEY_ROTATION`: set it to `1`
+(Settings → Secrets and variables → Actions → Variables) before the step 2
+release, and delete it when you do step 4. While it is set the check *requires*
+the mismatch, so a variable left behind fails the next release rather than
+silently disabling the check for good. Say which key signed the build in the
+release notes.
+
+A lost private key is not recoverable through this path. Installed apps can only
+be moved to a new key by a build signed with the old one, so the remaining route
+is a fresh download by hand.
+

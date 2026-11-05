@@ -2,19 +2,20 @@
 
 ## Purpose
 
-`app/modules/schedule` turns time, webhooks, datastore changes, and application
-events into normalized `schedule.fired` events. Targets are agents, workflows,
-or surfaces; target modules decide how to execute the fire.
+`app/modules/schedule` turns time, webhooks and datastore changes into
+normalized `schedule.fired` events. Targets are agents (the pod's own assistant
+included) or workflows, exactly one per schedule; target modules decide how to
+execute the fire.
 
 ## Runtime contributions
 
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Pod schedule CRUD and public webhook ingress/verification |
-| Redis consumers | Schedule commands, datastore events, pod deletion, scheduler notifications |
-| streaq task | Evaluate LLM filters off-request |
-| Worker poller | Claims due TIME schedules with `FOR UPDATE SKIP LOCKED` and advances their cursor |
-| Published stream | `schedule_events` |
+| Work kinds | `schedule.fire` and `schedule.arm` (a TIME schedule's next occurrence, one item per schedule), `schedule.filter` (judge an event against the filter, off-request), `schedule.start_target`, `schedule.paused_notice`, `schedule.pod_deleted`, `schedule.trigger_defaults` |
+| Fact subscriptions | `AgentRunFinished` -> `schedule.agent_finished`; `WorkflowRunFinished` and `WorkflowStartRefused` -> `schedule.workflow_finished` / `schedule.workflow_refused`; `schedule.outcome` records the run's result |
+| Change-log subscriber | DATASTORE triggers read their pod's record change log by cursor |
+| Periodic work | `schedule.runs_prune` (hourly), `schedule.mcp_listening_reconcile` (15 min) |
 
 ## Data and schedule types
 
@@ -33,9 +34,18 @@ standing one to fall back on. `schedule_runs` is the
 durable idempotency/delivery ledger keyed by schedule plus source event; it
 records the run's single user owner, attempts, target run, payload, and terminal
 outcome. RLS datastore events assign that ownership to the row owner; other
-schedule sources assign it to the schedule owner. Supported logical
-types include time/cron or once, webhook, datastore, and application-triggered
-schedules.
+schedule sources assign it to the schedule owner. The three types are TIME
+(cron, or once with `scheduled_at`), WEBHOOK and DATASTORE.
+
+`GET /pods/{pod_id}/events` lists what a schedule can start on, in the MCP
+Events descriptor shape (`domain/event_catalog.py`): `time`, `record.*`, and the
+events of every MCP server the caller connected, each with the schedule type
+that serves it.
+
+A DATASTORE schedule can narrow what fires it with `when` conditions over the
+written row (`app/core/domain/record_conditions.py`, shared with live subscriptions: equals, not equals, in, not in,
+changed, written, from, to). They are checked before any LLM filter, so a row
+that fails them costs no model call.
 
 A TIME schedule's config carries `cron` or `scheduled_at`, and optionally
 `timezone` — an IANA name the wall-clock times are read in. The key absent
@@ -49,10 +59,21 @@ first, pre-transition occurrence. The zone is resolved once, in
 `due_schedule_claimer.next_cursor_for`; `schedules.next_fire_at` is always a UTC
 instant. Zone names are checked against `zoneinfo.available_timezones()` rather
 than by constructing a `ZoneInfo`, which succeeds for a miscased name on a
-case-insensitive filesystem.
+case-insensitive filesystem. Every schedule response carries `next_fire_at`
+(UTC) and `next_fire_at_local` (that instant in the schedule's zone), and the
+CLI prints both after `schedules create`, so nobody has to create a test
+schedule and wait to learn which zone a cron is read in.
 
 The poller owns the concrete time job set: `next_fire_at` is the whole index,
 claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
+
+`trigger_skips` records what a DATASTORE trigger let pass without firing --
+the changes of a bulk write or import it skips, or fires past its daily
+ceiling -- one row per delivered page and reason with a count, so a bulk write
+of thousands of rows is a handful of rows; `GET .../schedules/{id}/skips`
+pages them for run history. `trigger_batches` holds each window a `batch`-mode
+trigger planned before firing it, so a replay after a crash fires that same
+window rather than a differently cut one.
 
 ## API groups
 
@@ -65,10 +86,31 @@ claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
 ## Webhook sources
 
 `POST /webhooks/{source}` takes its source from the URL, so the *sender* picks
-it. The registry in `app/modules/schedule/domain/webhook_source.py` is the
+it. The registry in `app/modules/schedule/contracts/webhook_source.py` is the
 allow-list that makes that safe: a source with no plugin is refused before
 anything reaches matching, a run, or an agent's first message. Plugins live in
-`app/composition/webhook_sources/` — `composio` and `github` today.
+`app/modules/connectors/infrastructure/webhook_sources/` — `composio`,
+`github` and `mcp` today. A known source's body is read under a 1 MiB ceiling
+(`MAX_WEBHOOK_BODY_BYTES`, GitHub included) before any plugin sees it; a larger
+one answers 413 as soon as it crosses, and is never verified or matched.
+
+`mcp` is a connected MCP server's events. Every subscription has its own
+secret, so the delivery names the subscription in the callback URL's query
+(`?subscription=`, carried as `WebhookDelivery.query`) and the plugin verifies
+against that one secret. The server proves the callback with a signed
+challenge before it answers `events/subscribe`; the plugin returns it as
+`VerifiedDelivery.reply`, which the endpoint echoes without matching anything.
+An occurrence routes by `{"provider_trigger_id": <our subscription id>}`, the
+same key a Composio trigger uses, and a digest of its `eventId` makes the
+`source_event_id`. The plugin also names the account whose secret verified the
+delivery (`NormalizedWebhook.account_id`), and only that account's schedules
+fire.
+
+**Routing keys only provisioning writes.** `provider_trigger_id` and
+`installation_id` (`PROVISIONED_CONFIG_KEYS`) are dropped from whatever config
+an author sends, on create and on update, and a match on either keeps only
+schedules bound to an account. Matching searches every tenant's schedules, so a
+schedule that could type one in would receive someone else's events.
 
 Each plugin does two things, and they are separate because they fail
 differently. `verify` proves the delivery came from the source and parses it; a
@@ -90,8 +132,10 @@ delivery id: providers issue a new delivery id when they retry, and
 
 ## Provisioning
 
-Creating a webhook schedule that names a connector trigger asks
-`ExternalScheduleWriter` to provision it. There are three outcomes and they are
+Creating a webhook schedule that names a connector trigger — or, with
+`config.source` `mcp`, a connected MCP server's event — asks
+`ExternalScheduleWriter` to provision it (`ScheduleEntity.listens_through_account`
+says which do). There are three outcomes and they are
 now distinguishable, which they were not:
 
 - a provider subscription is created, and its id is stored;
@@ -102,6 +146,20 @@ now distinguishable, which they were not:
   look like success: the row was written, nothing was subscribed, and the
   schedule could never fire. Slack's three triggers were inert for years for
   exactly that reason.
+
+Provisioning runs before the row is written, with the request's connection
+handed back (an MCP server proves our callback while we wait); a row that then
+fails to write drops the subscription. Only the schedule's author may change
+what their account listens for, and a schedule that listens through an account
+cannot be edited into one that does not. An MCP schedule is unsubscribed after
+its delete commits.
+
+`McpListeningReconciler` (every 15 minutes) unsubscribes what no schedule
+holds, and turns a schedule off -- emailing its author why, clearing its
+routing key -- when its author has left the pod or the server has stopped
+renewing its subscription. Turning it back on subscribes afresh, by its author
+only. Schedule responses carry `listening` for an MCP schedule: listening,
+retrying, lapsed or pending, with the server's last error.
 
 ### Declared defaults
 
@@ -120,28 +178,79 @@ flowchart LR
     T["Cron / once (in the schedule's zone)"] --> N["Normalized schedule event"]
     H["Webhook"] --> M["Match source + metadata"] --> N
     D["Datastore event"] --> Q["Match table + operation"] --> N
-    N --> F{"LLM filter?"}
-    F -- no --> E["schedule.fired stream"]
-    F -- yes --> J["streaq filter task"] --> E
+    N --> F{"Filter?"}
+    F -- no --> E["schedule.start_target item"]
+    F -- yes --> J["decision: should_proceed?"]
+    J -- yes --> E
+    J -- no or can't tell --> K["FILTERED run, with the answers"]
+    J -- provider down --> R["retry, then DEAD_LETTERED"]
     E --> A["agent target"]
     E --> W["workflow target"]
-    E --> S["surface target"]
 ```
 
 The service mirrors provider-backed webhook schedules into the connector through
-an adapter. Each `schedule.fired` trigger claims one durable schedule run;
+an adapter. Editing such a schedule's config makes a new subscription from it
+before the row is written and drops the old one after the commit
+(`services/trigger_resubscription.py`); keys provisioning wrote into the config
+(`provider_trigger_id`, a GitHub routing key) survive an edit that left them out. Each fire claims one durable schedule run;
 PostgreSQL deduplicates target dispatch and tracks retry/dead-letter state.
 `DISPATCHED` means the target run was created, not that the target completed.
-Consecutive-failure policy is durable on the schedule row, and a
+Consecutive-failure policy is durable on the schedule row. The streak is
+recounted from the run ledger on every outcome, back to `failures_reset_at`:
+a person reactivating the schedule sets it, so the failures that paused it do
+not count again and one more failure cannot switch it straight back off. A
 deactivation event is staged in the same transaction as that state change —
 including the poller's own retirements, so no schedule goes inactive silently.
 A schedule whose target was deleted keeps its row (`workflow_id` and `agent_id`
 are `SET NULL`) and records each firing as failed saying the target is missing.
-Publishers use the shared transactional outbox/core Redis Streams bus.
+Every item a fire needs is written in the transaction that claims it.
+
+### Filters
+
+A `filter_instruction` is asked through `decisions.contracts.decide` as a closed
+question -- `should_proceed`, a yes or no -- together with any closed questions
+the schedule's `filter_output_schema` declares (free-text and open-ended fields
+are left out and logged). The answers become the fire's `llm_output`, with a
+`_decision` block naming the provider, the model, whether it could not tell, and
+each answer's confidence. Every filter is judged in a `schedule.filter` work
+item, whichever way its event arrived: a webhook event straight from the
+webhook handler, a table change from the change-log delivery once its `when`
+conditions match, carrying the changed row's owner so the fire runs as them.
+No request or delivery waits on a model, and both paths get the outcomes below.
+
+The provider is the deployment's (`DECISION_PROVIDER`); with no Typesafe key
+it is the deployment's own model, so filters need nothing beyond a configured
+model.
+
+| Outcome | Recorded as |
+| --- | --- |
+| Yes | `schedule.fired`, then the usual run |
+| No, or could not tell | a `FILTERED` run carrying the answers; `last_fire_status` `FILTERED` |
+| Provider unavailable or rate-limited | retried with backoff (up to six tries), then `DEAD_LETTERED` as `ScheduleFilterUnavailable` -- never `FAILED`, which run recovery would send past the filter |
+| Spend limit, event too large, no provider, invalid questions | `DEAD_LETTERED` at once (`ScheduleFilterQuotaExhausted`, `ScheduleFilterEventTooLarge`, `ScheduleFilterNotConfigured`, `ScheduleFilterInvalid`) |
+| Interrupted after the question was asked (a crash, a lost lease, Lemma's database unreachable while the verdict was recorded) | asked once more -- the question has no effect until its verdict commits, so the only cost of asking again is a second billed call; interrupted again, `DEAD_LETTERED` as `ScheduleFilterInterrupted` |
+
+A redelivered event that already has a run is not judged again. (Two
+deliveries racing each other can both be judged, and billed, within the length
+of one decision; only one run is kept.) The failure breaker passes over
+`FILTERED` runs and over `ScheduleFilterUnavailable`,
+`ScheduleFilterNotConfigured` and `ScheduleFilterInterrupted` dead letters: a
+skip is not a failure, and a provider outage, an interruption or a deployment
+with no provider is the operator's to fix, not the schedule's -- counting either would switch off every filtered schedule at
+once. A spent budget, an event too large to judge and an invalid filter are the
+pod's or the schedule's, and are counted. The run list takes `status` and `skipped` filters; partial indexes
+on `status <> 'FILTERED'` keep the breaker's streak and a history without skips
+from walking past them. A `TIME` schedule refuses a new filter -- no event ever
+reaches it -- while one saved before stays editable and can be cleared.
 
 ## Authorization and security
 
-Schedule CRUD is pod-authorized. Webhook ingress is public by necessity and
+Schedule CRUD is pod-authorized. `schedule.delete` is a destructive action no
+agent holds by default, with one exception: `created_by_workload_id` records
+the agent that created a schedule (the pod's id for its default assistant),
+and that agent, acting for the schedule's owner, may delete it with
+`schedule.create` -- the authority it created it with -- so cleaning up after
+itself needs no approval. Webhook ingress is public by necessity and
 uses source-specific verification adapters plus schedule matching. Deletion of
 a pod is consumed as a system event to tear down schedules and external jobs.
 

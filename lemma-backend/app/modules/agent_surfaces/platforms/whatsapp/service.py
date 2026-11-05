@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    WhatsAppReplyTarget,
+    reply_target_as,
+    reply_target_for,
+)
+
 from typing import Any
 
 from pydantic_ai.tools import RunContext
@@ -12,20 +18,25 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
-from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
-    SurfaceApprovalRenderPlan,
-    SurfaceDisplayRenderPlan,
-    SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     WhatsAppSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
+from app.modules.agent_surfaces.platforms.whatsapp.indicators import (
+    acknowledge_inbound,
+)
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    WhatsAppCredentials,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
@@ -36,13 +47,9 @@ from app.modules.agent_surfaces.platforms.whatsapp.models import (
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WhatsAppRecipient,
-    build_whatsapp_approval_interactive,
-    build_whatsapp_interactive,
-    whatsapp_cta_url_payload,
-    whatsapp_display_resource_text,
+    retry_notice_interactive,
     flow_with_message,
     whatsapp_message_bodies,
-    whatsapp_recipient,
     whatsapp_text_payload,
     truncate_whatsapp_text,
 )
@@ -50,19 +57,25 @@ from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
     to_whatsapp_text,
 )
 
+from app.modules.agent_surfaces.platforms.whatsapp.interactive import (
+    WhatsAppInteractiveRenders,
+    recipient_of,
+)
+
 logger = get_logger(__name__)
 
 
-class WhatsAppPlatformService:
+class WhatsAppPlatformService(WhatsAppInteractiveRenders):
     def __init__(
-        self, credentials: dict[str, Any], *, client: WhatsAppClient | None = None
+        self, credentials: CredentialsLike, *, client: WhatsAppClient | None = None
     ):
-        self.credentials = credentials
-        self._access_token = credentials.get("access_token") or ""
-        self._phone_number_id = credentials.get("phone_number_id") or ""
+        self.credentials = WhatsAppCredentials.of(credentials)
+        # Revealed into a service built for the call at hand.
+        self._access_token = reveal_secret(self.credentials.access_token) or ""
+        self._phone_number_id = self.credentials.phone_number_id or ""
         # Resolve the base here (honoring a credential override) and hand it to
         # the typed client so all transport goes through one place.
-        self._api_base = resolve_api_base(credentials)
+        self._api_base = resolve_api_base(self.credentials)
         self._client = client or WhatsAppClient(
             access_token=self._access_token,
             phone_number_id=self._phone_number_id,
@@ -71,7 +84,10 @@ class WhatsAppPlatformService:
 
     def _arrival_number(self, event: ParsedInboundSurfaceEvent) -> str:
         """The number to send from: the one the message arrived on, else ours."""
-        return event.reply_target.get("phone_number_id") or self._phone_number_id
+        return (
+            reply_target_as(event, WhatsAppReplyTarget).phone_number_id
+            or self._phone_number_id
+        )
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
@@ -88,10 +104,8 @@ class WhatsAppPlatformService:
         phone number in surfaces list UI. Prefer already-stored account
         credential metadata, then resolve it through Graph best-effort.
         """
-        for key in ("display_phone_number", "phone_number"):
-            value = str(self.credentials.get(key) or "").strip()
-            if value:
-                return value
+        if self.credentials.display_phone_number:
+            return self.credentials.display_phone_number
         try:
             return await self._client.get_phone_number_field("display_phone_number")
         except Exception:
@@ -111,9 +125,11 @@ class WhatsAppPlatformService:
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Send the message; the id of its first part, which is what Meta's
+        later status report about it names."""
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
+        recipient = recipient_of(event)
         if recipient is None or not phone_number_id or not self._access_token:
             if (metadata or {}).get("private_onboarding"):
                 raise RuntimeError("WhatsApp cannot deliver private onboarding")
@@ -124,18 +140,18 @@ class WhatsAppPlatformService:
                 recipient=recipient.to if recipient else None,
             )
 
-        flow = (metadata or {}).get("onboarding_flow")
-        if event.is_dm and flow and not recipient.is_group:
-            await self._client.send_interactive(
+        bodies = whatsapp_message_bodies(message)
+        interactive = _interactive_reply(event, message, bodies, metadata, recipient)
+        if interactive is not None:
+            return await self._client.send_interactive(
                 phone_number_id=phone_number_id,
                 to=recipient.to,
-                interactive=flow_with_message(flow, message),
+                interactive=interactive,
             )
-            return
-        bodies = whatsapp_message_bodies(message)
+        first: str | None = None
         for index, body in enumerate(bodies):
             try:
-                await self._client.send_message_payload(
+                message_id = await self._client.send_message_payload(
                     phone_number_id=phone_number_id,
                     payload={
                         "messaging_product": "whatsapp",
@@ -145,12 +161,14 @@ class WhatsAppPlatformService:
                         "text": {"body": body},
                     },
                 )
-            except PLATFORM_TRANSPORT_ERRORS:
+                first = first or message_id
+            except platform_transport_errors():
                 if index:
                     # The person already has the first part. The caller sees
                     # this as "not delivered" and there is no rung below plain
                     # text to fall back to, so what it cannot say is that half
                     # the answer is on their phone.
+                    note_partial_delivery()
                     logger.warning(
                         "agent_surfaces.service.whatsapp_message_partially_delivered.degraded",
                         sent_parts=index,
@@ -158,6 +176,7 @@ class WhatsAppPlatformService:
                         exc_info=True,
                     )
                 raise
+        return first
 
     async def acknowledge_interaction(
         self,
@@ -183,14 +202,16 @@ class WhatsAppPlatformService:
         note = (text or "").strip()
         if not note or not show_alert:
             return
-        reply_target = interaction.reply_target or {}
-        sender_wa_id = reply_target.get("sender_wa_id")
+        reply_target = reply_target_for("WHATSAPP", interaction.reply_target)
+        if not isinstance(reply_target, WhatsAppReplyTarget):
+            return
+        sender_wa_id = reply_target.sender_wa_id
         # The number it arrived on wins over the one this adapter was configured
         # with, exactly as `stream_progress` and the send paths do it. With a
         # pool the two differ, and the configured one is a number the person has
         # never written to -- so the acknowledgement for their own tap arrives
         # from somewhere else, outside the thread they are looking at.
-        phone_number_id = reply_target.get("phone_number_id") or self._phone_number_id
+        phone_number_id = reply_target.phone_number_id or self._phone_number_id
         if not sender_wa_id or not phone_number_id or not self._access_token:
             return
         try:
@@ -230,7 +251,7 @@ class WhatsAppPlatformService:
         run.
         """
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
+        recipient = recipient_of(event)
         if recipient is None or not phone_number_id or not self._access_token:
             return
         body = to_whatsapp_text(progress_text)
@@ -246,242 +267,22 @@ class WhatsAppPlatformService:
             ),
         )
 
-    async def _render_choices(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        question_plan: SurfaceQuestionRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool | PartDelivery:
-        """Render ask_user questions as native interactive replies.
-
-        ≤3 options → reply buttons, 4–10 → a list; multi-select or anything that
-        can't be encoded returns ``False`` so the caller falls back to text. The
-        button/list ``id`` carries ``callback_id~header~value`` (no token store —
-        WhatsApp ids allow 256 chars).
-        """
-        del metadata
-        phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
-        if recipient is None or not phone_number_id or not self._access_token:
-            # Nothing can be sent. Declining here lets the caller's text fallback
-            # try, and that hits the raising guard in `send_message`, so the
-            # missing part is named there rather than in a debug line here.
-            return False
-        if recipient.is_group:
-            # A group takes no interactive message: the question goes as text.
-            return False
-        sender_wa_id = recipient.to
-        if any(q.multi_select for q in question_plan.questions):
-            return False
-        interactives = []
-        for question in question_plan.questions:
-            interactive = build_whatsapp_interactive(
-                question_plan.callback_id, question
-            )
-            if interactive is None:
-                return False
-            interactives.append(interactive)
-        for index, interactive in enumerate(interactives):
-            try:
-                await self._client.send_interactive(
-                    phone_number_id=phone_number_id,
-                    to=sender_wa_id,
-                    interactive=interactive,
-                )
-            except PLATFORM_TRANSPORT_ERRORS:
-                if not index:
-                    # Nothing went out: the caller's fallback sends every
-                    # question as text, and none of them is a duplicate.
-                    raise
-                # Earlier questions are already on the person's phone as
-                # buttons. Letting this raise made the caller resend *all* of
-                # them as text, so the first question appeared twice. Ask only
-                # what has not been asked.
-                logger.warning(
-                    "agent_surfaces.service.whatsapp_questions_partially_delivered.degraded",
-                    sent_questions=index,
-                    total_questions=len(interactives),
-                    exc_info=True,
-                )
-                await self.send_message(
-                    event,
-                    question_plan.model_copy(
-                        update={"questions": question_plan.questions[index:]}
-                    ).to_plain_text(),
-                )
-                # Delivered, but not all of it as controls: reporting True says
-                # every question is tappable, and nothing then accepts a typed
-                # answer to the ones that arrived as words.
-                return PartDelivery.DEGRADED
-        return True
-
-    async def _render_decision(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        approval_plan: SurfaceApprovalRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool:
-        """Render a request_approval prompt as WhatsApp reply buttons.
-
-        Approve/Deny (and optionally Approve-for-session) render as ≤3 reply
-        buttons; the tapped button's id carries the decision. Returns ``False``
-        (caller falls back to text) when the buttons can't be encoded natively.
-        """
-        del metadata
-        phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
-        if recipient is None or not phone_number_id or not self._access_token:
-            return False
-        if recipient.is_group:
-            # No buttons in a group: the approval is asked in words.
-            return False
-        sender_wa_id = recipient.to
-        interactive = build_whatsapp_approval_interactive(approval_plan)
-        if interactive is None:
-            return False
-        await self._client.send_interactive(
-            phone_number_id=phone_number_id,
-            to=sender_wa_id,
-            interactive=interactive,
-        )
-        return True
-
-    async def _render_resource(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        render_plan: SurfaceDisplayRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool:
-        """Send a resource card; True when it went as one, False when as text.
-
-        The bool is what lets a delivery receipt tell a card from a sentence. It
-        answered ``None`` -- which the adapter turned into ``True`` -- so every
-        resource read as delivered natively whichever way it actually arrived.
-        """
-        del metadata
-        phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
-        if not phone_number_id or recipient is None or not self._access_token:
-            raise unsendable(
-                "WhatsApp",
-                access_token=self._access_token,
-                phone_number_id=phone_number_id,
-                recipient=recipient.to if recipient else None,
-            )
-        action = render_plan.primary_action
-        if action is None or recipient.is_group:
-            # A card is an interactive message, which a group does not take;
-            # there the link goes as text, with its preview.
-            await self._client.send_message_payload(
-                phone_number_id=phone_number_id,
-                payload=whatsapp_text_payload(
-                    recipient_wa_id=recipient.to,
-                    recipient_type=recipient.recipient_type,
-                    body=whatsapp_display_resource_text(render_plan),
-                    preview_url=action is not None,
-                ),
-            )
-            return False
-        sender_wa_id = recipient.to
-
-        try:
-            await self._client.send_message_payload(
-                phone_number_id=phone_number_id,
-                payload=whatsapp_cta_url_payload(
-                    recipient_wa_id=sender_wa_id,
-                    render_plan=render_plan,
-                ),
-            )
-        except WhatsAppApiError as exc:
-            # This one does recover -- the resource goes out as text below --
-            # so the person is still served and this is not an error. It is
-            # still a thing that failed, and at `LOG_LEVEL=INFO` a `debug` line
-            # is indistinguishable from it never having happened, so the
-            # fallback is recorded rather than hidden.
-            logger.warning(
-                "agent_surfaces.service.whatsapp_display_resource_cta_rejected.degraded",
-                status_code=exc.status_code,
-                exc_info=True,
-            )
-            await self._client.send_message_payload(
-                phone_number_id=phone_number_id,
-                payload=whatsapp_text_payload(
-                    recipient_wa_id=sender_wa_id,
-                    body=whatsapp_display_resource_text(render_plan),
-                    preview_url=True,
-                ),
-            )
-            return False
-        return True
-
     async def add_processing_indicator(
         self,
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Acknowledge the inbound message with blue read ticks + a typing bubble.
-
-        WhatsApp couples mark-as-read and the typing indicator into a single
-        ``status:read`` call keyed by the inbound message id. The typing bubble
-        shows for ~25s or until the next message is sent, so a single call at run
-        start is enough (WhatsApp has no message-edit API for per-step progress).
-        Best-effort: an indicator failure never affects the run. When the inbound
-        message id is missing we fall back to the legacy 💬 reaction — but only
-        on the opening call. The bubble expires after ~25s so the observer
-        refreshes it on a timer, and a reaction re-posted on every tick would be
-        an API call every twenty seconds to say something already said.
-        """
-        is_refresh = bool((metadata or {}).get("is_refresh"))
+        """Blue read ticks and a typing bubble on the inbound message."""
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
-        message_id = str(event.external_message_id or "").strip()
         if not phone_number_id or not self._access_token:
             return
-        if recipient is not None and recipient.is_group:
-            # Meta documents neither a read receipt, a typing bubble nor a
-            # reaction from a business in a group -- its November 2025 guide
-            # listed marking read as unsupported there. Nothing is sent rather
-            # than a call a group may refuse on every turn.
-            return
-        sender_wa_id = recipient.to if recipient is not None else None
-
-        if message_id:
-            try:
-                await self._client.mark_read_and_typing(
-                    phone_number_id=phone_number_id,
-                    message_id=message_id,
-                )
-                return
-            except Exception:
-                # Best-effort indicator, and the reaction fallback below still
-                # runs, so this is `info` rather than `warning`. It said "log at
-                # debug so it is diagnosable without spamming warnings" -- and
-                # the deployment runs `LOG_LEVEL=INFO`, where `debug` is not
-                # diagnosable, it is absent. The exception goes with it.
-                logger.info(
-                    "agent_surfaces.service.whatsapp_mark_read_typing_best.observed",
-                    exc_info=True,
-                )
-
-        # Fallback: no inbound id (or read/typing rejected) — post a reaction so
-        # the user still sees the agent acknowledged the message.
-        if is_refresh or not sender_wa_id or not message_id:
-            return
-        try:
-            await self._client.react(
-                phone_number_id=phone_number_id,
-                to=sender_wa_id,
-                message_id=message_id,
-                emoji="\U0001f4ac",
-            )
-        except Exception:
-            # The last rung of the acknowledgement ladder: read receipt, then
-            # typing, then this. Nothing follows it, so the person sees no
-            # acknowledgement at all -- worth a record, with the reason.
-            logger.info(
-                "agent_surfaces.service.whatsapp_reaction_indicator_best_effort.observed",
-                exc_info=True,
-            )
+        await acknowledge_inbound(
+            self._client,
+            phone_number_id=phone_number_id,
+            recipient=recipient_of(event),
+            message_id=str(event.external_message_id or "").strip(),
+            is_refresh=bool((metadata or {}).get("is_refresh")),
+        )
 
     async def download_attachment_bytes(
         self,
@@ -506,7 +307,7 @@ class WhatsAppPlatformService:
         Returns True on success; False so the caller falls back to a URL link.
         """
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
+        recipient = recipient_of(event)
         if not self._access_token or not phone_number_id or recipient is None:
             return False
         return await media.send_file(
@@ -567,6 +368,16 @@ class WhatsAppPlatformService:
         return None
 
 
-def _recipient(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
-    """Who a reply to this event goes to: its group, else the person."""
-    return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)
+def _interactive_reply(
+    event: ParsedInboundSurfaceEvent,
+    message: str,
+    bodies: list[str],
+    metadata: dict[str, object] | None,
+    recipient: WhatsAppRecipient,
+) -> dict[str, object] | None:
+    """The message as an interactive one, when it is an onboarding step or a
+    failure notice with a Try again button; None to send it as text."""
+    flow = (metadata or {}).get("onboarding_flow")
+    if event.is_dm and flow and not recipient.is_group:
+        return flow_with_message(flow, message)
+    return retry_notice_interactive(bodies, metadata, recipient)

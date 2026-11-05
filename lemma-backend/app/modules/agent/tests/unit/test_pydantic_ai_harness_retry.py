@@ -1,7 +1,7 @@
 """A dropped model stream must not end the conversation run.
 
-Production loses ~20 runs a week to `httpx.ReadError` raised while iterating the
-provider's SSE stream: the request was accepted, the connection died mid-answer,
+Runs were lost to a `ReadError` raised while iterating the provider's SSE
+stream: the request was accepted, the connection died mid-answer,
 and the exception unwound past the graph into the harness catch-all. These tests
 pin the recovery — and, just as importantly, that recovering does not duplicate
 the half-written response the user already saw.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
-import httpx
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
@@ -35,7 +35,7 @@ def _drop_then_succeed(drop_after: str, final: str, attempts: list[int]):
         attempts.append(1)
         if len(attempts) == 1:
             yield drop_after
-            raise httpx.ReadError("connection reset by peer")
+            raise httpx2.ReadError("connection reset by peer")
         yield final
 
     return stream_fn
@@ -55,10 +55,10 @@ def _budget_expiry_then_succeed(final: str, attempts: list[int]):
         attempts.append(1)
         if len(attempts) == 1:
             yield "a trickle "
-            raise httpx.ReadTimeout(
+            raise httpx2.ReadTimeout(
                 "Model stream abandoned after 300.0s: "
                 "the provider stopped making progress.",
-                request=httpx.Request("POST", "https://provider.example/v1/chat"),
+                request=httpx2.Request("POST", "https://provider.example/v1/chat"),
             )
         yield final
 
@@ -131,9 +131,8 @@ async def _run_harness_until_it_dies(model, *, monkeypatch, toolsets=None):
     """Events queued before `_execute` raised, plus the exception.
 
     `_execute` does not turn a pause or a fatal error into an event -- `run()`
-    does, one layer up. Testing at this level is deliberate: what matters here
-    is that usage reached the queue *before* the run died, because that is the
-    ordering the pump depends on.
+    does, one layer up. Testing at this level sees exactly what reached the
+    queue before the run died.
     """
     events = []
     try:
@@ -266,7 +265,7 @@ async def test_the_retry_does_not_replay_the_truncated_response(monkeypatch) -> 
         )
         if len(attempts) == 1:
             yield "half a sentence that gets"
-            raise httpx.ReadError("connection reset by peer")
+            raise httpx2.ReadError("connection reset by peer")
         yield "a whole answer"
 
     await _run_harness(
@@ -302,22 +301,6 @@ async def test_the_client_is_told_to_discard_the_partial_bubble(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_usage_from_the_abandoned_attempt_is_still_billed(monkeypatch) -> None:
-    """The provider charges for the tokens it generated before the drop."""
-    attempts: list[int] = []
-    model = FunctionModel(
-        stream_function=_drop_then_succeed("partial ", "answer", attempts)
-    )
-
-    events = await _run_harness(model, monkeypatch=monkeypatch)
-
-    usage = [e for e in events if e.type is AgentEventType.USAGE]
-    assert len(usage) == 1, "a retried run still reports exactly one usage total"
-    # Two requests reached the provider even though one produced no message.
-    assert usage[0].data.request_count >= 2
-
-
-@pytest.mark.asyncio
 async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
     """The safety property the whole design rests on.
 
@@ -349,7 +332,7 @@ async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
         # Second model request — the one that drops the first time it runs.
         if len(attempts) == 2:
             yield "partial"
-            raise httpx.ReadError("connection reset by peer")
+            raise httpx2.ReadError("connection reset by peer")
         yield "done"
 
     monkeypatch.setattr(
@@ -441,12 +424,12 @@ async def test_retrying_stops_at_the_configured_attempt_ceiling(monkeypatch) -> 
         del messages, info
         attempts.append(1)
         yield "x"
-        raise httpx.ReadError("connection reset by peer")
+        raise httpx2.ReadError("connection reset by peer")
 
     monkeypatch.setattr(
         harness_module.agent_settings, "agent_model_stream_max_attempts", 3
     )
-    with pytest.raises(httpx.ReadError):
+    with pytest.raises(httpx2.ReadError):
         await _run_harness(
             FunctionModel(stream_function=always_drops), monkeypatch=monkeypatch
         )
@@ -462,12 +445,12 @@ async def test_retrying_can_be_disabled(monkeypatch) -> None:
         del messages, info
         attempts.append(1)
         yield "x"
-        raise httpx.ReadError("boom")
+        raise httpx2.ReadError("boom")
 
     monkeypatch.setattr(
         harness_module.agent_settings, "agent_model_stream_max_attempts", 1
     )
-    with pytest.raises(httpx.ReadError):
+    with pytest.raises(httpx2.ReadError):
         await _run_harness(
             FunctionModel(stream_function=always_drops), monkeypatch=monkeypatch
         )
@@ -484,34 +467,34 @@ async def test_a_stop_request_wins_over_a_pending_retry(monkeypatch) -> None:
         del messages, info
         attempts.append(1)
         yield "x"
-        raise httpx.ReadError("boom")
+        raise httpx2.ReadError("boom")
 
-    async def stop_now() -> bool:
-        return True
+    async def stop_once_an_attempt_began() -> bool:
+        # Pressed during the first attempt, not before it. A stop already
+        # pressed when the run starts is honoured by the consumer's own poll
+        # (STOP_POLL_SECONDS) -- correctly -- and on a slow runner that poll
+        # beat the driver to its first model call, so the run stopped with
+        # no attempt at all and this test read 0.
+        return bool(attempts)
 
     events = await _run_harness(
         FunctionModel(stream_function=always_drops),
         monkeypatch=monkeypatch,
-        should_stop=stop_now,
+        should_stop=stop_once_an_attempt_began,
     )
 
     assert len(attempts) == 1
     assert events[-1].type is AgentEventType.STOPPED
 
 
-class TestEveryEndingBills:
-    """The provider charges for tokens it produced, however the run ended.
+class TestTheHarnessDoesNotBill:
+    """Billing is the metered model's: one receipt per request it makes.
 
-    Usage used to be reported only when the node loop completed normally. Every
-    other exit skipped it and the run billed zero: the user pressing Stop, a
-    non-retryable provider error, retry exhaustion, and -- the one that is not
-    an edge case at all -- a pausing tool raising to wait for a person. An
-    approval-gated turn billed nothing on every single run that asked for one.
-
-    Ordering is load-bearing and is why these assert on position, not just
-    presence. `RunEventPump` finalizes the run the moment it sees a terminal
-    event and drops everything after it, so a usage event queued afterwards is
-    read by nobody and the run still bills zero.
+    The harness used to also queue a USAGE total ahead of every terminal event,
+    with ordering rules of its own -- and the recorder then discarded it for
+    every protocol this harness can run. A second, dead billing path is one
+    that misleads readers and can only fail, so it is gone; these pin that it
+    stays gone however the run ends.
     """
 
     @staticmethod
@@ -519,7 +502,20 @@ class TestEveryEndingBills:
         return [e for e in events if e.type is AgentEventType.USAGE]
 
     @pytest.mark.asyncio
-    async def test_a_stopped_run_still_bills(self, monkeypatch) -> None:
+    async def test_a_completed_run_reports_no_usage_event(self, monkeypatch) -> None:
+        attempts: list[int] = []
+        events = await _run_harness(
+            FunctionModel(
+                stream_function=_drop_then_succeed("partial ", "answer", attempts)
+            ),
+            monkeypatch=monkeypatch,
+        )
+
+        assert len(attempts) == 2
+        assert self._usage(events) == []
+
+    @pytest.mark.asyncio
+    async def test_a_stopped_run_reports_no_usage_event(self, monkeypatch) -> None:
         async def stop_now() -> bool:
             return True
 
@@ -529,18 +525,11 @@ class TestEveryEndingBills:
             should_stop=stop_now,
         )
 
-        usage = self._usage(events)
-        assert len(usage) == 1, "a stopped run reported no usage at all"
-        terminal = next(
-            i for i, e in enumerate(events) if e.type is AgentEventType.STOPPED
-        )
-        assert events.index(usage[0]) < terminal, (
-            "usage queued after the terminal event is dropped by the pump"
-        )
+        assert events[-1].type is AgentEventType.STOPPED
+        assert self._usage(events) == []
 
     @pytest.mark.asyncio
-    async def test_a_paused_run_still_bills(self, monkeypatch) -> None:
-        """The common case: every single turn that asks for approval."""
+    async def test_a_paused_run_reports_no_usage_event(self, monkeypatch) -> None:
         from pydantic_ai.toolsets import FunctionToolset
 
         from app.modules.agent.tools.tool_errors import AgentInputRequired
@@ -555,16 +544,14 @@ class TestEveryEndingBills:
         )
 
         assert isinstance(exc, AgentInputRequired), "the run should have paused"
-        assert len(self._usage(events)) == 1, (
-            "an approval-gated turn billed zero, which is every run that pauses"
-        )
+        assert self._usage(events) == []
 
     @pytest.mark.asyncio
-    async def test_a_run_that_dies_unretryably_still_bills(self, monkeypatch) -> None:
+    async def test_a_run_that_dies_reports_no_usage_event(self, monkeypatch) -> None:
         events, exc = await _run_harness_until_it_dies(
             FunctionModel(stream_function=_stream_then_fail("partial ")),
             monkeypatch=monkeypatch,
         )
 
         assert isinstance(exc, ValueError), exc
-        assert len(self._usage(events)) == 1, "a failed run billed zero"
+        assert self._usage(events) == []

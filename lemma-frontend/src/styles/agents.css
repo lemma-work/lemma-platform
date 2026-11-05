@@ -249,6 +249,8 @@
    they look alike says nothing about how the agent is called. */
 .agents-line code[data-required] { color: var(--accent); background: var(--accent-soft); }
 .agents-dim { font-size: 12px; color: var(--ink-3); line-height: 1.5; margin: 0; }
+/* Two small settings side by side, one above the other on a phone. */
+.agents-generation { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 
 .agent-grants { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
 .agent-grants li { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; font-size: 12.5px; }

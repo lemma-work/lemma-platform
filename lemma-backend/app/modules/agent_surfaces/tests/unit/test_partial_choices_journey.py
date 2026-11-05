@@ -24,19 +24,22 @@ import pytest
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    TELEGRAM_CALLBACK_TOKENS,
+    surface_caches,
+)
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.platforms.telegram import callback_token_store
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
     maybe_resume_pending_interaction,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    AnsweredAt,
     _delivering_adapter,
     _pending,
     _slack_surface,
@@ -77,10 +80,8 @@ def callback_tokens():
         redis_url=settings.redis_url, key_prefix="test:cb-journey", ttl_seconds=60
     )
     cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    previous = callback_token_store._token_store
-    callback_token_store._token_store = cache
-    yield cache
-    callback_token_store._token_store = previous
+    with surface_caches.substituted(TELEGRAM_CALLBACK_TOKENS, cache):
+        yield cache
 
 
 @pytest.fixture
@@ -118,7 +119,7 @@ async def _waiting_conversation(adapter, platform: SurfacePlatform, event):
     """An egress whose conversation is paused on the two questions."""
     conversation_id = uuid4()
     surface = _slack_surface().model_copy(update={"surface_type": platform})
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform=platform.value,
@@ -127,10 +128,7 @@ async def _waiting_conversation(adapter, platform: SurfacePlatform, event):
         external_user_id="user-1",
         last_event=event.model_dump(mode="json"),
     )
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     pending = _pending("ask_user", tool_call_id=TOOL_CALL_ID, tool_args=QUESTIONS)
     agent_conversations.pending_question.return_value = pending
     agent_conversations.pending_interaction.return_value = pending

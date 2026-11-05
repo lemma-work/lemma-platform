@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
 )

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.config import reveal_secret
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -119,7 +120,9 @@ async def deployment_owns_whatsapp_number(phone_number_id: str) -> bool:
     Fails **closed**, unlike `global_whatsapp_configuration`, and the asymmetry
     is deliberate: that one improves an answer settings can already give, while
     this one decides whether to act on a message. An unreadable pool must not
-    turn into "sure, we own that".
+    turn into "sure, we own that" -- nor, when the database is unavailable,
+    into "not ours": that is raised, so the caller retries instead of dropping
+    the code.
     """
     if not phone_number_id:
         return False
@@ -130,7 +133,8 @@ async def deployment_owns_whatsapp_number(phone_number_id: str) -> bool:
             found = await WhatsAppNumberRepository(
                 SqlAlchemyUnitOfWork(session)
             ).get_by_phone_number_id(phone_number_id)
-    except SQLAlchemyError:
+    except (SQLAlchemyError, OSError) as exc:
+        raise_if_database_unavailable(exc)
         logger.warning(
             "agent_surfaces.whatsapp_contract.number_ownership_unreadable.degraded",
             exc_info=True,
@@ -154,8 +158,10 @@ async def _shared_row() -> WhatsAppNumberEntity | None:
             return await WhatsAppNumberRepository(
                 SqlAlchemyUnitOfWork(session)
             ).oldest_available_number()
-    except SQLAlchemyError:
+    except SQLAlchemyError, OSError:
         # The database, specifically -- unreachable, or a migration not yet run.
+        # `OSError` because a refused or timed-out connection can surface from
+        # the driver unwrapped, before SQLAlchemy has a DBAPI error to wrap.
         # Not `Exception`: a `TypeError` here is a bug in this resolver, and
         # swallowing it would turn a broken fallback into a silently
         # settings-only deployment that nobody notices until the pool is the

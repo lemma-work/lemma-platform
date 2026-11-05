@@ -8,12 +8,15 @@ import {
     disconnectClient,
     verifiedHost,
     fetchMcpUrl,
+    listeningLine,
+    listeningStatus,
     loadConnections,
     quote,
     reachableFromInternet,
     serverName,
     serverSteps,
     setupCommands,
+    setListening,
     setupPrompt,
     starterPrompts,
 } from "../src/space/agent-access-model.ts";
@@ -103,6 +106,43 @@ test("the Claude Code command names the space and passes the URL whole", () => {
 test("what a connection may do is said in plain words", () => {
     assert.equal(accessLabel(["pod:read", "pod:write"]), "Read and write");
     assert.equal(accessLabel(["pod:read"]), "Read only");
+    assert.equal(accessLabel(["pod:read", "pod:events"]), "Read only, told about new rows");
+});
+
+test("a subscription says what it is told about and how it stands", () => {
+    const base = { id: "sub_1", name: "record.created", arguments: { table: "leads" }, last_delivery_at: null, last_error: null };
+    const ago = () => "5m ago";
+    assert.equal(listeningLine(base), "New rows in leads");
+    assert.equal(listeningStatus(base, ago), "nothing sent yet");
+    assert.equal(listeningStatus({ ...base, last_delivery_at: "2026-10-09T10:00:00Z" }, ago), "last sent 5m ago");
+    assert.equal(listeningStatus({ ...base, last_error: "http_500" }, ago), "last delivery failed");
+    assert.match(listeningStatus({ ...base, paused_at: "2026-10-09T10:00:00Z" }, ago), /^paused/);
+    assert.match(
+        listeningStatus({ ...base, stopped_at: "2026-10-09T10:00:00Z", paused_at: "2026-10-09T10:00:00Z" }, ago),
+        /^stopped 5m ago; the app is refused until you resume it/,
+        "a person's Stop is what they need to see, over a pause",
+    );
+});
+
+test("stop and resume reach the right endpoint, and a 404 is said", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    let status = 204;
+    const fetcher = (async (url: string, init: RequestInit) => {
+        calls.push({ url, method: String(init.method) });
+        return new Response(null, { status });
+    }) as unknown as typeof fetch;
+
+    await setListening("https://api.test", "g/1", "sub_1", false, fetcher);
+    await setListening("https://api.test", "g/1", "sub_1", true, fetcher);
+    assert.deepEqual(calls, [
+        { url: "https://api.test/oauth/grants/g%2F1/subscriptions/sub_1", method: "DELETE" },
+        { url: "https://api.test/oauth/grants/g%2F1/subscriptions/sub_1/resume", method: "POST" },
+    ]);
+
+    status = 404;
+    await assert.rejects(setListening("https://api.test", "g", "sub_1", false, fetcher), /not yours to change/);
+    status = 500;
+    await assert.rejects(setListening("https://api.test", "g", "sub_1", true, fetcher), /could not be resumed \(500\)/);
 });
 
 test("disconnecting something already gone is not an error", async () => {

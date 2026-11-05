@@ -23,7 +23,7 @@ import {
     TreeIcon,
 } from "@/ui/icons";
 import { Mark } from "@/shell/mark";
-import { source } from "@/data";
+import { connectLinkLabel, source } from "@/data";
 import { live } from "@/usage/queries";
 import { Modal } from "@/shell/modal";
 import { SignInPane } from "@/computer/sign-in-pane";
@@ -31,7 +31,10 @@ import { requestSignIn } from "@/computer/sign-in-bridge";
 import { openSettings } from "@/desktop/open-settings";
 import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
+import { writeAddress } from "@/shell/address";
+import { PlaceLink } from "@/shell/place-link";
 import {
+    askCardView,
     restLength,
     waitEnding,
     type BrowserStep,
@@ -43,6 +46,7 @@ import {
     type SignInAsk,
     type SourceList,
     type SubTask,
+    type TeammateAsk,
     type TerminalRun,
     type ToolCard,
     type WaitFor,
@@ -59,6 +63,31 @@ import {
  *  Closed is the default everywhere the content can be long. A run that greps
  *  a repository forty times is normal, and forty open terminal blocks is not a
  *  transcript any more. */
+
+/** A path or an argument value, on one line.
+ *
+ *  These are the two strings in a card that have no length bound: an absolute
+ *  path in a working directory nobody chose, and a connector's argument, which
+ *  is often a whole JSON body. Wrapped, one of them made a card twenty lines
+ *  tall with the thing that mattered somewhere in the middle of it; unbounded,
+ *  it pushed the card past the reply it belongs to. So: one line, cut with an
+ *  ellipsis, and the whole of it on a click for the reader who needs it. */
+function Clipped({ text, className = "toolcard__where" }: { text: string; className?: string }) {
+    const [open, setOpen] = useState(false);
+    if (!text) return null;
+    return (
+        <button
+            type="button"
+            className={className + " toolcard__clip"}
+            data-open={open ? "" : undefined}
+            title={open ? "Click to shorten" : text}
+            aria-expanded={open}
+            onClick={() => setOpen((was) => !was)}
+        >
+            {text}
+        </button>
+    );
+}
 
 /** The status on the right of a head. `tone` is only ever set on something a
  *  reader would want to find by scanning: a failure, or a wait. */
@@ -218,7 +247,7 @@ function BrowserCard({ step }: { step: BrowserStep }) {
                         </p>
                     )}
                     {step.title && <p className="toolcard__note">{step.title}</p>}
-                    {step.awaited && <p className="toolcard__where">waited for {step.awaited}</p>}
+                    {step.awaited && <Clipped text={"waited for " + step.awaited} />}
                     {/* A redirect, named. A snapshot of a login page when the
                         call asked for a dashboard is the most confusing result
                         this tool produces, and the payload can prove it. */}
@@ -423,7 +452,7 @@ function ImageCard({
                         and what somebody wanted from it is not. */}
                     {look.asked && <p className="toolcard__note">Looking for: {look.asked}</p>}
                     {look.error && <p className="toolcard__note" data-tone="bad">{look.error}</p>}
-                    <p className="toolcard__where">{[STORE_WORD[look.store], look.path].filter(Boolean).join(" · ")}</p>
+                    <Clipped text={[STORE_WORD[look.store], look.path].filter(Boolean).join(" · ")} />
                     {/* The picture in words, when the run's own model could not
                         see it and a vision model answered on its behalf. */}
                     {look.described && <p className="toolcard__note">{look.described}</p>}
@@ -489,7 +518,7 @@ function TerminalCard({ run }: { run: TerminalRun }) {
             {open && (
                 <div className="toolcard__body">
                     {run.comment && <p className="toolcard__note">{run.comment}</p>}
-                    {run.workdir && <p className="toolcard__where">in {run.workdir}</p>}
+                    {run.workdir && <Clipped text={"in " + run.workdir} />}
                     {run.output && <pre className="toolcard__out">{run.output}</pre>}
                     {run.errorOutput && <pre className="toolcard__out" data-stream="err">{run.errorOutput}</pre>}
                     {/* The last expression's value, which `execute_python`
@@ -623,7 +652,7 @@ function ReadCard({ read }: { read: FileRead }) {
             />
             {open && (
                 <div className="toolcard__body">
-                    <p className="toolcard__where">{read.path}</p>
+                    <Clipped text={read.path} />
                     {read.error && <p className="toolcard__note" data-tone="bad">{read.error}</p>}
                     {read.content && <pre className="toolcard__out">{read.content}</pre>}
                     {!read.content && !read.pending && !read.failed && <p className="toolcard__note">It was empty.</p>}
@@ -677,13 +706,12 @@ function ChangeCard({ change }: { change: FileChange }) {
             {more && open && (
                 <div className="toolcard__body">
                     {change.error && <p className="toolcard__note" data-tone="bad">{change.error}</p>}
-                    {change.destination && <p className="toolcard__where">{change.path} → {change.destination}</p>}
+                    {change.destination && <Clipped text={change.path + " → " + change.destination} />}
                     {change.files.map((file) => (
                         <div key={file.path} className="toolcard__file">
-                            <p className="toolcard__where">
-                                {file.path}
-                                {file.change === "add" ? " · new" : file.change === "delete" ? " · removed" : ""}
-                            </p>
+                            <Clipped
+                                text={file.path + (file.change === "add" ? " · new" : file.change === "delete" ? " · removed" : "")}
+                            />
                             {file.lines.length > 0 && (
                                 <pre className="toolcard__out toolcard__diff">
                                     {file.lines.map((line, index) =>
@@ -780,6 +808,47 @@ function TaskCard({ task }: { task: SubTask }) {
     );
 }
 
+/* ── a request put to another teammate ───────────────────────────────── */
+
+/** Ask cards stay readable once the turn is over: the request and what came
+ *  back, and -- when it was asked as the person -- the way into the other side
+ *  of it, which is a conversation of theirs in that teammate's space. Over a
+ *  connection that conversation is not theirs to open, so there is no link. */
+function AskCard({ ask }: { ask: TeammateAsk }) {
+    const [open, setOpen] = useState(false);
+    const view = askCardView(ask);
+    return (
+        <section className="toolcard toolcard--task">
+            <Head
+                icon={<AgentIcon size={14} />}
+                what={"Asked " + ask.teammate}
+                status={view.status}
+                tone={view.tone}
+                open={open}
+                onToggle={() => setOpen((was) => !was)}
+            />
+            {open && (
+                <div className="toolcard__body">
+                    <p className="toolcard__note">{ask.request}</p>
+                    {ask.error && <p className="toolcard__note" data-tone="bad">{ask.error}</p>}
+                    {ask.answer && <pre className="toolcard__out" data-stream="value">{ask.answer}</pre>}
+                    {view.line && <p className="toolcard__note">{view.line}</p>}
+                    {view.linkable && (
+                        <p className="toolcard__note">
+                            <PlaceLink
+                                className="linkish"
+                                href={writeAddress({ podId: ask.podId, tabId: "conversation", conversationId: ask.conversationId, agentName: null })}
+                            >
+                                Open {ask.teammate}&rsquo;s conversation
+                            </PlaceLink>
+                        </p>
+                    )}
+                </div>
+            )}
+        </section>
+    );
+}
+
 /* ── one call out to a connected account ─────────────────────────────── */
 
 function ConnectorCard({ run }: { run: ConnectorRun }) {
@@ -803,12 +872,16 @@ function ConnectorCard({ run }: { run: ConnectorRun }) {
                     {/* Said again, because the head drops it on a narrow
                         screen and the operation is the thing that was run. */}
                     <p className="toolcard__where">{run.operation}</p>
-                    {run.account && <p className="toolcard__where">as account {run.account}</p>}
                     {run.error && <p className="toolcard__note" data-tone={run.failed ? "bad" : undefined}>{run.error}</p>}
-                    {/* A failed call is most often an account that needs
-                        connecting again, and Connectors was somewhere nobody
-                        could find from here. */}
-                    {run.failed && (
+                    {/* The connector said where its account is connected:
+                        that link is the fix, and it is the reader's own. */}
+                    {run.failed && run.connectUrl && (
+                        <a className="linkish toolcard__where" href={run.connectUrl}>{connectLinkLabel(run.code)}</a>
+                    )}
+                    {/* Otherwise a failed call is most often an account that
+                        needs connecting again, and Connectors was somewhere
+                        nobody could find from here. */}
+                    {run.failed && !run.connectUrl && (
                         <button type="button" className="linkish toolcard__where" onClick={() => openSettings("connectors")}>
                             Check {run.connector} in Connectors
                         </button>
@@ -818,7 +891,7 @@ function ConnectorCard({ run }: { run: ConnectorRun }) {
                             {run.params.map((param) => (
                                 <div key={param.name}>
                                     <dt>{param.name}</dt>
-                                    <dd>{param.value}</dd>
+                                    <dd><Clipped text={param.value} className="toolcard__argvalue" /></dd>
                                 </div>
                             ))}
                         </dl>
@@ -826,7 +899,7 @@ function ConnectorCard({ run }: { run: ConnectorRun }) {
                     {/* The provider's own payload, which is arbitrary JSON and
                         is described rather than printed. */}
                     {run.summary && <p className="toolcard__note">Came back with {run.summary}.</p>}
-                    {run.savedTo && <p className="toolcard__where">saved to {run.savedTo}</p>}
+                    {run.savedTo && <Clipped text={"saved to " + run.savedTo} />}
                 </div>
             )}
         </section>
@@ -1019,5 +1092,7 @@ export function ToolCardView({
             return <SearchCard search={card} />;
         case "task":
             return <TaskCard task={card} />;
+        case "ask":
+            return <AskCard ask={card} />;
     }
 }

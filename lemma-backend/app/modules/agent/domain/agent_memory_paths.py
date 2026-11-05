@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from app.core.helpers.slug import slugify
 from app.modules.agent.domain.entities import Agent
+from app.modules.agent.domain.run_origin import RunOriginName
 from app.modules.agent.domain.value_objects import AgentToolset
 
 _POD_INDEX = "/memory/AGENTS.md"
@@ -91,3 +92,36 @@ def memory_is_active(toolsets: Collection[AgentToolset]) -> bool:
     if AgentToolset.MEMORY not in toolsets:
         return False
     return any(toolset in _FILE_TOOLSETS for toolset in toolsets)
+
+
+#: Origins whose turns a person is waiting on: typed in Lemma, or arrived on a
+#: surface. A schedule, workflow, trigger or sub-agent turn has nobody waiting.
+_ATTENDED_ORIGINS: frozenset[RunOriginName] = frozenset({"chat", "surface"})
+
+
+def memory_kept_after_turn(
+    *,
+    memory_enabled: bool,
+    in_process: bool,
+    answers_outsiders: bool,
+    origin: RunOriginName,
+) -> bool:
+    """Whether a run leaves its memory to a pass after it ends.
+
+    Saving in the turn means reading and writing memory files before the
+    answer, two or more model calls a person sits through for a fact they only
+    mentioned. Such a run is told to write memory only when asked, and the
+    pass (``events/memory_pass_work``) keeps the rest once the answer is out.
+
+    Only where somebody is waiting: an unattended run loses nothing by saving
+    as it goes, and knows its own work better than a pass reading it back. Only
+    in process: the pass runs on the run's own model, which an Agent Host
+    coding agent does not give Lemma. Never for outsiders, whose words are not
+    written with a member's authority by anyone.
+    """
+    return (
+        memory_enabled
+        and in_process
+        and not answers_outsiders
+        and origin in _ATTENDED_ORIGINS
+    )

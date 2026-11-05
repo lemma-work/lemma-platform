@@ -1,0 +1,42 @@
+<!--
+widget: show/image
+description: One image from an https URL, with a title and a caption; says so in place when the image cannot load.
+connector: none
+kind: view
+operations: none
+data: { title?, caption?, url }
+version: 1
+-->
+<script type="application/json" data-lemma-sample>
+{
+  "title": "A sample image",
+  "caption": "Any https image a person should see",
+  "url": "https://picsum.photos/seed/lemma/640/360"
+}
+</script>
+<style>
+  .si__title { margin: 0; font-size: 19px; line-height: 1.25; }
+  .si__caption { margin: 4px 0 0; font-size: 13.5px; color: var(--w-ink-2, #555); }
+  .si__body { margin-top: 12px; }
+  .si__body img { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto; border-radius: var(--w-r-md, 8px); }
+</style>
+<section class="w" data-lemma-widget-version="1">
+  <div class="w-card">
+    <h2 class="si__title" id="si-title"></h2>
+    <p class="si__caption" id="si-caption" hidden></p>
+    <div class="si__body" id="si-body"></div>
+  </div>
+</section>
+<script>
+  (function () {
+    var d = lemma.data || {};
+    document.getElementById("si-title").textContent = d.title || "";
+    if (d.caption) { var c = document.getElementById("si-caption"); c.textContent = d.caption; c.hidden = false; }
+    if (!/^https:\/\//.test(d.url || "")) { lemma.fail("An image needs an https URL.", "si-body"); return; }
+    var img = document.createElement("img");
+    img.alt = d.caption || d.title || "";
+    img.onerror = function () { lemma.fail("The image did not load from " + d.url, "si-body"); };
+    img.src = d.url;
+    document.getElementById("si-body").appendChild(img);
+  })();
+</script>

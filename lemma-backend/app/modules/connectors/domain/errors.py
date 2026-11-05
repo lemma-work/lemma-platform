@@ -1,5 +1,7 @@
 """Connector module domain/connector errors."""
 
+from collections.abc import Mapping
+
 from app.core.domain.errors import DomainError
 from app.core.redaction import redact_value
 
@@ -31,9 +33,43 @@ def _safe_connector_details(details: object | None) -> dict | None:
             "connector_id",
             "operation_name",
             "retry_after",
+            # The MCP server's host, never its URL: enough to tell which server
+            # failed, without the path or query a tenant may have put a secret
+            # in.
+            "server_host",
         }
     }
     return redact_value(allowed) if allowed else None
+
+
+# The message is a sentence someone reads; the whole explanation, bounded more
+# generously, stays in `details["upstream_message"]`. A provider's 403 is
+# sometimes an entire firewall page.
+_PROVIDER_REASON_LIMIT = 500
+
+
+def _with_provider_reason(
+    sentence: str, safe_details: Mapping[str, object] | None
+) -> str:
+    """The class's own sentence, then the provider's reason when it gave one.
+
+    For the errors that are a provider's answer to the caller. The agent's
+    connector tool hands the model `str(exc)` and nothing else, so with the
+    reason only in the details an agent told "Connector provider refused the
+    operation." could not see GitHub's "Required status check is failing", and
+    had nothing to correct or report. An outage does not get this: its text is
+    a gateway's error page, and the right response is the same whatever it says.
+
+    Reads the details after `_safe_connector_details` has scrubbed them, so the
+    message quotes nothing the details do not already show.
+    """
+    reason = (safe_details or {}).get("upstream_message")
+    if not isinstance(reason, str) or not reason.strip():
+        return sentence
+    reason = reason.strip()
+    if len(reason) > _PROVIDER_REASON_LIMIT:
+        reason = reason[:_PROVIDER_REASON_LIMIT] + "…"
+    return f"{sentence} The provider said: {reason}"
 
 
 class ConnectorDomainError(DomainError):
@@ -134,6 +170,36 @@ class ConnectorNotFoundError(_ConnectorNotFoundBase):
         self.code = "CONNECTOR_NOT_FOUND"
 
 
+class ConnectorNotInstalledError(_ConnectorNotFoundBase):
+    """A connector the catalog has, and this organization has not installed.
+
+    Said apart from ``ConnectorNotFoundError``: "Connector 'gmail' not found"
+    told a person, and an agent, that Gmail does not exist, when what was
+    missing was the organization's install of it -- and who can add one.
+    """
+
+    def __init__(self, connector_id: str, *, title: str | None = None, reason: str):
+        name = title or connector_id
+        super().__init__(
+            f"{name} is not installed in this organization yet. An organization "
+            "owner or editor adds it: organization menu -> Connectors -> "
+            f"Available -> {name} -> Connect.",
+            details={"connector_id": connector_id, "reason": reason},
+        )
+        self.code = "CONNECTOR_NOT_INSTALLED"
+
+
+class InstallationNotFoundError(_ConnectorNotFoundBase):
+    """No installation in this organization goes by the name a caller used."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            f"This organization has no connector installation named '{name}'.",
+            details={"installation": name, "reason": "installation_not_found"},
+        )
+        self.code = "INSTALLATION_NOT_FOUND"
+
+
 class ConnectorTriggerNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, trigger_id: str):
         _ConnectorNotFoundBase.__init__(self, f"Trigger '{trigger_id}' not found")
@@ -214,6 +280,35 @@ class ConnectRequestIdentityMismatchError(ConnectorValidationError):
         self.code = "CONNECT_REQUEST_IDENTITY_MISMATCH"
 
 
+class ConnectRequestBrowserMismatchError(ConnectorDomainError):
+    """The browser finishing a connect is not the person who started it.
+
+    The callback used to complete on ``state`` alone. Mallory could mint a
+    connect link and send it to Alice; Alice's consent landed her mailbox on
+    Mallory's Lemma account (audit H2). So the person signed in to the
+    returning browser must be the one the request was made for -- and a
+    browser signed in to nobody is refused too, since it proves nothing.
+    """
+
+    def __init__(self, *, signed_in: bool) -> None:
+        super().__init__(
+            message=(
+                "This connection link was started for a different Lemma account "
+                "than the one signed in here. Nothing was connected. Start the "
+                "connection again from your own account."
+                if signed_in
+                else "Sign in to Lemma in this browser, then open the connection "
+                "link again. Nothing was connected."
+            ),
+            code=(
+                "CONNECT_REQUEST_BROWSER_MISMATCH"
+                if signed_in
+                else "CONNECT_REQUEST_SIGN_IN_REQUIRED"
+            ),
+            status_code=403 if signed_in else 401,
+        )
+
+
 class OAuthWorkflowError(ConnectorValidationError):
     def __init__(self, message: str, details: object | None = None):
         ConnectorDomainError.__init__(
@@ -272,26 +367,6 @@ class ConnectorReauthRequiredError(ConnectorDomainError):
         self.reason = reason
 
 
-class PodConnectorNotFoundError(_ConnectorNotFoundBase):
-    def __init__(self, alias: str):
-        super().__init__(f"Pod connector '{alias}' not found")
-        self.code = "POD_CONNECTOR_NOT_FOUND"
-
-
-class PodConnectorConflictError(ConnectorConflictError):
-    def __init__(self, alias: str):
-        super().__init__(
-            f"Connector with alias '{alias}' is already installed in this pod"
-        )
-        self.code = "POD_CONNECTOR_CONFLICT"
-
-
-class PodAccountNotFoundError(_ConnectorNotFoundBase):
-    def __init__(self):
-        super().__init__("Account not found or access denied")
-        self.code = "POD_ACCOUNT_NOT_FOUND"
-
-
 class OperationNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, operation_name: str):
         super().__init__(f"Operation '{operation_name}' not found")
@@ -330,17 +405,77 @@ class OperationExecutionTimeoutError(OperationExecutionError):
         )
 
 
-class OperationExecutionValidationError(OperationExecutionError):
-    def __init__(self, message: str, details: object | None = None):
+class _ProviderAnswerError(OperationExecutionError):
+    """Base for a failure the provider chose to report: a 4xx, not an outage.
+
+    The class writes the message, as every execution error does -- the text a
+    gateway hands in may carry request bodies or credentials -- but quotes the
+    provider's reason from the scrubbed details when there is one.
+    """
+
+    def __init__(
+        self, *, sentence: str, code: str, status_code: int, details: object | None
+    ):
+        safe_details = _safe_connector_details(details)
         super().__init__(
-            message="Connector rejected the operation request.",
-            code="OPERATION_EXECUTION_VALIDATION_ERROR",
-            status_code=422,
-            details=_safe_connector_details(details),
+            message=_with_provider_reason(sentence, safe_details),
+            code=code,
+            status_code=status_code,
+            details=safe_details,
         )
 
 
-class OperationExecutionRateLimitedError(OperationExecutionError):
+class OperationExecutionValidationError(_ProviderAnswerError):
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            sentence="Connector rejected the operation request.",
+            code="OPERATION_EXECUTION_VALIDATION_ERROR",
+            status_code=422,
+            details=details,
+        )
+
+
+class OperationExecutionConflictError(_ProviderAnswerError):
+    """The provider refused because the resource is no longer as the caller saw it.
+
+    GitHub answers a merge whose head moved after it was read with 409 "Head
+    branch was modified". Sending the same request again cannot succeed;
+    reading the resource again and deciding afresh can, which is a different
+    instruction from both "fix your arguments" and "try later".
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            sentence="Connector provider refused the operation because the "
+            "resource changed or is in a conflicting state.",
+            code="OPERATION_EXECUTION_CONFLICT",
+            status_code=409,
+            details=details,
+        )
+
+
+class OperationExecutionRejectedError(_ProviderAnswerError):
+    """The provider understood the request and refused it, for its own reason.
+
+    Every 4xx with no class of its own: GitHub's 405 when branch rules block a
+    merge, a 410 for something deleted, a 413, a 451. Each is a deliberate
+    answer from a provider that is up, so none of them is Lemma's 500 or an
+    outage the breaker should count. 400 rather than 422 because nothing says
+    the arguments were wrong, and because a 422 is read elsewhere as a
+    specific answer -- a rejected fast-forward, in the pod bundle publisher.
+    The reason is the provider's, in the message.
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            sentence="Connector provider refused the operation.",
+            code="OPERATION_EXECUTION_REJECTED",
+            status_code=400,
+            details=details,
+        )
+
+
+class OperationExecutionRateLimitedError(_ProviderAnswerError):
     """The provider asked the caller to slow down.
 
     Deliberately not an infrastructure error, even though it is transient: the
@@ -352,40 +487,52 @@ class OperationExecutionRateLimitedError(OperationExecutionError):
 
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message="Connector provider is rate limiting these requests.",
+            sentence="Connector provider is rate limiting these requests.",
             code="OPERATION_EXECUTION_RATE_LIMITED",
             status_code=429,
-            details=_safe_connector_details(details),
+            details=details,
         )
 
 
-class OperationExecutionUnauthorizedError(OperationExecutionError):
+class OperationExecutionUnauthorizedError(_ProviderAnswerError):
+    """The provider refused the connected account's credential.
+
+    424, not the provider's 401. Every client of this API reads a 401 as the
+    caller's own Lemma session ending: the browser's session interceptor
+    refreshes and resends the request, the SDKs and the CLI refresh and run it
+    again, and a pod app signs its user out. So a wrong third-party API key
+    executed the operation several more times and then sent somebody who was
+    signed in to the sign-in page. The request did fail because something it
+    depended on failed, which is what 424 says; the provider's own status stays
+    in ``details["upstream_status"]``.
+    """
+
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message="Connector account authorization failed.",
+            sentence="Connector account authorization failed.",
             code="OPERATION_EXECUTION_UNAUTHORIZED",
-            status_code=401,
-            details=_safe_connector_details(details),
+            status_code=424,
+            details=details,
         )
 
 
-class OperationExecutionAccessDeniedError(OperationExecutionError):
+class OperationExecutionAccessDeniedError(_ProviderAnswerError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message="Connector operation access denied.",
+            sentence="Connector operation access denied.",
             code="OPERATION_EXECUTION_ACCESS_DENIED",
             status_code=403,
-            details=_safe_connector_details(details),
+            details=details,
         )
 
 
-class OperationExecutionNotFoundError(OperationExecutionError):
+class OperationExecutionNotFoundError(_ProviderAnswerError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
-            message="Connector operation was not found by the provider.",
+            sentence="Connector operation was not found by the provider.",
             code="OPERATION_EXECUTION_NOT_FOUND",
             status_code=404,
-            details=_safe_connector_details(details),
+            details=details,
         )
 
 

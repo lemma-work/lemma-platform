@@ -50,6 +50,13 @@ async def next_event_or_stop(
             if done:
                 return getter.result()
             if await stop_requested():
+                # The stop check can suspend on a read, and the driver may
+                # have queued an event meanwhile -- which the getter has
+                # already taken off the queue. Returning the stop then would
+                # drop it, and a dropped tool return is closed as "stopped
+                # before it returned" for a tool that really ran.
+                if getter.done():
+                    return getter.result()
                 return STOP_WHILE_BUSY
     finally:
         if not getter.done():

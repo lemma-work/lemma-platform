@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any
 from uuid import UUID
 from app.core.domain.events import DomainEvent
@@ -8,10 +7,8 @@ from app.modules.schedule.domain.schedule import ScheduleType
 class ScheduleEvent(DomainEvent):
     """Base for every event on the ``schedule_events`` stream.
 
-    ``user_id`` is declared per event rather than here. Lifecycle events always
-    know the schedule owner, but ``ScheduleFired`` has one case that genuinely
-    cannot — see its docstring — and promising it on the base only to weaken it
-    in a subclass would make the base contract a lie.
+    ``user_id`` is declared per event rather than here, so an event that may
+    not know the owner can say so without weakening the base contract.
     """
 
     schedule_id: UUID
@@ -82,32 +79,6 @@ class ScheduleDeactivated(ScheduleLifecycleEvent):
     reason: str = "consecutive_failures"
 
 
-class ScheduleFired(ScheduleEvent):
-    """Event emitted when any schedule source fires.
-
-    Unified event for all schedule source types (TIME, WEBHOOK, DATASTORE).
-    ``user_id`` is the single owner of the resulting schedule/target run: the
-    row owner for RLS datastore events, otherwise the schedule owner.
-
-    It is optional for exactly one case: a workflow wait timer persisted before
-    ownership existed. Those fires carry ``payload.workflow_run_id``, and the
-    run row is the authoritative owner, so nothing has to be synthesized. A
-    fire that starts a *schedule* run still fails closed without an owner —
-    see ``ScheduleStartService``.
-    """
-
-    event_type: str = "schedule.fired"
-    user_id: UUID | None = None
-    payload: dict[str, Any]
-    source_event_id: str
-    metadata: dict[str, Any] | None = None
-    # Additional context for richer processing
-    account_id: UUID | None = None  # For WEBHOOK schedules
-    pod_id: UUID | None = None  # For pod-scoped table/file schedules
-    scheduled_at: datetime | None = None  # For TIME schedules
-    llm_output: dict[str, Any] | None = None  # For filtered events
-
-
 class ScheduleEvents:
     STREAM = "schedule_events"
     # Grouped consumers of this stream. Declared here (not just discovered via the
@@ -116,8 +87,4 @@ class ScheduleEvents:
     # even though it never imports the consuming subscribers. Keeps a fired event
     # from being dropped when a consumer's group was lost (flush/failover) and is
     # otherwise only recreated later at "$".
-    CONSUMER_GROUPS = (
-        "workflow-schedule-events",
-        "schedule-notifications",
-        "schedule-runtime-lifecycle",
-    )
+    CONSUMER_GROUPS = ("workflow-schedule-events",)

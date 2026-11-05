@@ -367,3 +367,11 @@
     gap: 8px;
     cursor: pointer;
 }
+/* A separate yes beside it: being told about new rows is not a kind of reading. */
+.auth__choice {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 12px 0 4px;
+    cursor: pointer;
+}

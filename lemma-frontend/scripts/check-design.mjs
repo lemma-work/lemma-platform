@@ -28,7 +28,14 @@ const ALLOWED = [
     {
         file: "shell.css",
         line: /font-weight: 700;/,
-        reason: "the badge wordmark, stamped rather than set — the one documented exception, scoped to .idcard__name",
+        selector: /\.idcard__name/,
+        reason: "the badge wordmark, stamped rather than set — one of the two documented weight exceptions, scoped to .idcard__name",
+    },
+    {
+        file: "space.css",
+        line: /font-weight: 700;/,
+        selector: /\.md (?:strong|b)/,
+        reason: "bold in a page's prose — a document reads at 16px, where a bold at the 500 cap is one step above its own body and disappears into it",
     },
     {
         file: "shell.css",
@@ -71,14 +78,35 @@ function withoutComments(text) {
 const offences = [];
 const used = new Set();
 
-function allowed(file, line) {
+function allowed(file, line, selector) {
     for (const [index, rule] of ALLOWED.entries()) {
         if (rule.file !== file) continue;
         if (rule.line && !rule.line.test(line)) continue;
+        if (rule.selector && !rule.selector.test(selector)) continue;
         used.add(index);
         return true;
     }
     return false;
+}
+
+/** The selector the line at `index` is declared under, as the lines from the
+ *  one that opens its rule. An allowance that names a value the audit would
+ *  otherwise refuse is granted for one rule, and a reason that names a
+ *  selector is only true if the check reads it: a file-and-value pattern alone
+ *  clears the same value anywhere in a stylesheet of thousands of lines. */
+function selectorAt(lines, index) {
+    let open = -1;
+    for (let i = index; i >= 0; i--) {
+        if (lines[i].includes("{")) { open = i; break; }
+        if (lines[i].includes("}")) break;
+    }
+    if (open < 0) return "";
+    let start = open;
+    for (let i = open - 1; i >= 0; i--) {
+        if (lines[i].includes("{") || lines[i].includes("}")) break;
+        start = i;
+    }
+    return lines.slice(start, open + 1).join("\n").trim();
 }
 
 for (const entry of await readdir(path.join(ROOT, SEARCHED))) {
@@ -87,15 +115,17 @@ for (const entry of await readdir(path.join(ROOT, SEARCHED))) {
     const code = withoutComments(await readFile(path.join(ROOT, relative), "utf8"));
     const palette = PALETTE.has(entry);
 
-    code.split("\n").forEach((line, index) => {
+    const lines = code.split("\n");
+    lines.forEach((line, index) => {
         const at = { file: relative, line: index + 1, text: line.trim().slice(0, 110) };
-        if (HEAVY.test(line) && !allowed(entry, line)) {
+        const selector = selectorAt(lines, index);
+        if (HEAVY.test(line) && !allowed(entry, line, selector)) {
             offences.push({ ...at, note: "font weight above 500 — hierarchy is size and space, never bold" });
         }
         if (palette) return;
-        if (UNPAIRED_INK.test(line) && !allowed(entry, line)) {
+        if (UNPAIRED_INK.test(line) && !allowed(entry, line, selector)) {
             offences.push({ ...at, note: "white ink — a fill takes the ink paired with it: --on-accent, --on-ok, --on-bad, --field-ink" });
-        } else if (COLOUR.test(line) && !allowed(entry, line)) {
+        } else if (COLOUR.test(line) && !allowed(entry, line, selector)) {
             offences.push({ ...at, note: "literal colour — use a token, or add an allowance with a reason in this file" });
         }
     });

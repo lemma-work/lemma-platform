@@ -7,8 +7,8 @@
  *  table-change schedule on a table with row security, which runs as each
  *  row's owner (`datastore_event_handler.py`). There is no "install for me"
  *  on the server; getting a workflow for yourself *is* making your own
- *  schedule for it, with your own connected account where it listens to an
- *  app. That is what "Turn on for me" does.
+ *  schedule for it, listening through one of the pod's connectors where it
+ *  listens to an app. That is what "Turn on for me" does.
  *
  *  Personal schedules are invisible to everyone but their owner, so a list of
  *  who else has turned something on can only ever be partial — this never
@@ -73,8 +73,9 @@ export function turnOnOf(automation: Automation, perPerson: boolean, jobs: Stand
 
 /** The schedule to create. Per person, it is PERSONAL — yours, running as
  *  you; space-wide it is POD, so the space can see it is on. A webhook takes
- *  its trigger from the workflow's own start and only needs your account. */
-export function turnOnRequest(workflow: string, automation: Automation, perPerson: boolean, choice: { cron?: string; timezone?: string; accountId?: string }): Record<string, unknown> | null {
+ *  its trigger from the workflow's own start and only needs the pod connector
+ *  it listens through; whose account that is, the connector decides. */
+export function turnOnRequest(workflow: string, automation: Automation, perPerson: boolean, choice: { cron?: string; timezone?: string; podConnector?: string }): Record<string, unknown> | null {
     const body: Record<string, unknown> = {
         workflow_name: workflow,
         visibility: perPerson && automation.kind !== "rows" ? "PERSONAL" : "POD",
@@ -86,10 +87,10 @@ export function turnOnRequest(workflow: string, automation: Automation, perPerso
             body.config = choice.timezone ? { cron: choice.cron, timezone: choice.timezone } : { cron: choice.cron };
             return body;
         case "event":
-            if (!choice.accountId) return null;
+            if (!choice.podConnector) return null;
             body.schedule_type = "WEBHOOK";
             body.config = {};
-            body.account_id = choice.accountId;
+            body.pod_connector = choice.podConnector;
             return body;
         case "rows":
             body.schedule_type = "DATASTORE";

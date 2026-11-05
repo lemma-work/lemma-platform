@@ -29,10 +29,18 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
     ConversationStatus,
     ConversationType,
+    JsonObject,
     MessageKind,
     MessageRole,
 )
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.run_context_prompt import render_run_context
+from app.modules.agent.infrastructure.agent_host.session_memory import (
+    instructions_digest,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+    json_object,
+)
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
     _exported_tool_names,
     run_start_payload,
@@ -68,11 +76,18 @@ def _conversation() -> Conversation:
     )
 
 
+#: The run the messages below were said in. A message in no run is something
+#: else -- a reminder, another chat folded in -- which a resumed session is
+#: sent too (``test_agent_host_between_turns``).
+EARLIER_RUN = uuid7()
+
+
 def _message(sequence: int, role: str, text: str) -> Message:
     return Message(
         id=uuid7(),
         conversation_id=CONVERSATION_ID,
         sequence=sequence,
+        agent_run_id=EARLIER_RUN,
         role=role,
         kind=MessageKind.TEXT,
         text=text,
@@ -104,11 +119,13 @@ def _ctx() -> BaseAgentContext:
 
 
 def _woke_up(sequence: int, tool_call_id: str) -> Message:
-    """The return the wake synthesizes for the wait it resolved."""
+    """The return the wake synthesizes for the wait it resolved, appended to
+    the run that paused."""
     return Message(
         id=uuid7(),
         conversation_id=CONVERSATION_ID,
         sequence=sequence,
+        agent_run_id=EARLIER_RUN,
         role=MessageRole.TOOL,
         kind=MessageKind.TOOL_RETURN,
         tool_name="wait_for",
@@ -183,6 +200,28 @@ class TestWakingUp:
         prompt = _user_prompt(carries_history=False, resumed_tool_call_id=None)
 
         assert "Friday." in prompt
+
+    async def test_a_resume_carries_its_return_and_what_was_said_meanwhile(self):
+        """A message sent while the pause was open is claimed by the resume run,
+        and both are what the session has not seen: the answer it was waiting
+        on, and the message. Carrying only the message lost the answer."""
+        paused, resume = uuid7(), uuid7()
+        said = _in_run(
+            5,
+            MessageRole.USER,
+            "Also do the patio booking.",
+            paused,
+            {"during_active_run": True, "steered_into_run": str(resume)},
+        )
+        prompt = _user_prompt(
+            carries_history=False,
+            messages=[*_transcript(), said, _woke_up(6, "lemma-mcp-1")],
+            resumed_tool_call_id="lemma-mcp-1",
+            agent_run_id=resume,
+        )
+
+        assert "check the build" in prompt
+        assert "patio booking" in prompt
 
     async def test_a_resume_whose_return_is_gone_falls_back(self):
         """History is trimmed by size, so the message may not have survived.
@@ -277,6 +316,79 @@ class TestCredentials:
         )
 
         assert "runtime_credentials" not in payload
+
+    async def test_the_start_run_spec_carries_no_run_context_at_any_depth(self):
+        """The spec rests in plaintext in the command row and in the host's own
+        journal, on somebody's laptop. It used to carry the whole run context,
+        the agent and the conversation's metadata, none of which the host reads;
+        the check above looked only at the top level of a payload that nested
+        them one level down."""
+        from datetime import datetime, timezone
+
+        from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+            run_spec_from,
+        )
+        from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+            AgentHostRunConfig,
+        )
+
+        ctx = _ctx().model_copy(
+            update={
+                "runtime_credentials": {"api_key": "sk-provider-secret"},
+                "configured_accounts": {"github": uuid7()},
+                "surface_metadata": {"external_user_id": "U-private"},
+            }
+        )
+        conversation = _conversation().model_copy(
+            update={
+                "metadata": {
+                    "surface_metadata": {"external_user_id": "U-private"},
+                    "external_channel_id": "C-private",
+                }
+            }
+        )
+        payload = run_start_payload(
+            agent=_agent(),
+            conversation=conversation,
+            messages=_transcript(),
+            ctx=ctx,
+            agent_run_id=uuid7(),
+            runtime_instructions="",
+            carries_history=False,
+        )
+
+        spec = run_spec_from(
+            payload,
+            conversation=conversation,
+            harness_id=uuid7(),
+            profile_revision="rev-1",
+            run_config=AgentHostRunConfig(
+                harness_id=uuid7(),
+                runtime_profile_id=uuid7(),
+                config_selections={},
+                wait_timeout_seconds=300,
+                model_name=None,
+            ),
+            system_prompt="instructions",
+            system_prompt_delivery=None,
+            resume_session_id=None,
+            run_deadline=datetime.now(timezone.utc),
+        )
+        wire = json.dumps(spec.model_dump(mode="json")) + json.dumps(
+            payload, default=str
+        )
+
+        for leaked in (
+            "runtime_credentials",
+            "sk-provider-secret",
+            "configured_accounts",
+            "surface_metadata",
+            "U-private",
+            "C-private",
+        ):
+            assert leaked not in wire, leaked
+        assert spec.context == {}
+        assert spec.prompt[0]["text"].endswith("Friday.")
 
     async def test_the_host_agent_is_given_the_users_lemma_identity(self):
         """Distinct from the assertion above, and deliberately so.
@@ -756,20 +868,79 @@ class TestTheAgentsOwnCli:
         assert "lemma_cli" not in payload
 
 
+def _with_run_context(*sections: str) -> BaseAgentContext:
+    ctx = _ctx()
+    ctx.run_context = render_run_context(sections=sections)
+    return ctx
+
+
 def test_what_is_owed_rides_in_the_turn_not_the_system_prompt() -> None:
-    """Open notifications change the moment somebody answers, and the system
+    """Open questions change the moment somebody answers, and the system
     prompt is delivered once per provider session -- so they go with the turn,
     ahead of its history."""
     payload = run_start_payload(
         agent=_agent(),
         conversation=_conversation(),
         messages=_transcript(),
-        ctx=_ctx(),
+        ctx=_with_run_context(
+            "## Waiting on this person\nAnswer with `answer_question`."
+        ),
         agent_run_id=uuid7(),
         runtime_instructions="",
         carries_history=True,
-        open_notifications="# Open notifications\nAnswer with `respond_to_notification`.",
     )
     prompt = payload["prompt"]
-    assert "respond_to_notification" in str(prompt["user_prompt"])
-    assert "respond_to_notification" not in str(prompt["system_prompt"])
+    assert "answer_question" in str(prompt["user_prompt"])
+    assert "answer_question" not in str(prompt["system_prompt"])
+
+
+def test_a_task_list_change_does_not_re_deliver_the_instructions() -> None:
+    """The digest decides whether a session is sent the system prompt again,
+    and a resent prompt is another copy of it in the provider's transcript. So
+    nothing that changes turn to turn may be in it: the task list rides in the
+    user prompt, and two turns that differ only there share one digest."""
+
+    def dispatched(todo: str) -> JsonObject:
+        return json_object(
+            run_start_payload(
+                agent=_agent(),
+                conversation=_conversation(),
+                messages=_transcript(),
+                ctx=_with_run_context(f"# Your current task list\n- [ ] {todo}"),
+                agent_run_id=uuid7(),
+                runtime_instructions="",
+                carries_history=False,
+            )["prompt"]
+        )
+
+    before, after = dispatched("Draft the reply"), dispatched("Send the reply")
+
+    assert instructions_digest(str(before["system_prompt"])) == instructions_digest(
+        str(after["system_prompt"])
+    )
+    assert "Send the reply" in str(after["user_prompt"])
+    assert "Send the reply" not in str(after["system_prompt"])
+
+
+def test_a_host_execution_run_is_not_told_it_has_a_vm_home() -> None:
+    """With host execution on, an Agent Host run has no Lemma command tools and
+    works on the person's Mac; the VM workspace contract would contradict the
+    runtime section that says so."""
+    ctx = _ctx()
+    ctx.host_runs_native_commands = True
+    ctx.run_toolsets = [AgentToolset.WORKSPACE_CLI, AgentToolset.TODO]
+
+    system_prompt = str(
+        run_start_payload(
+            agent=_agent(),
+            conversation=_conversation(),
+            messages=_transcript(),
+            ctx=ctx,
+            agent_run_id=uuid7(),
+            runtime_instructions=load_agent_host_runtime_prompt(host_execution=True),
+            carries_history=False,
+        )["prompt"]["system_prompt"]
+    )
+
+    assert "Your whole home directory persists" not in system_prompt
+    assert "Your native tools are the only command and file tools" in system_prompt

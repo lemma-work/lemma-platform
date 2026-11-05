@@ -207,25 +207,25 @@ def test_an_enormous_html_body_is_bounded_before_parsing():
     """The sender chooses the body size, so it cannot choose the parse time.
 
     `html.parser` is pure Python at roughly a megabyte a second, and this runs
-    on the event loop while an inbound message is handled. Asserted as wall
-    clock with a wide margin, because the cost is the wall clock.
-    """
-    import time
+    on the event loop while an inbound message is handled.
 
+    Told by what the parser saw rather than by the clock. A comment spans the
+    cap and a paragraph follows it, so text from that paragraph means the
+    parser read past the cap. The comment yields no text, so cutting the
+    *output* short instead of the input would still let the paragraph through.
+    """
     from app.modules.agent_surfaces.platforms.email_text import (
         _MAX_HTML_CHARS,
         plain_text_from_html,
     )
 
-    # Ten times the cap, in markup the parser has to actually walk.
-    huge = "<p>hello <b>there</b></p>" * ((_MAX_HTML_CHARS * 10) // 25)
+    huge = f"<p>before</p><!--{'x' * _MAX_HTML_CHARS}--><p>after the cap</p>"
 
-    started = time.monotonic()
     text = plain_text_from_html(huge)
-    elapsed = time.monotonic() - started
 
-    assert "hello" in text
-    assert elapsed < 5.0, f"parse was not bounded: took {elapsed:.1f}s"
+    assert text.startswith("before")
+    assert "after the cap" not in text
+    assert "[message truncated" in text
 
 
 def test_an_ordinary_body_is_untouched_by_the_cap():

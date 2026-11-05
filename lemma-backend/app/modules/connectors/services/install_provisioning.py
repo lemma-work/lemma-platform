@@ -13,6 +13,8 @@ checked against anything.
 
 from __future__ import annotations
 
+from app.core.authorization.permissions import Permissions
+
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -22,6 +24,7 @@ from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
+from app.modules.connectors.domain.mcp_events import DiscoveredEvent
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     ConnectorValidationError,
@@ -191,6 +194,8 @@ async def discover_install_operations(
         )
         return DiscoveryOutcome(DiscoveryStatus.FAILED, reason=exc.code)
 
+    events = await _discover_events(auth_config, credentials)
+
     # Names are disambiguated before storage: two tools whose names normalize
     # alike would otherwise collide on the unique index and abort the whole
     # re-discovery.
@@ -211,8 +216,34 @@ async def discover_install_operations(
             for name, op in zip(names, found)
         ],
     )
+    if events is not None:
+        from app.modules.connectors.infrastructure.repositories.mcp_event_repository import (
+            McpEventRepository,
+        )
+
+        await McpEventRepository(uow.session).replace_install_events(
+            auth_config_id=auth_config.id,
+            organization_id=auth_config.organization_id,
+            events=events,
+        )
     await uow.commit()
     return DiscoveryOutcome(DiscoveryStatus.OK, operation_count=len(found))
+
+
+async def _discover_events(
+    auth_config: AuthConfigEntity, credentials: dict[str, object] | None
+) -> list[DiscoveredEvent] | None:
+    """An MCP server's events, beside its tools; None for any other kind, and
+    for a server that could not be reached -- either way the stored ones stay."""
+    if auth_config.kind is not ConnectorKind.MCP:
+        return None
+    from app.modules.connectors.services.discovery.mcp_events_discoverer import (
+        discover_mcp_events,
+    )
+
+    return await discover_mcp_events(
+        connection_config=auth_config.config, credentials=credentials
+    )
 
 
 async def refresh_install_operations(
@@ -230,7 +261,15 @@ async def refresh_install_operations(
     the outcome rather than a count so the endpoint can say which of the three
     things happened; reporting a refused server as `0` made the recovery path
     claim success on the failure it exists to recover from.
+
+    An installation manager's act: refreshing replaces the operation set every
+    member of the org sees (audit M13).
     """
+    await service._require_org_member(
+        user_id=user_id,
+        organization_id=organization_id,
+        permission=Permissions.ORG_INSTALLATION_MANAGE,
+    )
     auth_config = await service.get_auth_config_by_name(
         user_id=user_id,
         organization_id=organization_id,

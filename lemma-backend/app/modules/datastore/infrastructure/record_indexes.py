@@ -21,6 +21,7 @@ from hashlib import blake2b
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -183,7 +184,8 @@ async def ensure_record_index(
             )
             await lock(conn, schema_name)
             await conn.execute(text(index_sql))
-    except DBAPIError:
+    except DBAPIError as exc:
+        raise_if_database_unavailable(exc)
         # Marked ensured anyway. Retrying on every read would turn a
         # permissions or disk problem into an extra statement on the hottest
         # path, and the reads work without it.

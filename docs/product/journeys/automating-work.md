@@ -50,8 +50,8 @@ always reaches a conclusion a person can see.
   function, the system shall allow exactly that and refuse everything else.
 - While a function runs on a person's behalf, the system shall give it no more
   access than that person has, even where its own grants would allow more.
-- If a function performs a destructive act — dropping a table, deleting records
-  in bulk — then the system shall require either a standing grant for that act
+- If a function performs a destructive act — dropping a table, deleting
+  records — then the system shall require either a standing grant for that act
   or a person's approval at the time.
 - When a person changes a function's grants, the system shall apply the change
   to the next run and not to one already in flight.
@@ -218,6 +218,56 @@ always reaches a conclusion a person can see.
 
 
 **Contracts:** `workflow.run.create`, `workflow.run.get`
+
+### PS-FLOW-015 — A workflow can branch on a judgement
+**Status:** covered
+
+- Where a branch depends on reading something rather than on a fact the run
+  already holds, the system shall let a person give that step one closed
+  question about the evidence, and a branch for each answer.
+- When a run reaches such a step, the system shall ask the question and
+  continue down the branch the answer names.
+- When the evidence does not support an answer, the system shall take the branch
+  the person set for an unsure answer.
+- The system shall record on the step what was answered and which branch it
+  took.
+- If a person saves a question with an answer that leads nowhere, then the
+  system shall refuse it and shall say which answer.
+- If the judgement cannot be made, then the system shall not take any branch,
+  and shall fail the run saying why.
+
+**Contracts:** `workflow.graph.update`, `workflow.run.create`, `workflow.run.get`
+
+### PS-FLOW-016 — A failed run can be retried from the step that failed
+**Status:** covered
+
+- When a person retries a run that failed at a step, the system shall run that
+  step again and carry on from it.
+- The system shall not repeat the steps before the one that failed, and shall
+  keep what they produced.
+- The system shall keep the failed attempt in the run's history beside the
+  retry.
+- Where a schedule started the run, when the retried run finishes, the system
+  shall report its new outcome in the schedule's history in place of the
+  failure.
+- If a person retries a run that has not failed, then the system shall refuse.
+- If a run failed at a step that cannot be repeated without asking a person
+  again or paying for an agent's work again, then the system shall refuse to
+  retry it and shall say to start a new run.
+
+**Contracts:** `workflow.run.retry`, `workflow.run.get`, `schedule.run.list`
+
+### PS-FLOW-017 — A workflow can be held to a number of runs at once
+**Status:** covered
+
+- Where a workflow sets how many of its runs may be in progress at once, the
+  system shall hold back a run started past that number rather than refuse it.
+- While a run is held back, the system shall show it as queued, not as failed.
+- When a run in progress finishes, the system shall start the oldest run held
+  back.
+- If a person sets the number below one, then the system shall refuse it.
+
+**Contracts:** `workflow.update`, `workflow.run.create`, `workflow.run.get`
 
 ---
 

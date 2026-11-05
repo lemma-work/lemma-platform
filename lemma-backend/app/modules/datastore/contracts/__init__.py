@@ -2,6 +2,10 @@
 
 from app.modules.datastore.api.schemas.datastore_schemas import RecordFilter
 from app.modules.datastore.api.schemas.table_schemas import TableResponse
+from app.modules.datastore.domain.column_description import (
+    ColumnDescription,
+    describe_column,
+)
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
@@ -49,6 +53,11 @@ __all__ = [
     "DatastoreFileUpdateEntity",
     "RecordFilter",
     "ColumnSchema",
+    # One rendering of a column for every reader that writes to it -- the
+    # agent's brief and its `pod_tables` tool -- so the two cannot disagree on
+    # a length, an enum's values or a name that needs quoting.
+    "ColumnDescription",
+    "describe_column",
     "TableResponse",
     "TableContext",
     "normalize_datastore_name",

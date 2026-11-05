@@ -1,6 +1,6 @@
 """Who is actually in a pod, for a caller that only knows somebody's name.
 
-`message_user` takes a pod member id, a user id, or an exact email address --
+`channel_post` takes a pod member id, a user id, or an exact email address --
 and an agent told "ask Priya about the invoice" has none of them. Without this
 the tool is unusable unless an id happens to be sitting in the conversation
 already, which is why it exists.

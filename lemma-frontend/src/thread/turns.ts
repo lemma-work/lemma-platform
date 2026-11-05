@@ -109,9 +109,41 @@ export interface HumanMessage {
     at: string;
     note?: boolean;
     from?: string;
+    /** Another teammate's answer to a request this conversation put to it. It
+     *  arrives as input, like a person's message, but it is theirs, not yours. */
+    answeredBy?: AnsweredBy;
+    /** The other side of that: a request another teammate put to this one. The
+     *  conversation is the reader's, but they did not write it. */
+    askedBy?: AskedBy;
     /** Drawn before the server has it: still going, or refused. See
      *  `pending-sends.ts`. */
     pending?: PendingState;
+}
+
+/** How a request to another teammate ended, as the backend writes it on the
+ *  message that carries the outcome back. */
+export type AskOutcome = "ANSWERED" | "NO_ANSWER" | "UNFINISHED" | "DISCONNECTED";
+
+/** Who answered, how it ended, and where their side of the request lives.
+ *  `asPerson` when it was asked as the reader, so that side is a conversation
+ *  of theirs; over a connection it belongs to whoever looks after the
+ *  connection, and the reader is not linked to it. */
+export interface AnsweredBy {
+    name: string;
+    podId: string;
+    conversationId: string;
+    asPerson: boolean;
+    outcome: AskOutcome;
+}
+
+/** Who asked. `forYou` when it asked as the reader, from a conversation of
+ *  theirs; otherwise it asked on its own, over its connection, and where it
+ *  asked from is not necessarily the reader's to open. */
+export interface AskedBy {
+    name: string;
+    podId: string;
+    conversationId: string;
+    forYou: boolean;
 }
 
 export interface Turn {
@@ -127,6 +159,11 @@ export interface Turn {
      *  notes silently, and this is the platform saying that it did. */
     noted?: Noted[];
     notice?: string;
+    /** What the agent's runtime said about this turn's run while it went —
+     *  a model it no longer offers, a session it lost and restarted. Not in
+     *  the transcript: these arrive on the stream only, so they are held by
+     *  the conversation and laid onto its turns (`withRuntimeNotes`). */
+    runtimeNotes?: string[];
     /** First and last assistant activity, for "Worked for 2m 14s". */
     startedAtMs?: number;
     endedAtMs?: number;
@@ -230,9 +267,35 @@ function textOf(message: RawMessage): string {
 /** What a person's message says about itself: a note to the bot alone, and —
  *  for one that came in from a chat platform — who wrote it. Keys are added
  *  only when they apply, so a plain message stays `{ id, text, at }`. */
-export function humanMarks(metadata: Record<string, unknown> | null | undefined): Pick<HumanMessage, "note" | "from"> {
+export function humanMarks(
+    metadata: Record<string, unknown> | null | undefined,
+): Pick<HumanMessage, "note" | "from" | "answeredBy" | "askedBy"> {
     const meta = metadata ?? {};
-    const marks: Pick<HumanMessage, "note" | "from"> = {};
+    const marks: Pick<HumanMessage, "note" | "from" | "answeredBy" | "askedBy"> = {};
+    if (meta.source === "pod_ask") {
+        const name = typeof meta.ask_from_pod_name === "string" ? meta.ask_from_pod_name.trim() : "";
+        marks.askedBy = {
+            name: name || "Another teammate",
+            podId: typeof meta.ask_from_pod_id === "string" ? meta.ask_from_pod_id : "",
+            conversationId: typeof meta.ask_from_conversation_id === "string" ? meta.ask_from_conversation_id : "",
+            forYou: meta.ask_mode !== "LINK",
+        };
+        return marks;
+    }
+    if (meta.source === "pod_ask_answer") {
+        const name = typeof meta.asked_pod_name === "string" ? meta.asked_pod_name.trim() : "";
+        marks.answeredBy = {
+            name: name || "Another teammate",
+            podId: typeof meta.asked_pod_id === "string" ? meta.asked_pod_id : "",
+            conversationId: typeof meta.ask_conversation_id === "string" ? meta.ask_conversation_id : "",
+            /* Strict: an answer from before the mode was written down links
+               nowhere rather than to a conversation that may not be the
+               reader's to open. */
+            asPerson: meta.ask_mode === "AS_PERSON",
+            outcome: askOutcomeOf(meta.ask_outcome),
+        };
+        return marks;
+    }
     if (meta.private_note === true) marks.note = true;
     const named = [meta.sender_display_name, meta.sender_phone]
         .find((value): value is string => typeof value === "string" && value.trim() !== "");
@@ -249,6 +312,9 @@ export interface Streaming {
      *  agent's `comment`, which is the only thing that can say what this step
      *  is *for* while it is still happening. */
     tool: { toolName: string; toolCallId?: string; args?: Record<string, unknown> } | null;
+    /** What the run is waiting on before it can start, in the server's words:
+     *  "Waiting for a free slot on My Mac: 2 runs already going". */
+    waiting?: string | null;
 }
 
 /** What the run is doing right now, as one more step rather than a row of its
@@ -287,6 +353,9 @@ export function liveNote(streaming: Streaming, landed: Note[] = []): Note[] {
         }];
     }
     if (streaming.thinking) return [{ kind: "thought", label: "Thought", detail: streaming.thinking }];
+    /* A run queued behind others on the person's computer has done nothing
+       yet, and "Working" alone over minutes of that reads as stuck. */
+    if (streaming.waiting) return [{ kind: "tool", label: streaming.waiting, detail: "" }];
     return [];
 }
 
@@ -307,6 +376,81 @@ function step(message: RawMessage, metadata: Record<string, unknown> | null, ear
            a page not yet loaded would indent a step under nothing. */
         nested: Boolean(parent) && earlier.some((note) => note.toolCallId === parent),
     };
+}
+
+const OUTCOMES: readonly AskOutcome[] = ["ANSWERED", "NO_ANSWER", "UNFINISHED", "DISCONNECTED"];
+
+/** An outcome the backend wrote. One from before outcomes were written down
+ *  was an answer: nothing else was carried back then. */
+function askOutcomeOf(value: unknown): AskOutcome {
+    return OUTCOMES.find((one) => one === value) ?? "ANSWERED";
+}
+
+/** What the chip on a relayed answer says, by how the request ended. */
+export function answerChip(outcome: AskOutcome): string {
+    switch (outcome) {
+        case "ANSWERED":
+            return "Answered your request";
+        case "NO_ANSWER":
+            return "No answer";
+        case "UNFINISHED":
+            return "Couldn’t finish";
+        case "DISCONNECTED":
+            return "Disconnected";
+    }
+}
+
+/** What a person reads in the message that carried an ask's outcome back.
+ *
+ *  The message itself is written for the model, which reads it as input and
+ *  must be told whose words follow and what to do with them. A person sees the
+ *  name on the message already. So: an answer is the other teammate's own
+ *  words, from `answer_offset` on; every other outcome is said here, in the
+ *  app's words, and never the model's instructions or a run's raw error. An
+ *  answer with no offset -- one from before it was written down -- is shown
+ *  whole rather than guessed at. */
+export function relayedAnswerText(raw: string, answeredBy: AnsweredBy, offset: unknown): string {
+    const { name } = answeredBy;
+    switch (answeredBy.outcome) {
+        case "ANSWERED": {
+            const at = typeof offset === "number" && Number.isInteger(offset) && offset >= 0 && offset <= raw.length ? offset : 0;
+            return raw.slice(at).trim() || raw.trim();
+        }
+        case "NO_ANSWER":
+            return name + " finished without writing an answer.";
+        case "UNFINISHED":
+            return name + " couldn’t finish this request. You can ask again.";
+        case "DISCONNECTED":
+            return name + " was disconnected before it answered, so its answer wasn’t passed back. Someone needs to connect the two teammates again before it can be asked.";
+    }
+}
+
+/** A message another teammate put here: its answer to a request of yours, or a
+ *  request of its own. Either way it is input, not yours, so it is drawn under
+ *  that teammate's name with a chip saying which, and -- only where the other
+ *  side is the reader's own conversation -- the place to link to. Over a
+ *  connection neither side is: the conversation it opened belongs to whoever
+ *  looks after the connection, and where it asked from to whoever started
+ *  that run. */
+export function relayedBy(message: Pick<HumanMessage, "answeredBy" | "askedBy">): {
+    name: string;
+    chip: string;
+    place: { podId: string; conversationId: string } | null;
+} | null {
+    const at = (podId: string, conversationId: string) => (podId && conversationId ? { podId, conversationId } : null);
+    const answered = message.answeredBy;
+    if (answered) {
+        return {
+            name: answered.name,
+            chip: answerChip(answered.outcome),
+            place: answered.asPerson ? at(answered.podId, answered.conversationId) : null,
+        };
+    }
+    const asked = message.askedBy;
+    if (!asked) return null;
+    return asked.forYou
+        ? { name: asked.name, chip: "Asked for you", place: at(asked.podId, asked.conversationId) }
+        : { name: asked.name, chip: "Asked over its connection", place: null };
 }
 
 export function buildTurns(messages: RawMessage[]): Turn[] {
@@ -438,7 +582,10 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
             }
 
             if (isDisplayResourceTool(message.tool_name, metadata)) {
-                const resource = parseDisplayResource(message.tool_args);
+                const resource = parseDisplayResource(
+                    message.tool_args,
+                    message.tool_call_id ? returns.get(message.tool_call_id)?.tool_result : undefined,
+                );
                 if (resource) {
                     /* A widget the harness rejected has nothing to show, and
                        seven rows saying so is worse than the silence. The
@@ -517,11 +664,14 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
         if (message.role === "user") {
             current = open(message);
             const pending = pendingStateOf(message);
+            const marks = humanMarks(message.metadata);
             current.human = {
                 id: message.id ?? "u" + turns.length,
-                text,
+                text: marks.answeredBy
+                    ? relayedAnswerText(message.text ?? message.content ?? "", marks.answeredBy, message.metadata?.answer_offset)
+                    : text,
                 at: clockOf(message.created_at),
-                ...humanMarks(message.metadata),
+                ...marks,
                 ...(pending ? { pending } : {}),
             };
             continue;
@@ -582,4 +732,35 @@ export interface OpenSignIn {
     id: string;
     toolCallId?: string;
     card: SignInAsk;
+}
+
+/** A runtime notice, and the turn that was last when it arrived. */
+export interface RuntimeNote {
+    text: string;
+    /** The id of the turn it belongs to; see `Turn.id`. */
+    turnId: string;
+}
+
+/** The turns with each runtime notice laid onto the turn it arrived during.
+ *
+ *  Anchored by turn id, which survives a pending message being replaced by
+ *  the server's copy. A notice whose turn is no longer drawn — the transcript
+ *  reloaded around it — goes onto the last turn rather than nowhere: the
+ *  sentence is about the run that just went, and dropping it is the bug this
+ *  is here to fix. Turns it does not touch come back as they were. */
+export function withRuntimeNotes(turns: Turn[], notes: readonly RuntimeNote[]): Turn[] {
+    if (notes.length === 0 || turns.length === 0) return turns;
+    const ids = new Set(turns.map((turn) => turn.id));
+    const last = turns[turns.length - 1].id;
+    const byTurn = new Map<string, string[]>();
+    for (const note of notes) {
+        const id = ids.has(note.turnId) ? note.turnId : last;
+        const held = byTurn.get(id) ?? [];
+        if (!held.includes(note.text)) held.push(note.text);
+        byTurn.set(id, held);
+    }
+    return turns.map((turn) => {
+        const held = byTurn.get(turn.id);
+        return held ? { ...turn, runtimeNotes: [...(turn.runtimeNotes ?? []), ...held] } : turn;
+    });
 }

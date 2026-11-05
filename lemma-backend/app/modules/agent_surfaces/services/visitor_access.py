@@ -39,6 +39,15 @@ class VisitorAccess:
     strength: VisitorStrength
 
     @property
+    def is_vouched(self) -> bool:
+        """Whether something proved who they are: a code, or the host's token.
+
+        An anonymous visitor who has written is a contact too -- the pod can
+        name them -- but nothing has vouched for them.
+        """
+        return self.strength is not VisitorStrength.ANONYMOUS
+
+    @property
     def actor_id(self) -> str:
         """Who acts, for the audit trail: the contact, or this session."""
         if self.contact_id is not None:

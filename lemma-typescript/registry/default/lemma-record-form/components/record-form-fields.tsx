@@ -403,7 +403,7 @@ function typeBadgeClassName(
 
 function resolveFieldStringValue(value: unknown): string {
   if (value == null) return ""
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+  if (typeof value === "object" && !Array.isArray(value)) {
     const objectValue = value as Record<string, unknown>
     if (objectValue.id != null) return String(objectValue.id)
   }

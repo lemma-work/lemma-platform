@@ -19,8 +19,9 @@ event** (`WEBHOOK`):
   "once on 2026-06-14".*
 - **`DATASTORE`** — a row created/updated/deleted on a named table. The changed row
   starts the run. *"When a ticket is inserted, triage it."*
-- **`WEBHOOK`** — a connector event (new email, message posted). Needs a connected
-  account and a kind-qualified trigger id. *"When mail arrives, intake it."*
+- **`WEBHOOK`** — a connector event (new email, message posted). Needs a pod
+  connector (by slug) and a kind-qualified trigger id. *"When mail arrives, intake
+  it."*
 
 ## Whose identity does a fired run use?
 
@@ -31,17 +32,20 @@ and it is not always the schedule's creator:
 | --- | --- |
 | `TIME` | the schedule's configured user |
 | `WEBHOOK` | the schedule's configured user |
-| `DATASTORE` on an **RLS** table | the **owner of the row that changed** |
-| `DATASTORE` on a **shared** table | the schedule's configured user |
+| `DATASTORE` on an **RLS** table | the **owner of the row that changed** (default `run_as: "ROW_OWNER"`) |
+| `DATASTORE` with `config.run_as: "SCHEDULE_OWNER"` | the schedule's configured user, for every change |
+| `DATASTORE` on a **shared** table, a batched fire, or a row nobody in the pod owns | the schedule's configured user |
 
 The RLS row-owner rule is the useful one: each member's write starts a run scoped
 to **that member**, over their own rows, with their `/me` and their connected
 accounts. That is what makes "write a row, get agentic work done as yourself" a
-one-line app feature — see `app-recipes/rls-table.md`. A datastore fire that
-carries no owner is treated as an error rather than quietly falling back.
+one-line app feature — see `app-recipes/rls-table.md`.
 
 Creating a `DATASTORE` schedule needs **`datastore.table.update` on the watched
-table**, not just permission to write records to it.
+table**, not just permission to write records to it — and, while it runs as row
+owners (the default), **edit access to the target** too (`agent.update` /
+`workflow.update`; for `POD_DEFAULT`, `pod.update`), because its instruction runs
+with other people's access.
 
 The triggering event becomes the run's **start payload**. Design the first workflow
 node (or the agent's instruction) around that exact shape — see *Event payloads*.
@@ -70,13 +74,15 @@ CLI flags cover the common cases. Exactly one of `--agent` / `--workflow` is
 required:
 
 ```bash
-# TIME — cron (5-field) or one-shot ISO timestamp. UTC unless config.timezone says
-# otherwise, and there is no flag for it: merge an IANA zone through --data.
-lemma schedules create --agent triage-agent --cron "0 9 * * 1-5" --name weekday-triage
-lemma schedules create --workflow nightly-review --cron "0 2 * * *"
+# TIME — cron (5-field) or one-shot ISO timestamp. Read in UTC unless
+# --timezone (an IANA zone, sent as config.timezone) says otherwise. The reply's
+# next_fire_at (UTC) and next_fire_at_local say when it fires — read them rather
+# than creating a test schedule and waiting.
+lemma schedules create --agent triage-agent --cron "0 9 * * 1-5" --timezone Europe/Berlin --name weekday-triage
+lemma schedules create --workflow nightly-review --cron "0 2 * * *"          # 02:00 UTC
 lemma schedules create --workflow intake --at "2026-06-14T09:00:00Z"
-lemma schedules create --agent daily-digest --cron "0 9 * * 1-5" \
-  --data '{"config": {"timezone": "Europe/Berlin"}}'
+lemma schedules create --agent POD_DEFAULT --name daily-digest --cron "0 9 * * 1-5" \
+  --timezone America/New_York --instruction "Summarise yesterday's tickets and message me."
 
 # DATASTORE — table row events; --on is REQUIRED (insert | update | delete | all)
 lemma schedules create --workflow ticket-intake --datastore tickets --on insert --on update
@@ -84,14 +90,14 @@ lemma schedules create --workflow ticket-intake --datastore tickets --on all   #
 
 # WEBHOOK on an AGENT — the trigger id is what picks the app.
 # --webhook-source names the inbound ENDPOINT (composio | github), not the app.
-# (find the trigger id via `lemma connectors triggers list <auth-config>`)
+# (find the trigger id via `lemma connectors triggers list gmail -q "new email"`)
 lemma schedules create --agent mail-triage \
-  --webhook-source composio --connector-trigger gmail:composio:new_message --account <account-id>
+  --webhook-source composio --connector-trigger gmail:composio:new_message --connector gmail
 
 # WEBHOOK on a WORKFLOW — the trigger comes from the workflow's EVENT start.
 # Passing --connector-trigger here is rejected.
 lemma schedules create --workflow ticket-intake \
-  --webhook-source composio --account <account-id>
+  --webhook-source composio --connector gmail
 ```
 
 Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key:
@@ -118,7 +124,7 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   and nothing has to be rewritten to gain it. Set it whenever "9am" means 9am
   *somewhere*: `{"cron": "0 9 * * 1-5", "timezone": "Europe/Berlin"}` fires at 08:00Z
   in summer and 07:00Z in winter, which a UTC cron cannot do. An unknown zone is
-  rejected at write time, and there is no CLI flag — pass it through `--data`.
+  rejected at write time. On the CLI it is `--timezone` (alias `--tz`).
 
   Daylight saving is settled at write time, not left to the caller: on a
   spring-forward date a `0 2 * * *` schedule still fires (at the instant 02:00 would
@@ -129,14 +135,15 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   `DELETE` (`--on all` expands to all three). A datastore schedule without
   operations is rejected. Add an optional `when` block to match on column values
   (see *Match conditions*).
-- `WEBHOOK` — an `account_id` plus a connector trigger, and the trigger id is
+- `WEBHOOK` — a `pod_connector` (the pod connector's slug) plus a connector
+  trigger, and the trigger id is
   **kind-qualified** (`{app}:{kind}:{slug}`, e.g. `gmail:composio:new_message`);
-  get it from `lemma connectors triggers list <auth-config>` (see
-  `connectors.md`).
+  get it from `lemma connectors triggers list <connector-or-install>` (a catalog
+  id such as `gmail` resolves to the org's default install; see `connectors.md`).
 
   **`source` is not the connector.** It names the **inbound webhook endpoint**
   (`POST /webhooks/{source}`), and this deployment answers on exactly two:
-  **`composio`** and **`github`**. On a schedule that is bound to an account *and* a
+  **`composio`** and **`github`**. On a schedule that is bound to a pod connector *and* a
   connector trigger — every schedule you create the normal way — `source` is
   **decorative**: provisioning writes the real routing key (a Composio
   `provider_trigger_id`, or GitHub's `{installation_id, event}` — which overwrites
@@ -145,7 +152,7 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   makes it Gmail.
 
   On an **unprovisioned** schedule — one whose stored config *is* the whole routing
-  key, with no account and trigger to bind — `source` is load-bearing, and a name the
+  key, with no connector and trigger to bind — `source` is load-bearing, and a name the
   registry does not know is **refused at create**: *"No webhook source named 'x'
   delivers to this deployment, so a schedule listening for it could never fire."*
   That refusal is the reason to stop thinking of `source` as "which app": the useful
@@ -160,7 +167,7 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
     *"Webhook workflow schedules require an EVENT workflow start"*.
 
   **A trigger may take parameters of its own**, declared by its `config_schema`
-  and read with `lemma connectors triggers get <auth-config> <trigger-id>`. They
+  and read with `lemma connectors triggers get <connector-or-install> <trigger-id>`. They
   go at the **top level** of `config`, alongside `source` — not nested under a
   `trigger_config` key, where nothing would match them. GitHub's
   `github:http:pull_request`, for example, takes an optional `repository_id` and
@@ -168,14 +175,26 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   of these narrows a trigger that already works, so none is required.
 
   Some keys are **bound for you** and must not be written by hand. A GitHub
-  schedule's `installation_id` comes from the connected account when the
-  schedule is created — it is not something to copy out of a URL, and a wrong
-  one routes another organization's events at your pod.
+  schedule's `installation_id` comes from the account its pod connector
+  resolves to when the schedule is created — it is not something to copy out of
+  a URL, and a wrong one routes another organization's events at your pod.
+
+  **Which account a schedule listens through is the connector's decision**, and
+  it is made again on every use, as the schedule's **owner**: a per-member
+  connector means the owner's own account, a shared connector the account its
+  owner shared. Creating the schedule is your own use of the connector — the
+  same checks as running one of its operations, with the same typed refusals
+  (`CONNECTION_REQUIRED` with a `connect_url`, `CONNECTOR_NEEDS_ACCOUNT`, …).
+  Afterwards, a delivery only fires the schedule while the connector still
+  resolves: when the owner leaves the pod or a shared account is withdrawn it
+  stops, and an MCP event schedule is turned off with the reason on it. Whoever
+  changes what a schedule does becomes its owner, on their own use of the
+  connector, and its subscription is made again as them.
 
   **A triggered agent needs its own connector grant.** Connecting the account
   authorizes the *person*; a scheduled run is a delegated workload and is
   refused unless the **agent** also holds `connector.use` on the connector
-  (`PUT /pods/{pod}/agents/{name}/permissions`). Without it the run still
+  (`lemma agents permissions add <agent> connector:<slug>:use`). Without it the run still
   starts and the repository is still bound — the sandbox simply has no
   credentials, and `git clone` fails with `could not read Username`.
 
@@ -203,10 +222,13 @@ no `start`). JMESPath expressions in workflow nodes reference it:
   `start.payload`** — a common mistake. Bind your first node's input to
   `start.metadata.record_id`.
 
-  Bulk writes are no exception: a row inserted by `bulk_create` carries the same
-  whole-row payload as one created on its own.
-- `start.llm_output.*` — the structured output of the LLM filter, if you set one
-  (below).
+  Bulk writes and imports **do not fire per row by default**: `config.bulk_writes`
+  and `config.import_writes` are `skip` unless set (the changes are recorded as
+  skipped). Set either to `each` (one fire per matching row, same whole-row payload
+  as a single write) or `batch` (one fire with the rows as a list, run as the
+  schedule's owner). The pod setting `triggers.bulk_writes_default` changes the
+  default for `bulk_writes`.
+- `start.llm_output.*` — the filter's answers, if you set a filter (below).
 
 For an **agent** target, the event is delivered as the message that wakes the agent
 — write the instruction to read that message.
@@ -276,13 +298,42 @@ lemma schedules create --workflow fulfil-ticket --datastore tickets --on update 
   --data '{"config": {"when": {"status": {"to": "approved"}}}}'
 ```
 
-## LLM event filtering — drop the noise
+## Event filtering — drop the noise
 
 Chatty webhook/datastore sources fire constantly. A `filter_instruction` is a
-**natural-language predicate evaluated per event before the target fires**; events
-that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
-`filter_output_schema` to capture structured output the run can read at
-`start.llm_output.*`.
+**natural-language predicate judged per event before the target fires** — asked as
+a *decision* (see `functions.md` → Decisions), on whichever provider the
+deployment chose. An event it says no to is **skipped**: recorded as a run with
+status `FILTERED` carrying the answer, and the schedule's `last_fire_status`
+becomes `FILTERED`. An event the filter **cannot tell** about is skipped too.
+
+`filter_output_schema` asks extra **closed** questions alongside the yes/no, and
+their answers reach the target at `start.llm_output.*`:
+
+```json
+"filter_output_schema": {
+  "type": "object",
+  "properties": {
+    "category": { "type": "string", "enum": ["bug", "billing", "other"], "description": "What is it about?" },
+    "urgent":   { "type": "boolean", "description": "Does it need a reply today?" }
+  }
+}
+```
+
+- Allowed: a string `enum` (or `oneOf` of `{const, description}`), an array of one
+  with `uniqueItems`, `boolean`, or `integer` with `minimum`/`maximum` (2-11
+  levels). **Free text and open-ended numbers are not asked** — such fields are
+  left out and logged; there is no `reason` field any more.
+- `start.llm_output` is `{ should_proceed: true, <your answers>, _decision:
+  { provider, model, unsure, confidence: {question: number|null} } }`.
+- If no decision provider answers, the event is retried with backoff and then
+  recorded **`DEAD_LETTERED`** (`ScheduleFilterUnavailable`) — never sent past the
+  filter. A person can retry it by hand (`lemma schedules runs retry`).
+- **Not on a `TIME` schedule**: it fires on the clock, so there is no event to
+  judge, and a filter there is refused (422).
+- History: `lemma schedules runs list <schedule> --no-skipped` shows the firings
+  only; `--skipped` shows only the skips (`?skipped=` on
+  `GET /pods/{pod}/schedules/{id}/runs`).
 
 > On a `DATASTORE` trigger, prefer a `when` block for anything a comparison can
 > decide. The filter costs a model call **per event**; a `when` block costs
@@ -293,7 +344,7 @@ that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
   "name": "important-mail",
   "schedule_type": "WEBHOOK",
   "config": { "source": "composio" },
-  "account_id": "${gmail_account}",
+  "pod_connector": "gmail",
   "workflow_name": "ticket-intake",
   "filter_instruction": "Only process emails from external customers describing a problem or request. Ignore newsletters, receipts, and internal mail.",
   "is_active": true
@@ -362,31 +413,41 @@ suspended execution — invisible in `schedules`, resolves exactly once, and cap
 
 ## Limits & gotchas
 
-- **Pause or delete test schedules.** A near-future cron you set to verify keeps
-  firing after you move on — `lemma schedules pause` it the moment you're done.
+- **Don't create throwaway test schedules.** To check *when* a schedule fires,
+  read `next_fire_at` / `next_fire_at_local` from the create reply. To check
+  *what* it does, run the target directly (`lemma workflows run`, or do the
+  agent's instruction in your own conversation). If you did make one, delete it
+  — `lemma schedules delete <name> --yes`; an agent may delete a schedule it
+  created itself without asking for approval.
 - **Trigger loops.** If a `DATASTORE` schedule fires on `UPDATE` of a table and its
   target workflow **writes that same table**, each write re-fires the schedule —
-  an infinite loop. Write to a different table, fire only on `INSERT`, or guard the
-  write so it's a no-op when nothing changed.
-- **Datastore bursts.** Datastore schedules fire **per matching row operation** — a
-  bulk insert of 500 rows means 500 runs. Throttle the writer or fire on a coarser
-  signal.
-- **Concurrency.** Firings are not serialized — overlapping runs of the same target
-  can be in flight at once. Make targets idempotent; don't assume the previous run
-  finished.
-- **Webhook prerequisites.** A WEBHOOK schedule needs the connector account
-  connected first (`connectors.md`) and a publicly reachable backend to receive the
-  POST (local stacks may not get webhook deliveries).
-- **Internal schedules.** Workflow `WAIT_UNTIL` nodes create their own schedules
-  that show up in `list` — don't touch them.
+  a loop that runs until the daily fire cap pauses the schedule
+  (`paused_reason: fire_cap`, and its owner is told). Write to a different table,
+  fire only on `INSERT`, or guard the write so it's a no-op when nothing changed.
+- **Datastore bursts.** Single-row writes fire **per matching row operation** — a
+  loop of 500 `records create` calls means 500 runs. Bulk writes and imports are
+  skipped unless `bulk_writes` / `import_writes` says `each` or `batch`; prefer
+  `batch` over `each` for a large writer.
+- **Concurrency.** Firings are not serialized by default — overlapping runs of the
+  same target can be in flight at once. Make targets idempotent; don't assume the
+  previous run finished. To cap it, set `max_concurrent_runs` (1–1000) in the
+  schedule's `config`: a fire that finds it full is **skipped** (recorded as
+  skipped), not queued.
+- **Webhook prerequisites.** A WEBHOOK schedule needs a pod connector declared
+  in the pod, and an account it resolves to for you — your own connected for a
+  per-member one, a shared one for a shared one (`connectors.md`) — plus a
+  publicly reachable backend to receive the POST (local stacks may not get
+  webhook deliveries).
 
 ## Verify
 
 ```bash
 lemma schedules get <name>                  # active? right target? right config?
+                                            # TIME: next_fire_at (UTC) / next_fire_at_local
 
-# TIME: set a near-future cron / --at, wait, then check the run, then PAUSE it
-lemma workflows runs list <workflow>        # or: lemma conversations list --agent <agent>
+# TIME: don't wait for a fire — run the target once directly instead
+lemma workflows run <workflow> --data '{}'  # or do the agent's instruction yourself
+lemma workflows runs list <workflow>        # after a real fire: lemma schedules runs list <name>
 
 # DATASTORE: create a test row, confirm a run started with the row in start.payload
 lemma records create tickets --data '{"title":"smoke","status":"new"}'

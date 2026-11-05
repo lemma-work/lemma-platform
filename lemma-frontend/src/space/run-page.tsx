@@ -8,11 +8,11 @@ import { useMe } from "@/session/use-me";
 import { WaitForm } from "@/workflow/form";
 import { DataView } from "@/workflow/data-view";
 import {
-    readRun, runMillis, runTone, sayCancelRefusal, sayFor, sayStatus, sayWhen, stillGoing,
+    canRetryFrom, readRun, runMillis, runTone, sayCancelRefusal, sayFor, sayRetryRefusal, sayStatus, sayWhen, stillGoing,
     type RunDetail, type StepRow,
 } from "@/workflow/runs";
 import {
-    buildTree, idsIn, leadOf, progressOf, stateOfTrace, stateOfUnvisited, tracesByNode,
+    buildTree, idsIn, leadOf, progressOf, sayDecided, stateOfTrace, stateOfUnvisited, tracesByNode,
     type Arm, type Graph, type GraphNode, type NodeState, type TreeItem,
 } from "@/workflow/run-tree";
 import { useRun, useWorkflowGraph, useWorkflowList } from "@/workflow/use-run";
@@ -94,6 +94,14 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
             setRefused(sayCancelRefusal(status, problem instanceof Error ? problem.message : "Couldn’t cancel this run."));
         },
     });
+    const retry = useMutation({
+        mutationFn: () => lemma(pod.id).workflows.runs.retry(runId, pod.id),
+        onSuccess: () => { setRefused(null); refresh(); },
+        onError: (problem) => {
+            const status = (problem as { statusCode?: number } | null)?.statusCode;
+            setRefused(sayRetryRefusal(status, problem instanceof Error ? problem.message : "Couldn’t retry this run."));
+        },
+    });
     const again = useMutation({
         mutationFn: async () => readRun(await lemma(pod.id).workflows.runs.create(name!)),
         onSuccess: (next) => { if (next) onOpenRun(next.id, name ?? label); },
@@ -109,6 +117,8 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
         : null;
     const going = detail ? stillGoing(detail.status) : false;
     const nodeName = (id: string | null) => (id && graph?.nodes.get(id)?.label) || id || "a step";
+    const retryable = detail?.status === "FAILED" && !sample
+        && canRetryFrom(detail.failedNodeId ? graph?.nodes.get(detail.failedNodeId)?.kind : null);
 
     return (
         <div className="runpage">
@@ -176,6 +186,13 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
                     <div>
                         <b>Failed at {nodeName(detail.failedNodeId)}</b>
                         <p>{detail.error || "It stopped without saying why."}</p>
+                        {retryable && (
+                            /* Every step before this one keeps its result, so
+                               an agent's answer is not paid for twice. */
+                            <button className="runpage__cancel" disabled={retry.isPending} onClick={() => retry.mutate()}>
+                                {retry.isPending ? "Retrying…" : "Retry from this step"}
+                            </button>
+                        )}
                     </div>
                 </div>
             )}
@@ -245,6 +262,19 @@ function Standing({ pod, run, graph, bots, onOpenConversation, onChanged }: {
         return (
             <section className="standing">
                 <header><ClockIcon size={16} /><div><b>Waiting for its time — {nodeLabel}</b><p>It picks up again on its own.</p></div></header>
+            </section>
+        );
+    }
+    if (wait?.type === "DECISION") {
+        return (
+            <section className="standing" data-tone="going">
+                <header>
+                    <span className="standing__dot" />
+                    <div>
+                        <b>Weighing a question — {nodeLabel}</b>
+                        <p>{wait.question ? "“" + wait.question + "” " : ""}It goes on down the branch the answer picks; nothing is needed from you.</p>
+                    </div>
+                </header>
             </section>
         );
     }
@@ -480,18 +510,13 @@ function Body({ node, trace, ctx }: { node: GraphNode; trace: StepRow; ctx: Ctx 
                     : <DataView value={output} />
             )}
 
-            {node.kind === "DECISION" && <p className="rtree__lead">{decisionSays(output)}</p>}
+            {node.kind === "DECISION" && (
+                <p className="rtree__lead">{sayDecided(output, (id) => ctx.graph.nodes.get(id)?.label || id)}</p>
+            )}
 
             {node.kind !== "AGENT" && node.kind !== "FORM" && node.kind !== "DECISION" && <DataView value={output} lead={lead} showLead />}
         </div>
     );
-}
-
-function decisionSays(output: unknown): string {
-    const matched = output && typeof output === "object" ? (output as Record<string, unknown>).matched_condition : undefined;
-    if (typeof matched === "string" && matched) return "Matched " + matched + ".";
-    if (matched === null) return "No rule matched, so it took the default path.";
-    return "Decided.";
 }
 
 /** A history row when the workflow's graph could not be read. */

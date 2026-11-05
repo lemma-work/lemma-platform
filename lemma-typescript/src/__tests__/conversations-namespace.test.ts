@@ -2,6 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 import type { HttpClient } from "../http.js";
 import { ConversationsNamespace } from "../namespaces/conversations.js";
 
+describe("ConversationsNamespace.pendingInteractions", () => {
+  it("asks the pod once for everything waiting on the caller, paged by token", async () => {
+    const request = vi.fn(async () => ({ items: [], limit: 10, next_page_token: null }));
+    const http = { request } as unknown as HttpClient;
+    const conversations = new ConversationsNamespace(http, () => "pod-1");
+
+    await conversations.pendingInteractions({ limit: 10, page_token: "next-page" });
+    await conversations.pendingInteractions();
+
+    expect(request).toHaveBeenNthCalledWith(1, "GET", "/pods/pod-1/conversations/pending-interactions", {
+      params: { limit: 10, page_token: "next-page" },
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "GET", "/pods/pod-1/conversations/pending-interactions", {
+      params: { limit: 50, page_token: undefined },
+    });
+  });
+});
+
 function setup() {
   const request = vi.fn(async () => ({
     items: [],
@@ -133,7 +151,10 @@ describe("ConversationsNamespace.list", () => {
     expect(request).toHaveBeenCalledWith(
       "POST",
       "/pods/pod-1/conversations/conversation-1/messages/append",
-      expect.objectContaining({ body: { content: "steer this" } }),
+      // Every send names itself, so a retried append is stored once.
+      expect.objectContaining({
+        body: { content: "steer this", client_message_id: expect.any(String) },
+      }),
     );
     expect(stream).not.toHaveBeenCalled();
   });

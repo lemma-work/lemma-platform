@@ -21,6 +21,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `workflow.run.get` | GET | `/pods/{pod_id}/workflow-runs/{run_id}` | Get Workflow Run |
 | `workflow.run.list` | GET | `/pods/{pod_id}/workflows/{workflow_name}/runs` | List Workflow Runs |
 | `workflow.run.list_for_pod` | GET | `/pods/{pod_id}/workflow-runs` | List Workflow Runs In Pod |
+| `workflow.run.retry` | POST | `/pods/{pod_id}/workflow-runs/{run_id}/retry` | Retry Workflow Run |
 | `workflow.run.stream` | GET | `/pods/{pod_id}/workflow-runs/{run_id}/stream` | Stream Workflow Run |
 | `workflow.run.visualize` | GET | `/pods/{pod_id}/workflow-runs/{run_id}/visualize` | Visualize Workflow Run |
 | `workflow.run.waiting_assigned_to_me` | GET | `/pods/{pod_id}/workflow-runs/waiting/assigned-to-me` | List Workflow Runs Waiting For Current User |

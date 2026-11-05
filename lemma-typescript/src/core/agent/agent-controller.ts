@@ -690,6 +690,14 @@ export class AgentController {
           this.clearStreamingTool();
           continue;
         }
+        if (parsed.tokenKind === "stream_reset") {
+          // What streamed so far is withdrawn: a retry starting the answer
+          // over, or text the server learned late was reasoning (it follows
+          // with the stream again, classified). It carries no text.
+          this.clearStreamingText();
+          this.clearStreamingThinking();
+          continue;
+        }
         if (parsed.token) {
           if (parsed.tokenKind === "tool") {
             this.streamingToolToken += parsed.token;

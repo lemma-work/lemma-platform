@@ -40,12 +40,16 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostPairingRejected,
     AgentHostRepositoryError,
 )
+from app.modules.agent.infrastructure.agent_host.transfers import (
+    AgentHostTransferStore,
+)
 from app.modules.agent.services.agent_host_link_mcp import AgentHostLinkMcp
 from app.modules.agent.services.agent_host_link_registry import (
     AgentHostLinkRegistry,
 )
 from app.modules.agent.services.agent_host_link_session import AgentHostLinkSession
 from app.modules.agent.services.agent_host_link_tool_calls import ToolCallLedger
+from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
 from app.modules.agent.services.agent_host_link_store import (
     ControlUpdates,
     LinkedHost,
@@ -91,6 +95,8 @@ class FakeSocket:
         self.accepted = False
         self.closed: tuple[int, str | None] | None = None
         self._next_id = 0
+        #: The largest frame the session sent, in bytes.
+        self.largest_sent = 0
 
     # the socket, as the session sees it
     async def accept(self) -> None:
@@ -102,6 +108,7 @@ class FakeSocket:
     async def send_text(self, data: str) -> None:
         if self.closed is not None:
             raise RuntimeError("socket is closed")
+        self.largest_sent = max(self.largest_sent, len(data.encode()))
         await self._outbox.put(json.loads(data))
 
     async def close(self, code: int = 1000, reason: str | None = None) -> None:
@@ -267,6 +274,9 @@ class FakeChannels:
         #: Set to hold every subscription open until the test releases it.
         self.subscribe_gate: asyncio.Event | None = None
 
+    async def subscriber_count(self, channel: str) -> int:
+        return len(self._subscribers.get(channel, []))
+
     async def publish(self, channel: str, message: object) -> None:
         if (
             self._hold_announcements
@@ -322,10 +332,22 @@ class FakeConversationMcp:
         self.ended_runs: set[UUID] = set()
         #: Raised by the next ``call_tool`` after it is counted, once.
         self.call_error: BaseException | None = None
+        #: What ``call_tool`` answers, when a test needs more than "ok".
+        self.call_result: CallToolResult | None = None
+        self.authorized_hosts: list[RelayingHost | None] = []
 
     async def authorize(
-        self, *, conversation_id: UUID, token: str, agent_run_id: UUID | None = None
+        self,
+        *,
+        conversation_id: UUID,
+        token: str,
+        agent_run_id: UUID | None = None,
+        host: RelayingHost | None = None,
+        allow_ended_run: bool = False,
     ) -> bool:
+        # What the link said about where the call came from, for a test to
+        # read back; the rules themselves are `conversation_mcp_authorization`'s.
+        self.authorized_hosts.append(host)
         if agent_run_id is not None and agent_run_id in self.foreign_runs:
             return False
         return conversation_id == self.conversation_id and token == TOKEN
@@ -357,6 +379,8 @@ class FakeConversationMcp:
         if self.call_error is not None:
             error, self.call_error = self.call_error, None
             raise error
+        if self.call_result is not None:
+            return self.call_result
         return CallToolResult(
             content=[TextContent(type="text", text="ok")],
             structured_content={"success": True},
@@ -388,6 +412,7 @@ class Link:
         max_waits: int | None = None,
         ledger: ToolCallLedger | None = None,
         mcp_service: FakeConversationMcp | None = None,
+        transfers: AgentHostTransferStore | None = None,
     ) -> None:
         self.store = store or FakeStore()
         self.channels = channels or FakeChannels()
@@ -399,6 +424,10 @@ class Link:
         # share one record the way two replicas share Redis.
         self.ledger = ledger or ToolCallLedger(
             fake_aioredis.FakeRedis(decode_responses=True)
+        )
+        #: Staged bodies and op transfers, in an in-memory Redis.
+        self.transfers = transfers or AgentHostTransferStore(
+            client=fake_aioredis.FakeRedis(decode_responses=False)
         )
         self.session = AgentHostLinkSession(
             self.socket,
@@ -416,6 +445,7 @@ class Link:
             resend_after_seconds=resend_after_seconds,
             max_in_flight=max_in_flight,
             max_waits=max_waits,
+            transfers=self.transfers,
         )
         self.task: asyncio.Task | None = None
         # `SET NX`, in memory: shared through the channels object so two links
@@ -436,7 +466,7 @@ class Link:
         self.task = asyncio.ensure_future(self.session.serve_link())
         return self
 
-    async def open(self, **capacity) -> dict:
+    async def open(self, *, staged_bodies: bool = True, **capacity) -> dict:
         """Say hello and return the welcome."""
         self.start()
         frame_id = self.socket.send(
@@ -444,6 +474,7 @@ class Link:
             {
                 "hello": hello(),
                 "capacity": capacity or {"max_runs": 2, "available_runs": 2},
+                "staged_bodies": staged_bodies,
             },
         )
         welcome = await self.socket.answer_to(frame_id)

@@ -34,6 +34,7 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
         Permissions.DATASTORE_TABLE_READ,
         Permissions.DATASTORE_RECORD_READ,
         Permissions.DATASTORE_RECORD_WRITE,
+        Permissions.DATASTORE_RECORD_DELETE,
         Permissions.DATASTORE_TABLE_UPDATE,
         Permissions.DATASTORE_TABLE_DELETE,
     ),
@@ -41,11 +42,13 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
         Permissions.FOLDER_READ,
         Permissions.FOLDER_WRITE,
         Permissions.FOLDER_DELETE,
+        Permissions.FOLDER_SHARE,
     ),
     ResourceType.FOLDER: (
         Permissions.FOLDER_READ,
         Permissions.FOLDER_WRITE,
         Permissions.FOLDER_DELETE,
+        Permissions.FOLDER_SHARE,
     ),
     ResourceType.APP: (
         Permissions.APP_READ,
@@ -53,6 +56,11 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
         Permissions.APP_PUBLISH,
         Permissions.APP_DELETE,
     ),
+    # A pod connector and a pod account are grant targets for their one use
+    # each: ``connector.use`` to an agent or a role, ``connector_account.use``
+    # to the members an owner shares a RESTRICTED account with.
+    ResourceType.CONNECTOR: (Permissions.CONNECTOR_USE,),
+    ResourceType.CONNECTOR_ACCOUNT: (Permissions.CONNECTOR_ACCOUNT_USE,),
 }
 
 # Owners get the full action set of resources they own. Schedules are owned by
@@ -61,6 +69,16 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
 # member manage the schedules they create without pod-wide schedule permissions.
 OWNER_RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
     **RESOURCE_ACTIONS,
+    # Declaring a pod connector confers nothing on whoever declared it: using
+    # it is the role's or the grant's business, like anyone else's.
+    ResourceType.CONNECTOR: (),
+    # Sharing is the owner's act and nobody else's (audit H3). It is here and
+    # in no role, so a pod admin can remove an account from the pod but never
+    # put someone's credential in front of anyone.
+    ResourceType.CONNECTOR_ACCOUNT: (
+        Permissions.CONNECTOR_ACCOUNT_USE,
+        Permissions.CONNECTOR_ACCOUNT_SHARE,
+    ),
 }
 
 

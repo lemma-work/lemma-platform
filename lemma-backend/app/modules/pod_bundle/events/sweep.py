@@ -1,7 +1,9 @@
-"""The pod-bundle sweep cron.
+"""The pod-bundle sweep, as periodic work (``pod_bundle.staging_sweep``, 30 min).
 
-Reclaims staged archives whose job state has expired, terminalizes jobs a
-crashed worker left non-terminal, and deletes finished job rows past retention.
+Reclaims staged archives whose job state has expired, terminalizes jobs nothing
+will run again (a job with a live work item is the item's, see
+``PodBundleStateStore.recover_stale_jobs``), and deletes finished job rows past
+retention.
 
 Its own module rather than another 100 lines of ``handlers``: the sweep shares
 nothing with the export/import/publish tasks except the state store, runs on a
@@ -13,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.state import (
     ExportStatus,
@@ -42,13 +44,12 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# A non-terminal job untouched for longer than this is presumed dead (worker
-# crash/restart): the apply job's own timeout is 1800s, so ~40min leaves a wide
-# margin before the sweep intervenes.
+# A non-terminal job untouched for longer than this, with no live work item, is
+# presumed dead: the job's own cap is 1800s, so ~40min leaves a wide margin.
 _STUCK_AFTER_SECONDS = 40 * 60
 
 
-@streaq_cron("13-59/30 * * * *", name="sweep_pod_bundle_staging", lane=Lane.BULK)
+@periodic_job("pod_bundle.staging_sweep", every=timedelta(minutes=30))
 async def sweep_pod_bundle_staging() -> None:
     """Reclaim staged archives whose ephemeral state has expired, mark crashed
     jobs FAILED so the UI stops showing them as in-progress, and delete job rows

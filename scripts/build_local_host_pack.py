@@ -77,13 +77,18 @@ def python_executable(python_root: Path) -> Path:
     raise SystemExit(f"standalone Python executable not found under {python_root}")
 
 
-def install_python(
-    output: Path,
+def install_interpreter(
+    destination: Path,
     version: str,
-    wheels: Path,
     explicit_python_root: Path | None = None,
 ) -> Path:
-    destination = output / "backend/python"
+    """A standalone CPython of exactly ``version`` at ``destination``.
+
+    Shared by the host pack, whose backend runs on it, and the CLI bundled in
+    the Desktop app (``build_desktop_lemma_cli.py``), which runs only `lemma`.
+    Returns the interpreter, reachable as ``bin/python3`` on POSIX because the
+    `lemma` launcher starts it by that name.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
     if explicit_python_root is not None:
         source = explicit_python_root.resolve()
@@ -98,8 +103,8 @@ def install_python(
             )
         shutil.copytree(source, destination, symlinks=True)
     else:
-        staging = output / ".python-install"
-        bin_dir = output / ".python-bin"
+        staging = destination.parent / ".python-install"
+        bin_dir = destination.parent / ".python-bin"
         environment = os.environ.copy()
         environment["UV_PYTHON_BIN_DIR"] = str(bin_dir)
         try:
@@ -141,6 +146,17 @@ def install_python(
     if os.name != "nt" and not (destination / "bin/python3").exists():
         (destination / "bin/python3").symlink_to(executable.name)
         executable = destination / "bin/python3"
+    return executable
+
+
+def install_python(
+    output: Path,
+    version: str,
+    wheels: Path,
+    explicit_python_root: Path | None = None,
+) -> Path:
+    destination = output / "backend/python"
+    executable = install_interpreter(destination, version, explicit_python_root)
 
     wheel_files: list[Path] = []
     for project in LOCAL_WHEEL_PROJECTS:
@@ -188,6 +204,10 @@ def install_python(
         # system Python. uv marks managed downloads as externally managed, so
         # explicitly authorize installing the application into this pack.
         "--break-system-packages",
+        # The export is already the whole locked graph. Resolving it again
+        # drops `[tool.uv] override-dependencies`, which `uv pip` never reads,
+        # and fastembed's `pillow<13` then refuses the pillow 13 the lock holds.
+        "--no-deps",
         "--find-links",
         wheels,
         "--requirements",
@@ -495,6 +515,11 @@ sys.exit(main())
 
 
 def install_lemma_cli(output: Path, executable: Path, wheels: Path) -> None:
+    """The host pack's `lemma`, in its `backend/`; see `install_lemma_cli_into`."""
+    install_lemma_cli_into(output / "backend", executable, wheels)
+
+
+def install_lemma_cli_into(root: Path, executable: Path, wheels: Path) -> None:
     """The `lemma` CLI of this release, for commands run on the user's Mac.
 
     Host execution runs an agent's commands on the Mac, where the user may have
@@ -506,8 +531,13 @@ def install_lemma_cli(output: Path, executable: Path, wheels: Path) -> None:
     Installed into its own `cli/` rather than beside the backend's packages:
     the CLI's pinned dependency set is its own lock's, not the backend's, and
     the launcher puts `cli/` ahead of the interpreter's site-packages.
+
+    ``root`` is the CLI root the launcher resolves from its own path: it holds
+    ``python/`` (the interpreter, ``executable``), and gets ``cli/`` and
+    ``bin/lemma``. The host pack's is its ``backend/``; the Desktop app's is
+    ``Contents/Resources/lemma-cli``.
     """
-    backend = output / "backend"
+    backend = root
     for project in ("lemma-python", "lemma-cli"):
         run("uv", "build", "--wheel", "--out-dir", wheels, REPO_ROOT / project)
     cli_wheels = [

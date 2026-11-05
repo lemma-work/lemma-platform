@@ -8,48 +8,35 @@ they already exist, and the read is the fallback -- see ``_run_scope``.
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.delegation import is_pod_default_agent
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
 from app.core.origin import Origin, OriginKind
 from app.modules.agent.contracts.conversations import (
     ConversationScope,
     conversation_scope,
 )
 from app.modules.agent.domain.events import (
-    AGENT_EVENTS_STREAM,
     AgentCreatedEvent,
     AgentRunCompletedEvent,
     ConversationStartedEvent,
 )
-from app.modules.agent_surfaces.contracts.conversations import (
-    surface_id_for_conversation,
-)
 from app.modules.analytics.events.wiring import (
+    DELIVERED_STATUSES,
+    ProjectionReads,
     actor_or_system,
     origin_of,
-    provide_uow_factory,
-    router,
 )
 from app.modules.analytics.services.buckets import (
     COUNT_EDGES,
+    TOKEN_EDGES,
     bucket,
     duration_seconds,
     seconds_bucket,
 )
 from app.modules.analytics.services.pod_delivery import (
+    AUTONOMOUS_ORIGINS,
     DeliveryVia,
-    maybe_emit_pod_delivered,
-    pod_creator,
 )
 
 WIRED = frozenset(
@@ -62,18 +49,16 @@ WIRED = frozenset(
 )
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    AGENT_EVENTS_STREAM,
-    group="analytics-agent",
-    consumer="analytics-agent-consumer",
+@projection(
+    AgentRunCompletedEvent.get_event_type(),
+    AgentCreatedEvent.get_event_type(),
+    ConversationStartedEvent.get_event_type(),
 )
 async def on_agent_event(
     event: dict[str, object],
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    reads: ProjectionReads | None = None,
 ) -> None:
+    reads = reads or ProjectionReads()
     event_type = event.get("event_type")
     if event_type not in {
         AgentRunCompletedEvent.get_event_type(),
@@ -85,25 +70,30 @@ async def on_agent_event(
     async def record() -> None:
         origin = origin_of(event)
         if event_type == AgentCreatedEvent.get_event_type():
-            _record_agent_created(AgentCreatedEvent.model_validate(event), origin)
+            await _record_agent_created(
+                reads, AgentCreatedEvent.model_validate(event), origin
+            )
             return
         if event_type == ConversationStartedEvent.get_event_type():
-            _record_conversation_started(
-                ConversationStartedEvent.model_validate(event), origin
+            await _record_conversation_started(
+                reads, ConversationStartedEvent.model_validate(event), origin
             )
             return
         await _record_run_completed(
-            uow_factory, AgentRunCompletedEvent.model_validate(event), origin
+            reads, AgentRunCompletedEvent.model_validate(event), origin
         )
 
-    await inbox.process("analytics.agent", event, record)
+    await record()
 
 
-def _record_agent_created(created: AgentCreatedEvent, origin: Origin | None) -> None:
+async def _record_agent_created(
+    reads: ProjectionReads, created: AgentCreatedEvent, origin: Origin | None
+) -> None:
     emit(
         "agent.created",
         actor=actor_or_system(created.user_id),
         origin=origin,
+        organization_id=await reads.organization_of_pod(created.pod_id),
         pod_id=created.pod_id,
         properties={
             "pod_id": created.pod_id,
@@ -113,8 +103,8 @@ def _record_agent_created(created: AgentCreatedEvent, origin: Origin | None) -> 
     )
 
 
-def _record_conversation_started(
-    started: ConversationStartedEvent, origin: Origin | None
+async def _record_conversation_started(
+    reads: ProjectionReads, started: ConversationStartedEvent, origin: Origin | None
 ) -> None:
     # Sub-agent spawns and workflow agent nodes each open a conversation, so
     # counting every one measures traffic rather than people starting work. Only
@@ -125,6 +115,7 @@ def _record_conversation_started(
         "conversation.started",
         actor=AnalyticsActor.user(started.user_id),
         origin=origin,
+        organization_id=await reads.organization_of_pod(started.pod_id),
         pod_id=started.pod_id,
         properties={
             "pod_id": started.pod_id,
@@ -161,16 +152,19 @@ async def _run_scope(
 
 
 async def _record_run_completed(
-    uow_factory, parsed: AgentRunCompletedEvent, origin: Origin | None
+    reads: ProjectionReads, parsed: AgentRunCompletedEvent, origin: Origin | None
 ) -> None:
-    scope = await _run_scope(uow_factory, parsed)
+    scope = await _run_scope(reads.uow_factory, parsed)
     if scope is None:
         return
+    organization_id = scope.organization_id or await reads.organization_of_pod(
+        scope.pod_id
+    )
     emit(
         "agent_run.completed",
         actor=AnalyticsActor.user(scope.user_id),
         origin=origin,
-        organization_id=scope.organization_id,
+        organization_id=organization_id,
         pod_id=scope.pod_id,
         properties={
             "pod_id": scope.pod_id,
@@ -186,18 +180,35 @@ async def _record_run_completed(
             "duration_bucket": seconds_bucket(
                 duration_seconds(parsed.started_at, parsed.occurred_at)
             ),
+            "tool_call_count_bucket": bucket(parsed.tool_call_count, COUNT_EDGES),
+            "token_count_bucket": bucket(parsed.token_count, TOKEN_EDGES),
         },
     )
 
-    creator_user_id = await pod_creator(uow_factory, scope.pod_id)
-    await maybe_emit_pod_delivered(
-        uow_factory,
+    # A failed or stopped run is measured above and delivers nothing below: it
+    # neither activates the pod nor answers the surface that asked.
+    if parsed.status.value.upper() not in DELIVERED_STATUSES:
+        return
+    # A run that paused for an answer, an approval or a wait finishes COMPLETED
+    # with its conversation WAITING. It has delivered nothing yet; the run that
+    # resumes it is the one that does, so counting both would answer one
+    # message twice.
+    if (parsed.data or {}).get("conversation_status") == "WAITING":
+        return
+
+    creator_user_id = await reads.pod_creator(scope.pod_id)
+    # Unattended work (a schedule, a data trigger, a connector event) reached
+    # nobody in particular: it is credited to its owner as delegated work, as
+    # the schedule's own projection does, rather than as their direct action.
+    autonomous = origin is not None and origin.kind in AUTONOMOUS_ORIGINS
+    await reads.deliver(
         pod_id=scope.pod_id,
-        organization_id=scope.organization_id,
+        organization_id=organization_id,
         via=DeliveryVia.AGENT_RUN,
         origin=origin,
-        recipient_user_id=scope.user_id,
+        recipient_user_id=None if autonomous else scope.user_id,
         creator_user_id=creator_user_id,
+        delegated_by_user_id=scope.user_id if autonomous else None,
     )
 
     # `surface.message_answered` is projected from here rather than from the
@@ -208,15 +219,14 @@ async def _record_run_completed(
     # contract-violation alarm on every occurrence.
     if origin is None or origin.kind is not OriginKind.SURFACE:
         return
-    async with uow_factory() as uow:
-        surface_id = await surface_id_for_conversation(uow, parsed.conversation_id)
+    surface_id = await reads.surface_of_conversation(parsed.conversation_id)
     if surface_id is None:
         return
     emit(
         "surface.message_answered",
         actor=AnalyticsActor.user(scope.user_id),
         origin=origin,
-        organization_id=scope.organization_id,
+        organization_id=organization_id,
         pod_id=scope.pod_id,
         properties={
             "pod_id": scope.pod_id,
@@ -224,10 +234,9 @@ async def _record_run_completed(
             "agent_id": scope.agent_id,
         },
     )
-    await maybe_emit_pod_delivered(
-        uow_factory,
+    await reads.deliver(
         pod_id=scope.pod_id,
-        organization_id=scope.organization_id,
+        organization_id=organization_id,
         via=DeliveryVia.SURFACE_MESSAGE,
         origin=origin,
         recipient_user_id=scope.user_id,

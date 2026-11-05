@@ -60,3 +60,35 @@ def test_resend_webhook_falls_back_to_the_generic_id(carried: bool) -> None:
         assert minted == "resend:s:em-1"
     else:
         assert minted.startswith("resend:s:content-sha256:")
+
+
+def _whatsapp_body(*changes: dict) -> dict:
+    return {"entry": [{"changes": [{"value": value} for value in changes]}]}
+
+
+def test_a_rebatched_whatsapp_retry_is_the_same_delivery() -> None:
+    """Meta retries for days and may batch a retry differently."""
+    first = {"messages": [{"id": "wamid.A"}], "metadata": {"phone_number_id": "1"}}
+    second = {"messages": [{"id": "wamid.B"}], "metadata": {"phone_number_id": "1"}}
+    together = _whatsapp_body(first, second)
+    retried = _whatsapp_body(second, first)
+    retried["entry"][0]["id"] = "waba-1"
+
+    assert webhook_source_event_id(
+        "whatsapp", together, b"one body", receiver="shared"
+    ) == webhook_source_event_id("whatsapp", retried, b"another", receiver="shared")
+
+
+def test_two_states_of_one_outbound_whatsapp_message_are_two_deliveries() -> None:
+    delivered = _whatsapp_body({"statuses": [{"id": "wamid.X", "status": "delivered"}]})
+    read = _whatsapp_body({"statuses": [{"id": "wamid.X", "status": "read"}]})
+
+    assert webhook_source_event_id(
+        "whatsapp", delivered, b"", receiver="shared"
+    ) != webhook_source_event_id("whatsapp", read, b"", receiver="shared")
+
+
+def test_a_whatsapp_body_naming_nothing_still_falls_back_to_its_bytes() -> None:
+    assert webhook_source_event_id(
+        "whatsapp", _whatsapp_body({"metadata": {}}), b"bytes", receiver="shared"
+    ).startswith("whatsapp:shared:content-sha256:")

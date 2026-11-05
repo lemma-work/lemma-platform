@@ -29,6 +29,7 @@ from pydantic_ai.exceptions import (
 )
 
 from app.core.errors.describe import describe_exception
+from app.core.infrastructure.work import LeaseLost
 from app.core.redaction import redact_text
 from app.core.domain.errors import DomainError
 
@@ -37,10 +38,12 @@ from app.core.domain.errors import DomainError
 # call through ``request_approval`` instead of treating it as a hard failure.
 # DESTRUCTIVE_ACTION_REQUIRES_APPROVAL is the destructive-action gate — the
 # user's APPROVE_FOR_SESSION decision unlocks the action type for the rest of
-# the conversation.
+# the conversation. OUTSIDE_TEXT_REQUIRES_APPROVAL is the same question asked
+# of anything an agent does while it reads what people outside the pod wrote.
 APPROVAL_CODES = {
     "MISSING_WORKLOAD_RESOURCE_GRANT",
     "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+    "OUTSIDE_TEXT_REQUIRES_APPROVAL",
     "AUTH_REQUIRED",
 }
 
@@ -63,7 +66,9 @@ class AgentInputRequired(Exception):
 
 # Exceptions that are control flow, not tool failures: they carry meaning for the
 # pydantic-ai run loop (retry / deferral / approval / usage limit / unexpected
-# behaviour) or signal cancellation/shutdown. Never swallow these.
+# behaviour) or signal cancellation/shutdown. Never swallow these. ``LeaseLost``
+# is a tool's commit refused because another worker holds the turn now: the
+# turn ends here, and must not hand the model an error to work around.
 _CONTROL_FLOW_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ModelRetry,
     CallDeferred,
@@ -71,6 +76,7 @@ _CONTROL_FLOW_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AgentInputRequired,
     UsageLimitExceeded,
     UnexpectedModelBehavior,
+    LeaseLost,
     asyncio.CancelledError,
     KeyboardInterrupt,
     SystemExit,

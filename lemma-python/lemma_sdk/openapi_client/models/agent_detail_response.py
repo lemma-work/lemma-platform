@@ -11,6 +11,7 @@ from dateutil.parser import isoparse
 
 from ..models.agent_kind import AgentKind
 from ..models.agent_toolset import AgentToolset
+from ..models.resource_visibility import ResourceVisibility
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -63,7 +64,7 @@ class AgentDetailResponse:
         metadata (AgentDetailResponseMetadataType0 | None | Unset):
         output_schema (AgentDetailResponseOutputSchemaType0 | None | Unset):
         toolsets (list[AgentToolset] | Unset):
-        visibility (str | Unset):  Default: 'POD'.
+        visibility (ResourceVisibility | Unset):
     """
 
     created_at: datetime.datetime
@@ -83,7 +84,7 @@ class AgentDetailResponse:
     metadata: AgentDetailResponseMetadataType0 | None | Unset = UNSET
     output_schema: AgentDetailResponseOutputSchemaType0 | None | Unset = UNSET
     toolsets: list[AgentToolset] | Unset = UNSET
-    visibility: str | Unset = "POD"
+    visibility: ResourceVisibility | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -173,7 +174,9 @@ class AgentDetailResponse:
                 toolsets_item = toolsets_item_data.value
                 toolsets.append(toolsets_item)
 
-        visibility = self.visibility
+        visibility: str | Unset = UNSET
+        if not isinstance(self.visibility, Unset):
+            visibility = self.visibility.value
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -357,7 +360,12 @@ class AgentDetailResponse:
 
                 toolsets.append(toolsets_item)
 
-        visibility = d.pop("visibility", UNSET)
+        _visibility = d.pop("visibility", UNSET)
+        visibility: ResourceVisibility | Unset
+        if isinstance(_visibility, Unset):
+            visibility = UNSET
+        else:
+            visibility = ResourceVisibility(_visibility)
 
         agent_detail_response = cls(
             created_at=created_at,

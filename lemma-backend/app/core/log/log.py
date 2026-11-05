@@ -10,6 +10,7 @@ import sys
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.core.log.cloud_trace import cloud_trace_fields
 from opentelemetry import trace
 import structlog
 
@@ -46,14 +47,12 @@ _FOREIGN_LOGGER_PREFIXES = frozenset(
         "coredis",
         "e2b",
         "fastmcp",
-        "faststream",
         "filelock",
         "httpcore",
         "httpx",
         "mcp",
         "openai",
         "sqlalchemy",
-        "streaq",
         "urllib3",
         "uvicorn",
     }
@@ -62,7 +61,6 @@ _INFO_NOISE_LOGGER_PREFIXES = (
     # These libraries narrate every successful request/message at INFO. Their
     # warnings and errors remain visible; timing belongs in OTel spans instead
     # of duplicate console records.
-    "faststream",
     "httpcore",
     "httpx",
     "sqlalchemy.engine",
@@ -74,7 +72,6 @@ _INFO_NOISE_LOGGER_PREFIXES = (
     # propagate through the redacted JSON pipeline.
     "sqlalchemy.orm",
     "sqlalchemy.pool",
-    "streaq",
     "uvicorn.access",
 )
 _DEBUG_ONLY_NOISE_LOGGER_PREFIXES = (
@@ -236,6 +233,7 @@ def _add_trace_context(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str,
     if span_context and span_context.is_valid:
         event_dict.setdefault("trace_id", format(span_context.trace_id, "032x"))
         event_dict.setdefault("span_id", format(span_context.span_id, "016x"))
+        event_dict.update(cloud_trace_fields(span_context))
     return event_dict
 
 

@@ -285,7 +285,8 @@ async def test_send_message_retry_button_stores_only_the_action():
     service = _service(recorder)
 
     with patch(
-        "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+        "app.modules.agent_surfaces.platforms.telegram.callback_token_store."
+        "put_callback_token",
         new=AsyncMock(return_value="retry-token"),
     ) as put_token:
         await service.send_message(

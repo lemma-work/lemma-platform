@@ -1,17 +1,18 @@
 """The reads behind ``get_usage_limits``, batched.
 
-Answering "may this call proceed" needed six serial aggregates: three spend
-sums over ``usage_records`` — which migration 0018 records as the highest
-insert-rate table in the system — and three reserved-counter reads. They ran
-strictly in sequence on the request path.
+Reporting a member's limits needs six aggregates: three spend sums over
+``usage_records`` — which migration 0018 records as the highest insert-rate
+table in the system — and three reserved-counter reads.
 
 Neither collapse changes what is counted; both change how many times the
 database is asked.
 
-Not cached, deliberately. These numbers gate spending, and a cached limit lets
-a caller overspend by the TTL's worth before anything notices. Not gathered
-either: six concurrent checkouts from a ``pool_size=10``, ``max_overflow=0``
-pool is a worse trade than three sequential statements.
+What admits work no longer reads these. A run's start and each of its requests
+compare the limited windows' running totals (``spend_counters``), which keep
+up with the ledger without summing it; these sums are what the limits pages
+show, for every window, limited or not. Not gathered: six concurrent checkouts
+from a ``pool_size=10``, ``max_overflow=0`` pool is a worse trade than three
+sequential statements.
 """
 
 from __future__ import annotations

@@ -125,6 +125,14 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show, or choose, how many runs this computer takes at once.
+    MaxRuns {
+        /// The new limit, 1 to 128. Kept as chosen through later changes of
+        /// the default; applies when the Agent Host next starts.
+        value: Option<u16>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Turn running Lemma agents' commands on this computer on or off.
     HostExecution {
         #[command(subcommand)]

@@ -77,6 +77,16 @@ def _bounded_pieces(text: str) -> list[str]:
     return pieces
 
 
+def _decode_state(raw_state: bytes | str) -> tuple[ProcessState, int | None]:
+    try:
+        decoded = json.loads(raw_state)
+        return ProcessState(decoded["s"]), decoded["e"]
+    except KeyError, TypeError, ValueError:
+        # A malformed or half-written state key means the process is simply
+        # not known to have finished.
+        return ProcessState.RUNNING, None
+
+
 @dataclass(frozen=True, slots=True)
 class E2BOutputBuffer:
     """Sequenced output for one process, shared across pollers and replicas."""
@@ -180,6 +190,30 @@ class E2BOutputBuffer:
             ex=_RETENTION_SECONDS,
         )
 
+    async def read_state(
+        self, process_id: str
+    ) -> tuple[ProcessState, int | None] | None:
+        """The process's state and exit code, or None when nothing is recorded.
+
+        For listings, which need only the state. `read` fetches the whole
+        output buffer and renews its retention, so a listing that used it pulled
+        every process's output just to learn whether it had ended, and kept
+        every abandoned buffer alive for as long as anything listed the sandbox.
+        Returns None rather than raising: one process aging out is a fact about
+        that process, not a reason the whole listing cannot be answered.
+        """
+        redis = self._redis
+        raw_state = await redis.get(self._state_key(process_id))
+        if raw_state is None:
+            # `append` renews the chunks, not the state written at start, so a
+            # command that has printed for longer than the retention window
+            # still exists -- and has not recorded an exit, which would have
+            # rewritten the state.
+            if await redis.exists(self._chunks_key(process_id)):
+                return ProcessState.RUNNING, None
+            return None
+        return _decode_state(raw_state)
+
     async def read(
         self, process_id: str, *, after_sequence: int
     ) -> ProcessOutputSnapshot:
@@ -222,17 +256,9 @@ class E2BOutputBuffer:
         # oldest retained chunk is however many were dropped. Tracking total
         # appends separately would be more precise; this errs toward telling
         # the reader that truncation happened.
-        state, exit_code = ProcessState.RUNNING, None
-        if raw_state:
-            try:
-                decoded = json.loads(raw_state)
-                state = ProcessState(decoded["s"])
-                exit_code = decoded["e"]
-            except KeyError, TypeError, ValueError:
-                # A malformed or half-written state key means the process
-                # is simply not known to have finished, which is what the
-                # RUNNING/None defaults above already say.
-                pass
+        state, exit_code = (
+            _decode_state(raw_state) if raw_state else (ProcessState.RUNNING, None)
+        )
 
         # Where the retained window starts in absolute terms. Trimming drops
         # from the left, so index 0 is not sequence 1 once anything has been

@@ -61,6 +61,23 @@ class DatastoreSignedLinkLimitError(DatastoreDomainError):
         )
 
 
+class DatastoreRetryTooSoonError(DatastoreDomainError):
+    """This document was asked to be processed again too recently.
+
+    429: nothing is wrong and the request is not refused for good, it is early.
+    The details say how long the cooldown is, because the caller -- often an
+    agent -- has to decide whether to wait.
+    """
+
+    def __init__(self, cooldown_seconds: int):
+        super().__init__(
+            "This document was retried moments ago; wait before retrying it again.",
+            code="DATASTORE_RETRY_TOO_SOON",
+            status_code=429,
+            details={"cooldown_seconds": cooldown_seconds},
+        )
+
+
 class DatastoreRevocationIncompleteError(DatastoreDomainError):
     """The link is revoked in the record but still cached, so still openable.
 
@@ -148,14 +165,15 @@ class DatastoreQueryUnavailableError(DatastoreDomainError):
     """Direct querying is not available on this deployment.
 
     `PS-DATA-021`: a person who wrote perfectly good SQL must not be told their
-    query was the problem. Ad-hoc SQL runs as a dedicated Postgres role
-    (`datastore_query_role`), and a managed Postgres that never provisioned it
-    leaves every query with nowhere to run — a fact about the deployment that
-    no amount of rewriting the query will change.
+    query was the problem. Ad-hoc SQL runs as a Postgres role of the pod's own
+    (``datastore_query_role`` plus the pod's id), which the app creates; an app
+    role that may not create roles leaves every query with nowhere to run — a
+    fact about the deployment that no amount of rewriting the query will change.
 
     503 rather than 400 for exactly that reason, and rather than 500 because
     the platform is not broken: this one facility is absent, everything else in
-    the datastore works, and an operator can fix it by granting the role.
+    the datastore works, and an operator can fix it by granting the app's
+    database role CREATEROLE.
     """
 
     def __init__(self, message: str, details: object | None = None):
@@ -168,23 +186,39 @@ class DatastoreQueryUnavailableError(DatastoreDomainError):
 
 
 class DocumentExtractionUnavailableError(RuntimeError):
-    """The extractor could not be reached — the document was never judged.
+    """The extractor is down -- the document was never judged.
 
-    This is the engine-neutral signal for *infrastructure* backpressure:
-    connection refused, a 5xx or timeout from the extraction service, or an open
-    circuit breaker. It deliberately does NOT mean "this document is bad".
+    Raised only with evidence that the dependency is down for everyone: the
+    connection was refused, its health check failed, or the circuit is open
+    because *other* documents failed. A 5xx, timeout or 413 on one document
+    while the extractor serves others is not this; it is the document's
+    failure and is charged an attempt (``ExtractorFailedOnDocument``).
 
-    The distinction is load-bearing. ``claim_for_processing`` spends one of a
-    file's ``datastore_recovery_max_attempts`` (3) on every claim, and the
-    recovery cron terminally fails a file once that budget is gone. Treating an
-    extractor outage as a document failure therefore turns three blips into a
-    permanently-failed user document. Processing catches this specific type and
-    calls ``release_claim``, which returns the row to PENDING and refunds the
-    attempt, so the file is re-driven when the extractor comes back.
+    The distinction is the whole rule. Classing every 5xx as "unavailable" is
+    how one PDF the extractor panicked on was re-processed once a minute
+    forever: the attempt was refunded each time, so no budget ever ran out.
 
-    Adapters raise their own subclass (e.g. ``KreuzbergTransientError``) so the
-    processing service never has to know which engine is configured.
+    ``evidence`` names what was observed, in the work runtime's vocabulary
+    (``connection_refused``, ``health_check_failing``, ``circuit_open``,
+    ``rate_limited``), so processing can say why it is waiting.
     """
 
-    def __init__(self, message: str = "Document extractor unavailable"):
+    evidence: str = "connection_refused"
+
+    def __init__(
+        self,
+        message: str = "Document extractor unavailable",
+        *,
+        retry_after_seconds: float | None = None,
+    ):
         super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ExtractorFailedOnDocument(RuntimeError):
+    """The extractor answered, and failed on this document.
+
+    A 5xx, a timeout or a 413 while its health check passes: the document is
+    at fault, so an attempt is charged and the failure counts once against
+    this document in the circuit breaker.
+    """

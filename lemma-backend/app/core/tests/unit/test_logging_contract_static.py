@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from app.core.log.event_catalog import EVENT_CATALOG as BACKEND_CATALOG
+from app.modules.test_support import source_tree
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -44,7 +45,7 @@ def _logger_method(node: ast.Call) -> str | None:
 
 
 def _runtime_files(root: Path):
-    for path in sorted(root.rglob("*.py")):
+    for path in source_tree.python_files(root):
         if "tests" in path.parts or "test_support" in path.parts:
             continue
         yield path
@@ -66,7 +67,7 @@ def test_every_runtime_log_call_matches_its_exact_catalog_contract() -> None:
 
     for root, catalog in roots.items():
         for path in _runtime_files(root):
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = source_tree.tree(path)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
@@ -141,7 +142,7 @@ def test_runtime_does_not_create_framework_owned_application_loggers() -> None:
         for path in _runtime_files(root):
             if path == REPO_ROOT / "lemma-backend" / "app" / "core" / "log" / "log.py":
                 continue
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = source_tree.tree(path)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Assign):
                     continue
@@ -178,7 +179,7 @@ def test_runtime_async_tasks_choose_inherited_or_clean_context_explicitly() -> N
         for path in _runtime_files(root):
             if path in allowed_helpers:
                 continue
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = source_tree.tree(path)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(
                     node.func, ast.Attribute

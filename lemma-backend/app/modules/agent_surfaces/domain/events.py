@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.events import DomainEvent
@@ -10,15 +9,6 @@ from app.core.domain.events import DomainEvent
 
 class SurfaceEvents:
     STREAM = "surface_events"
-
-
-class SurfaceOnboardingReadyEvent(DomainEvent):
-    event_type: str = "surface.onboarding.ready"
-    pending_id: UUID
-
-    @classmethod
-    def stream_name(cls) -> str:
-        return SurfaceEvents.STREAM
 
 
 class SurfaceConnectedEvent(DomainEvent):
@@ -40,47 +30,6 @@ class SurfaceConnectedEvent(DomainEvent):
     #: mailbox provisioned automatically with an agent, which is the one case
     #: where nobody connected anything.
     connected_by_user_id: UUID | None = None
-
-    @classmethod
-    def stream_name(cls) -> str:
-        return SurfaceEvents.STREAM
-
-
-class NotificationSettledEvent(DomainEvent):
-    """An asking conversation is owed no further answers.
-
-    Raised when the *last* notification an agent run sent comes back answered,
-    expired or cancelled -- not the first. An agent that messaged four people
-    and woke on each reply would replay the whole conversation four times to
-    learn "three still pending" three times over.
-
-    An event rather than a call, because the work it triggers belongs to
-    `agent`: bringing the asking conversation back. Both respond paths used to
-    have to remember to do it themselves, through a function in the composition
-    root that swallowed every failure into a log line -- so an answer whose
-    delivery failed was simply lost. On the stream it is redelivered instead.
-    """
-
-    event_type: str = "notification.settled"
-    pod_id: UUID
-    conversation_id: UUID
-    notification_id: UUID
-
-    @classmethod
-    def stream_name(cls) -> str:
-        return SurfaceEvents.STREAM
-
-
-class SurfaceWebhookReceivedEvent(DomainEvent):
-    event_type: str = "surface.webhook.received"
-    source: str
-    payload: dict[str, Any]
-    headers: dict[str, str] | None = None
-    surface_id: UUID | None = None
-    source_event_id: str | None = None
-    # Surfaces served by the native receiver (bot) that produced this event, so
-    # platform-fan-in ingress can scope candidates to the receiving bot.
-    receiver_surface_ids: list[UUID] | None = None
 
     @classmethod
     def stream_name(cls) -> str:

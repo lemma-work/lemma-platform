@@ -451,6 +451,82 @@ async def test_a_named_mailbox_for_an_agent_that_has_one_is_refused(
     assert len(after) == 1, f"the refusal must leave the agent's mailbox alone: {after}"
 
 
+async def test_naming_the_mailbox_it_already_has_is_told_it_exists(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    pod_with_a_mailbox,
+    fake_resend,
+):
+    """QA #4: the 409 said to name the surface `resend-assistant`, and naming
+    it so gave the same 409.
+
+    A caller-chosen name went through the address retry loop as a candidate to
+    vary, so `resend-assistant` was tried as `resend-assistant-<suffix>`, which
+    lost to the one-mailbox-per-agent rule -- whose advice is the name the
+    caller had just used. The surface exists, so the refusal says that, and
+    how to change it.
+    """
+    pod_id = pod_with_a_mailbox["id"]
+    contacts_on = {"config": {"contacts": {"answer": "anyone"}}}
+
+    named = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={**contacts_on, "platform": "RESEND", "name": "resend-assistant"},
+    )
+
+    assert named.status_code == 409, named.text
+    body = named.json()
+    assert body["code"] == "AGENT_SURFACE_ALREADY_EXISTS", body
+    assert "PATCH /surfaces/resend-assistant" in body["message"], body["message"]
+    await db_session.commit()
+    after = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=pod_id)
+            )
+        ).scalars()
+    )
+    assert [surface.name for surface in after] == ["resend-assistant"], after
+
+
+async def test_the_sdk_upsert_sequence_switches_contacts_on_for_email(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    pod_with_a_mailbox,
+    fake_resend,
+):
+    """What `lemma surfaces upsert resend` sends, against the real API.
+
+    `PodSurfaces.upsert` patches the name it was given, creates on a 404, and
+    on the one-mailbox-per-agent refusal patches the surface the refusal names.
+    Each step's answer is the one the SDK relies on: a 404 for `resend`, a 409
+    whose details name the mailbox, and a patch of that mailbox that turns
+    contacts on -- idempotently.
+    """
+    pod_id = pod_with_a_mailbox["id"]
+    contacts_on = {"config": {"contacts": {"answer": "anyone"}}}
+
+    missing = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/resend", json=contacts_on
+    )
+    assert missing.status_code == 404, missing.text
+    refused = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={**contacts_on, "platform": "RESEND", "name": "resend"},
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["code"] == "AGENT_SURFACE_AGENT_PLATFORM_CONFLICT"
+    held = refused.json()["details"]["conflicting_surface"]["name"]
+    assert held == "resend-assistant"
+
+    for _ in range(2):
+        updated = await authenticated_client.patch(
+            f"/pods/{pod_id}/surfaces/{held}", json=contacts_on
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["config"]["contacts"]["answer"] == "anyone"
+
+
 async def test_what_the_bundle_applier_does_with_an_email_surface(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

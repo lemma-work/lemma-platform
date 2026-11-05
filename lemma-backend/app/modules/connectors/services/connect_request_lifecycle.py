@@ -14,9 +14,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
-from app.modules.connectors.domain.connect_request import (
-    ConnectRequestEntity,
-)
+from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 
 # Long enough for a person to read a consent screen, find a password manager
 # and pass an MFA prompt; short enough that a leaked `state` is not a standing
@@ -35,6 +33,24 @@ _FOLLOWUP_IDENTITY_KEY = "followup_provider_account_id"
 # Where the person was when they started, so the round trip puts them back
 # rather than somewhere plausible.
 _RETURN_TO_KEY = "return_to"
+
+# What another module started the request for (``start_authorization``), kept
+# after the exchange so the grant can say so.
+_PURPOSE_KEY = "purpose"
+#: A purpose is a short identifier another module chose, never free text.
+_PURPOSE_MAX = 64
+
+
+#: How long a started sign-in is handed back again rather than made anew.
+#: Well inside ``CONNECT_REQUEST_TTL``, so a link handed back still has most of
+#: its life left, and inside the lifetime of a provider-side authorization
+#: (Composio's connection link) that the request carries.
+CONNECT_REQUEST_REUSE_WINDOW = timedelta(minutes=10)
+
+
+def reusable_connect_request_cutoff() -> datetime:
+    """The earliest `created_at` a repeated connect may be handed back."""
+    return datetime.now(timezone.utc) - CONNECT_REQUEST_REUSE_WINDOW
 
 
 def oldest_claimable_connect_request() -> datetime:
@@ -191,3 +207,55 @@ def with_return_path(attributes: dict[str, str], return_to: object) -> dict[str,
     """Record the return path on a request, if the caller named a usable one."""
     path = safe_return_path(return_to)
     return {**attributes, _RETURN_TO_KEY: path} if path else attributes
+
+
+def with_purpose(attributes: dict[str, str], purpose: str | None) -> dict[str, str]:
+    """Record what the request was started for, if its starter said."""
+    if not purpose:
+        return attributes
+    if len(purpose) > _PURPOSE_MAX or not purpose.replace("_", "").isalnum():
+        raise ValueError(f"not a connect purpose: {purpose!r}")
+    return {**attributes, _PURPOSE_KEY: purpose}
+
+
+def purpose_of(connect_request: ConnectRequestEntity) -> str | None:
+    value = (connect_request.attributes or {}).get(_PURPOSE_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+# Set when the callback connected the account but could not bind the
+# installation it came back with: nobody holds it yet, and this person is not
+# its owner on GitHub (audit H4). The callback then reports PENDING_APPROVAL,
+# the state reconcile reports for the same account.
+_INSTALLATION_KEY = "installation"
+_NEEDS_ADMIN = "NEEDS_ADMIN"
+
+
+def with_installation_needing_an_admin(
+    attributes: dict[str, object] | None,
+) -> dict[str, object]:
+    return {**(attributes or {}), _INSTALLATION_KEY: _NEEDS_ADMIN}
+
+
+def installation_needs_an_admin(connect_request: ConnectRequestEntity | None) -> bool:
+    if connect_request is None:
+        return False
+    return (connect_request.attributes or {}).get(_INSTALLATION_KEY) == _NEEDS_ADMIN
+
+
+def request_attributes(
+    state: str,
+    provider_state: str | None,
+    code_verifier: str | None,
+    return_to: object,
+    purpose: str | None,
+) -> dict[str, str]:
+    """What a new connect request remembers until its callback: the flow's
+    secrets, where to put the person back, and what another module started it
+    for (``purpose``, carried to the ``ConnectorAccountConnected`` it emits)."""
+    attributes = {"state": state}
+    if provider_state is not None:
+        attributes["provider_state"] = provider_state
+    if code_verifier:
+        attributes["code_verifier"] = code_verifier
+    return with_purpose(with_return_path(attributes, return_to), purpose)

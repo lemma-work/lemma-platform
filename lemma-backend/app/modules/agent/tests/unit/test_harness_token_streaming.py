@@ -26,6 +26,13 @@ from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
 from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harnesses.streaming import (
+    DEFAULT_TOKEN_FLUSH_SECONDS,
+)
+
+#: The reading-pace promise, written down apart from the setting that keeps it,
+#: so a longer interval fails here instead of lowering what this test expects.
+_FLUSH_CONTRACT_SECONDS = 0.05
 
 pytestmark = pytest.mark.unit
 
@@ -41,14 +48,16 @@ _DELTA_CHARS = 8
 _DELTA_GAP_SECONDS = 0.01
 
 
-def _slow_stream(text: str):
+def _slow_stream(
+    text: str, *, chars: int = _DELTA_CHARS, gap: float = _DELTA_GAP_SECONDS
+):
     """A model that trickles its answer out, the way a real provider does."""
 
     async def stream_fn(messages, info: AgentInfo) -> AsyncIterator[str]:
         del messages, info
-        for start in range(0, len(text), _DELTA_CHARS):
-            await asyncio.sleep(_DELTA_GAP_SECONDS)
-            yield text[start : start + _DELTA_CHARS]
+        for start in range(0, len(text), chars):
+            await asyncio.sleep(gap)
+            yield text[start : start + chars]
 
     return stream_fn
 
@@ -158,3 +167,33 @@ async def test_the_durable_message_lands_only_once_the_response_is_whole(
 
     assert len(messages) == 1, timeline
     assert messages[0] >= tokens[-1], timeline
+
+
+@pytest.mark.asyncio
+async def test_a_reply_written_at_reading_pace_reaches_the_reader_as_it_grows(
+    monkeypatch,
+) -> None:
+    """A slow model's reply is shown every flush interval, not in fifty-character jumps.
+
+    Four characters every 25 ms take a third of a second to fill one
+    fifty-character chunk, so batching by size alone showed this reply in three
+    frames: its first word, one jump, and the rest when the part ended. Text
+    that changes about every flush interval is what reads as being written.
+    """
+    reply = "Sure. I checked the table and found three overdue invoices; here they are."
+    chars, gap = 4, 0.025
+    timeline = await _timed_events(
+        FunctionModel(stream_function=_slow_stream(reply, chars=chars, gap=gap)),
+        monkeypatch=monkeypatch,
+    )
+
+    frames = [at for at, kind in timeline if kind is AgentEventType.TOKEN]
+    produced_over = (-(-len(reply) // chars) - 1) * gap
+    # A frame per interval, with room for each to wait one more delta: a delta
+    # landing just short of the interval holds its text for the next one.
+    assert DEFAULT_TOKEN_FLUSH_SECONDS <= _FLUSH_CONTRACT_SECONDS
+    expected = produced_over / (2 * _FLUSH_CONTRACT_SECONDS)
+    assert len(frames) >= expected, (
+        f"{len(frames)} token frames over a {produced_over:.3f}s reply -- the "
+        f"reader saw it jump rather than grow (expected at least {expected:.1f})"
+    )

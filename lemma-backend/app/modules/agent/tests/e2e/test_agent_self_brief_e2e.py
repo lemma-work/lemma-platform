@@ -74,14 +74,24 @@ async def _default_agent_brief(*, pod_id: str, user_id: str) -> str:
         )
     assert agent is not None, "every pod has its own agent as a row"
     conversation = type(
-        "_Conversation", (), {"id": uuid4(), "is_pod_assistant": True, "metadata": {}}
+        "_Conversation",
+        (),
+        {
+            "id": uuid4(),
+            "is_pod_assistant": True,
+            "metadata": {},
+            "user_id": UUID(user_id),
+            "type": None,
+        },
     )()
-    return await AgentContextBriefBuilder(uow_factory).build(
+    brief = await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,
         conversation=conversation,
         user_id=UUID(user_id),
         pod_id=UUID(pod_id),
     )
+    # The half in the system prompt: who the agent is and what the pod holds.
+    return brief.stable
 
 
 @pytest.mark.asyncio
@@ -207,7 +217,7 @@ async def test_an_empty_pod_still_renders_a_whole_brief(
     assert brief.startswith("# Runtime Context")
     assert "## You" in brief
     # The person who made it is in the pod, so this one is never empty -- and it
-    # carries the id `message_user` actually takes.
+    # carries the id `channel_post` actually takes.
     assert "## People here" in brief
     assert "(to: " in brief
     for empty_section in ("## Tables", "## Workflows", "## Agents", "## Functions"):

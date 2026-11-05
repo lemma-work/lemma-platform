@@ -34,6 +34,7 @@ pub(super) fn fixture() -> (TempDir, Journal, Uuid, Command, RunSpec) {
         }),
         run_deadline: Utc::now() + ChronoDuration::minutes(5),
         system_prompt_delivery: None,
+        pre_approvals: Vec::new(),
     };
     let payload = serde_json::to_value(&spec).unwrap();
     let command = Command {

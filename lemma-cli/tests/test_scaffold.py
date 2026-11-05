@@ -231,12 +231,17 @@ def test_parse_grant_spec_explicit_app_and_raw_perm():
 
 
 def test_parse_grant_spec_table_delete_is_structural():
-    # Regression: the delete preset used to emit datastore.record.delete, a
-    # permission id that does not exist in the backend registry (grants with it
-    # were rejected server-side). Record deletion rides on datastore.record.write;
-    # `delete` means the structural (destructive) table delete.
+    # `delete` means the structural (destructive) table delete; deleting rows
+    # is `delete-rows`, which is datastore.record.delete (also destructive).
     g = parse_grant_spec("tickets:delete")
     assert g["permission_ids"] == ["datastore.table.delete"]
+
+
+def test_parse_grant_spec_delete_rows_is_its_own_permission():
+    # Row deletes stopped riding on datastore.record.write: writing a row is
+    # not deleting every row.
+    g = parse_grant_spec("tickets:write,delete-rows")
+    assert g["permission_ids"] == ["datastore.record.write", "datastore.record.delete"]
 
 
 def test_parse_grant_spec_function_and_agent_tools():
@@ -344,6 +349,37 @@ def test_validate_workflow_flags_problems():
     assert "ZZZ" in joined  # bad edge target
     assert "END" in joined  # missing END
     assert "agent_name" in joined  # AGENT node without target
+
+
+def test_validate_workflow_reads_a_question_decisions_routes_as_its_branches():
+    from lemma_cli.cli_app.scaffold import validate_workflow
+
+    issues = validate_workflow(
+        {
+            "nodes": [
+                {
+                    "id": "triage",
+                    "type": "DECISION",
+                    "config": {
+                        "question": {
+                            "instruction": "Triage the email.",
+                            "evidence": {"type": "literal", "value": "Refund me"},
+                            "answer": {"type": "boolean", "description": "Refund?"},
+                            "routes": {"true": "refund"},
+                            "unsure_next_node_id": "ask",
+                        }
+                    },
+                },
+                {"id": "refund", "type": "END"},
+                {"id": "ask", "type": "END"},
+                {"id": "reply", "type": "END"},
+            ],
+            "edges": [{"id": "e1", "source": "triage", "target": "reply"}],
+        }
+    )
+
+    # Its routes are not extra entry nodes, and "no rules" is not a fall-through.
+    assert issues == []
 
 
 def test_validate_workflow_flags_unknown_start_namespace():
@@ -864,6 +900,9 @@ UNDOCUMENTED_SCAFFOLD_FIELDS: dict[str, set[str]] = {
     "function": {"icon_url"},
     "agent": {"icon_url"},
     "workflow": {"icon_url"},
+    # Deprecated: a schedule names its pod connector. Agents reading the
+    # scaffold took the commented-out line for a field to fill in.
+    "schedule": {"account_id"},
 }
 
 SCAFFOLD_REQUEST_MODELS: list[tuple[str, str, str]] = [

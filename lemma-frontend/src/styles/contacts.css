@@ -208,39 +208,6 @@
 }
 
 /* ── on your website ────────────────────────────────────────────────── */
-.cwidgets {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-.cwidget {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 16px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-lg);
-    background: var(--paper);
-}
-.cwidget__top {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-}
-.cwidget__name {
-    font-size: 15px;
-    font-weight: 500;
-}
-.cwidget__kind,
-.cwidget__origins {
-    margin: 0;
-    font-size: 13px;
-    color: var(--ink-3);
-}
 .cwidget__embed {
     display: flex;
     align-items: flex-start;
@@ -382,4 +349,321 @@
 }
 .collect__own .cwidget__embed {
     margin-top: 8px;
+}
+
+/* ── where contacts can write, and the page before anyone has ────────── */
+.contacts__lead {
+    margin: -4px 0 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.contacts__intro {
+    margin: 4px 0 8px;
+    padding: 18px 20px;
+    border-radius: var(--r-lg);
+    background: var(--wash-b);
+    box-shadow: inset 0 0 0 1px var(--line);
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--ink-2);
+}
+.contacts__intro p {
+    margin: 0;
+}
+.contacts__intro ol {
+    margin: 10px 0 12px;
+    padding-left: 22px;
+    color: var(--ink);
+}
+.contacts__intro li + li {
+    margin-top: 4px;
+}
+.crow.cbot {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+}
+.cbot__mark {
+    display: grid;
+    place-items: center;
+}
+.cbot__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.cbot__text .crow__sub {
+    white-space: normal;
+}
+.cbot__choose select {
+    height: 32px;
+    max-width: 280px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--wash-a);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+.cbot__problem {
+    grid-column: 2 / -1;
+    font-size: 13px;
+    color: var(--bad);
+}
+
+/* ── the Contacts place as a tool: tabs, a people table, setup cards ──── */
+.ctabs {
+    display: flex;
+    gap: 22px;
+    margin: 4px 0 18px;
+    border-bottom: 1px solid var(--line-2);
+}
+.ctabs__tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 38px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.ctabs__tab:hover,
+.ctabs__tab[aria-selected="true"] {
+    color: var(--ink);
+}
+.ctabs__tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ink);
+}
+.ctabs__count {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.cfind {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(100%, 360px);
+    height: 36px;
+    margin-bottom: 12px;
+    padding: 0 12px;
+    border-radius: var(--r-sm);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink-3);
+}
+.cfind:focus-within {
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.cfind input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+}
+.cpeople {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--line);
+}
+.cpeople__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) 80px;
+    align-items: center;
+    gap: 16px;
+    min-height: 44px;
+    padding: 6px 8px;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.cpeople__row:hover {
+    background: var(--wash-b);
+}
+.cpeople__row--head {
+    min-height: 32px;
+    font-size: 12px;
+    color: var(--ink-3);
+    cursor: default;
+}
+.cpeople__row--head:hover {
+    background: transparent;
+}
+.cpeople__name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+.cpeople__name > span:last-child,
+.cpeople__muted {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cpeople__muted {
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.cpeople__face {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--wash-a);
+    font-size: 11px;
+    color: var(--ink-2);
+}
+.csetup {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+}
+.ccard {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    padding: 16px;
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.ccard--wide {
+    grid-column: 1 / -1;
+}
+.ccard__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.ccard__head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+}
+.ccard__sub {
+    margin: -6px 0 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.ccard__clip {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ccard .crows {
+    border-top: 0;
+}
+.ccard .crow {
+    padding: 8px 0;
+}
+.ccard .crow:last-child {
+    border-bottom: 0;
+}
+.ccard .cbot__text .crow__sub {
+    white-space: nowrap;
+}
+.ccard .creach h3 {
+    margin: 4px 0 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+}
+.ccard .smanage__check small {
+    display: block;
+    max-width: 100%;
+}
+.ccard .crow,
+.ccard .crow:hover {
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+.ccard .cbot__choose select {
+    max-width: 200px;
+}
+.ccard .cbot__text .crow__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ccard__note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+@media (max-width: 720px) {
+    /* A phone keeps the whole handle: the choice drops under it. */
+    .ccard .crow.cbot {
+        grid-template-columns: 28px minmax(0, 1fr);
+        row-gap: 8px;
+    }
+    .ccard .cbot__choose {
+        grid-column: 2 / -1;
+    }
+    .ccard .cbot__choose select {
+        max-width: 100%;
+    }
+}
+
+/* A web chat is a row like a bot's: what it answers, its link, and its
+   code and secret folded under "Set up". */
+.cwebchat .cwidget__acts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.cwebchat .cwidget__more {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 0 4px 42px;
+}
+/* A function's description stays on its line: the column, not the page,
+   is what it fits. */
+.ccard .smanage__check,
+.ccard .smanage__check > span {
+    min-width: 0;
+}
+.creach__more {
+    margin-top: 6px;
+    font-size: 13px;
+}
+.ccard .creach > div {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+@media (max-width: 720px) {
+    .ccard .cwebchat .cwidget__acts {
+        grid-column: 2 / -1;
+    }
+    .ccard .cwebchat .cwidget__more {
+        padding-left: 0;
+    }
 }

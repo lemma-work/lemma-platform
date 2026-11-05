@@ -12,16 +12,25 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noq
 from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # noqa: F401
     WhatsAppNumber,
 )
-from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F401
-    AgentSurfaceGroupMessageModel,
-    AgentSurfaceGroupModel,
+from app.modules.agent_surfaces.infrastructure.inbound_delivery_models import (  # noqa: F401
+    SurfaceDeliveryModel,
+    SurfaceInboundMessageModel,
+    SurfaceMessageClaimModel,
+    SurfaceReceiverStateModel,
+)
+from app.modules.agent_surfaces.infrastructure.slack_configuration_models import (  # noqa: F401
+    SlackConfigurationTokenModel,
+)
+from app.modules.agent_surfaces.infrastructure.slack_manager_models import (  # noqa: F401
+    SlackManagerInstallModel,
+    SlackPendingAppBindingModel,
+    SlackWorkspacePersonModel,
 )
 
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
-    Boolean,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -39,18 +48,11 @@ from app.core.crypto import get_secret_cipher
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     ExternalSurfaceUserEntity,
     SurfaceCredentialMode,
     SurfacePlatform,
-)
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-    NotificationStatus,
 )
 
 logger = get_logger(__name__)
@@ -153,6 +155,10 @@ class AgentSurface(UUIDAuditBase):
         # it is this index's leading column, and there is no query that filters
         # the platform without also filtering the status.
         Index("ix_agent_surface_routing", "surface_type", "status"),
+        # The surfaces bound to one pod connector, which is how a slug reaches
+        # back to them: is this bot already bound, what does removing the
+        # connector stop.
+        Index("ix_agent_surfaces_pod_connector", "pod_id", "pod_connector_slug"),
     )
 
     # No index of its own: `uq_agent_surface_pod_name` leads with `pod_id`, and
@@ -201,13 +207,13 @@ class AgentSurface(UUIDAuditBase):
         String(50), default="SYSTEM", server_default="SYSTEM"
     )
     config: Mapped[dict] = mapped_column(JSONB)
-    # Indexed: `get_account_conflict_in_org` and the shared-webhook narrowing in
-    # `routing_surfaces` both filter it, including as IS NULL.
-    account_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
+    # The pod connector the surface runs as, by slug. No foreign key, on
+    # purpose: slugs never change, and a connector removed from the pod must
+    # make the surface fail with `POD_CONNECTOR_NOT_FOUND` on its next use --
+    # a SET NULL would quietly put it on the deployment's own credentials.
+    # Indexed with the pod, which is how every reader finds the surfaces on
+    # one connector.
+    pod_connector_slug: Mapped[str | None] = mapped_column(String(63), nullable=True)
     # Indexed: `routing_surfaces` narrows by it on every inbound event that
     # carries a workspace, which is the selective predicate once the platform's
     # live surfaces are the candidate set.
@@ -250,7 +256,7 @@ class AgentSurface(UUIDAuditBase):
         everyone's problem. `list_by_pod` maps a whole page, so one retired row
         took the pod's entire surface list with it -- as a 500, since a
         ``ValueError`` is not a ``DomainError`` and reaches the catch-all
-        handler. `get_account_conflict_in_org` is org-wide and platform-blind,
+        handler. `get_bound_to_connectors` can be platform-blind,
         so it did the same to the *creation* of an unrelated surface, and
         `list_by_pod` again to every agent-to-human notification for the pod.
 
@@ -293,7 +299,7 @@ class AgentSurface(UUIDAuditBase):
                 self.credential_mode or SurfaceCredentialMode.SYSTEM.value
             ),
             config=self.config,
-            account_id=self.account_id,
+            pod_connector_slug=self.pod_connector_slug,
             external_workspace_id=self.external_workspace_id,
             external_tenant_id=self.external_tenant_id,
             external_channel_id=self.external_channel_id,
@@ -361,240 +367,3 @@ class AgentSurfaceExternalUser(UUIDAuditBase):
 
     def to_entity(self) -> ExternalSurfaceUserEntity:
         return ExternalSurfaceUserEntity.model_validate(self)
-
-
-class AgentSurfaceConversationLinkModel(UUIDAuditBase):
-    __tablename__ = "agent_surface_conversation_links"
-    __table_args__ = (
-        Index(
-            "ix_agent_surface_link_external_thread",
-            "surface_id",
-            "platform",
-            "external_channel_id",
-            "external_thread_id",
-            "external_user_id",
-            unique=True,
-        ),
-        Index("ix_agent_surface_link_conversation", "conversation_id"),
-        # `find_surface_id_for_external_thread`: the continuity lookup that runs
-        # on *every* inbound message, and the one read here that is not scoped
-        # to a surface -- it exists to find which surface a returning chat
-        # already lives on. Without this it matched the standalone `platform`
-        # index and then filtered and sorted a table that grows per thread.
-        # Column order is the query's; `updated_at DESC` is its `ORDER BY ...
-        # LIMIT 1`.
-        Index(
-            "ix_agent_surface_link_thread_continuity",
-            "platform",
-            "external_thread_id",
-            "external_channel_id",
-            "external_user_id",
-            text("updated_at DESC"),
-        ),
-        # `latest_links_by_surface_and_external_users`: the fan-in read, one row
-        # per person via DISTINCT ON. The pair is the lookup; `last_inbound_at`
-        # is carried because the recency it sorts by is
-        # `coalesce(last_inbound_at, updated_at)`, so this covers the common
-        # case without claiming to serve the coalesce itself. Also
-        # `find_latest_dm_link_for_person`, which is always handed a surface list
-        # so that "this person's earlier private chat" is a lookup on this index
-        # rather than a scan of the platform.
-        Index(
-            "ix_agent_surface_link_surface_member",
-            "surface_id",
-            "external_user_id",
-            text("last_inbound_at DESC"),
-        ),
-    )
-
-    # No index of its own: leading column of `ix_agent_surface_link_external_thread`,
-    # and paired with the member in `ix_agent_surface_link_surface_member`.
-    surface_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_surfaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    # `index=True` removed, not the index: it produced a second, identical index
-    # beside `ix_agent_surface_link_conversation` above. Both existed, both were
-    # maintained on every write, and one of them could ever be chosen.
-    conversation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    # No index of its own: leading column of the continuity index above, which
-    # is the only read that starts from the platform.
-    platform: Mapped[str] = mapped_column(String(50), nullable=False)
-    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    external_thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Never filtered on: it records which agent answered this thread and is read
-    # off a row already found. Same for `route_key` below.
-    routed_agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
-    )
-    conversation_kind: Mapped[str] = mapped_column(
-        String(50), default="DM", server_default="DM", nullable=False
-    )
-    route_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    last_event: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Nullable, and it stays nullable: the backfill sets it from ``updated_at``
-    # for existing rows, but a row created by an older worker mid-deploy would
-    # still arrive NULL. ``inbound_activity_at`` on the entity is the reader.
-    last_inbound_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    def to_entity(self) -> AgentSurfaceConversationLink:
-        return AgentSurfaceConversationLink(
-            id=self.id,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            surface_id=self.surface_id,
-            conversation_id=self.conversation_id,
-            platform=self.platform,
-            external_channel_id=self.external_channel_id,
-            external_thread_id=self.external_thread_id,
-            external_user_id=self.external_user_id,
-            routed_agent_id=self.routed_agent_id,
-            conversation_kind=self.conversation_kind or "DM",
-            route_key=self.route_key,
-            last_event=self.last_event or {},
-            last_message_id=self.last_message_id,
-            last_inbound_at=self.last_inbound_at,
-        )
-
-
-class NotificationModel(UUIDAuditBase):
-    """Something the pod needs a person to see — see ``domain/notification.py``.
-
-    Lives in ``agent_surfaces`` because delivery is almost entirely surface work
-    (identity resolution, conversation links, platform adapters all live here).
-    The agent and workflow modules reach it through this module's own
-    ``contracts/notifications.py`` and ``contracts/workflow_notifications.py``.
-    It used to be ``app/composition``, which no longer exists.
-    """
-
-    __tablename__ = "notifications"
-    __table_args__ = (
-        # The inbox query: this person's notifications in this pod, newest first.
-        Index(
-            "ix_notifications_recipient_inbox",
-            "pod_id",
-            "recipient_user_id",
-            "status",
-            "created_at",
-        ),
-        # The reply path: does the conversation this inbound landed in have
-        # anything open addressed to its owner?
-        Index(
-            "ix_notifications_delivery_conversation",
-            "delivery_conversation_id",
-            "status",
-        ),
-        Index("ix_notifications_origin", "origin_kind", "origin_id"),
-        # The expiry sweep only ever scans OPEN rows with a deadline.
-        Index(
-            "ix_notifications_open_expires_at",
-            "expires_at",
-            postgresql_where=text("status = 'OPEN'"),
-        ),
-        # Pod-scoped rather than global: the key encodes a run/node id, and two
-        # pods can legitimately never collide, but a global unique index would
-        # make one pod's retry key a landmine for another's.
-        UniqueConstraint(
-            "pod_id", "idempotency_key", name="uq_notifications_idempotency"
-        ),
-    )
-
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), index=True, nullable=False
-    )
-    recipient_user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
-    )
-    recipient_pod_member_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pod_members.id", ondelete="CASCADE"), index=True, nullable=False
-    )
-    actor_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-    actor_agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
-    )
-
-    origin_kind: Mapped[str] = mapped_column(String(30), nullable=False)
-    origin_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    origin_conversation_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="SET NULL"), nullable=True
-    )
-    # From a stranger's thread: answered only as words the recipient approved.
-    from_outside: Mapped[bool] = mapped_column(Boolean, server_default="false")
-    origin_group_title: Mapped[str | None] = mapped_column(String(255))
-    asked_in_private: Mapped[bool] = mapped_column(Boolean, server_default="false")
-    asked_by_name: Mapped[str | None] = mapped_column(String(255))
-
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
-    background_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
-    expects_response: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
-    )
-    action: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-
-    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
-    delivery_status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
-    delivery_surface_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_surfaces.id", ondelete="SET NULL"), nullable=True
-    )
-    delivery_conversation_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="SET NULL"), nullable=True
-    )
-    delivery_platform: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    response_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    response_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-
-    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    def to_entity(self) -> NotificationEntity:
-        return NotificationEntity(
-            id=self.id,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            pod_id=self.pod_id,
-            recipient_user_id=self.recipient_user_id,
-            recipient_pod_member_id=self.recipient_pod_member_id,
-            actor_user_id=self.actor_user_id,
-            actor_agent_id=self.actor_agent_id,
-            origin_kind=NotificationOriginKind(self.origin_kind),
-            origin_id=self.origin_id,
-            origin_conversation_id=self.origin_conversation_id,
-            from_outside=self.from_outside,
-            origin_group_title=self.origin_group_title,
-            asked_in_private=bool(self.asked_in_private),
-            asked_by_name=self.asked_by_name,
-            title=self.title,
-            body=self.body,
-            background_instruction=self.background_instruction,
-            expects_response=self.expects_response,
-            action=self.action,
-            status=NotificationStatus(self.status),
-            delivery_status=NotificationDeliveryStatus(self.delivery_status),
-            delivery_surface_id=self.delivery_surface_id,
-            delivery_conversation_id=self.delivery_conversation_id,
-            delivery_platform=self.delivery_platform,
-            delivery_error=self.delivery_error,
-            response_summary=self.response_summary,
-            response_data=self.response_data,
-            idempotency_key=self.idempotency_key,
-            expires_at=self.expires_at,
-            delivered_at=self.delivered_at,
-            read_at=self.read_at,
-            responded_at=self.responded_at,
-        )

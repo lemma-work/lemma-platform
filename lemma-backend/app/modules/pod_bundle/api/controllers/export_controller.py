@@ -19,6 +19,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 from fastapi.responses import StreamingResponse
 
+from app.core.api.actor_policy import refuse_named_workloads
 from app.core.api.dependencies import CurrentUser
 from app.modules.pod_bundle.api.dependencies import ExportUseCasesDep, PodViewerDep
 from app.modules.pod_bundle.api.schemas import (
@@ -26,7 +27,14 @@ from app.modules.pod_bundle.api.schemas import (
     ExportStatusResponse,
 )
 
-router = APIRouter(prefix="/pods", tags=["Pod Bundle"], redirect_slashes=False)
+# A bundle job runs as the person, not as a workload's grants: named agents
+# and functions stay out of every bundle route (the assistant keeps them).
+router = APIRouter(
+    prefix="/pods",
+    tags=["Pod Bundle"],
+    redirect_slashes=False,
+    dependencies=[refuse_named_workloads("export, import or publish a pod")],
+)
 
 
 @router.post(

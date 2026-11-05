@@ -31,6 +31,7 @@ own disk and prefers it, and the re-open also hints the root the run recorded.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import UUID
@@ -105,6 +106,32 @@ class HostOpTransport(Protocol):
         params: dict[str, object],
         deadline_at: datetime,
     ) -> dict[str, object]: ...
+
+    async def send(
+        self,
+        *,
+        host_id: UUID,
+        workspace: UUID,
+        method: str,
+        params: dict[str, object],
+        data: bytes,
+        deadline_at: datetime,
+    ) -> dict[str, object]:
+        """``request``, with ``data`` for the host to fetch over HTTP."""
+        ...
+
+    async def receive(
+        self,
+        *,
+        host_id: UUID,
+        workspace: UUID,
+        method: str,
+        params: dict[str, object],
+        max_bytes: int,
+        deadline_at: datetime,
+    ) -> tuple[dict[str, object], bytes]:
+        """``request``, and the data the host delivered over HTTP for it."""
+        ...
 
 
 class HostTargets(Protocol):
@@ -261,16 +288,36 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
         deadline_at: datetime,
     ) -> dict[str, object]:
         """One op on this sandbox's host, re-opening once if it forgot us."""
+        return await self._with_reopen(
+            sandbox_id,
+            method,
+            lambda host_id: self._transport.request(
+                host_id=host_id,
+                workspace=sandbox_id,
+                method=method,
+                params=params,
+                deadline_at=deadline_at,
+            ),
+            deadline_at=deadline_at,
+        )
+
+    async def _with_reopen[T](
+        self,
+        sandbox_id: UUID,
+        method: str,
+        call: Callable[[UUID], Awaitable[T]],
+        *,
+        deadline_at: datetime,
+    ) -> T:
+        """``call`` on this sandbox's host, re-opening once if it forgot us.
+
+        ``call`` is made again from scratch on the retry, so an op that names
+        a transfer names a fresh one: the first may already have been used.
+        """
         target = await self._target(sandbox_id)
         for attempt in range(2):
             try:
-                return await self._transport.request(
-                    host_id=target.host_id,
-                    workspace=sandbox_id,
-                    method=method,
-                    params=params,
-                    deadline_at=deadline_at,
-                )
+                return await call(target.host_id)
             except HostOpRefused as exc:
                 if exc.kind != WORKSPACE_NOT_OPEN or attempt:
                     raise sandbox_error(exc, method=method) from exc
@@ -295,6 +342,54 @@ class AgentHostSandboxProvider(AgentHostOpsMixin):
     ) -> dict[str, object]:
         return await self.op(
             _sandbox_id(instance.name), method, params, deadline_at=deadline_at
+        )
+
+    async def _instance_send(
+        self,
+        instance: ProviderInstance,
+        method: str,
+        params: dict[str, object],
+        data: bytes,
+        *,
+        deadline_at: datetime,
+    ) -> dict[str, object]:
+        sandbox_id = _sandbox_id(instance.name)
+        return await self._with_reopen(
+            sandbox_id,
+            method,
+            lambda host_id: self._transport.send(
+                host_id=host_id,
+                workspace=sandbox_id,
+                method=method,
+                params=params,
+                data=data,
+                deadline_at=deadline_at,
+            ),
+            deadline_at=deadline_at,
+        )
+
+    async def _instance_receive(
+        self,
+        instance: ProviderInstance,
+        method: str,
+        params: dict[str, object],
+        max_bytes: int,
+        *,
+        deadline_at: datetime,
+    ) -> tuple[dict[str, object], bytes]:
+        sandbox_id = _sandbox_id(instance.name)
+        return await self._with_reopen(
+            sandbox_id,
+            method,
+            lambda host_id: self._transport.receive(
+                host_id=host_id,
+                workspace=sandbox_id,
+                method=method,
+                params=params,
+                max_bytes=max_bytes,
+                deadline_at=deadline_at,
+            ),
+            deadline_at=deadline_at,
         )
 
     # ------------------------------------------------------------ lifecycle

@@ -34,6 +34,9 @@ export interface ConsentRequest {
 }
 
 export const WRITE_SCOPE = "pod:write";
+/** Being told about new rows: sent to the app's own server as they are added,
+ *  while the person is away too. Asked for separately and off unless ticked. */
+export const EVENTS_SCOPE = "pod:events";
 
 /** Who is asking, said the way a person can check it. The host serving an
  *  app's metadata document is verified; the name an app gives itself is not,
@@ -145,17 +148,22 @@ export function safeRedirect(raw: string): boolean {
 
 /** The URL to send the browser to. Only ever the one the API returns, and
  *  only when it passes `safeRedirect`. `readOnly` narrows what the app asked
- *  for; it never widens it. */
+ *  for; it never widens it. `events` grants `pod:events` only when the app
+ *  asked for it. */
 export async function answerConsentRequest(
     id: string,
-    answer: { allow: boolean; readOnly?: boolean },
+    answer: { allow: boolean; readOnly?: boolean; events?: boolean },
     fetcher: typeof fetch = fetch,
 ): Promise<string> {
     const response = await fetcher(onApi("/oauth/consent/" + encodeURIComponent(id)), {
         method: "POST",
         credentials: "include",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ allow: answer.allow, read_only: answer.readOnly ?? false }),
+        body: JSON.stringify({
+            allow: answer.allow,
+            read_only: answer.readOnly ?? false,
+            events: answer.events ?? false,
+        }),
     });
     if (!response.ok) throw await problem(response, "Your answer could not be sent (" + response.status + ").");
     const body = (await response.json()) as { redirect_to?: unknown };

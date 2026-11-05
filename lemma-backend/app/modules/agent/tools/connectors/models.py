@@ -6,19 +6,24 @@ from pydantic import BaseModel, Field
 
 from app.modules.agent.domain.value_objects import JsonObject
 
+_CONNECTOR = (
+    "The pod connector, by its slug, as `list_connectors` names it (e.g. "
+    "`gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) "
+    "works too: browsing it needs nothing connected, and running it answers "
+    "with a `connect_url` until your person has connected it."
+)
+
 
 class SearchConnectorOperationsRequest(BaseModel):
     # Optional on purpose. Requiring it made every task start with
-    # list_connectors and a guess about which install does email -- and the
-    # guess is wrong whenever an org has both Gmail and Outlook installed.
-    # Omitting it searches every install and each hit carries the auth_config
-    # to run it against, so "send an email" is search then run.
-    auth_config: str | None = Field(
+    # list_connectors and a guess about which connector does email -- and the
+    # guess is wrong whenever a pod has both Gmail and Outlook.
+    connector: str | None = Field(
         default=None,
         description=(
-            "Installed connector to search, by its auth-config name. Omit to "
-            "search every connector installed in the organization -- prefer "
-            "that when you know the task but not which install provides it."
+            _CONNECTOR + " Omit to search every connector you may use in this "
+            "pod -- prefer that when you know the task but not which connector "
+            "provides it."
         ),
     )
     query: str | None = Field(
@@ -28,19 +33,27 @@ class SearchConnectorOperationsRequest(BaseModel):
 
 
 class DescribeConnectorOperationRequest(BaseModel):
-    auth_config: str = Field(description="Installed connector, by auth-config name.")
+    connector: str = Field(description=_CONNECTOR)
     operation: str = Field(description="Operation name from search results.")
 
 
 class RunConnectorOperationRequest(BaseModel):
-    auth_config: str = Field(description="Installed connector, by auth-config name.")
+    """No account argument: the connector decides whose account a call runs as.
+
+    A per-member connector uses the account of the person you act for; a
+    shared one uses the account its owner shared with the pod. An
+    ``account_id`` here was a free argument a model could fill in to act as a
+    colleague.
+    """
+
+    connector: str = Field(description=_CONNECTOR)
     operation: str = Field(description="Operation name from search results.")
     # Free-form rather than a per-operation model: compiling one model per
     # operation would blow the tool budget, need invalidating on every refresh,
     # and change whenever any tenant adds an MCP server. The schema is fetched on
     # demand by describe_connector_operation, and arguments are validated against
     # it server-side.
-    arguments: JsonObject = Field(
+    payload: JsonObject = Field(
         default_factory=dict,
         description=(
             "Operation arguments, matching its input_schema. A file argument "
@@ -48,11 +61,16 @@ class RunConnectorOperationRequest(BaseModel):
             '{"file_id": "..."}.'
         ),
     )
-    account_id: str | None = Field(
-        default=None,
-        description="Connected account to use; omit for the caller's own.",
-    )
     output_path: str | None = Field(
         default=None,
         description="Pod path to save a file result to, e.g. /me/report.pdf.",
+    )
+
+
+class ConnectConnectorRequest(BaseModel):
+    connector: str = Field(
+        description=(
+            "What to connect: a pod connector's slug, an installation's name, or "
+            "a catalog connector id such as `gmail`."
+        )
     )

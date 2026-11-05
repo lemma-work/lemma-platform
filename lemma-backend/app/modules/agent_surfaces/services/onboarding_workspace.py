@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (
+    VerifiedSurfaceIdentityRepository,
+)
+
 from dataclasses import dataclass
 from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -10,7 +14,6 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from datetime import datetime, timezone
 
 from pydantic import JsonValue
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
@@ -18,7 +21,9 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     AgentSurfaceStatus,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceOnboardingReadyEvent
+from app.modules.agent_surfaces.services.onboarding_handoff import (
+    hand_off_when_ready,
+)
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
     VerifiedSurfaceIdentity,
@@ -210,10 +215,8 @@ async def _provision_and_bind(
         if transport.surface is not None:
             # The destination goes on the identity row, which by now exists:
             # one write, and nothing that can outlive a revocation.
-            identity = await uow.session.scalar(
-                select(VerifiedSurfaceIdentity).where(
-                    VerifiedSurfaceIdentity.binding_key == state.binding_key
-                )
+            identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+                state.binding_key
             )
             assert identity is not None
             identity.installation_surface_id = transport.surface.id
@@ -229,12 +232,34 @@ async def _provision_and_bind(
         pending.step = OnboardingStep.READY
         if pending.ready_at is None:
             pending.ready_at = datetime.now(timezone.utc)
-            uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
+            await hand_off_when_ready(uow, pending.id)
         if workspace.entry == "invitation":
             return OnboardingOutcome(
                 invited_pod_name=await pod_name(uow.session, workspace.pod_id)
             )
     return OnboardingOutcome()
+
+
+async def bind_on_its_own_number(
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
+) -> None:
+    """Know this sender through the org's own number, and nothing more.
+
+    The number belongs to its pod, so there is no workspace to provision or
+    offer: who is answered there is the pod's membership, which ordinary
+    routing asks of the binding written here. A person who is not a member is
+    refused there, as before. The pending row goes, so their next message is
+    an ordinary one.
+    """
+    from app.modules.agent_surfaces.infrastructure.repositories.onboarding_repository import (  # noqa: E501
+        ChatOnboardingRepository,
+    )
+
+    await record_verified_identity(uows, transport, state)
+    async with uows() as uow:
+        row = await uow.session.get(PendingChatOnboarding, state.id)
+        if row is not None:
+            await ChatOnboardingRepository(uow).discard_pending(row)
 
 
 async def record_verified_identity(
@@ -271,10 +296,8 @@ async def record_verified_identity(
         user = await active_chat_user(uow, state.user_id)
         if user is None:
             raise ChallengeRejected("This account cannot chat")
-        identity = await uow.session.scalar(
-            select(VerifiedSurfaceIdentity).where(
-                VerifiedSurfaceIdentity.binding_key == state.binding_key
-            )
+        identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+            state.binding_key
         )
         if identity is not None and identity.user_id != user.id:
             if identity.revoked_at is None:
@@ -298,6 +321,8 @@ async def record_verified_identity(
             # a leftover number would answer the wrong person.
             identity.user_id = user.id
             identity.verified_phone = None
+            identity.session_proved_at = None
+            identity.proved_through_surface_id = None
         if identity is None:
             identity = VerifiedSurfaceIdentity(
                 binding_key=state.binding_key,
@@ -327,7 +352,7 @@ async def _ensure_shared_surface(
         (
             item
             for item in surfaces
-            if item.account_id is None
+            if item.pod_connector_slug is None
             and item.credential_mode == SurfaceCredentialMode.SYSTEM
             and item.agent_id == assistant_id
         ),
@@ -459,11 +484,8 @@ async def attach_chosen_workspace(
             uow, pod_id=pod_id, user_id=user.id
         )
         if transport.surface is not None:
-            identity = await uow.session.scalar(
-                select(VerifiedSurfaceIdentity).where(
-                    VerifiedSurfaceIdentity.binding_key == state.binding_key,
-                    VerifiedSurfaceIdentity.revoked_at.is_(None),
-                )
+            identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+                state.binding_key, include_revoked=False
             )
             if identity is None:
                 # Recorded above and not revoked since, so this is a race with a
@@ -486,5 +508,5 @@ async def attach_chosen_workspace(
         pending.offered_pods = None
         if pending.ready_at is None:
             pending.ready_at = datetime.now(timezone.utc)
-            uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
+            await hand_off_when_ready(uow, pending.id)
     return None

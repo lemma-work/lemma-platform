@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import EmailStr, field_validator
+from pydantic import EmailStr, Field, field_validator
 
 from app.core.api.schemas import BaseSchema
 from app.core.helpers.identifiers import normalize_mobile_e164
@@ -13,7 +13,15 @@ class UserProfileRequest(BaseSchema):
     first_name: str | None = None
     last_name: str | None = None
     mobile_number: str | None = None
-    telegram_username: str | None = None
+    telegram_username: str | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated: accepted and ignored, and will be removed. A Telegram "
+            "account is linked by sharing a contact with a Lemma bot, never by "
+            "a handle typed onto a profile."
+        ),
+    )
     country: str | None = None
     timezone: str | None = None
     date_of_birth: date | None = None
@@ -42,7 +50,6 @@ class UserResponse(BaseSchema):
     last_name: str | None = None
     mobile_number: str | None = None
     mobile_verified_at: datetime | None = None
-    telegram_username: str | None = None
     country: str | None = None
     timezone: str | None = None
     date_of_birth: date | None = None

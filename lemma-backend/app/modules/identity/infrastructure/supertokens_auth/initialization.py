@@ -25,6 +25,9 @@ from app.modules.identity.infrastructure.supertokens_auth.override_email_passwor
 from app.modules.identity.infrastructure.supertokens_auth.override_thirdparty import (
     override_thirdparty_functions,
 )
+from app.modules.identity.infrastructure.supertokens_auth.override_session import (
+    override_session_functions,
+)
 from app.modules.identity.infrastructure.supertokens_auth.email_delivery import (
     LemmaPasswordResetEmailService,
     LemmaVerificationEmailService,
@@ -158,6 +161,9 @@ def initialize_supertokens():
                 older_cookie_domain=identity_settings.session_cookie_older_domain,
                 cookie_secure=identity_settings.session_cookie_secure,
                 cookie_same_site=identity_settings.session_cookie_same_site,
+                override=session.SessionOverrideConfig(
+                    functions=override_session_functions
+                ),
             ),
             emailpassword.init(
                 override=emailpassword.InputOverrideConfig(

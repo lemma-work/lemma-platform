@@ -462,15 +462,15 @@ frontend/
   node/                      packed Node runtime
   frontend-launcher.mjs      desktop/runtime/frontend-launcher.mjs
   lemma-frontend/
-    server.mjs               the custom server locald starts (voice gateways)
+    server.mjs               the custom server locald starts
     server.js                Next's generated server; not started
     server/ node_modules/ .next/ public/ content/
 ```
 
 `scripts/build_local_host_pack.py` runs `LEMMA_STANDALONE=1 npm run build`
 (standalone output is opt-in in `next.config.ts`) and then
-`lemma-frontend/scripts/complete-standalone.mjs`, which traces `server.mjs`,
-its gateways and their dependencies with Next's own tracer and copies them,
+`lemma-frontend/scripts/complete-standalone.mjs`, which traces `server.mjs`
+and its dependencies with Next's own tracer and copies them,
 `public/` and `.next/static` into the tree. `server.mjs` recognises a
 standalone tree by Next's `server.js` beside it and then loads the config Next
 serialised into `.next/required-server-files.json` through
@@ -506,7 +506,6 @@ same values (`lemma-frontend/src/site/runtime.ts`):
 | `deployment` | `NEXT_PUBLIC_LEMMA_DEPLOYMENT` (`local` for Desktop) |
 | `analyticsKey`, `analyticsHost` | `NEXT_PUBLIC_ANALYTICS_KEY`, `NEXT_PUBLIC_ANALYTICS_HOST` |
 | `desktopDownloadUrl` | `NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL` (`null` when unset) |
-| `voiceProvider` | `NEXT_PUBLIC_VOICE_PROVIDER` |
 | `authEmailVerificationRequired` | `NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED` |
 | `runtimeInstanceId` | `NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID` |
 
@@ -738,9 +737,10 @@ each card saving one operator section:
   falls back to for a pod with no default runtime. locald also names the
   side jobs' models from it: `VISION_MODEL` (the image model, which it adds
   to the vision names, or the default model when that reads images),
-  `CONVERSATION_TITLE_MODEL` (the fast model, else the default) and
-  `HISTORY_SUMMARIZATION_MODEL` (the fast model, when there is one). Test lists
-  the provider's models and asks the default one for a one-word answer.
+  `CONVERSATION_TITLE_MODEL` (the fast model, else the default), and
+  `HISTORY_SUMMARIZATION_MODEL` and `DECISION_MODEL` (the fast model, when
+  there is one). Test lists the provider's models and asks the default one for
+  a one-word answer.
 - **Email** writes the `email` section (`none`, `resend` or `smtp`, a sender
   address, and the SMTP server with its password in the vault). Until it is
   set up the host pack's `EMAIL_TRANSPORT=smtp` names no server, so the
@@ -766,10 +766,14 @@ each card saving one operator section:
   proven contact matches that unverified profile number and the chat reaches
   their pod's agent with no email
   ([chat onboarding](../operators/chat-onboarding.md)).
-- **Voice** is the Deepgram key for voice notes, and the voice-call keys
-  (Gemini for the voice, TypeSafe for routing) that the workspace's own server
-  reads: locald keeps those in the frontend's environment, never the
-  backend's, and restarts only the frontend when they change; **Web search** works with no key (DuckDuckGo)
+- **Voice** is the Deepgram key, for voice notes and for calls through the
+  Deepgram engine, and the Gemini key, for calls through Gemini Live. Calls
+  are the API's, so locald passes both to the backend. The optional TypeSafe
+  key is the backend's too: each turn of a call asks the
+  [decisions API](../configuration.md#decisions) whether it needs the agents,
+  and with the key stored locald sets `TYPESAFE_API_KEY` and
+  `DECISION_PROVIDER=typesafe`, so decisions use the dedicated provider,
+  which answers faster than the AI model. **Web search** works with no key (DuckDuckGo)
   and switches to Brave Search when a Brave key is stored.
 
 Tests are read-only requests locald makes (`config.test`): with the typed
@@ -851,6 +855,14 @@ Each command is granted to a webview by a capability in
 is granted the same permissions at runtime on its exact origin, port included
 (`local_workspace_capability`), when locald names it: a static file could only
 say `http://app.lemma.localhost:*`, which would also match every alias port.
+A Lemma server the person connected to from the chooser ("Connect to your own
+Lemma server") is granted the same permissions at runtime too
+(`grant_hosted_workspace_capability`), under an identifier of its own per
+origin. It is saved as `hostedServer` in the desktop config only after
+`/site-config.js` answers with `window.__LEMMA_SITE__`, kept as an HTTPS origin
+(plain http only for `localhost`, `127.0.0.1` or `[::1]`, and never `*.localhost` by any scheme), and from
+then on it *is* the hosted site for every rule below: `hosted_url()` returns
+it, so pairing, the sign-in Cancel and navigation all follow it.
 - **settings**: `require_settings_caller` — control, or local workspace.
 - **agent host**: `require_agent_host_caller` — control, the splash, or the
   workspace on the origin this app navigated to: the hosted site in hosted

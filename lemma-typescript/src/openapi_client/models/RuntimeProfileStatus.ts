@@ -5,5 +5,4 @@
 export enum RuntimeProfileStatus {
     ACTIVE = 'ACTIVE',
     DISABLED = 'DISABLED',
-    REAUTH_REQUIRED = 'REAUTH_REQUIRED',
 }

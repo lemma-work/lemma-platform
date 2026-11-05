@@ -1,9 +1,10 @@
 """How often the contact path may say something, or tell somebody something.
 
 Each of these is a message the pod sends without a model deciding to -- a
-refusal, a "a person will reply", an inbox note -- or a member writing to a
-contact who did not ask. Left uncounted, each can be made to repeat by whoever
-writes to the bot, so each has a window in Redis.
+refusal, a "a person will reply", an inbox note. Left uncounted, each can be
+made to repeat by whoever writes to the bot, so each has a window in Redis.
+(How often a member may write to a contact is the contact's outreach rule,
+in ``contacts``.)
 
 All of them fail **closed**: when Redis is away the message is not sent and the
 note not left. Every one of them is either a courtesy the sender can do without
@@ -13,7 +14,6 @@ worse failure.
 
 from __future__ import annotations
 
-from enum import Enum
 from uuid import UUID
 
 from redis.exceptions import RedisError
@@ -21,19 +21,11 @@ from redis.exceptions import RedisError
 from app.core.infrastructure.redis.client import get_redis
 from app.core.infrastructure.redis.counters import incr_with_ttl
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.config import surface_settings
 
 logger = get_logger(__name__)
 
 DAY = 86_400
 HOUR = 3600
-
-
-class Window(Enum):
-    OPEN = "open"
-    SHUT = "shut"
-    #: Redis could not say; treated as shut by every caller.
-    UNKNOWN = "unknown"
 
 
 class ContactWindows:
@@ -58,14 +50,6 @@ class ContactWindows:
         except (RedisError, OSError) as exc:
             _unavailable(exc)
             return None
-
-    async def follow_up(self, contact_id: UUID) -> Window:
-        """Count a member writing first to this contact today."""
-        count = await self.count(f"contact:follow_up:{contact_id}", DAY)
-        if count is None:
-            return Window.UNKNOWN
-        limit = surface_settings.surface_contact_follow_ups_per_contact_per_day
-        return Window.OPEN if count <= limit else Window.SHUT
 
     async def stranger_refusal(self, surface_id: UUID, sender: str) -> bool:
         """The one refusal a stranger gets from a bot for known contacts, a day."""

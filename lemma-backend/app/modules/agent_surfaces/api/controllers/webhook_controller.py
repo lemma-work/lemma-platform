@@ -11,21 +11,22 @@ from app.core.api.callback_page import (
     render_callback_page,
     safe_provider_error,
 )
+from app.modules.agent_surfaces.api.controllers.slack_manager_lane import (
+    answer_manager,
+)
 from app.modules.agent_surfaces.config import (
     surface_settings,
-    surface_webhook_verification_enabled,
 )
 from app.core.webhooks.signatures import constant_time_equals
-from app.core.infrastructure.events.inbox import stable_event_id
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.api.dependencies import get_uow_factory
 from app.modules.agent_surfaces.api.controllers.webhook_seams import (
+    InboundAccept,
     PooledNumberLookup,
-    SurfaceEventPublish,
+    SurfaceLookup,
+    get_inbound_accept,
     get_pooled_number_lookup,
-    get_surface_event_publish,
+    get_surface_lookup,
 )
-from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceWebhookSecurityServiceDep,
@@ -40,12 +41,23 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _published_whatsapp_verification,
     _redacted_headers,
     _verify_inbound_request,
+    parse_webhook_platform,
+    read_webhook_body,
+    slack_url_verification,
+)
+from app.modules.agent_surfaces.api.controllers.webhook_verification import (
+    webhook_verification_response,
 )
 from app.modules.agent_surfaces.api.controllers.webhook_rejections import (
     record_whatsapp_number_mismatch,
     record_whatsapp_signature_rejected,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfaceDirectWebhookIngress,
+    SurfacePlatformWebhookIngress,
+)
+from app.modules.agent_surfaces.services.inbound_acceptor import InboundDelivery
 from app.modules.agent_surfaces.domain.source_event_ids import webhook_source_event_id
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.onboarding_slack_modal import (
@@ -84,7 +96,8 @@ async def handle_telegram_manager_webhook(
         )
     if not constant_time_equals(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
-    payload = _decode_webhook_payload(await request.body(), dict(request.headers))
+    raw_body = await read_webhook_body(request, SurfacePlatform.TELEGRAM)
+    payload = _decode_webhook_payload(raw_body, dict(request.headers))
     try:
         await service.handle_update(payload)
     except TelegramManagedBotProvisioningInProgressError as exc:
@@ -106,78 +119,100 @@ async def handle_platform_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    accept: InboundAccept = Depends(get_inbound_accept),
 ):
     """Handle platform-level webhook callbacks."""
     # No request-scoped session on this route by design. It is an inbound
-    # webhook endpoint -- the request rate belongs to the sending platform --
-    # and it publishes to Redis up to three times. Every lookup below opens its
-    # own short scope, so nothing is held across a publish or a signature check.
+    # webhook endpoint -- the request rate belongs to the sending platform.
+    # Every lookup below opens its own short scope, so nothing is held across a
+    # signature check or a provider call.
     # Deliberately a comment, not part of the docstring: the docstring becomes
     # the endpoint's public OpenAPI description.
+    resolved = parse_webhook_platform(platform)
+    source = resolved.value.lower()
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await read_webhook_body(request, resolved)
     payload = _decode_webhook_payload(raw_body, headers)
 
     # Resend inbound: a catch-all address webhook. Resolve the destination
     # address to a concrete surface and feed the normal surface-level pipeline.
-    if platform == "resend":
+    if resolved is SurfacePlatform.RESEND:
         return await _handle_resend_webhook(
             payload=payload,
             headers=headers,
             raw_body=raw_body,
             security_service=security_service,
             uow_factory=uow_factory,
+            accept=accept,
         )
 
-    # Slack sends url_verification before any signing secret is configured — respond immediately.
-    if platform == "slack" and payload.get("type") == "url_verification":
-        return {"challenge": payload.get("challenge")}
+    # Slack sends url_verification before any signing secret is configured.
+    if resolved is SurfacePlatform.SLACK and payload.get("type") == "url_verification":
+        return slack_url_verification(payload, headers, security_service)
 
     # Authenticity failures raise SurfaceWebhookAuthenticationError (a DomainError),
     # translated to the right status by the global handler.
-    security_service.assert_platform_request_allowed(platform)
-    receiver_surface_ids = await _verify_inbound_request(
-        platform=platform,
+    security_service.assert_platform_request_allowed(resolved.value)
+    verified = await _verify_inbound_request(
+        platform=source,
         headers=headers,
         raw_body=raw_body,
         payload=payload,
         security_service=security_service,
         uow_factory=uow_factory,
     )
+    receiver_surface_ids = verified.receivers
 
-    if platform == "whatsapp" and await _published_whatsapp_verification(
+    if verified.is_managers:
+        # Lemma's own app managing the workspace: its own lane, decided here
+        # and only here, before onboarding and before `accept()` -- nothing it
+        # receives is stored as an inbound message or reaches group updates.
+        return await answer_manager(
+            payload,
+            source_event_id=webhook_source_event_id(
+                source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+            ),
+            uow_factory=uow_factory,
+        )
+
+    if resolved is SurfacePlatform.WHATSAPP and await _published_whatsapp_verification(
         payload, uow_factory
     ):
         return {"message": "Verification message received"}
 
-    if platform == "slack" and await open_onboarding_modal(
+    if resolved is SurfacePlatform.SLACK and await open_onboarding_modal(
         payload, receiver_surface_ids, uow_factory
     ):
         return Response(status_code=200)
 
-    if platform == "slack" and await _handled_slack_modal(
+    if resolved is SurfacePlatform.SLACK and await _handled_slack_modal(
         payload, headers, receiver_surface_ids, uow_factory
     ):
         return Response(status_code=200)
 
-    source_event_id = webhook_source_event_id(
-        platform, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+    # Classified, answered or stored, in this request: what nobody acts on is
+    # dropped here, a tap is decided here, a message is a row and an item.
+    await accept(
+        InboundDelivery(
+            request=SurfacePlatformWebhookIngress(
+                source=source,
+                payload=payload,
+                headers=_redacted_headers(headers),
+                receiver_surface_ids=receiver_surface_ids,
+            ),
+            receiver_scope=SHARED_PLATFORM_RECEIVER,
+            source_event_id=webhook_source_event_id(
+                source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+            ),
+            platform=resolved,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source=platform,
-        payload=payload,
-        headers=_redacted_headers(headers),
-        source_event_id=source_event_id,
-        receiver_surface_ids=receiver_surface_ids,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
 
     # A Slack modal submission is the one webhook whose *body* is protocol, not
     # acknowledgement: Slack parses it as a response_action and shows the user
     # "We had some trouble connecting" for anything it doesn't recognise. An
     # empty 200 means "accepted, close the modal".
-    if platform == "slack" and payload.get("type") == "view_submission":
+    if resolved is SurfacePlatform.SLACK and payload.get("type") == "view_submission":
         return Response(status_code=200)
 
     return {"message": "Webhook received"}
@@ -236,13 +271,13 @@ async def handle_whatsapp_number_webhook(
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
     pooled_number: PooledNumberLookup = Depends(get_pooled_number_lookup),
-    publish: SurfaceEventPublish = Depends(get_surface_event_publish),
+    accept: InboundAccept = Depends(get_inbound_accept),
 ):
     """Handle a delivery to one pooled WhatsApp number's own callback URL."""
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
-    # short scope for the pool lookup, nothing held across the publish.
+    # short scope for the pool lookup, nothing held across a provider call.
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await read_webhook_body(request, SurfacePlatform.WHATSAPP)
 
     # The order below is the whole point of this route, and it looks odd enough
     # to be worth stating. The body names a `metadata.phone_number_id`, and
@@ -313,17 +348,20 @@ async def handle_whatsapp_number_webhook(
     # The number is the receiver, not `SHARED_PLATFORM_RECEIVER`: this URL has
     # one per pooled number, and the content-hash fallback in
     # `webhook_source_event_id` is only unique per receiver.
-    source_event_id = webhook_source_event_id(
-        "whatsapp", payload, raw_body, receiver=phone_number_id
+    await accept(
+        InboundDelivery(
+            request=SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=payload,
+                headers=_redacted_headers(headers),
+            ),
+            receiver_scope=phone_number_id,
+            source_event_id=webhook_source_event_id(
+                "whatsapp", payload, raw_body, receiver=phone_number_id
+            ),
+            platform=SurfacePlatform.WHATSAPP,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source="whatsapp",
-        payload=payload,
-        headers=_redacted_headers(headers),
-        source_event_id=source_event_id,
-    )
-    await publish(event)
 
     return {"message": "Webhook received"}
 
@@ -337,20 +375,22 @@ async def handle_surface_webhook(
     surface_id: UUID,
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
-    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    surface_by_id: SurfaceLookup = Depends(get_surface_lookup),
+    accept: InboundAccept = Depends(get_inbound_accept),
 ):
     """Handle webhooks addressed to one concrete surface."""
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
-    # short scope for the surface lookup, nothing held across the publish.
+    # short scope for the surface lookup, nothing held across a provider call.
+    # The lookup goes first so an id nothing answers to is refused unread. The
+    # ceiling is not the surface's platform's (see ANY_PLATFORM_BODY_LIMIT).
+    # An unknown id is AgentSurfaceNotFoundError (404) and verify_surface_request
+    # raises SurfaceWebhookAuthenticationError -- both DomainErrors, translated
+    # by the global handler.
+    surface = await surface_by_id(surface_id)
     headers = dict(request.headers)
-    raw_body = await request.body()
+    raw_body = await read_webhook_body(request)
     payload = _decode_webhook_payload(raw_body, headers)
 
-    # get_surface raises AgentSurfaceNotFoundError (404) and verify_surface_request
-    # raises SurfaceWebhookAuthenticationError — both DomainErrors, translated by
-    # the global handler.
-    async with uow_scope(uow_factory) as uow:
-        surface = await get_surface_service(uow).get_surface(surface_id)
     await security_service.verify_surface_request(
         surface=surface,
         headers=headers,
@@ -361,69 +401,23 @@ async def handle_surface_webhook(
     # Named by the surface, not just the platform: a Telegram ``update_id`` is a
     # per-bot counter, so every bot's first update is 1 and two of them would
     # otherwise share one inbox row.
-    source_event_id = webhook_source_event_id(
-        source, payload, raw_body, receiver=str(surface.id)
+    await accept(
+        InboundDelivery(
+            request=SurfaceDirectWebhookIngress(
+                surface_id=surface.id,
+                payload=payload,
+                headers=_redacted_headers(headers),
+            ),
+            receiver_scope=str(surface.id),
+            source_event_id=webhook_source_event_id(
+                source, payload, raw_body, receiver=str(surface.id)
+            ),
+            platform=surface.surface_type,
+            pod_id=surface.pod_id,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source=source,
-        payload=payload,
-        headers=_redacted_headers(headers),
-        surface_id=surface.id,
-        source_event_id=source_event_id,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
 
     return {"message": "Webhook received"}
-
-
-def _token_matches(provided: str | None, expected: str | None) -> bool:
-    """Compare a verify token without leaking its length or prefix in timing.
-
-    `==` on a secret returns as soon as two bytes differ, so the time it takes
-    says how much of the token was right -- and this one is guessable a
-    character at a time by anyone who can reach the endpoint, which is the whole
-    internet, because a platform has to. The signature check two functions up
-    already uses `compare_digest`; this comparison was the odd one out.
-
-    A missing expected token is never a match. Otherwise an unconfigured
-    deployment would accept `hub.verify_token` absent as equal to absent and
-    hand out its challenge.
-
-    Through the shared helper rather than `hmac.compare_digest` directly: this
-    token arrives as a query parameter, so it is whatever the caller typed, and
-    `compare_digest` on two `str`s raises `TypeError` the moment either one
-    leaves ASCII. That turned a wrong token into an unauthenticated 500.
-    """
-    return constant_time_equals(provided, expected)
-
-
-def _webhook_verification_response(
-    platform: str, params: dict[str, str], *, whatsapp_verify_token: str | None = None
-) -> Response:
-    """Shared GET-verification handshake (WhatsApp hub challenge / Telegram ok)."""
-    if platform == "whatsapp":
-        mode = params.get("hub.mode")
-        challenge = params.get("hub.challenge")
-        verify_token = params.get("hub.verify_token")
-
-        # The same answer the POST paths get, rather than the raw flag: the
-        # switch is honoured on a developer machine and nowhere else.
-        security_enabled = surface_webhook_verification_enabled()
-        if (
-            mode == "subscribe"
-            and challenge
-            and (
-                not security_enabled
-                or _token_matches(verify_token, whatsapp_verify_token)
-            )
-        ):
-            return Response(content=challenge, media_type="text/plain")
-
-    if platform == "telegram":
-        return Response(content="ok", media_type="text/plain")
-
-    raise HTTPException(status_code=403, detail="Verification failed")
 
 
 @router.get(
@@ -436,8 +430,8 @@ async def verify_surface_webhook(
     request: Request,
 ):
     """Webhook verification endpoint for platforms that require it."""
-    return _webhook_verification_response(
-        platform,
+    return webhook_verification_response(
+        platform.lower(),
         dict(request.query_params),
         whatsapp_verify_token=reveal_secret(surface_settings.whatsapp_verify_token),
     )
@@ -463,11 +457,11 @@ async def verify_whatsapp_number_webhook(
     verify_token = (number.verify_token if number else None) or reveal_secret(
         surface_settings.whatsapp_verify_token
     )
-    # `_token_matches` is constant-time and treats an absent expected token as
+    # `token_matches` is constant-time and treats an absent expected token as
     # never matching, so a number with no stored token and a deployment with
     # none in settings refuses the handshake instead of handing out the
     # challenge to whoever asked.
-    return _webhook_verification_response(
+    return webhook_verification_response(
         "whatsapp",
         dict(request.query_params),
         whatsapp_verify_token=verify_token,
@@ -499,7 +493,7 @@ async def verify_direct_surface_webhook(
         if platform == "whatsapp"
         else reveal_secret(surface_settings.whatsapp_verify_token)
     )
-    return _webhook_verification_response(
+    return webhook_verification_response(
         platform,
         dict(request.query_params),
         whatsapp_verify_token=whatsapp_verify_token,

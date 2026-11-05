@@ -87,7 +87,7 @@ async def resolve_system_runtime(
         pod_id=pod_id,
         model_name=model_name,
     )
-    runtime_profile = resolved.public_snapshot()
+    runtime_profile = resolved.runtime_snapshot().as_payload()
     model = require_pydantic_ai_model_from_runtime_profile(
         runtime_profile=runtime_profile,
         runtime_credentials=resolved.credentials or {},

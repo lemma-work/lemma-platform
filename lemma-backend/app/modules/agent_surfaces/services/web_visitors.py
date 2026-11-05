@@ -37,7 +37,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.contact_conversations import (
-    mark_conversation_contact,
+    name_contact_on_conversation,
 )
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
@@ -59,10 +59,12 @@ from app.modules.contacts.contracts import (
     ContactRef,
     IdentityKind,
     IdentityStrength,
+    ProofTooWeak,
     contact_by_id,
     find_contact,
-    open_contact,
+    prove_handle,
 )
+from app.modules.contacts.contracts.outreach import host_handle
 from app.modules.contacts.contracts.visitor_sessions import (
     VisitorSession,
     VisitorStrength,
@@ -121,9 +123,10 @@ class StartedSession:
     expires_in: int
 
 
-def host_contact_key(subject: str) -> str:
-    """How a customer's user is known in a pod, through any of its widgets."""
-    return f"host:{subject}"
+def host_contact_key(widget: WebWidget, subject: str) -> str:
+    """How a customer's user is known in a pod: as a user of the product the
+    widget speaks for, through any of the pod's widgets for it."""
+    return host_handle(widget.host_issuer, subject)
 
 
 def verify_host_token(token: str, *, secret: str, public_key: str) -> HostClaims | None:
@@ -286,17 +289,21 @@ class WebVisitors:
     ) -> StartedSession | None:
         """The session, with a host token presented: renewed, upgraded, or
         ``None`` when it is somebody else's."""
+        vouched = session.strength is not VisitorStrength.ANONYMOUS
         contact = await self._visitor_contact(
             uow,
             widget,
             IdentityKind.HOST,
-            host_contact_key(claims.subject),
+            host_contact_key(widget, claims.subject),
             IdentityStrength.HOST,
             claims.name,
+            # A vouched session is one person's already; only an anonymous
+            # browser can turn out to be the person the host names.
+            claimant_id=None if vouched else session.contact_id,
         )
-        if session.contact_id == contact.id:
+        if session.contact_id == contact.id and vouched:
             return await self._renewed_session(uow, widget, session)
-        if session.contact_id is not None:
+        if vouched:
             return None
         return await self._become_contact(
             uow, widget, session, contact=contact, strength=VisitorStrength.HOST
@@ -320,7 +327,7 @@ class WebVisitors:
                     uow,
                     widget,
                     IdentityKind.HOST,
-                    host_contact_key(claims.subject),
+                    host_contact_key(widget, claims.subject),
                     IdentityStrength.HOST,
                     claims.name,
                 )
@@ -348,12 +355,17 @@ class WebVisitors:
         contact: ContactRef,
         strength: VisitorStrength,
     ) -> StartedSession:
-        """Name the contact on the session and its conversation, under a new secret."""
+        """Vouch for the session as this contact's, under a new secret.
+
+        The conversation already names the contact the browser was, and a
+        merge leads it to the one it became (``ContactMerged``); one opened
+        before anything named anybody is named now.
+        """
         secret = await identify_visitor_session(
             uow, session, contact_id=contact.id, strength=strength
         )
         if session.conversation_id is not None:
-            await mark_conversation_contact(
+            await name_contact_on_conversation(
                 uow, conversation_id=session.conversation_id, contact_id=contact.id
             )
         upgraded = await visitor_session(uow, session.id)
@@ -380,7 +392,9 @@ class WebVisitors:
         return StartedSession(
             access_token=mint_visitor_access(session, organization_id=organization_id),
             secret=secret,
-            is_contact=contact is not None,
+            # A confirmed contact, as the page means it: one a code or the
+            # host's token vouched for, not a browser that has written.
+            is_contact=session.strength is not VisitorStrength.ANONYMOUS,
             display_name=contact.display_name if contact else None,
             expires_in=ACCESS_TOKEN_SECONDS,
         )
@@ -393,29 +407,45 @@ class WebVisitors:
         value: str,
         strength: IdentityStrength,
         display_name: str | None,
+        *,
+        claimant_id: UUID | None = None,
     ) -> ContactRef:
-        """The contact this handle names, created only where the widget answers anyone."""
+        """Who the visitor is, having proved this handle.
+
+        ``claimant_id`` is the anonymous contact their browser already is, if
+        it wrote anything: the handle joins it, or -- when an older contact
+        holds the handle -- the two merge into that one. A contact nobody knew
+        is made only where the widget answers anyone.
+        """
         known = await find_contact(uow, pod_id=widget.pod_id, kind=kind, value=value)
-        if known is not None:
-            return known
-        if widget.answer is not WidgetAnswer.ANYONE:
+        if (
+            known is None
+            and claimant_id is None
+            and widget.answer is not WidgetAnswer.ANYONE
+        ):
             raise refused(
                 "This chat is for existing customers only", 403, "not_a_contact"
             )
-        return await open_contact(
-            uow,
-            pod_id=widget.pod_id,
-            kind=kind,
-            value=value,
-            strength=strength,
-            display_name=display_name,
-        )
+        try:
+            return await prove_handle(
+                uow,
+                pod_id=widget.pod_id,
+                claimant_id=claimant_id,
+                kind=kind,
+                value=value,
+                strength=strength,
+                display_name=display_name,
+            )
+        except ProofTooWeak as exc:  # pragma: no cover - HOST and CODE both prove
+            raise refused(
+                "That address could not be confirmed", 409, "not_proven"
+            ) from exc
 
     # -- codes --------------------------------------------------------------
 
     @staticmethod
     def _one_identity(visitor: Visitor) -> None:
-        if visitor.session.contact_id is not None:
+        if visitor.session.is_vouched:
             raise refused(
                 "You're already confirmed in this chat. Start a new chat to use "
                 "another address.",
@@ -521,13 +551,19 @@ class WebVisitors:
         session = await visitor_session(uow, visitor.session.session_id)
         if session is None or not await consume_visitor_code(uow, code_id):
             raise refused("That code has expired. Ask for a new one.", 400, "bad_code")
-        if session.contact_id is not None:
+        if session.strength is not VisitorStrength.ANONYMOUS:
             # Confirmed by another request since this one's token was minted.
             raise refused(
                 "You're already confirmed in this chat.", 409, "already_a_contact"
             )
         contact = await self._visitor_contact(
-            uow, widget, IdentityKind.EMAIL, email, IdentityStrength.CODE, None
+            uow,
+            widget,
+            IdentityKind.EMAIL,
+            email,
+            IdentityStrength.CODE,
+            None,
+            claimant_id=session.contact_id,
         )
         return await self._become_contact(
             uow, widget, session, contact=contact, strength=VisitorStrength.CODE

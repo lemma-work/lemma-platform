@@ -26,6 +26,7 @@ from app.core.authorization.models import (
     RoleModel,
     RolePermissionModel,
 )
+from app.core.authorization.permissions import SYSTEM_ROLE_PERMISSIONS
 
 #: One row of the join: the principal it was assigned to, the role, one of that
 #: role's permissions -- or ``None`` where the role grants none, which the outer
@@ -123,6 +124,14 @@ def merge_role_data(
         role_names.add(role_name)
         if permission_id is not None:
             permission_ids.add(permission_id)
+    # A built-in role means what the code says it means, whatever its rows
+    # hold. The rows are re-seeded only when roles are listed or assigned, so
+    # an organization nobody has touched since a release keeps the old set --
+    # an org owner without the pod permissions their role now carries is
+    # refused every pod they are not a member of. Built-in names are reserved
+    # (`create_role` refuses them), so the name identifies the role.
+    for role_name in role_names:
+        permission_ids.update(SYSTEM_ROLE_PERMISSIONS.get(role_name, ()))
 
 
 def roles_applying_to_pod(rows: Iterable[RoleRow], pod_id: UUID) -> list[RoleRow]:

@@ -2,23 +2,13 @@
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import emit
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
 from app.modules.analytics.events.wiring import (
     DELIVERED_STATUSES,
+    ProjectionReads,
     actor_or_system,
     origin_of,
-    provide_uow_factory,
-    router,
 )
 from app.modules.analytics.services.buckets import (
     COUNT_EDGES,
@@ -26,13 +16,8 @@ from app.modules.analytics.services.buckets import (
     duration_seconds,
     seconds_bucket,
 )
-from app.modules.analytics.services.pod_delivery import (
-    DeliveryVia,
-    maybe_emit_pod_delivered,
-    pod_creator,
-)
+from app.modules.analytics.services.pod_delivery import DeliveryVia
 from app.modules.workflow.domain.events import (
-    WORKFLOW_RUN_EVENTS_STREAM,
     WorkflowCreatedEvent,
     WorkflowRunTerminalEvent,
 )
@@ -40,18 +25,15 @@ from app.modules.workflow.domain.events import (
 WIRED = frozenset({"workflow.created", "workflow_run.completed"})
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    WORKFLOW_RUN_EVENTS_STREAM,
-    group="analytics-workflow",
-    consumer="analytics-workflow-consumer",
+@projection(
+    WorkflowCreatedEvent.get_event_type(),
+    WorkflowRunTerminalEvent.get_event_type(),
 )
 async def on_workflow_event(
     event: dict[str, object],
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    reads: ProjectionReads | None = None,
 ) -> None:
+    reads = reads or ProjectionReads()
     event_type = event.get("event_type")
     if event_type not in {
         WorkflowCreatedEvent.get_event_type(),
@@ -67,6 +49,7 @@ async def on_workflow_event(
                 "workflow.created",
                 actor=actor_or_system(created.user_id),
                 origin=origin,
+                organization_id=await reads.organization_of_pod(created.pod_id),
                 pod_id=created.pod_id,
                 properties={
                     "pod_id": created.pod_id,
@@ -82,10 +65,12 @@ async def on_workflow_event(
         # would be uncountable in either direction.
         if terminal.pod_id is None:
             return
+        organization_id = await reads.organization_of_pod(terminal.pod_id)
         emit(
             "workflow_run.completed",
             actor=actor_or_system(terminal.user_id),
             origin=origin,
+            organization_id=organization_id,
             pod_id=terminal.pod_id,
             properties={
                 "pod_id": terminal.pod_id,
@@ -94,17 +79,17 @@ async def on_workflow_event(
                 "duration_bucket": seconds_bucket(
                     duration_seconds(terminal.started_at, terminal.completed_at)
                 ),
+                "waited_on_form": terminal.waited_on_form,
             },
         )
         if terminal.status.value.upper() in DELIVERED_STATUSES:
-            await maybe_emit_pod_delivered(
-                uow_factory,
+            await reads.deliver(
                 pod_id=terminal.pod_id,
-                organization_id=None,
+                organization_id=organization_id,
                 via=DeliveryVia.WORKFLOW_RUN,
                 origin=origin,
                 recipient_user_id=terminal.user_id,
-                creator_user_id=await pod_creator(uow_factory, terminal.pod_id),
+                creator_user_id=await reads.pod_creator(terminal.pod_id),
             )
 
-    await inbox.process("analytics.workflow", event, record)
+    await record()

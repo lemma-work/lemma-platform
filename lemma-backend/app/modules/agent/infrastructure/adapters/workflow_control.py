@@ -13,20 +13,18 @@ caller read a key off it without the type checker asking.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import origin_metadata
 import json
 from uuid import UUID
 
 from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.core.domain.generation import GenerationSettings
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import AgentNotFoundError
-from app.modules.agent.domain.events import (
-    AgentRunStartedEvent,
-    AgentRunStopRequestedEvent,
-)
+from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
 from app.modules.agent.domain.value_objects import (
-    AgentRunStatus,
     ConversationStatus,
     ConversationType,
     MessageDraft,
@@ -42,6 +40,7 @@ from app.modules.agent.infrastructure.conversation_idempotency_store import (
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
+from app.modules.agent.services.run_stop import stop_run
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
@@ -84,6 +83,8 @@ class AgentControlAdapter(AgentPort):
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, object] | None = None,
         instructions: str | None = None,
+        model_name: str | None = None,
+        generation: GenerationSettings | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get_by_pod_and_name(
             pod_id=pod_id,
@@ -91,10 +92,19 @@ class AgentControlAdapter(AgentPort):
         )
         if agent is None:
             raise AgentNotFoundError("Workflow agent target was not found")
+        runtime_override = None
+        if model_name is not None or generation is not None:
+            base = agent.agent_runtime or await self._default_agent_runtime_for_pod(
+                pod_id=pod_id
+            )
+            runtime_override = base.with_overrides(
+                model_name=model_name, settings=generation
+            )
         return await self._start_conversation(
             agent_id=agent.id,
             agent_name=agent.name,
             agent_runtime=agent.agent_runtime,
+            runtime_override=runtime_override,
             input_data=input_data,
             pod_id=pod_id,
             user_id=user_id,
@@ -119,13 +129,12 @@ class AgentControlAdapter(AgentPort):
         source: str,
         conversation_metadata: dict[str, object] | None,
         instructions: str | None,
+        runtime_override: AgentRuntimeConfig | None = None,
     ) -> UUID:
         metadata: dict[str, object] = {
             **(conversation_metadata or {}),
-            "source": source,
+            **origin_metadata(source=source, workflow_run_id=workflow_run_id),
         }
-        if workflow_run_id is not None:
-            metadata["workflow_run_id"] = str(workflow_run_id)
         started_by_schedule = source == SCHEDULE_SOURCE
         entity_values: dict[str, object] = {
             "user_id": user_id,
@@ -147,6 +156,10 @@ class AgentControlAdapter(AgentPort):
             # task, and the default assistant, whose instruction is empty, gets
             # the only thing telling it why it woke up.
             "instructions": instructions,
+            # On the conversation, not only the first run: a step whose agent
+            # stops to ask somebody something resumes on a later run, and that
+            # run must still be on the step's model and settings.
+            "agent_runtime": runtime_override,
         }
         if conversation_id is not None:
             entity_values["id"] = conversation_id
@@ -163,8 +176,10 @@ class AgentControlAdapter(AgentPort):
         else:
             conversation = await self.conversation_repo.create_conversation(entity)
 
-        runtime = agent_runtime or await self._default_agent_runtime_for_pod(
-            pod_id=pod_id
+        runtime = (
+            runtime_override
+            or agent_runtime
+            or await self._default_agent_runtime_for_pod(pod_id=pod_id)
         )
         run = await self.conversation_repo.create_agent_run(
             conversation_id=conversation.id,
@@ -187,16 +202,16 @@ class AgentControlAdapter(AgentPort):
                 },
             ),
         )
-        self.conversation_repo.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation.id,
-                    agent_run_id=run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=agent_name,
-                )
-            ]
+        await stage_agent_turn(
+            self.uow,
+            AgentTurnStart(
+                conversation_id=conversation.id,
+                run_id=run.id,
+                pod_id=pod_id,
+                user_id=user_id,
+                agent_name=agent_name,
+                origin="schedule" if started_by_schedule else "workflow",
+            ),
         )
         return conversation.id
 
@@ -228,7 +243,11 @@ class AgentControlAdapter(AgentPort):
         )
 
     async def get_conversation_status(self, conversation_id: UUID) -> dict[str, object]:
-        conversation = await self.conversation_repo.get_conversation(conversation_id)
+        # With its latest run: `last_run_error` below is derived from it, and
+        # without it a failed step only ever said that the agent failed.
+        conversation = await self.conversation_repo.get_conversation(
+            conversation_id, include_runs=True
+        )
         if conversation is None or conversation.status is None:
             return {"status": "NOT_FOUND"}
         output = self._normalize_agent_output(conversation.output)
@@ -282,19 +301,20 @@ class AgentControlAdapter(AgentPort):
         )
         if active_run is None:
             return
-        await self.conversation_repo.finish_agent_run(
-            agent_run_id=active_run.id,
-            status=AgentRunStatus.STOP_REQUESTED,
+        del user_id  # the engine already authorized the cancel
+        await stop_run(
+            self.uow,
+            self.conversation_repo,
+            pod_id=await self._conversation_pod(conversation_id),
+            conversation_id=conversation_id,
+            run_id=active_run.id,
         )
-        self.conversation_repo.collect_events(
-            [
-                AgentRunStopRequestedEvent(
-                    conversation_id=conversation_id,
-                    agent_run_id=active_run.id,
-                    user_id=user_id,
-                )
-            ]
-        )
+
+    async def _conversation_pod(self, conversation_id: UUID) -> UUID:
+        conversation = await self.conversation_repo.get_conversation(conversation_id)
+        if conversation is None:
+            raise AgentNotFoundError("Workflow agent conversation was not found")
+        return conversation.pod_id
 
     async def _default_agent_runtime_for_pod(
         self, *, pod_id: UUID

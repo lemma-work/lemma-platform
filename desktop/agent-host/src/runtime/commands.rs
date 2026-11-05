@@ -5,6 +5,7 @@ use super::{
     JournalCallbacks, PermissionDecision, RejectionCode, RunSpec, RunState, Steer, StreamSegments,
     TargetWorker, Value, redact_error, short_revision, terminal_failure,
 };
+use crate::journal::JournalRun;
 use crate::protocol::SteerRunPayload;
 
 /// Why a command was refused, decided where the refusal happens.
@@ -440,45 +441,61 @@ impl TargetWorker {
 
     pub(crate) fn recover_interrupted_runs(&self) -> anyhow::Result<()> {
         for run in self.journal.recoverable_runs(self.target.target_id)? {
-            let mut segments = StreamSegments::default();
-            self.journal.visit_run_events(
-                self.target.target_id,
-                run.run_id,
-                run.lease_epoch,
-                |event| segments.recover_event(&event),
-            )?;
-            JournalCallbacks {
-                journal: self.journal.clone(),
-                target_id: self.target.target_id,
-                run_id: run.run_id,
-                lease_epoch: run.lease_epoch,
-                host_cwd: None,
-                provider_seen: AtomicBool::new(true),
-                dispatched: AtomicBool::new(true),
-                stream_segments: std::sync::Mutex::new(segments),
-                events_ready: self.events_ready.clone(),
-            }
-            .flush_stream_segments()?;
             if run.prompt_dispatched {
-                terminal_failure(
-                    &self.journal,
-                    self.target.target_id,
-                    run.run_id,
-                    run.lease_epoch,
+                self.end_interrupted_run(
+                    &run,
                     RunState::DispatchUnknown,
                     "Agent Host restarted after prompt dispatch; the turn was not repeated",
                 )?;
             } else {
-                terminal_failure(
-                    &self.journal,
-                    self.target.target_id,
-                    run.run_id,
-                    run.lease_epoch,
+                self.end_interrupted_run(
+                    &run,
                     RunState::Failed,
                     "Agent Host restarted before provider dispatch; Lemma may safely retry",
                 )?;
             }
         }
         Ok(())
+    }
+
+    /// End a run nothing is executing any more: seal the text it streamed,
+    /// then write its terminal event and checkpoint.
+    ///
+    /// For a run the process that held it lost -- to a restart, or to a run
+    /// task that stopped without finishing it -- so the run's own callbacks,
+    /// which would have sealed the text, are gone with it.
+    pub(crate) fn end_interrupted_run(
+        &self,
+        run: &JournalRun,
+        state: RunState,
+        message: &str,
+    ) -> anyhow::Result<()> {
+        let mut segments = StreamSegments::default();
+        self.journal.visit_run_events(
+            self.target.target_id,
+            run.run_id,
+            run.lease_epoch,
+            |event| segments.recover_event(&event),
+        )?;
+        JournalCallbacks {
+            journal: self.journal.clone(),
+            target_id: self.target.target_id,
+            run_id: run.run_id,
+            lease_epoch: run.lease_epoch,
+            host_cwd: None,
+            provider_seen: AtomicBool::new(true),
+            dispatched: AtomicBool::new(true),
+            stream_segments: std::sync::Mutex::new(segments),
+            events_ready: self.events_ready.clone(),
+        }
+        .flush_stream_segments()?;
+        terminal_failure(
+            &self.journal,
+            self.target.target_id,
+            run.run_id,
+            run.lease_epoch,
+            state,
+            message,
+        )
     }
 }

@@ -197,7 +197,7 @@ async def test_a_delegated_workload_cannot_reach_the_organization_routes(
         headers=agent_headers,
     )
     assert invite.status_code == status.HTTP_403_FORBIDDEN, invite.text
-    assert invite.json()["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert invite.json()["code"] == "WORKLOAD_NOT_ALLOWED"
 
     renamed = await async_client.patch(
         f"/organizations/{org_id}",

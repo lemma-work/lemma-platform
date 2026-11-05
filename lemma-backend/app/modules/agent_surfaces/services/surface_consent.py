@@ -8,6 +8,12 @@ surface once it has.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.surface_connector import bound_account_id
+from app.modules.connectors.contracts.pod_connectors import PodConnectorRefusal
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
+from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
+
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -15,7 +21,6 @@ import httpx
 from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret
-from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.domain.entities import (
@@ -35,6 +40,7 @@ from app.modules.agent_surfaces.domain.setup_guides import (
     build_surface_setup_guide,
 )
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import TEAMS_CONSENT_CHECKS, surface_caches
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -42,11 +48,6 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     pass
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-
-# Shared Redis cache of Teams admin-consent probe results (per-entry TTL: 60 s
-# granted / 10 s denied), so the Graph probe is shared across replicas. Redis
-# unavailable -> re-probe (never fails).
-_consent_check_cache: RedisJsonCache | None = None
 
 
 def access_token_from(payload: object) -> str | None:
@@ -68,17 +69,9 @@ def access_token_from(payload: object) -> str | None:
 
 
 def _get_consent_cache() -> RedisJsonCache:
-    global _consent_check_cache
-    if (
-        _consent_check_cache is None
-        or _consent_check_cache._redis_url != settings.redis_url
-    ):
-        _consent_check_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:teams-consent",
-            ttl_seconds=60,
-        )
-    return _consent_check_cache
+    """Teams admin-consent probe results (60 s granted, 10 s denied), so the
+    Graph probe is shared across replicas. Redis down -> re-probe."""
+    return surface_caches.get(TEAMS_CONSENT_CHECKS)
 
 
 if TYPE_CHECKING:
@@ -129,14 +122,22 @@ class SurfaceConsentMixin:
         back to: any connected account is the org's own WhatsApp Business app
         and always needs its webhook configured.
         """
-        if surface.account_id is None:
+        if surface.pod_connector_slug is None:
             return False
         if surface.surface_type is SurfacePlatform.WHATSAPP:
             return True
 
         if self._account_port is None or self._auth_config_port is None:
             return False
-        account = await self._account_port.get_account(surface.account_id)
+        try:
+            account_id = await bound_account_id(self.surface_repository.uow, surface)
+        except PodConnectorRefusal:
+            return False
+        account = (
+            await self._account_port.get_account(account_id)
+            if account_id is not None
+            else None
+        )
         if account is None or account.auth_config_id is None:
             return False
         auth_config = await self._auth_config_port.get_auth_config(
@@ -167,19 +168,22 @@ class SurfaceConsentMixin:
         """
         if surface.surface_type is not SurfacePlatform.WHATSAPP:
             return reveal_secret(surface_settings.whatsapp_verify_token)
-        if surface.account_id is not None and self._credential_resolver is not None:
+        if (
+            surface.pod_connector_slug is not None
+            and self._credential_resolver is not None
+        ):
             try:
-                credentials = await self._credential_resolver.for_account(
-                    surface.account_id
+                credentials = WhatsAppCredentials.of(
+                    await self._credential_resolver.for_surface(surface)
                 )
             except Exception:
-                logger.debug(
-                    "agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic",
-                    account_id=surface.account_id,
+                logger.warning(
+                    "agent_surfaces.surface_service.whatsapp_verify_token_unavailable.degraded",
+                    surface_id=str(surface.id),
                     exc_info=True,
                 )
                 return None
-            return credentials.get("verify_token")
+            return reveal_secret(credentials.verify_token)
         if surface.surface_identity_id:
             number = await WhatsAppNumberRepository(
                 self.surface_repository.uow
@@ -189,12 +193,19 @@ class SurfaceConsentMixin:
         return reveal_secret(surface_settings.whatsapp_verify_token)
 
     async def _surface_admin_consent(
-        self, surface: AgentSurfaceEntity
+        self, surface: AgentSurfaceEntity, *, include_consent_url: bool
     ) -> dict[str, Any] | None:
-        """Teams admin-consent state, or None for platforms that never need it."""
+        """Teams admin-consent state, or None for platforms that never need it.
+
+        The consent URL carries a live nonce, and the callback it leads to is
+        unauthenticated: whoever holds it can mark the surface consented. So it
+        goes only to a reader who could change the surface anyway.
+        """
         if surface.surface_type is not SurfacePlatform.TEAMS:
             return None
-        info = await self.get_admin_consent_info(surface)
+        info = await self.get_admin_consent_info(
+            surface, include_consent_url=include_consent_url
+        )
         return {
             "required": True,
             "granted": info.get("status") is AgentSurfaceStatus.ACTIVE,
@@ -222,8 +233,15 @@ class SurfaceConsentMixin:
         return await self.surface_repository.update(surface)
 
     async def get_admin_consent_info(
-        self, surface: AgentSurfaceEntity
+        self, surface: AgentSurfaceEntity, *, include_consent_url: bool
     ) -> dict[str, Any]:
+        """Where this surface stands on admin consent. Reads only.
+
+        Activating a surface whose tenant had already consented happens when
+        it is created (`activate_if_tenant_consented`) or on the consent
+        callback, never on this read: it is reached by every pod member who
+        opens the setup panel.
+        """
         if surface.surface_type != SurfacePlatform.TEAMS:
             return {"status": surface.status}
 
@@ -234,17 +252,28 @@ class SurfaceConsentMixin:
         if surface.status is AgentSurfaceStatus.ACTIVE:
             return {"status": AgentSurfaceStatus.ACTIVE}
 
-        already_granted = await self._check_admin_consent_granted(tenant_id)
-        if already_granted:
-            surface.activate()
-            await self.surface_repository.update(surface)
-            return {"status": AgentSurfaceStatus.ACTIVE}
-
-        consent_url = await teams_consent.build_consent_url(surface.id, tenant_id)
+        consent_url = (
+            await teams_consent.build_consent_url(surface.id, tenant_id)
+            if include_consent_url
+            else None
+        )
         return {
             "status": AgentSurfaceStatus.PENDING_ADMIN_CONSENT,
             "consent_url": consent_url,
         }
+
+    async def activate_if_tenant_consented(self, surface: AgentSurfaceEntity) -> None:
+        """Start a new Teams surface active when its tenant already consented.
+
+        Consent is tenant-wide, so a tenant that consented for an earlier
+        surface does not go through the round trip again for this one.
+        """
+        if (
+            surface.surface_type is SurfacePlatform.TEAMS
+            and surface.external_tenant_id
+            and await self._check_admin_consent_granted(surface.external_tenant_id)
+        ):
+            surface.activate()
 
     async def _check_admin_consent_granted(self, tenant_id: str) -> bool:
         app_id = surface_settings.microsoft_bot_app_id
@@ -269,7 +298,7 @@ class SurfaceConsentMixin:
 
         token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with outbound_http(10) as client:
                 token_response = await client.post(
                     token_url,
                     data={
@@ -309,7 +338,7 @@ class SurfaceConsentMixin:
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with outbound_http(10) as client:
                 probe = await client.get(
                     "https://graph.microsoft.com/v1.0/users?$top=1&$select=id",
                     headers={"Authorization": f"Bearer {token}"},

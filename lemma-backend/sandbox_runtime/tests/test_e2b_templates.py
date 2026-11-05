@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -28,17 +29,21 @@ _SPEC.loader.exec_module(build_templates)
 class _RecordingTemplate:
     copies: list[tuple[str, str]]
     commands: list[str]
+    steps: list[tuple[str, str]]
 
     def __init__(self, **_: object) -> None:
         self.copies = []
         self.commands = []
+        self.steps = []
 
     def __getattr__(self, name: str):
         def record(*args: object, **_: object) -> _RecordingTemplate:
             if name == "copy":
                 self.copies.append((str(args[0]), str(args[1])))
+                self.steps.append(("copy", str(args[1])))
             if name == "run_cmd" and args:
                 self.commands.append(str(args[0]))
+                self.steps.append(("run", str(args[0])))
             return self
 
         return record
@@ -143,3 +148,29 @@ def test_both_images_wire_the_overlay_the_same_way(monkeypatch) -> None:
         assert fragment in e2b_script, f"the E2B template lost {fragment}"
         assert fragment in dockerfile, f"Dockerfile.workspace lost {fragment}"
     assert "/opt/lemma-runtime" in dockerfile
+
+
+_BARE_UV = re.compile(r"(?:^|[\s;&|(])uv\s")
+
+
+@pytest.mark.parametrize("template_name", ["workspace_template", "function_template"])
+def test_no_build_step_calls_uv_before_the_shim_is_there(
+    monkeypatch, template_name: str
+) -> None:
+    """`uv` on PATH is a shim copied in late; the real binary is installed
+    under another name. A build step that says bare `uv` before the copy
+    exits 127, and the function template never copies the shim at all -- both
+    templates were unbuildable that way.
+    """
+    monkeypatch.setattr(build_templates, "Template", _RecordingTemplate)
+    template = getattr(build_templates, template_name)()
+
+    shim_copied = False
+    for kind, step in template.steps:
+        if kind == "copy" and step == "/usr/local/bin/uv":
+            shim_copied = True
+        if kind == "run" and not shim_copied:
+            assert not _BARE_UV.search(step), (
+                f"{template_name} runs bare `uv` before the shim is copied: "
+                f"call {build_templates.UV} instead"
+            )

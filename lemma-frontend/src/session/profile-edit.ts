@@ -14,13 +14,12 @@ export interface ProfileDraft {
     timezone: string;
     country: string;
     mobile_number: string;
-    telegram_username: string;
     date_of_birth: string;
 }
 
 export const PROFILE_FIELDS: (keyof ProfileDraft)[] = [
     "first_name", "last_name", "timezone", "country",
-    "mobile_number", "telegram_username", "date_of_birth",
+    "mobile_number", "date_of_birth",
 ];
 
 function text(value: string | null | undefined): string {
@@ -35,27 +34,27 @@ export function draftOf(user: UserResponse | null | undefined): ProfileDraft {
         timezone: text(user?.timezone),
         country: text(user?.country),
         mobile_number: text(user?.mobile_number),
-        /* Stored bare; the @ is how people write it and how it is shown. */
-        telegram_username: text(user?.telegram_username).replace(/^@+/, ""),
         date_of_birth: text(user?.date_of_birth).slice(0, 10),
     };
 }
 
-/** Only what actually changed, and `null` where it was deliberately emptied.
+/** Only what actually changed, and an empty value where timezone was cleared.
  *
  *  The distinction is the point. Sending every field back means a form that
  *  loaded while one value was still in flight can write a stale copy over the
- *  newer one; sending nothing for an emptied field leaves it set forever, so
- *  clearing a phone number would silently not work. Unchanged is omitted,
- *  cleared is an explicit null.
+ *  newer one; sending nothing for an emptied field leaves it set forever.
+ *  Most cleared fields use `null`; timezone uses an empty string so signup can
+ *  tell it apart from a timezone that has never been set.
  */
 export function changes(before: ProfileDraft, after: ProfileDraft): UserProfileRequest {
     const patch: Record<string, string | null> = {};
     for (const field of PROFILE_FIELDS) {
         const was = before[field];
-        const now = field === "telegram_username" ? after[field].replace(/^@+/, "").trim() : after[field].trim();
+        const now = after[field].trim();
         if (was === now) continue;
-        patch[field] = now === "" ? null : now;
+        /* Keep an intentional timezone clear distinct from a never-set
+           timezone: signup may fill the latter, but must respect the former. */
+        patch[field] = now === "" ? (field === "timezone" ? "" : null) : now;
     }
     return patch as UserProfileRequest;
 }

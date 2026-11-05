@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..models.write_intent import WriteIntent
+from ..types import UNSET, Unset
+
 if TYPE_CHECKING:
     from ..models.bulk_update_records_request_records_item import (
         BulkUpdateRecordsRequestRecordsItem,
@@ -22,9 +25,11 @@ class BulkUpdateRecordsRequest:
     Attributes:
         records (list[BulkUpdateRecordsRequestRecordsItem]): List of record updates. Each item must include the table
             primary key field. At most 1000 per request.
+        intent (WriteIntent | Unset):
     """
 
     records: list[BulkUpdateRecordsRequestRecordsItem]
+    intent: WriteIntent | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -33,6 +38,10 @@ class BulkUpdateRecordsRequest:
             records_item = records_item_data.to_dict()
             records.append(records_item)
 
+        intent: str | Unset = UNSET
+        if not isinstance(self.intent, Unset):
+            intent = self.intent.value
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -40,6 +49,8 @@ class BulkUpdateRecordsRequest:
                 "records": records,
             }
         )
+        if intent is not UNSET:
+            field_dict["intent"] = intent
 
         return field_dict
 
@@ -59,8 +70,16 @@ class BulkUpdateRecordsRequest:
 
             records.append(records_item)
 
+        _intent = d.pop("intent", UNSET)
+        intent: WriteIntent | Unset
+        if isinstance(_intent, Unset):
+            intent = UNSET
+        else:
+            intent = WriteIntent(_intent)
+
         bulk_update_records_request = cls(
             records=records,
+            intent=intent,
         )
 
         bulk_update_records_request.additional_properties = d

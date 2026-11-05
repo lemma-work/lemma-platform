@@ -10,6 +10,7 @@ Everything else about a run is a row write; this path deliberately is not.
 
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostEventBatch,
     AgentHostRunState,
 )
+from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
 )
@@ -34,6 +36,40 @@ from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseMod
 
 
 logger = get_logger(__name__)
+
+#: The most one event may put on the run's stream, which is shared Redis. Large
+#: enough for an image a chunk carries to the artifact writer -- the same 8 MiB
+#: the host's MCP relay allows one line -- and only a ceiling, never a budget.
+MAX_EVENT_PAYLOAD_BYTES = 8 * 1024 * 1024
+
+
+def bounded_event_payload(
+    payload: JsonObject, *, limit: int = MAX_EVENT_PAYLOAD_BYTES
+) -> JsonObject:
+    """``payload``, with its largest fields replaced until it fits ``limit``.
+
+    Replaced field by field rather than refused whole: refusing a batch makes
+    the host resend it forever, and dropping the event would leave a gap the
+    stream then refuses. The small fields -- a result's ``status``, a call's
+    ``tool`` -- survive, so the event still means what it meant.
+    """
+    if _json_size(payload) <= limit:
+        return payload
+    bounded: JsonObject = dict(payload)
+    for key in sorted(
+        bounded, key=lambda name: _json_size(bounded[name]), reverse=True
+    ):
+        omitted = _json_size(bounded[key])
+        bounded[key] = (
+            f"[{omitted} bytes omitted: over the {limit}-byte limit for one event]"
+        )
+        if _json_size(bounded) <= limit:
+            break
+    return bounded
+
+
+def _json_size(value: object) -> int:
+    return len(json.dumps(value, separators=(",", ":"), default=str))
 
 
 async def append_events(
@@ -89,7 +125,7 @@ async def append_events(
                 "sequence": event.sequence,
                 "type": event.type.value,
                 "object_id": event.object_id,
-                "payload": event.payload,
+                "payload": bounded_event_payload(event.payload),
             }
             for event in batch.events
         ],

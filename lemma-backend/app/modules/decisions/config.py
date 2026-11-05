@@ -69,7 +69,10 @@ class DecisionsSettings(BaseSettings):
     decision_rate_limit_per_minute: int = Field(
         default=600,
         ge=0,
-        description="Decisions one organization may ask per minute; 0 for no limit.",
+        description=(
+            "Decisions one organization may ask per minute, counted separately "
+            "for interactive and background decisions; 0 for no limit."
+        ),
     )
 
 

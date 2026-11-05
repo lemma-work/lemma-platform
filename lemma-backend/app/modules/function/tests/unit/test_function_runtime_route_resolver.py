@@ -44,6 +44,7 @@ def _dispatch(
         config={},
         mode=mode,
         deadline_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        execution_seconds=60,
         revision_hash=f"sha256:{'a' * 64}",
         input_data={},
     )
@@ -163,7 +164,7 @@ async def test_quarantine_destroys_the_sandbox_not_just_the_cached_endpoint() ->
             return_value=SimpleNamespace(ready=True, retry_after_ms=None)
         ),
         lease_function_runtime=AsyncMock(return_value=_lease(dispatch.pod_id)),
-        destroy_sandbox=AsyncMock(),
+        destroy_sandbox=AsyncMock(return_value=True),
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
@@ -172,14 +173,43 @@ async def test_quarantine_destroys_the_sandbox_not_just_the_cached_endpoint() ->
     )
     endpoint = await resolver.endpoint(dispatch)
 
-    await resolver.quarantine(dispatch.pod_id, endpoint)
+    assert await resolver.quarantine(dispatch.pod_id, endpoint) is True
 
     client.destroy_sandbox.assert_awaited_once()
     assert client.destroy_sandbox.await_args.args[1] == dispatch.pod_id
+    # Only the incarnation the endpoint was leased from.
+    assert client.destroy_sandbox.await_args.kwargs["expected_epoch"] == 3
     # And the next resolve provisions rather than reusing the cached entry.
     client.lease_function_runtime.reset_mock()
     await resolver.endpoint(dispatch)
     client.lease_function_runtime.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_of_an_already_replaced_sandbox_reports_nothing_destroyed() -> (
+    None
+):
+    """A second failure on the old endpoint must not count as destroying it.
+
+    The caller fails every run in flight on the pod when this returns True, and
+    by now those runs are on the replacement.
+    """
+    dispatch = _dispatch()
+    client = SimpleNamespace(
+        ensure_sandbox=AsyncMock(
+            return_value=SimpleNamespace(ready=True, retry_after_ms=None)
+        ),
+        lease_function_runtime=AsyncMock(return_value=_lease(dispatch.pod_id)),
+        destroy_sandbox=AsyncMock(return_value=False),
+        close=AsyncMock(),
+    )
+    resolver = FunctionRuntimeRouteResolver(
+        sandbox_client_factory=lambda: client,
+        endpoint_cache=FunctionRuntimeEndpointCache(),
+    )
+    endpoint = await resolver.endpoint(dispatch)
+
+    assert await resolver.quarantine(dispatch.pod_id, endpoint) is False
 
 
 @pytest.mark.asyncio

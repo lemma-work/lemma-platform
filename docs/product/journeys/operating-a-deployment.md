@@ -152,14 +152,16 @@ rather than degrading in a way that only shows up as confused users.
 - The system shall not drop an event because nothing was listening at the time
   it was published.
 
-> **Verified by:** `test_dead_letter_e2e.py` in `app/core/tests/e2e/`, not by
-> a scenario. Every clause needs a dependency to fail repeatedly on demand, and
-> the scenario suite forbids mocking, so it has no way to induce one — see
-> [testing.md](../../testing.md) on which suite owns injected failure. The two
-> tests there drive a real dispatcher against a real outbox with a broker that
-> always raises, and hold the retry budget stopping, the row being kept with
-> its error type, a dead-lettered event not being claimed again, and an
-> operator finding it and replaying it.
+> **Verified by:** the work runtime's e2e tests in `app/core/tests/e2e/`, not
+> by a scenario. Every clause needs a dependency to fail repeatedly on demand,
+> and the scenario suite forbids mocking, so it has no way to induce one — see
+> [testing.md](../../testing.md) on which suite owns injected failure.
+> `test_work_recovery_e2e.py` holds the retry budget stopping, the item being
+> kept `dead` with its error and its domain state written terminal, and an
+> operator retrying it (`work.admin retry`); `test_work_enqueue_e2e.py` holds a
+> periodic that keeps failing going dead and its chain going on. Nothing can be
+> dropped for want of a listener: work is a row written in the transaction that
+> caused it, claimed whenever a worker is up.
 >
 > This previously read `covered` on the strength of
 > `test_feedback_can_be_reported`, which reports a broken *tool* and has

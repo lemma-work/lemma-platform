@@ -8,9 +8,12 @@ they move together and the routes stay where they were.
 
 from __future__ import annotations
 
+from fastapi import Request
+
 from typing import Any, Awaitable, Callable
 from uuid import UUID
 
+from app.core.authorization.dependencies import resolve_pod_context
 from app.core.authorization.grants import (
     apply_inline_workload_grants,
     list_grantee_resource_grants,
@@ -34,6 +37,7 @@ async def apply_function_grants(
     function: FunctionEntity,
     data,
     user: UserEntity,
+    request: Request,
 ) -> None:
     """Apply a create/update payload's inline ``permissions`` block.
 
@@ -62,16 +66,26 @@ async def apply_function_grants(
         # -- which names no permissions at all -- checks out no connection.
         return
     function_id = function.id
-    await write_then_invalidate(
-        uow_factory,
-        write=lambda session: apply_inline_workload_grants(
+
+    async def _apply(session) -> bool:
+        # The granter's context on this short unit of work, from the request,
+        # so a workload calling the route is bounded as itself.
+        ctx = await resolve_pod_context(
+            session=session, request=request, user_id=user.id, pod_id=pod_id
+        )
+        return await apply_inline_workload_grants(
             session,
             pod_id=pod_id,
             grantee_type="FUNCTION",
             grantee_id=function_id,
             permissions=permissions,
             created_by_user_id=user.id,
-        ),
+            ctx=ctx,
+        )
+
+    await write_then_invalidate(
+        uow_factory,
+        write=lambda session: _apply(session),
         # The sandbox reads its grants from a cached environment, so skipping
         # this leaves the function running with the access it had before.
         invalidate=lambda: invalidate_function_workspace_env_cache(

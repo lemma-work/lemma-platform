@@ -26,6 +26,8 @@ class TeamsChannelMessageSnapshot(BaseModel):
     reply_to_id: str | None = None
     user_id: str | None = None
     display_name: str | None = None
+    #: Sent by an application (a bot, ours included), not a person.
+    from_application: bool = False
     # Author attribution making clear this is another channel participant, not
     # the user who mentioned the agent. Background-context framing only.
     author_label: str | None = None

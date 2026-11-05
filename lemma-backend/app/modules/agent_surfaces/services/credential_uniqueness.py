@@ -30,7 +30,6 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceCredentialMode,
-    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAgentPlatformConflictError,
@@ -58,12 +57,8 @@ async def ensure_unique_org_credential_binding(
     pod and surface name so the UI can name who has it rather than showing a
     bare failed save.
     """
-    if surface.account_id is not None:
-        conflict = await surface_repository.get_account_conflict_in_org(
-            pod_id=surface.pod_id,
-            account_id=surface.account_id,
-            exclude_surface_id=surface.id,
-        )
+    if surface.pod_connector_slug is not None:
+        conflict = await surface_repository.get_sharing_account_with(surface)
         if isinstance(conflict, AgentSurfaceEntity):
             raise AgentSurfaceCredentialConflictError(
                 "This connected account is already used by another surface in "
@@ -150,7 +145,7 @@ async def ensure_unique_platform_identity(
     This is the half that was never enforced.
 
     `ensure_unique_org_credential_binding` cannot enforce it, because it
-    compares ``account_id`` -- a row in *our* database. Connected accounts are
+    compares the account behind the connector -- a row in *our* database. Connected accounts are
     per person (``accounts.user_id`` is in the unique key), so two colleagues
     installing the same Slack app into the same workspace get two account rows
     with different ids and one bot behind them. Nothing about that is a
@@ -241,29 +236,6 @@ async def ensure_one_surface_per_agent(
     )
 
 
-async def ensure_unique_telegram_account(
-    surface: AgentSurfaceEntity,
-    *,
-    surface_repository: SurfaceInstallationRepositoryPort,
-) -> None:
-    """A Telegram bot answers for exactly one surface, across all orgs.
-
-    Telegram delivers by bot token, so a second surface on the same account
-    would receive the first one's updates.
-    """
-    if surface.account_id is None:
-        return
-    existing = await surface_repository.get_by_platform_and_account_id(
-        platform=SurfacePlatform.TELEGRAM.value,
-        account_id=surface.account_id,
-        exclude_surface_id=surface.id,
-    )
-    if existing is not None:
-        raise AgentSurfaceValidationError(
-            "Telegram account is already connected to another surface"
-        )
-
-
 def warn_if_tied_on_one_bot(
     member_candidates: list[AgentSurfaceEntity], *, platform: str
 ) -> None:
@@ -285,7 +257,7 @@ def warn_if_tied_on_one_bot(
         return
     by_identity: dict[tuple[str, str], list[AgentSurfaceEntity]] = {}
     for surface in member_candidates:
-        if surface.account_id is None:
+        if surface.pod_connector_slug is None:
             continue
         if not surface.external_workspace_id or not surface.surface_identity_id:
             continue

@@ -27,12 +27,8 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as HttpOTLPSpanExporter,
 )
 from opentelemetry.metrics import NoOpMeterProvider
-from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics import MeterProvider, TraceBasedExemplarFilter
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.metrics._internal.exemplar.exemplar_filter import (
-    AlwaysOffExemplarFilter,
-)
-from opentelemetry.sdk.metrics.view import View
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
@@ -54,6 +50,9 @@ from openinference.instrumentation.pydantic_ai import OpenInferenceSpanProcessor
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.core.log.log import get_logger
+from app.core.observability.exemplars import metric_view
+from app.core.observability.edge import install_propagators
+from app.core.observability import forced_sampling
 from app.core.observability.otel_logging import (
     quiet_otlp_export_logs,
     setup_otel_logs,
@@ -64,7 +63,6 @@ from app.core.observability.span_limits import (
     general_span_processor,
 )
 from app.core.observability.span_sanitizer import (
-    METRIC_ATTRIBUTE_KEYS,
     SanitizingSpanExporter,
     sanitize_http_route,
 )
@@ -567,7 +565,7 @@ def _setup_tracing(service_name: str) -> TracerProvider | None:
         return None
     provider = TracerProvider(
         resource=_build_resource(service_name),
-        sampler=_build_sampler(settings),
+        sampler=forced_sampling.ForcibleSampler(_build_sampler(settings)),
         span_limits=GENERAL_SPAN_LIMITS,  # truncate at record time
     )
 
@@ -646,12 +644,11 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
     endpoint = settings.llm_otel_exporter_otlp_endpoint
     if not settings.llm_otel_enabled or not endpoint:
         return None
+    llm = (settings.llm_otel_traces_sampler, settings.llm_otel_traces_sampler_arg)
     provider = TracerProvider(
         resource=_build_resource(service_name),
-        sampler=_build_sampler(
-            settings,
-            strategy=settings.llm_otel_traces_sampler,
-            ratio=settings.llm_otel_traces_sampler_arg,
+        sampler=forced_sampling.ForcibleSampler(
+            _build_sampler(settings, strategy=llm[0], ratio=llm[1])
         ),
     )
     provider.add_span_processor(AgentRunSpanEnricher())
@@ -726,8 +723,8 @@ def _setup_metrics(service_name: str) -> MeterProvider | None:
     provider = MeterProvider(
         resource=_build_resource(service_name),
         metric_readers=readers,
-        exemplar_filter=AlwaysOffExemplarFilter(),
-        views=[View(instrument_name="*", attribute_keys=set(METRIC_ATTRIBUTE_KEYS))],
+        exemplar_filter=TraceBasedExemplarFilter(),
+        views=[metric_view()],
     )
     metrics.set_meter_provider(provider)
     return provider
@@ -760,12 +757,9 @@ def _instrument_libraries() -> None:
     # the stable conventions, so the process was describing the same calls under
     # two names and two schemas.
     #
-    # ``http``, not ``http/dup``. ``dup`` was the migration
-    # step: it emitted both vocabularies so the dashboards could move at their
-    # own pace. They have — every inbound-latency panel reads
-    # ``http.server.request.duration`` now — so the superseded
-    # ``http.server.duration`` (26 series, still being paid for) can stop. The
-    # old series going stale silently is the failure this avoids.
+    # ``http``, not ``http/dup``: ``dup`` was the migration step, emitting both
+    # vocabularies until every inbound-latency panel read the stable
+    # ``http.server.request.duration``, which they now do.
     #
     # ``setdefault`` so a deployment can pin either behaviour itself.
     os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
@@ -773,10 +767,13 @@ def _instrument_libraries() -> None:
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,
     )
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation import httpx as otel_httpx
 
     AioHttpClientInstrumentor().instrument()
-    HTTPXClientInstrumentor().instrument()
+    otel_httpx.HTTPXClientInstrumentor().instrument()
+    # httpx2 is its own package, which the httpx instrumentation does not
+    # reach; the model provider SDKs are built on it.
+    otel_httpx.HTTPX2ClientInstrumentor().instrument()
     _libraries_instrumented = True
 
 
@@ -819,6 +816,7 @@ def init_telemetry(service_name: str = "lemma-api") -> None:
     resolved_service_name = _resolve_service_name(service_name)
     _validate_telemetry_config()
     try:
+        install_propagators()  # before any server span reads a header
         quiet_otlp_export_logs()
         if settings.observability_enabled:
             _trace_provider = _setup_tracing(resolved_service_name)
@@ -937,6 +935,7 @@ def instrument_fastapi_app(app: FastAPI) -> None:
         meter_provider=metrics.get_meter_provider(),
         excluded_urls="/health,/health/live,/health/ready,/livez",
     )
+    forced_sampling.wrap_outermost(app, settings.otel_always_sample_user_ids)
     _instrumented_app_ids.add(app_id)
 
 

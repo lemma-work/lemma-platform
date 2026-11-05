@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { MicIcon, MicOffIcon, EndCallIcon, MinimizeIcon, ChevronLeftIcon, ChevronRightIcon } from "@/ui/icons";
 import { ResourceCard } from "@/thread/resource-card";
 import { CallMark } from "./call-mark";
 import type { CallStatus } from "./use-call";
-import type { CallResource } from "./use-call-session";
+import type { CanvasItem } from "./canvas";
 import type { CallLine } from "./call-transcript";
-import type { PlanStepState } from "@/thread/turns";
 import { statusLine } from "./call-status";
 
 /** The call, given the whole pane.
@@ -17,48 +16,54 @@ import { statusLine } from "./call-status";
  *  something better to put there, and then it steps aside and becomes a
  *  small presence at the top while the teammate's widgets take the space.
  *
- *  Nothing here authors a picture. Every widget on this screen came from the
- *  teammate's own `display_resource`, rendered by the same `WidgetView` the
- *  transcript uses — which is what gets it the theme, the negotiated height
- *  and the compose bridge, instead of the white-backed `srcDoc` box the call
- *  drew for itself before. */
+ *  Nothing here authors a picture. The screen is the call's canvas: whatever
+ *  the teammate or any of its sub-agents put there, rendered by the same
+ *  `ResourceCard` the transcript uses — so a diagram, a chart or a file looks
+ *  the same here as it does in the conversation afterwards. */
 export function CallScreen({
     teammate,
     podId,
-    conversationId,
     status,
     error,
+    notice,
     muted,
     thinking,
     level,
-    resources,
+    canvas,
+    showing,
     transcript,
-    plan,
     onMute,
     onEnd,
     onCollapse,
+    onShow,
+    onRenderFailed,
     onOpenFile,
     onOpenApp,
     onOpenTable,
 }: {
     teammate: string;
     podId: string;
-    /** The call's own conversation. Null until it exists, and a widget cannot
-     *  be minted without it. */
-    conversationId: string | null;
     status: CallStatus;
     error: string | null;
+    /** Something to know, said once (a request the team cannot take). */
+    notice?: string | null;
     muted: boolean;
     thinking?: boolean;
     level: number;
-    resources: CallResource[];
+    /** The call's canvas, in the order it was drawn. */
+    canvas: CanvasItem[];
+    /** The item on screen, by id; null for the newest. Held by the call, not
+     *  here: this screen unmounts when the call is collapsed. */
+    showing: string | null;
     /** What has been said so far, both ways. */
     transcript: CallLine[];
-    /** The teammate's own plan, for the line under its name. */
-    plan?: PlanStepState[];
     onMute: () => void;
     onEnd: () => void;
     onCollapse: () => void;
+    /** The person paged to this item: show it, and tell the voice. */
+    onShow: (item: CanvasItem) => void;
+    /** An item could not draw here; whoever drew it is told. */
+    onRenderFailed?: (item: CanvasItem, problem: string) => void;
     /** Put the thing on screen onto the stage as a tab. The call does not end
      *  for it — it steps back to the bar, which is the whole point of having
      *  a bar. */
@@ -73,11 +78,55 @@ export function CallScreen({
        The newest always takes the screen the moment it arrives, the way a
        slide changes when the presenter changes it. Paging back is for looking
        something up, not for holding the screen. */
-    const [showing, setShowing] = useState(0);
+    const resources = canvas;
     const newest = Math.max(0, resources.length - 1);
-    useEffect(() => { setShowing(newest); }, [newest]);
-    const active = Math.min(showing, newest);
+    const picked = showing === null ? -1 : resources.findIndex((one) => one.id === showing);
+    const active = picked >= 0 ? picked : newest;
     const onScreen = resources[active];
+
+    /* Every page the person turns is them pointing at something, back to the
+       newest included: the voice is told which slide is up, or it talks about
+       one while another is on screen. The newest item arriving is not a turn
+       of theirs -- the voice was told about that when it was drawn. */
+    const page = useCallback((to: number) => {
+        const item = resources[to];
+        if (item) onShow(item);
+    }, [resources, onShow]);
+
+    /* The arrow keys page, as in any slide viewer -- unless the person is
+       typing, or a widget inside the slide has the focus and the keys. */
+    useEffect(() => {
+        if (resources.length < 2) return;
+        const onKey = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null;
+            if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+            if (event.key === "ArrowLeft") page(active - 1);
+            else if (event.key === "ArrowRight") page(active + 1);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [resources.length, active, page]);
+
+    /* A widget that cannot draw says so to its parent frame (the widget kit's
+       `lemma.fail`, and any error it did not catch). Which item
+       it was is read off the frame that sent it, not off the message, so a
+       widget cannot report a failure on another's behalf. */
+    const deckRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (!onRenderFailed) return;
+        const heard = (event: MessageEvent) => {
+            const data = event.data as { type?: unknown; message?: unknown } | null;
+            if (!data || data.type !== "lemma-widget-error") return;
+            for (const slide of deckRef.current?.querySelectorAll<HTMLElement>("[data-canvas-item]") ?? []) {
+                const frames = Array.from(slide.querySelectorAll("iframe"));
+                if (!frames.some((frame) => frame.contentWindow === event.source)) continue;
+                const item = resources.find((one) => one.id === slide.dataset.canvasItem);
+                if (item) onRenderFailed(item, String(data.message ?? "").slice(0, 500));
+            }
+        };
+        window.addEventListener("message", heard);
+        return () => window.removeEventListener("message", heard);
+    }, [resources, onRenderFailed]);
 
     /* One line, the one being said. A call is spoken — a scrolling record of
        it would be a second thing to read while trying to listen, and the
@@ -89,7 +138,7 @@ export function CallScreen({
        there — which is now either a widget or the first thing anybody said. */
     const bare = resources.length === 0;
 
-    const hint = statusLine({ error, muted, plan, thinking, teammate });
+    const hint = statusLine({ error: error ?? notice, muted, thinking, teammate });
 
     return (
         <section className="call-view" aria-label={"Call with " + teammate}>
@@ -119,7 +168,7 @@ export function CallScreen({
                         Anything {teammate} shows you will appear here.
                     </p>
                 ) : (
-                    <div className="call-deck">
+                    <div className="call-deck" ref={deckRef}>
                         {/* Every widget stays mounted and all but one is
                             hidden — the same rule the pod's app tabs follow.
                             Rendering only the visible slide would tear down
@@ -127,7 +176,7 @@ export function CallScreen({
                             that had already been looked at. */}
                         <div className="call-deck__screen">
                             {resources.map((shown, index) => (
-                                <div className="call-deck__slide" key={shown.id} hidden={index !== active}>
+                                <div className="call-deck__slide" key={shown.id} hidden={index !== active} data-canvas-item={shown.id}>
                                     {/* The same card the transcript uses, so a
                                         file, a table or an app the teammate
                                         shows lands on the call's screen
@@ -136,8 +185,8 @@ export function CallScreen({
                                     <ResourceCard
                                         resource={shown.resource}
                                         podId={podId}
-                                        conversationId={conversationId}
-                                        toolCallId={shown.toolCallId}
+                                        conversationId={shown.conversationId}
+                                        toolCallId={shown.id}
                                         onOpenFile={onOpenFile}
                                         onOpenApp={onOpenApp}
                                         onOpenTable={onOpenTable}
@@ -151,7 +200,7 @@ export function CallScreen({
                             <div className="call-deck__nav">
                                 <button
                                     className="call-deck__step"
-                                    onClick={() => setShowing(active - 1)}
+                                    onClick={() => page(active - 1)}
                                     disabled={active === 0}
                                     aria-label="Previous"
                                 ><ChevronLeftIcon size={18} /></button>
@@ -161,7 +210,7 @@ export function CallScreen({
                                 </span>
                                 <button
                                     className="call-deck__step"
-                                    onClick={() => setShowing(active + 1)}
+                                    onClick={() => page(active + 1)}
                                     disabled={active === newest}
                                     aria-label="Next"
                                 ><ChevronRightIcon size={18} /></button>

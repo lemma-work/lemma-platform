@@ -48,6 +48,14 @@ async def fail_run_for_wait(
         WorkflowRunStatus.RUNNING,
     ):
         return None
+    # The wait was read before the lock was taken. A resume that held the lock
+    # first may have completed it and moved the run on to another step, which
+    # leaves the run live; failing it now would fail a run that went past this
+    # wait. So the wait must still be the run's active one.
+    current = await engine.wait_repo.get_active_for_run(wait.run_id)
+    if current is None or current.id != wait.id:
+        return None
+    wait = current
 
     normalized = normalize_node_output(output)
     wait.fail(normalized or {"error": error})
@@ -60,8 +68,7 @@ async def fail_run_for_wait(
     # for an answer nobody will read -- the same reason `cancel_run` does this.
     # Only a form wait ever put one there.
     if wait.wait_type == WorkflowRunWaitType.HUMAN:
-        await engine.notification_adapter.cancel_for_run(run_id=run.id)
-    engine._collect_terminal_event(run)
-    await engine.uow.commit()
-    await engine._announce(run)
+        await engine.form_questions.run_ended(pod_id=run.pod_id, run_id=run.id)
+    await engine._record_transition(run)
+    await engine._settle(run)
     return run

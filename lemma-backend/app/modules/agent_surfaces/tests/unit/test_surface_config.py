@@ -22,6 +22,7 @@ EXPECTED = [
     ("microsoft_bot_tenant_id", "MICROSOFT_BOT_TENANT_ID", None),
     ("microsoft_bot_openid_config_url", "MICROSOFT_BOT_OPENID_CONFIG_URL", None),
     ("microsoft_bot_oauth_base_url", "MICROSOFT_BOT_OAUTH_BASE_URL", None),
+    ("microsoft_bot_service_extra_host", "MICROSOFT_BOT_SERVICE_EXTRA_HOST", None),
     ("microsoft_bot_app_name", "MICROSOFT_BOT_APP_NAME", None),
     ("slack_signing_secret", "SLACK_SIGNING_SECRET", None),
     ("slack_app_id", "SLACK_APP_ID", None),
@@ -35,6 +36,12 @@ EXPECTED = [
     ("whatsapp_verify_token", "WHATSAPP_VERIFY_TOKEN", None),
     ("whatsapp_app_secret", "WHATSAPP_APP_SECRET", None),
     ("whatsapp_display_phone_number", "WHATSAPP_DISPLAY_PHONE_NUMBER", None),
+    ("whatsapp_reengage_template", "WHATSAPP_REENGAGE_TEMPLATE", None),
+    (
+        "whatsapp_reengage_template_language",
+        "WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE",
+        "en_US",
+    ),
     ("telegram_bot_token", "TELEGRAM_BOT_TOKEN", None),
     ("telegram_webhook_secret", "TELEGRAM_WEBHOOK_SECRET", None),
     ("telegram_manager_bot_token", "TELEGRAM_MANAGER_BOT_TOKEN", None),
@@ -62,11 +69,6 @@ EXPECTED = [
         "surface_allow_unverified_phone_match",
         "SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH",
         False,
-    ),
-    (
-        "surface_dm_conversation_reset_after_hours",
-        "SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS",
-        24,
     ),
     (
         "surface_outsider_turns_per_person_per_10_minutes",
@@ -98,16 +100,26 @@ EXPECTED = [
         "SURFACE_WEB_SUBMISSIONS_PER_WIDGET_PER_DAY",
         500,
     ),
+    (
+        "surface_web_attachment_max_bytes",
+        "SURFACE_WEB_ATTACHMENT_MAX_BYTES",
+        10 * 1024 * 1024,
+    ),
+    (
+        "surface_web_attachments_max_bytes",
+        "SURFACE_WEB_ATTACHMENTS_MAX_BYTES",
+        25 * 1024 * 1024,
+    ),
+    (
+        "surface_web_reads_per_widget_per_day",
+        "SURFACE_WEB_READS_PER_WIDGET_PER_DAY",
+        20000,
+    ),
     ("surface_web_stream_seconds", "SURFACE_WEB_STREAM_SECONDS", 300),
     (
         "surface_new_contacts_per_surface_per_day",
         "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",
         200,
-    ),
-    (
-        "surface_contact_follow_ups_per_contact_per_day",
-        "SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY",
-        10,
     ),
     (
         "surface_parked_mail_notes_per_surface_per_hour",
@@ -122,6 +134,7 @@ EXPECTED = [
     ),
     ("enable_slack_socket_mode", "ENABLE_SLACK_SOCKET_MODE", False),
     ("enable_resend_polling_mode", "ENABLE_RESEND_POLLING_MODE", False),
+    ("surface_send_backoff_scale", "SURFACE_SEND_BACKOFF_SCALE", 1.0),
 ]
 
 
@@ -149,6 +162,8 @@ def test_surface_settings_reads_legacy_env_var(monkeypatch, field, env, default)
         raw, expected = ("false", False) if default else ("true", True)
     elif isinstance(default, int):
         raw, expected = "123", 123
+    elif isinstance(default, float):
+        raw, expected = "0.25", 0.25
     else:
         raw, expected = "sentinel", "sentinel"
     monkeypatch.setenv(env, raw)

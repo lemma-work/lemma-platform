@@ -54,11 +54,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = ROOT / "import-budget-baseline.json"
 
-# Entrypoints worth watching: the api app and the worker's event wiring. Both
-# are what a pod actually imports before it is ready.
+# Entrypoints worth watching: the api app, which is what a pod imports before
+# it is ready. (The worker imports lazily from ``app.worker``; its registration
+# imports the same work kinds the API registers.)
 ENTRYPOINTS = {
     "app.app": "the FastAPI application",
-    "app.events": "the worker's event and task wiring",
 }
 
 # Headroom before the gate complains. A handful of modules is a normal

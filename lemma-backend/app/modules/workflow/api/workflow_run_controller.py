@@ -143,6 +143,38 @@ async def cancel_workflow_run(
         )
 
 
+@router.post(
+    "/{run_id}/retry",
+    response_model=WorkflowRunResponse,
+    operation_id="workflow.run.retry",
+    summary="Retry Workflow Run",
+    description=(
+        "Resume a failed run from the node that failed, keeping every earlier "
+        "node's output -- an agent step's answer is not produced again. "
+        "Allowed when the failed node is a function, decision, loop or "
+        "wait-until node; any other run, or one that has not failed, returns 409."
+    ),
+)
+async def retry_workflow_run(
+    uow: UoWDep,
+    user: CurrentUser,
+    ctx: PodContextDep,
+    pod_id: UUID,
+    run_id: UUID,
+) -> WorkflowRunResponse:
+    engine = build_workflow_engine(uow)
+    run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
+    _verify_pod(run, pod_id)
+
+    async with uow:
+        run = await engine.retry_run(run_id, requester_user_id=user.id, ctx=ctx)
+        return run_response_from_domain(
+            run,
+            await engine.get_active_wait(run.id),
+            await SqlAlchemyWorkflowRepository(uow).run_title_of(run.flow_id),
+        )
+
+
 @router.get(
     "/waiting/assigned-to-me",
     response_model=WorkflowRunWaitAssignmentListResponse,

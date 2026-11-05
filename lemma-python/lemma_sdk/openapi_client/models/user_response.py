@@ -35,7 +35,6 @@ class UserResponse:
         last_name (None | str | Unset):
         mobile_number (None | str | Unset):
         mobile_verified_at (datetime.datetime | None | Unset):
-        telegram_username (None | str | Unset):
         timezone (None | str | Unset):
     """
 
@@ -55,7 +54,6 @@ class UserResponse:
     last_name: None | str | Unset = UNSET
     mobile_number: None | str | Unset = UNSET
     mobile_verified_at: datetime.datetime | None | Unset = UNSET
-    telegram_username: None | str | Unset = UNSET
     timezone: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -136,12 +134,6 @@ class UserResponse:
         else:
             mobile_verified_at = self.mobile_verified_at
 
-        telegram_username: None | str | Unset
-        if isinstance(self.telegram_username, Unset):
-            telegram_username = UNSET
-        else:
-            telegram_username = self.telegram_username
-
         timezone: None | str | Unset
         if isinstance(self.timezone, Unset):
             timezone = UNSET
@@ -179,8 +171,6 @@ class UserResponse:
             field_dict["mobile_number"] = mobile_number
         if mobile_verified_at is not UNSET:
             field_dict["mobile_verified_at"] = mobile_verified_at
-        if telegram_username is not UNSET:
-            field_dict["telegram_username"] = telegram_username
         if timezone is not UNSET:
             field_dict["timezone"] = timezone
 
@@ -320,15 +310,6 @@ class UserResponse:
             d.pop("mobile_verified_at", UNSET)
         )
 
-        def _parse_telegram_username(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        telegram_username = _parse_telegram_username(d.pop("telegram_username", UNSET))
-
         def _parse_timezone(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -355,7 +336,6 @@ class UserResponse:
             last_name=last_name,
             mobile_number=mobile_number,
             mobile_verified_at=mobile_verified_at,
-            telegram_username=telegram_username,
             timezone=timezone,
         )
 

@@ -57,7 +57,7 @@ def _surface(identity: str | None):
         id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
         surface_identity_id=identity,
-        account_id=None,
+        pod_connector_slug=None,
     )
 
 
@@ -112,8 +112,8 @@ async def test_a_shared_line_answers_from_the_number_the_message_arrived_on():
 
     credentials = await resolver.for_surface(_surface(None), arrived_on=_POOLED)
 
-    assert credentials["phone_number_id"] == _POOLED
-    assert credentials["access_token"] == "token-for-b"
+    assert credentials.phone_number_id == _POOLED
+    assert credentials.access_token.get_secret_value() == "token-for-b"
     assert seen == [_POOLED]
 
 
@@ -136,7 +136,7 @@ async def test_a_surface_that_holds_a_number_keeps_it():
         _surface("held-number-c"), arrived_on=_POOLED
     )
 
-    assert credentials["access_token"] == "token-for-c"
+    assert credentials.access_token.get_secret_value() == "token-for-c"
     assert seen == ["held-number-c"]
 
 
@@ -176,11 +176,11 @@ async def test_the_platform_lookup_answers_from_the_number_the_message_arrived_o
     resolver, seen = _resolver({_POOLED: _pooled_row()})
 
     credentials = await resolver.for_platform(
-        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on=_POOLED
+        SurfacePlatform.WHATSAPP, surface=None, arrived_on=_POOLED
     )
 
-    assert credentials["access_token"] == "token-for-b"
-    assert credentials["phone_number_id"] == _POOLED
+    assert credentials.access_token.get_secret_value() == "token-for-b"
+    assert credentials.phone_number_id == _POOLED
     assert seen == [_POOLED]
 
 
@@ -188,7 +188,7 @@ async def test_the_platform_lookup_reads_no_pool_for_another_platform():
     resolver, seen = _resolver({_POOLED: _pooled_row()})
 
     await resolver.for_platform(
-        SurfacePlatform.TELEGRAM, None, surface=None, arrived_on=_POOLED
+        SurfacePlatform.TELEGRAM, surface=None, arrived_on=_POOLED
     )
 
     assert seen == []
@@ -246,10 +246,10 @@ async def test_the_read_receipt_and_media_download_use_the_arriving_numbers_toke
     await starter.execute_chat(context)
 
     indicator = adapter.add_processing_indicator.await_args.kwargs["credentials"]
-    assert indicator["access_token"] == "token-for-b"
-    assert indicator["phone_number_id"] == _POOLED
+    assert indicator.access_token.get_secret_value() == "token-for-b"
+    assert indicator.phone_number_id == _POOLED
     media = ingest.ingest_attachments.await_args.kwargs["credentials"]
-    assert media["access_token"] == "token-for-b"
+    assert media.access_token.get_secret_value() == "token-for-b"
 
 
 async def test_the_fallback_reply_goes_out_with_the_arriving_numbers_token():
@@ -267,5 +267,5 @@ async def test_the_fallback_reply_goes_out_with_the_arriving_numbers_token():
     await starter.execute_chat(context)
 
     sent = adapter.deliver.await_args.kwargs["credentials"]
-    assert sent["access_token"] == "token-for-b"
-    assert sent["phone_number_id"] == _POOLED
+    assert sent.access_token.get_secret_value() == "token-for-b"
+    assert sent.phone_number_id == _POOLED

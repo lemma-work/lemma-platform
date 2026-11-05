@@ -23,7 +23,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.agent.domain.agent_host import (
     AGENT_HOST_PROTOCOL_VERSION,
@@ -170,6 +170,9 @@ class LinkErrorCode(str, Enum):
     #: An ``op`` the host could not perform. ``detail.kind`` says why; see
     #: ``OP_FAILURE_KINDS``.
     OP_FAILED = "OP_FAILED"
+    #: The answer would have been a frame past the link's 1 MiB ceiling, so it
+    #: was not sent. Never retryable: the same request has the same answer.
+    FRAME_TOO_LARGE = "FRAME_TOO_LARGE"
 
 
 class HostFrameType(str, Enum):
@@ -238,6 +241,10 @@ class HostExecutionCapability(BaseModel):
     enabled: bool = False
     platform: str | None = Field(default=None, max_length=32)
     available: bool = False
+    #: The host moves an op's file data over HTTP when the op names a transfer
+    #: (``domain/agent_host_transfer``). Absent from a host released before
+    #: the link's 1 MiB ceiling; its link session inlines that data instead.
+    transfers: bool = False
 
     @property
     def usable(self) -> bool:
@@ -247,6 +254,10 @@ class HostExecutionCapability(BaseModel):
 class HelloBody(BaseModel):
     hello: HostHello
     capacity: AgentHostCapacity = Field(default_factory=AgentHostCapacity)
+    #: The host fetches a part of a frame Lemma staged instead of sending
+    #: (``{"lemma_staged": ...}``; ``domain/agent_host_transfer``). Absent from
+    #: a host released before it, which is sent nothing staged.
+    staged_bodies: bool = False
     #: Absent from a host too old to know it, which means "no host execution".
     host_execution: HostExecutionCapability | None = None
 
@@ -300,6 +311,17 @@ class McpBody(BaseModel):
     #: retry of that call, on any link. With ``run_id`` it makes the call
     #: execute at most once (``agent_host_link_tool_calls``).
     request_id: str | None = Field(default=None, pattern=_REQUEST_ID_PATTERN)
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def _null_params_are_empty(cls, value: object) -> object:
+        """Read ``"params": null`` as no params.
+
+        MCP lets a client leave ``params`` out of ``tools/list``, and a host
+        released before the bridge filled it in relays that as ``null``.
+        Refusing it cost the agent every Lemma tool for the whole run.
+        """
+        return {} if value is None else value
 
 
 class InteractionWaitBody(BaseModel):

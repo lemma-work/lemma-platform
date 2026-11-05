@@ -28,10 +28,10 @@ scopes data*:
   - `workflows run` — the human who called it.
   - A **`TIME`** or **`WEBHOOK`** schedule — the schedule's configured user.
   - A **`DATASTORE`** schedule on an **RLS** table — the **owner of the row that
-    changed**, not the schedule's creator. (A datastore fire that somehow carries
-    no owner is an error, not a fallback.)
-  - A **`DATASTORE`** schedule on a **shared** table — no row has an owner there,
-    so it falls back to the schedule's creator.
+    changed**, not the schedule's creator (unless the schedule sets
+    `run_as: "SCHEDULE_OWNER"`).
+  - A **`DATASTORE`** schedule on a **shared** table, a batched bulk-write fire, or
+    a row nobody in the pod owns — the schedule's creator.
 
   **`FUNCTION` and `AGENT` nodes run as that identity** — they are workloads
   delegated to the run owner, exactly like a directly invoked function or agent.
@@ -71,7 +71,7 @@ model from `pod-model.md`.
 ## Core Concepts
 
 - **Definition**: named graph — `nodes`, `edges`, `start`, description. Graphs are validated at save time (single entry node, no dangling edges/rule targets, reachable nodes, compilable expressions); invalid graphs are rejected with the full issue list.
-- **Run**: one execution. Carries status, current node, run context, step history, and `active_wait` (what it's waiting on) when status is `WAITING`.
+- **Run**: one execution. Carries status, current node, run context, step history, and `active_wait` (what it's waiting on) whenever it is suspended — on a person (`WAITING`) or on platform work (still `RUNNING`).
 - **Name the runs** with `run_title` on the workflow: up to four JMESPath expressions over the run context, joined with ` · ` — `"run_title": ["intake.candidate_name", "intake.role"]`. Every run list and the in-progress board show it, so set it on any workflow whose runs take days or pass between people; without it they all read "Waiting on a person". It is evaluated on every read, so a part filled in by a later form appears once that form is answered, and editing it retitles runs already in flight.
 - **Runs have no arbitrary start input object.** `workflows run` creates the run; if the entry node is a FORM, `--data` submits that entry form. Trigger payloads (schedule/event/datastore) are injected by the platform under `start.*`.
 - **Run context** (what every expression resolves against):
@@ -107,14 +107,13 @@ Start types: `MANUAL`, `SCHEDULED`, `DATASTORE_EVENT`, `EVENT`. Create schedules
 
 Pauses the run until the assigned pod member submits the form. Use for intake, review, approval, missing-data collection, QA, and exceptions. A FORM as the **entry node** is how manual workflows collect their input.
 
-**Assigning one now tells the person.** A FORM with an `assignee_pod_member_id` sends them
-a notification — on the chat surface they last used, or by email, always with a copy in
-their Lemma inbox — carrying the resolved form schema. It used to be a pure pull queue:
-the wait existed, `workflows runs waiting` listed it, and nobody was ever told, so a run
-could sit for days on someone who had no idea. Submitting the form closes the
-notification; cancelling the run closes it too. An **unassigned** FORM notifies nobody, by
-design — there is no one person to tell, and broadcasting would make every form everyone's
-problem.
+**Assigning one tells the person.** A FORM with an `assignee_pod_member_id` puts a
+question in their own channel in Lemma — waiting on them in their inbox, carrying the
+resolved form schema — and the channel carries it on to the chat surface they last used,
+or email. Without that a run could sit for days on someone who had no idea it was waiting.
+Submitting the form answers the question; cancelling the run cancels it. An **unassigned**
+FORM tells nobody, by design — there is no one person to tell, and broadcasting would make
+every form everyone's problem.
 
 ```json
 {
@@ -174,7 +173,7 @@ Design notes: keep forms small and decision-oriented; assign to pod members (not
 }
 ```
 
-Create and test the agent first; give it an `output_schema` when downstream nodes consume the result. While the agent works the run is `WAITING` with `active_wait.wait_type == "AGENT"` and the conversation id in `active_wait.external_ref`. A periodic sweep recovers runs whose completion events were lost.
+Create and test the agent first; give it an `output_schema` when downstream nodes consume the result. While the agent works the run stays `RUNNING` with `active_wait.wait_type == "AGENT"` and the conversation id in `active_wait.external_ref`. A periodic sweep recovers runs whose completion events were lost.
 
 The agent runs **as the run's owner** (delegated identity) and under **its own
 grants** — so its `POD` reads/writes are RLS-scoped to the run owner, and the agent
@@ -241,6 +240,66 @@ edge.condition == 'approved'        # edge conditions are not evaluated
 
 Truthiness: `null`, `false`, `""`, `[]`, `{}` are falsy; everything else (including `` `0` ``) is truthy. Missing paths are falsy. Conditions are compile-checked at graph save, so typos in syntax are caught before any run.
 
+#### Branching on a judgement: `question`
+
+When the branch depends on *reading* something — is this email a refund
+request, how urgent is this ticket — give the DECISION a `question` instead of
+`rules`. It asks one closed question about some evidence (the same contract as
+`pod.decisions.make`) and routes on the answer. No AGENT node, no prompt to
+parse. A node has `rules` **or** a `question`, never both.
+
+```json
+{
+  "id": "triage",
+  "type": "DECISION",
+  "label": "What is it about?",
+  "config": {
+    "question": {
+      "instruction": "Triage incoming support email for the billing team.",
+      "evidence": { "type": "expression", "value": "start.payload.email" },
+      "answer": {
+        "type": "string",
+        "oneOf": [
+          { "const": "billing", "description": "Charges, invoices, refunds" },
+          { "const": "bug", "description": "Something in the product is broken" },
+          { "const": "other", "description": "Anything else" }
+        ],
+        "description": "What is this support email about?"
+      },
+      "examples": [{ "evidence": "I was charged twice", "answer": "billing" }],
+      "routes": { "billing": "refund_flow", "bug": "file_bug" },
+      "unsure_next_node_id": "ask_a_person",
+      "min_confidence": 0.7
+    }
+  }
+}
+```
+
+- `instruction` is trusted; `evidence` is an input binding (expression or
+  literal) and is never followed as instructions. Send the part that matters —
+  evidence over 64 KiB fails the run.
+- `answer` is **one** question: a choice (`enum`, or `oneOf` with
+  descriptions), yes or no (`{"type": "boolean"}`), or a scale
+  (`{"type": "integer", "minimum": 1, "maximum": 5}`). Its `description` is the
+  question. A multi-choice cannot be routed and is refused.
+- `routes` keys are the answer written as a string: the option for a choice,
+  `"true"`/`"false"` for yes or no, `"3"` for a scale level.
+- **Unsure** — the evidence did not support an answer, or `confidence` is below
+  `min_confidence` (ignored when the provider reports no confidence, as a
+  language model does) — goes to `unsure_next_node_id`.
+- Anything without a route goes to the **default edge** (the first outgoing
+  edge). Save refuses a question where some answer, or unsure, has neither.
+- The run waits on a `DECISION` wait while it is asked (it stays `RUNNING`).
+  The node's output is `{answer, confidence, provider, model, route}` —
+  downstream nodes read `triage.answer`; `route` is the node it went to.
+- **It never guesses a branch.** A provider that does not answer is retried
+  with backoff for a few minutes, then the run fails saying why. A spent usage
+  limit, an invalid question or too much evidence fails it at once.
+
+Use `rules` when the branch is a fact already in the context
+(``manager_review.approved == `true` ``); use a `question` when someone — or
+something — would have to read the evidence to know.
+
 ### LOOP — iterate an array
 
 ```json
@@ -292,6 +351,7 @@ Common paths: `start.payload.<field>` (triggered runs), `<form_node_id>.<field>`
 - **Approval gate**: `FUNCTION prepare → FORM approve → DECISION → FUNCTION commit / END`. The classic; humans approve what code prepared.
 - **Agent-assisted review**: `FORM intake → AGENT analyze → FORM reviewer_decision (sees agent output) → FUNCTION save`. The agent does the heavy reading; the human decides.
 - **Escalate on low confidence**: ``AGENT classify → DECISION (classify.confidence >= `0.8`?) → auto path / FORM human_classify``. Humans handle only the uncertain tail.
+- **Triage by judgement**: `DECISION (question: what is this about?) → FUNCTION per answer`, with `unsure_next_node_id` pointing at a FORM. One closed question replaces an AGENT node whose only job was to pick a branch.
 - **Exception routing**: `FUNCTION validate → DECISION → FORM fix_data → FUNCTION retry`. Failures become assigned work instead of dead runs.
 - **Timed follow-up**: `FORM decision → WAIT_UNTIL → AGENT draft_follow_up → FORM send_review`.
 - **Batch with human sampling**: schedule starts workflow → `FUNCTION load_batch → LOOP → AGENT process`, decision inside the loop assigns FORMs only for flagged items.
@@ -363,14 +423,14 @@ lemma workflows runs cancel <run-id>          # kill a stuck/unwanted run
 
 Workflow definition commands: `lemma workflows list | get | create | update | update-graph | delete`. Run commands live under `lemma workflows runs <verb>`; `run` (create + auto-submit to the entry form) stays top-level like `agents run` / `functions run`.
 
-Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a `WAITING` run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`).
+Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`, `DECISION`, or `QUEUED` — held back by the workflow's concurrency limit); only `HUMAN` makes it `WAITING`, the others keep it `RUNNING`.
 
 Debugging a run, in order:
 
 1. `runs get` → check `status`, `current_node_id`, `failed_node_id`, `error`. Missing-path failures name the exact expression and input.
 2. Read `step_history` — every executed node with status, output, error, timestamps. This shows exactly which mapping or condition misbehaved.
-3. A run stuck in `WAITING`: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time. Forms are completed via the app/frontend or `runs submit-form --data`.
-4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means the default edge) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``).
+3. A run that is not moving: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time, `DECISION` the question and evidence being asked (`payload`). Forms are completed via the app/frontend or `runs submit-form --data`.
+4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means the default edge) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``). For a `question`, the output's `answer` and `route` say what was answered and where it went; tighten the `instruction`, the option descriptions or the `examples` rather than the routes.
 
 ## Limits & Gotchas
 
@@ -387,7 +447,7 @@ Debugging a run, in order:
 
 - Run with a realistic form payload; confirm `COMPLETED` and inspect `step_history` for every expected node.
 - For each FORM: confirm the wait appears in the assignee's `lemma workflows runs waiting` queue, submit as that member, confirm other members get 403.
-- For each DECISION: drive both branches with test payloads; don't infer routing from edge labels.
+- For each DECISION: drive both branches with test payloads; don't infer routing from edge labels. For a `question`, include evidence it should be unsure about and check it lands on `unsure_next_node_id`.
 - For `FUNCTION`/`AGENT` nodes: confirm each callee is granted its tables/files/connectors (no `MISSING_WORKLOAD_RESOURCE_GRANT`), and that RLS reads match the run owner's seat. Run it once as the **lowest-privileged member who will really start it** — that is the seat `DELEGATION_EXCEEDS_INVOKER` shows up in, and never the builder's own.
 - Confirm final table/file state matches the business outcome, not just the run status.
 

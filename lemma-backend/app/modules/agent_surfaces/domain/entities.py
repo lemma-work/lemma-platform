@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
+
+from collections.abc import Callable
 from enum import StrEnum
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
@@ -134,12 +137,19 @@ def platform_value_for_source(source: str) -> str | None:
 _GROUPS_NEED_NO_ROUTE = frozenset({SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP})
 
 
-def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
-    """A Slack conversation between several people and the bot (an ``mpim``)."""
-    return (
-        event.platform is SurfacePlatform.SLACK
-        and event.metadata.get("channel_type") == "mpim"
-    )
+#: What each workspace platform calls a chat of several people and the bot.
+_GROUP_DM_TYPES = {
+    SurfacePlatform.SLACK: "mpim",
+    SurfacePlatform.TEAMS: "groupchat",
+}
+
+
+def is_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
+    """A chat between several people and the bot, outside any channel: a Slack
+    ``mpim`` or a Teams group chat. Somebody started it with the bot in it."""
+    kind = _GROUP_DM_TYPES.get(event.platform)
+    channel_type = InboundRoutingFacts.of(event).channel_type
+    return kind is not None and (channel_type or "").lower() == kind
 
 
 class ExternalSurfaceUserEntity(Entity):
@@ -193,6 +203,12 @@ class SurfaceLifecycleKind(StrEnum):
     JOINED_CHANNEL = "JOINED_CHANNEL"
     # Someone opened the app's own surface (Slack's App Home / agent DM tab).
     HOME_OPENED = "HOME_OPENED"
+    # The app lost its tokens here: uninstalled, or its bot token revoked. Names
+    # no person and is answered by no one -- the token to answer with is gone.
+    # The one kind with no actor, so the one not authorized by who caused it:
+    # the request's signature is the authority, and its verified receivers are
+    # the scope (``services/app_uninstall``).
+    UNINSTALLED = "UNINSTALLED"
 
 
 class ParsedSurfaceLifecycleEvent(BaseModel):
@@ -200,8 +216,9 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
 
     A message becomes a conversation; an interaction resumes a paused run. These
     do neither — nothing here reaches an agent. They are the platform telling us
-    the app's own situation changed, and the only correct response is to
-    configure something or to offer to.
+    the app's own situation changed, and the response is to configure
+    something or to offer to -- or, for UNINSTALLED, to stand down what ran on
+    the app, which nobody is asked about because nobody can answer.
 
     Kept a separate contract on purpose: folding them into the message parser
     would mean every consumer of ``ParsedInboundSurfaceEvent`` grows a branch for
@@ -213,9 +230,14 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
     tenant_id: str | None = None
     external_channel_id: str | None = None
     # Who caused it: the inviter for JOINED_CHANNEL, the viewer for HOME_OPENED.
+    # None for UNINSTALLED: Slack names nobody, and the event is not authorized
+    # by an actor but by the signature of the app it is about.
     actor_external_user_id: str | None = None
     # The group's own name, where the event carries it (Telegram's does).
     channel_title: str | None = None
+    # UNINSTALLED only: the bot users whose tokens went. None means all of the
+    # app's -- an uninstall takes every one, a revocation names the ones it took.
+    revoked_identity_ids: list[str] | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -237,6 +259,9 @@ class ParsedSurfaceInteraction(BaseModel):
     external_user_id: str | None = None
     callback_id: str = ""
     action: str | None = None
+    #: ``"expired"`` (nothing the tap carried can be resolved), ``"other"``
+    #: (they want to type the answer) or ``"unreadable"`` (what the tap carried
+    #: could not be looked up just now, and tapping again may work).
     interaction_state: str | None = None
     values: dict[str, Any] = Field(default_factory=dict)
     # Set when the tapped control is a native approval button; carries the
@@ -254,6 +279,11 @@ class ResolvedSurfaceUser(BaseModel):
     email: str | None = None
     phone: str | None = None
     display_name: str | None = None
+    #: Whether Slack calls them a guest (``is_restricted`` or
+    #: ``is_ultra_restricted``): in the workspace, let in from outside it.
+    #: ``None`` where Slack said neither -- no profile, another platform -- and
+    #: then they are not known *not* to be one.
+    is_guest: bool | None = None
 
 
 class AgentSurfaceStatus(StrEnum):
@@ -280,8 +310,13 @@ class AgentSurfaceEntity(AggregateRoot):
     surface_type: SurfacePlatform
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
     config: SurfaceConfig
+    #: The pod connector this surface runs as, by slug: a SHARED connector
+    #: whose account its owner shared with the pod. ``None`` runs on the
+    #: deployment's own credentials. The account is never stored here; it is
+    #: resolved through the connector on every use, so an owner withdrawing it
+    #: stops the surface at once.
+    pod_connector_slug: str | None = None
     # Entity-level routing/derived fields (stored as dedicated DB columns)
-    account_id: UUID | None = None
     external_workspace_id: str | None = None
     external_tenant_id: str | None = None
     external_channel_id: str | None = None
@@ -289,7 +324,9 @@ class AgentSurfaceEntity(AggregateRoot):
     surface_identity_username: str | None = None
     #: The address this surface receives on, and the one it replies from.
     surface_identity_email: str | None = None
-    webhook_secret: str | None = None
+    #: Telegram's per-surface `secret_token`. A secret on the aggregate, so a
+    #: `repr` or a logged entity shows it masked; revealed where it is sent.
+    webhook_secret: SecretStr | None = None
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
     @property
@@ -310,7 +347,7 @@ class AgentSurfaceEntity(AggregateRoot):
         config: SurfaceConfig | None = None,
         agent_id: UUID,
         credential_mode: SurfaceCredentialMode | None = None,
-        account_id: UUID | None = None,
+        pod_connector_slug: str | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
@@ -319,7 +356,9 @@ class AgentSurfaceEntity(AggregateRoot):
         resolved = SurfacePlatform(str(surface_type).upper())
         resolved_name = (name or "").strip() or cls.default_name_for(resolved)
         config = config if config is not None else SurfaceConfig()
-        cls._validate_binding(surface_type=resolved, account_id=account_id)
+        cls._validate_binding(
+            surface_type=resolved, pod_connector_slug=pod_connector_slug
+        )
 
         initial_status = (
             AgentSurfaceStatus.PENDING_ADMIN_CONSENT
@@ -335,11 +374,11 @@ class AgentSurfaceEntity(AggregateRoot):
             credential_mode=credential_mode
             or (
                 SurfaceCredentialMode.CUSTOM
-                if account_id is not None
+                if pod_connector_slug is not None
                 else SurfaceCredentialMode.SYSTEM
             ),
             config=config,
-            account_id=account_id,
+            pod_connector_slug=pod_connector_slug,
             external_workspace_id=external_workspace_id,
             external_tenant_id=external_tenant_id,
             external_channel_id=external_channel_id,
@@ -367,43 +406,53 @@ class AgentSurfaceEntity(AggregateRoot):
     def _validate_binding(
         *,
         surface_type: SurfacePlatform,
-        account_id: UUID | None,
+        pod_connector_slug: str | None,
     ) -> None:
         if (
             surface_type in {SurfacePlatform.SLACK, SurfacePlatform.TEAMS}
-            and account_id is None
+            and pod_connector_slug is None
         ):
             raise AgentSurfaceValidationError(
-                f"{surface_type.value} surfaces require account_id"
+                f"{surface_type.value} surfaces run as a pod connector: name "
+                "one in pod_connector"
             )
 
     def activate(self) -> None:
         self.status = AgentSurfaceStatus.ACTIVE
         self.updated_at = datetime.now(timezone.utc)
 
+    def mark_webhook_unregistered(self) -> None:
+        """The platform never accepted this surface's webhook: nothing arrives."""
+        self.status = AgentSurfaceStatus.ERROR
+        self.updated_at = datetime.now(timezone.utc)
+
     def configure_webhook_secret(self, *, secret: str) -> None:
-        self.webhook_secret = secret
+        self.webhook_secret = SecretStr(secret)
         self.updated_at = datetime.now(timezone.utc)
 
     def update_config(
         self,
         config: SurfaceConfig,
         *,
-        account_id: UUID | None = None,
+        pod_connector_slug: str | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
         surface_identity_id: str | None = None,
     ) -> None:
-        next_account_id = account_id if account_id is not None else self.account_id
+        next_slug = (
+            pod_connector_slug
+            if pod_connector_slug is not None
+            else self.pod_connector_slug
+        )
         self._validate_binding(
-            surface_type=self.surface_type, account_id=next_account_id
+            surface_type=self.surface_type, pod_connector_slug=next_slug
         )
         self.config = config
         if credential_mode is not None:
             self.credential_mode = credential_mode
-        self.account_id = next_account_id
+        self.pod_connector_slug = next_slug
         if external_workspace_id is not None:
             self.external_workspace_id = external_workspace_id
         if external_tenant_id is not None:
@@ -428,21 +477,19 @@ class AgentSurfaceEntity(AggregateRoot):
         return self.surface_type.value == str(platform).upper()
 
     def matches_tenant(self, tenant_id: str | None) -> bool:
-        if self.surface_type is SurfacePlatform.TEAMS:
-            expected = self.external_tenant_id
-            return not expected or not tenant_id or expected == tenant_id
-        if self.surface_type is SurfacePlatform.SLACK:
-            expected = self.external_workspace_id
-            return not expected or not tenant_id or expected == tenant_id
-        return True
+        """Whether an event from this tenant (or workspace) is this surface's.
 
-    def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
-        if self.surface_type is SurfacePlatform.SLACK:
-            return bool(
-                sender_external_user_id
-                and self.surface_identity_id == sender_external_user_id
-            )
-        return False
+        Fails closed on the two platforms whose installations are scoped to a
+        tenant: a surface that never recorded its tenant, or an event that
+        names none, matches nothing. Reading either as "any" let a tenantless
+        row accept every tenant's events, and an event with no tenant reach
+        every surface.
+        """
+        tenant_key = _TENANT_KEY.get(self.surface_type)
+        if tenant_key is None:
+            return True
+        expected = tenant_key(self)
+        return bool(expected) and bool(tenant_id) and expected == tenant_id
 
     def matches_channel(self, channel_id: str | None) -> bool:
         if not channel_id:
@@ -495,14 +542,14 @@ class AgentSurfaceEntity(AggregateRoot):
         # groups have no allow-list — being added to the group is the
         # authorization — so any group is accepted (the @mention gate below, plus
         # the pod-membership check on the sender, still apply).
-        # A Slack group DM is the Telegram case too: somebody started it with
-        # the bot in it, so there is no channel to allow-list and no setup
+        # A Slack or Teams group DM is the Telegram case too: somebody started
+        # it with the bot in it, so there is no channel to allow-list and no setup
         # prompt to answer -- being in it is the authorization. A WhatsApp
         # group is one the bot created at a member's request, and ingress has
         # already narrowed it to the surface that created it.
         if (
             self.surface_type not in _GROUPS_NEED_NO_ROUTE
-            and not is_slack_group_dm(event)
+            and not is_group_dm(event)
             and not self.matches_channel(event.external_channel_id)
         ):
             return False
@@ -517,56 +564,18 @@ class AgentSurfaceEntity(AggregateRoot):
         # its own it admitted every threaded reply in a connected channel,
         # whoever it was to. The caller resolves the rest; see
         # `SurfaceInboundMixin._admit`.
-        if event.metadata.get("is_thread_reply") and thread_is_ours:
+        if InboundRoutingFacts.of(event).is_thread_reply and thread_is_ours:
             return True
-        if not event.mentioned_agent:
-            return False
-        if self.surface_type is SurfacePlatform.SLACK:
-            # Slack delivers `app_mention` only to the app that was mentioned,
-            # so the event type is itself the answer.
-            if event.metadata.get("event_type") == "app_mention":
-                return True
-            # A plain `message` reaches here whenever *anyone* was @-mentioned,
-            # because that is all the parser can tell. So it needs this
-            # surface's own bot id among them — and fails closed when there is
-            # no bot id to compare, which a surface created through the
-            # bundle/CLI path has not recorded. That case used to be read as
-            # "allow": the agent then answered every channel message in which
-            # two colleagues mentioned each other.
-            bot_user_id = self.surface_identity_id
-            mentioned_user_ids = set(event.metadata.get("mentioned_user_ids") or [])
-            return bool(bot_user_id) and bot_user_id in mentioned_user_ids
-        return True
+        # `mentioned_agent` means *this* bot by now: where the parser could
+        # not tell (a Slack `message` mentioning anyone, a Telegram @name),
+        # the platform's adapter settled it before admission
+        # (`InboundReader.settle_mention`).
+        return event.mentioned_agent
 
 
-class AgentSurfaceConversationLink(Entity):
-    surface_id: UUID
-    conversation_id: UUID
-    platform: str
-    external_channel_id: str | None = None
-    external_thread_id: str
-    external_user_id: str | None = None
-    routed_agent_id: UUID | None = None
-    conversation_kind: str = "DM"
-    route_key: str | None = None
-    last_event: dict[str, Any] = Field(default_factory=dict)
-    last_message_id: str | None = None
-    # When this person last wrote to us. Distinct from ``updated_at``, which an
-    # outbound notification also bumps — keying the DM reset off ``updated_at``
-    # means a proactive message silently suppresses the reset and leaks
-    # yesterday's context into today. Also the ranking key when choosing which of
-    # someone's channels to reach them on: freshest inbound is the best available
-    # guess at where they are actually looking.
-    last_inbound_at: datetime | None = None
-
-    @property
-    def inbound_activity_at(self) -> datetime:
-        """Last inbound time, falling back to ``updated_at`` for legacy rows.
-
-        Rows written before ``last_inbound_at`` existed have NULL there, and for
-        those ``updated_at`` *was* the last inbound time, because until then only
-        inbound events wrote this row. The fallback is correct by definition, and
-        it has to survive in code as well as in the backfill: a row the backfill
-        touched can still be NULL if it was created by an older worker mid-deploy.
-        """
-        return self.last_inbound_at or self.updated_at
+#: Where a surface records the tenant its installation is scoped to, on the
+#: platforms that scope one. A platform absent here is not tenant-scoped.
+_TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] = {
+    SurfacePlatform.TEAMS: lambda surface: surface.external_tenant_id,
+    SurfacePlatform.SLACK: lambda surface: surface.external_workspace_id,
+}

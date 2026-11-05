@@ -183,6 +183,27 @@ export function canInstallWithDefaults(kind: ConnectorKind | null): boolean {
     return !(Array.isArray(schema?.required) && schema.required.length > 0);
 }
 
+/** Where an install's OAuth app comes from: Lemma's own, or the organization's. */
+export type ConfigSource = "SYSTEM_DEFAULT" | "ORG_CUSTOM";
+
+/** The active install of a connector to authorise an account against.
+ *
+ *  Unasked, the organization's default, else the first. A flow that needs one
+ *  kind of app names it: Lemma's own Slack app manages a workspace only through
+ *  Lemma's own install, and a teammate's own Slack app is an `ORG_CUSTOM`
+ *  install of the same connector, which "the first" would otherwise pick —
+ *  and the manager would then refuse the account it made. Null when there is
+ *  none of that kind, so the caller makes one. */
+export function heldInstall(
+    installs: readonly Install[], connectorId: string, source?: ConfigSource,
+): Install | null {
+    const active = installs.filter((one) => one.connector_id === connectorId && one.status === "ACTIVE");
+    if (source) return active.find((one) => one.config_source === source && one.is_default)
+        ?? active.find((one) => one.config_source === source)
+        ?? null;
+    return active.find((one) => one.is_default) ?? active[0] ?? null;
+}
+
 /** A name for an install that does not collide with the ones already there.
  *
  *  Install names are unique per organization and an unnamed one is named after

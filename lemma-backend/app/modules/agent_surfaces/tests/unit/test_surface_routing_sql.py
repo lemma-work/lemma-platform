@@ -49,7 +49,7 @@ def test_shared_credentials_excludes_both_a_custom_mode_and_a_bound_account():
     original Python required both, and so does this.
     """
     statement = _sql(system_credentials_only=True)
-    assert "agent_surfaces.account_id IS NULL" in statement
+    assert "agent_surfaces.pod_connector_slug IS NULL" in statement
     assert "agent_surfaces.credential_mode = 'SYSTEM'" in statement
 
 

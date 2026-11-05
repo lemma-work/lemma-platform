@@ -105,6 +105,28 @@ function patchKnownGeneratorIssues(source, filePath) {
     );
   }
 
+  if (filePath.endsWith("core/request.ts")) {
+    // The generator reads every non-JSON body as text, so a binary download
+    // (a channel line's image, a file, an app archive) came back as a
+    // mangled string typed `Blob`. Text stays text; everything else is bytes.
+    patched = patched.replace(
+      `                if (isJSON) {
+                    return await response.json();
+                } else {
+                    return await response.text();
+                }`,
+      `                const textTypes = ['text/', 'application/javascript', 'application/xml', 'application/yaml'];
+                const isText = textTypes.some(type => contentType.toLowerCase().startsWith(type));
+                if (isJSON) {
+                    return await response.json();
+                } else if (isText) {
+                    return await response.text();
+                } else {
+                    return await response.blob();
+                }`,
+    );
+  }
+
   // The generator has emitted either one or two final newlines across runtime
   // versions. Canonicalize the ending so codegen drift checks are byte-stable.
   return patched.replace(/\n+$/, "\n");

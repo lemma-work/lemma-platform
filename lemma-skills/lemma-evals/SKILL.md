@@ -175,8 +175,9 @@ lemma workflows runs cancel <run-id> --pod <pod>
 
 Preserve `status`, `user_id`, `current_node_id`, `failed_node_id`, `error`,
 `execution_context`, `step_history`, `active_wait`, and timestamps. `WAITING` is the
-human-form state. Agent, function, and timer suspensions remain `RUNNING` and identify
-their platform work through `active_wait.wait_type` (`AGENT`, `FUNCTION`, or `TIME`).
+human-form state. Every other suspension remains `RUNNING` and identifies its
+platform work through `active_wait.wait_type` (`AGENT`, `FUNCTION`, `TIME`,
+`DECISION`, or `QUEUED` behind the workflow's concurrency limit).
 For a human gate, require `active_wait.wait_type == HUMAN`, verify that the intended
 assignee sees it in `runs waiting`, submit the documented decision as that member,
 and verify the next state. Do not interpret a still-running platform wait as failure.
@@ -199,7 +200,8 @@ Exercise authorization as a first-class contract, not only as failure debugging:
   and `DELEGATION_EXCEEDS_INVOKER` (the workload *is* granted it and the person it
   acts for is not). Assert the exact code; a suite that accepts "denied" cannot
   tell a correct boundary from a misconfigured one;
-- confirm connector calls use the intended user-owned or explicitly pinned account;
+- confirm connector calls run as the account their pod connector's mode implies:
+  the invoking member's own (PER_MEMBER) or the owner-shared one (SHARED);
 - confirm called functions and agents use their own grants rather than inheriting
   the parent workload's grants.
 

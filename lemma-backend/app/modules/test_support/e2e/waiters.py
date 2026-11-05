@@ -104,3 +104,60 @@ async def wait_for_status(
         timeout_seconds=timeout_seconds,
         interval_seconds=interval_seconds,
     )
+
+
+def _libpq_url(url: str) -> str:
+    scheme, rest = url.split("://", 1)
+    return f"{scheme.split('+', 1)[0]}://{rest}"
+
+
+async def _work_in_flight(database_url: str, datastore_database_url: str) -> int:
+    """Wake rows not yet handed off, plus work items due or running."""
+    import psycopg
+
+    async with await psycopg.AsyncConnection.connect(
+        _libpq_url(datastore_database_url), autocommit=True
+    ) as connection:
+        cursor = await connection.execute(
+            "SELECT CASE WHEN to_regclass('public.lemma_change_pending') IS NULL "
+            "THEN 0 ELSE (SELECT count(*) FROM public.lemma_change_pending) END"
+        )
+        row = await cursor.fetchone()
+        pending = int(row[0]) if row else 0
+    async with await psycopg.AsyncConnection.connect(
+        _libpq_url(database_url), autocommit=True
+    ) as connection:
+        # Receivers are perpetual pollers: running is their resting state.
+        cursor = await connection.execute(
+            "SELECT count(*) FROM work_items WHERE class <> 'receivers' AND "
+            "(state = 'running' OR (state = 'queued' AND run_at <= now()))"
+        )
+        row = await cursor.fetchone()
+        due = int(row[0]) if row else 0
+    return pending + due
+
+
+async def wait_for_work_to_settle(
+    *,
+    label: str,
+    database_url: str,
+    datastore_database_url: str,
+    timeout_seconds: float = 30.0,
+) -> None:
+    """Wait until the worker has nothing left to do for what was already committed.
+
+    The barrier for a negative assertion -- "this write must *not* start a
+    run" -- which otherwise has nothing to wait on but the clock. Each step of
+    the asynchronous chain stays a row until the next step's row commits: a
+    datastore write's wake row stays until its delivery items are committed, and
+    a work item stays queued or running until whatever it causes commits with
+    it. Once there is neither, everything the earlier writes set in motion has
+    happened, and what has not happened will not.
+    """
+    await eventually(
+        label=f"{label}: worker settled",
+        probe=lambda: _work_in_flight(database_url, datastore_database_url),
+        done=lambda count: count == 0,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.1,
+    )

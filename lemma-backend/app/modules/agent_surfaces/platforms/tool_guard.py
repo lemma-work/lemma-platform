@@ -23,5 +23,7 @@ async def guarded_tool_result(call: Awaitable[T], *, tool: str, failure: T) -> T
     try:
         return await call
     except Exception:
-        logger.debug("surface.tool.failed", tool=tool, exc_info=True)
+        # Warning: the model is told the lookup failed, and nobody else would
+        # be at `LOG_LEVEL=INFO`.
+        logger.warning("surface.tool.failed", tool=tool, exc_info=True)
         return failure

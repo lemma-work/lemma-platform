@@ -1,7 +1,9 @@
 {
   "name": "on_ticket",
   "schedule_type": "WEBHOOK",
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Triage the new ticket.",
   "config": {},
-  "account_id": "${on_ticket_account}",
+  "pod_connector": "jira",
   "connector_trigger_id": "jira_new_issue"
 }

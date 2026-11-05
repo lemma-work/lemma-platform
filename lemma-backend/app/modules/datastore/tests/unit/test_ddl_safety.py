@@ -22,7 +22,9 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreDataType,
     validate_computed_expression,
 )
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.infrastructure.sql_identifiers import (
     quote_sql_literal,
@@ -30,6 +32,13 @@ from app.modules.datastore.infrastructure.sql_identifiers import (
 )
 
 KNOWN = {"price", "qty", "name", "discount"}
+
+
+class _Absent:
+    """A role the catalog does not have."""
+
+    def scalar(self) -> None:
+        return None
 
 
 class _CatalogResult:
@@ -156,11 +165,19 @@ def test_enum_check_clause_quotes_options_safely() -> None:
     assert manager._enum_check_clause(non_enum) == ""
 
 
+@asynccontextmanager
+async def _savepoint():
+    """``begin_nested`` as the fakes need it: an error inside propagates, which
+    is what a real savepoint does once it has rolled back."""
+    yield
+
+
 def _provisioning_connection(*, schema_exists: bool = False) -> SimpleNamespace:
     """A connection on a provisioned deployment, and a catalog without the schema."""
     return SimpleNamespace(
         execute=AsyncMock(return_value=_CatalogResult()),
         scalar=AsyncMock(return_value=schema_exists),
+        begin_nested=_savepoint,
     )
 
 
@@ -207,11 +224,41 @@ async def test_a_new_schema_is_readable_by_the_query_role_from_birth() -> None:
 
     statements = _statements(connection)
     schema_name = manager.get_schema_name(pod_id)
+    role = pod_query_role_name(schema_name)
     create = next(i for i, s in enumerate(statements) if "CREATE SCHEMA" in s)
     after_create = statements[create + 1 :]
-    assert any(f'GRANT USAGE ON SCHEMA "{schema_name}"' in s for s in after_create)
     assert any(
-        f'IN SCHEMA "{schema_name}" GRANT SELECT ON TABLES' in s for s in after_create
+        f'GRANT USAGE ON SCHEMA "{schema_name}" TO "{role}"' in s for s in after_create
+    )
+    assert any(
+        f'IN SCHEMA "{schema_name}" GRANT SELECT ON TABLES TO "{role}"' in s
+        for s in after_create
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_new_schema_gets_a_role_of_its_own_in_the_creating_transaction() -> (
+    None
+):
+    """The role is the pod boundary, so it is born with the schema -- and a
+    schema whose creation rolls back leaves no role behind."""
+    connection = _provisioning_connection()
+    connection.execute = AsyncMock(
+        side_effect=lambda statement, *args: (
+            _Absent() if "pg_roles" in str(statement) else _CatalogResult()
+        )
+    )
+    manager = _manager_on(connection)
+    pod_id = uuid4()
+
+    await manager.create_datastore_schema(pod_id)
+
+    statements = _statements(connection)
+    role = pod_query_role_name(manager.get_schema_name(pod_id))
+    create = next(i for i, s in enumerate(statements) if "CREATE SCHEMA" in s)
+    assert any(f'CREATE ROLE "{role}"' in s for s in statements[create + 1 :])
+    assert not any(
+        f'"{datastore_settings.datastore_query_role}"' in s for s in statements
     )
 
 
@@ -253,7 +300,11 @@ async def test_schema_provisioning_survives_a_role_that_cannot_be_created() -> N
         # established: the deployment this test is named for.
         return _Missing()
 
-    connection = SimpleNamespace(execute=execute, scalar=AsyncMock(return_value=False))
+    connection = SimpleNamespace(
+        execute=execute,
+        scalar=AsyncMock(return_value=False),
+        begin_nested=_savepoint,
+    )
 
     await _manager_on(connection).create_datastore_schema(uuid4())
 

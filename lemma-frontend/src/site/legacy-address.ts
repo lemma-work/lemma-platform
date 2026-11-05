@@ -48,6 +48,13 @@ export function legacyAddress(
                   )[item] || "people",
                   id,
               );
+    /* Where the server sends a person to fix a connector -- every typed
+       refusal's `connect_url` is `/pods/{pod}/connections?connector={slug}`.
+       It is the teammate's Connections part, opened on that connector. */
+    if (root === "pods" && id && area === "connections" && !item) {
+        const slug = query.get("connector");
+        return "/t/" + e(id) + "/about/connections" + (slug ? "?connector=" + e(slug) : "");
+    }
     if (root === "pod" && id) {
         const base = "/t/" + e(id);
         switch (area) {
@@ -101,11 +108,14 @@ export function legacyAddress(
                 return base + "/profile?section=what%20it%20can%20reach%20for";
             case "schedules":
                 return base + "/profile?section=schedules";
+            /* Notifications became the channels' inbox. */
+            case "notifications":
+                return base + "/channels";
             case "surfaces":
             case "channels":
                 return base + "/conversation?reach=1";
             case "connectors":
-                return setting("connectors");
+                return base + "/about/connections";
             default:
                 return base + "/profile";
         }

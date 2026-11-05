@@ -17,9 +17,11 @@ npm run dev
 Open http://localhost:3000. Set `NEXT_PUBLIC_API_URL` for live data, or
 `NEXT_PUBLIC_DATA=sample` for a local demo without a backend.
 
-See [.env.example](.env.example) for configuration. Voice calls require
-server-only `GEMINI_API_KEY` and `TYPESAFE_API_KEY`; never expose secrets through
-`NEXT_PUBLIC_*` variables. `/auth` provides sign-in; `/connect` supports manual token sign-in.
+See [.env.example](.env.example) for configuration; never expose secrets
+through `NEXT_PUBLIC_*` variables. Voice calls are the backend's: the browser
+opens a socket to the API, which holds the voice and the agents behind it, so
+calls need no key here (see [Calls](../docs/configuration.md#calls)). `/auth`
+provides sign-in; `/connect` supports manual token sign-in.
 
 ## Checks
 
@@ -29,6 +31,9 @@ npm test
 npm run build
 ```
 
+`typecheck` checks the app, then the tests through `tests/tsconfig.json`;
+`npm test` strips the tests' types without checking them.
+
 Build runs lint, naming and design checks before compiling. Some tests bind
 local WebSocket ports. Design conventions are in [DESIGN.md](DESIGN.md).
 
@@ -37,7 +42,14 @@ local WebSocket ports. Design conventions are in [DESIGN.md](DESIGN.md).
 - `src/app/`: Next.js routes and API handlers.
 - `src/data/`, `src/session/`: sample/live data and authentication.
 - `src/shell/`, `src/stage/`, `src/thread/`: workspace and conversations.
-- `src/call/`, `server/`: voice routing and WebSocket gateways.
+- `src/call/`: the call screen, its audio and its canvas, over the API's call socket.
+- `src/live/`: the pod's one live socket (`/pods/{pod}/live`), shared by every
+  live view: channel timelines and the inbox, a conversation's run (read as
+  the same SSE frames, with SSE as the fallback), and table rows. Polling is
+  only the fallback while it is down. The protocol is
+  `lemma-backend/docs/modules/live.md`.
+- `src/channels/`: the Channels place, the inbox bell, and a contact's
+  channel as a support inbox.
 - `src/marketing/`: landing previews and sample apps.
 - `src/styles/`: shared tokens and feature styles.
 
@@ -104,9 +116,9 @@ The ingestion and asset proxy hosts are configurable at build time using
 `NEXT_PUBLIC_ANALYTICS_INGEST_HOST` and `NEXT_PUBLIC_ANALYTICS_ASSETS_HOST`.
 Only explicitly allowed event properties and redacted route templates leave
 the app; DOM autocapture and replay are disabled. Storage consent is remembered.
-Feature flags (`groups`, `contacts`) come from PostHog and are off wherever it
-does not run; `NEXT_PUBLIC_LEMMA_FEATURES=groups,contacts` turns them on
-regardless.
+Feature flags (`contacts`) come from PostHog and are off wherever it does not
+run; `NEXT_PUBLIC_LEMMA_FEATURES=contacts` turns them on regardless. Channels
+and the inbox bell are not flagged.
 
 Run `npm run check`, `npm test`, and `npm run build` for the component gates.
 With Node dependencies installed, the public website scenarios build and boot

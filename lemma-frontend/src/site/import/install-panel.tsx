@@ -6,7 +6,6 @@ import {
     useQuery,
 } from "@tanstack/react-query";
 import {
-    ArrowSquareOut,
     ArrowsClockwise,
     Check,
     CircleNotch,
@@ -17,16 +16,38 @@ import {
 import { useSession } from "@/session/session";
 import { hasApiUrl, lemma } from "@/session/client";
 import { source as data } from "@/data";
+import { connectLinkLabel, failureOf } from "@/data/pod-connectors";
 import { Mark } from "@/shell/mark";
+import { personalNameFor } from "@/org/arrival";
+import { forgetInstall, markInstallArrival, rememberInstall } from "./pending-install";
 import type { Pod } from "@/data/types";
-import type { ImportStatusResponse, VariableSpec } from "../import-types";
+import { captureEvent } from "@/site/analytics/client";
+import type {
+    ConnectorPlan,
+    ImportStatusResponse,
+    VariableSpec,
+} from "../import-types";
 import {
+    CREATE_INSTALLATION,
     WORKING,
     actionLabel,
+    askedConnectors,
     askedVariables,
+    blockedBy,
+    connectorChoices,
+    connectorLine,
+    declares,
+    defaultPick,
+    shareableAccounts,
+    type ConnectorPick,
+    contentsLine,
     groupSteps,
     humanize,
+    installedApp,
+    landingPath,
+    needsAnswer,
     statusLine,
+    suggestedValue,
     teammateName,
 } from "./plan";
 import s from "./import.module.css";
@@ -49,6 +70,19 @@ export function InstallPanel(props: Props) {
 
 function Gate(props: Props) {
     const session = useSession();
+    /* Written before anything can send the person away — sign-in, a new
+       organization — so the workspace can offer the install back if the way
+       home is lost. Cleared when the install finishes. */
+    useEffect(() => {
+        try {
+            rememberInstall(window.localStorage, {
+                path: window.location.pathname + window.location.search,
+                title: props.title,
+            });
+        } catch {
+            /* no storage */
+        }
+    }, [props.title]);
     if (!hasApiUrl() || data.label === "sample")
         return (
             <Panel>
@@ -76,11 +110,80 @@ function Gate(props: Props) {
                     adds before anything is installed.
                 </p>
                 <button className={s.primary} onClick={session.signIn}>
-                    Sign in to install
+                    Sign in or create an account
                 </button>
             </Panel>
         );
     return <Journey {...props} />;
+}
+
+/** A workspace for somebody who has none, made here rather than on a page of
+ *  its own. Somebody who came to install a template has no reason to know
+ *  what an organization is; they need somewhere for it to go, named after
+ *  them, and the install carrying on. */
+function FirstWorkspace({ onMade }: { onMade: () => void }) {
+    const session = useSession();
+    const suggested = personalNameFor(session.user?.name);
+    const [name, setName] = useState(suggested);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    async function make() {
+        setBusy(true);
+        setError("");
+        try {
+            const typed = name.trim();
+            await data.createOrg({
+                name: typed || suggested,
+                /* Untouched, the name is ours, and a second Ada gets a
+                   workspace rather than a complaint about a name she never
+                   chose. */
+                derived: !typed || typed === suggested,
+            });
+            onMade();
+        } catch (e) {
+            setError(
+                e instanceof Error ? e.message : "Could not make your workspace.",
+            );
+            setBusy(false);
+        }
+    }
+    return (
+        <form
+            onSubmit={(e) => {
+                e.preventDefault();
+                void make();
+            }}
+        >
+            <p className={s.muted}>
+                First, a workspace for your teammates. It is private to you;
+                you can invite people later.
+            </p>
+            <label className={s.field}>
+                <span>Workspace name</span>
+                <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    maxLength={80}
+                />
+            </label>
+            <button className={s.primary} disabled={busy}>
+                {busy ? (
+                    <>
+                        <CircleNotch size={16} className={s.spin} aria-hidden />
+                        Making it…
+                    </>
+                ) : (
+                    "Continue"
+                )}
+            </button>
+            {error && (
+                <p role="alert" className={s.error}>
+                    <Warning size={16} aria-hidden />
+                    <span>{error}</span>
+                </p>
+            )}
+        </form>
+    );
 }
 
 function Panel({ children }: { children: React.ReactNode }) {
@@ -132,10 +235,26 @@ function Journey({ repo, owner, title }: Props) {
     const [created, setCreated] = useState<Pod | null>(null);
     const [job, setJob] = useState<ImportStatusResponse | null>(null);
     const [values, setValues] = useState<Record<string, string>>({});
+    const [picks, setPicks] = useState<Record<string, ConnectorPick>>({});
     const [confirm, setConfirm] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+    /* Where to fix the failure above, when the server named somewhere: a
+       pod connector refusing as CONNECTION_REQUIRED carries its link. */
+    const [errorLink, setErrorLink] = useState({ url: "", code: "" });
     const [retry, setRetry] = useState(0);
+    const fail = (e: unknown, fallback: string) => {
+        const said = failureOf(e, fallback);
+        setError(said.message);
+        setErrorLink({ url: said.connectUrl, code: said.code });
+    };
+    const clearError = () => {
+        setError("");
+        setErrorLink({ url: "", code: "" });
+    };
+    /* The plain path shows a sentence and one button. The component list, and
+       the names behind it, are one press away for whoever wants them. */
+    const [choosing, setChoosing] = useState(false);
 
     const existing = pods.data?.find((p) => p.id === target) ?? null;
     const who =
@@ -162,12 +281,10 @@ function Journey({ repo, owner, title }: Props) {
                     timer = setTimeout(() => void poll(), 1200);
                 }
             } catch (e) {
-                if (alive)
-                    setError(
-                        e instanceof Error
-                            ? e.message
-                            : "Lost track of the installation.",
-                    );
+                if (!alive) return;
+                const said = failureOf(e, "Lost track of the installation.");
+                setError(said.message);
+                setErrorLink({ url: said.connectUrl, code: said.code });
             }
         }
         timer = setTimeout(() => void poll(), 1200);
@@ -177,9 +294,20 @@ function Journey({ repo, owner, title }: Props) {
         };
     }, [polling, jobId, podId, retry]);
 
+    const finished = job?.status === "COMPLETED";
+    useEffect(() => {
+        if (!finished) return;
+        try {
+            forgetInstall(window.localStorage);
+        } catch {
+            /* no storage */
+        }
+    }, [finished]);
+
     async function review() {
+        captureEvent("import.started", { is_remix: false });
         setBusy(true);
-        setError("");
+        clearError();
         try {
             let id = target === NEW ? created?.id : target;
             if (!id) {
@@ -187,19 +315,25 @@ function Journey({ repo, owner, title }: Props) {
                 setCreated(pod);
                 id = pod.id;
             }
+            /* Fetched through the pod's `github` connector as the person
+               installing, or anonymously for a public repository: no account
+               is named here. A failure for want of one comes back on the job
+               with its `connect_url`. */
             setJob(
                 await lemma(id).request<ImportStatusResponse>(
                     "POST",
                     "/pods/" + id + "/bundle/imports",
-                    { body: { kind: "GITHUB", owner, repo } },
+                    {
+                        body: {
+                            kind: "GITHUB",
+                            owner,
+                            repo,
+                        },
+                    },
                 ),
             );
         } catch (e) {
-            setError(
-                e instanceof Error
-                    ? e.message
-                    : "Could not read what " + title + " includes.",
-            );
+            fail(e, "Could not read what " + title + " includes.");
         } finally {
             setBusy(false);
         }
@@ -208,7 +342,7 @@ function Journey({ repo, owner, title }: Props) {
     async function install() {
         if (!job?.plan) return;
         setBusy(true);
-        setError("");
+        clearError();
         try {
             setJob(
                 await lemma(job.pod_id).request<ImportStatusResponse>(
@@ -223,18 +357,20 @@ function Journey({ repo, owner, title }: Props) {
                             variables: Object.fromEntries(
                                 job.plan.variables.map((v) => [
                                     v.name,
-                                    values[v.name] ?? v.default ?? "",
+                                    values[v.name] ?? suggestedValue(v, who),
                                 ]),
                             ),
                             confirm_destructive: confirm,
+                            connectors: connectorChoices(
+                                job.plan.connectors ?? [],
+                                picks,
+                            ),
                         },
                     },
                 ),
             );
         } catch (e) {
-            setError(
-                e instanceof Error ? e.message : "The installation failed.",
-            );
+            fail(e, "The installation failed.");
         } finally {
             setBusy(false);
         }
@@ -258,7 +394,7 @@ function Journey({ repo, owner, title }: Props) {
         }
         setJob(null);
         setConfirm(false);
-        setError("");
+        clearError();
     }
 
     async function stop() {
@@ -271,7 +407,7 @@ function Journey({ repo, owner, title }: Props) {
             );
             setJob({ ...job, status: "CANCELLED" });
         } catch (e) {
-            setError(e instanceof Error ? e.message : "Could not stop it.");
+            fail(e, "Could not stop it.");
         } finally {
             setBusy(false);
         }
@@ -303,12 +439,7 @@ function Journey({ repo, owner, title }: Props) {
         return (
             <Panel>
                 <h2 className={s.panelTitle}>Install {title}</h2>
-                <p className={s.muted}>
-                    You need an organization to hire a teammate into.
-                </p>
-                <a className={s.primary} href="/organizations/new">
-                    Create an organization
-                </a>
+                <FirstWorkspace onMade={() => void orgs.refetch()} />
             </Panel>
         );
 
@@ -317,13 +448,21 @@ function Journey({ repo, owner, title }: Props) {
             <Warning size={16} aria-hidden />
             <span>
                 {error}
+                {errorLink.url && (
+                    <>
+                        {" "}
+                        <a className={s.link} href={errorLink.url}>
+                            {connectLinkLabel(errorLink.code)}
+                        </a>
+                    </>
+                )}
                 {polling && (
                     <>
                         {" "}
                         <button
                             className={s.link}
                             onClick={() => {
-                                setError("");
+                                clearError();
                                 setRetry((v) => v + 1);
                             }}
                         >
@@ -473,6 +612,14 @@ function Journey({ repo, owner, title }: Props) {
     const plan = job.plan;
     const groups = plan ? groupSteps(plan.steps) : [];
     const asked = plan ? askedVariables(plan.variables) : [];
+    /* Only what nothing can stand in for is put in front of the person: a
+       name we could not derive. Everything else is named after the teammate,
+       and shown prefilled to whoever opens the list. */
+    const needsFromYou = choosing
+        ? asked
+        : asked.filter((v) => needsAnswer(v, who));
+    const valueOf = (v: VariableSpec) =>
+        values[v.name] ?? suggestedValue(v, who);
     const warnings = [...job.warnings, ...(plan?.warnings ?? [])];
     const markFor = podForMark ?? {
         id: job.pod_id,
@@ -480,9 +627,24 @@ function Journey({ repo, owner, title }: Props) {
     };
     const cancelled =
         job.status === "CANCELLED" || job.status === "PARTIALLY_CANCELLED";
-    const missing = asked.some(
-        (v) => v.required && !(values[v.name] ?? v.default ?? ""),
-    );
+    const missing = asked.some((v) => v.required && !valueOf(v));
+    /* The bundle's connectors. Asked about only where there is a choice to
+       make or a reason it cannot install; sharing an account is never
+       assumed, so a shared one installs needing an account unless picked. */
+    const connectors = plan?.connectors ?? [];
+    const askedConns = askedConnectors(connectors);
+    const pickOf = (c: ConnectorPlan) => picks[c.slug] ?? defaultPick(c);
+    const blocked = connectors.some((c) => blockedBy(c, pickOf(c)) !== null);
+    /* The app this install brought, if it brought one. It decides where the
+       person goes when they leave this panel — see `landingPath`. */
+    const app = installedApp(plan?.steps ?? []);
+    const markArrival = () => {
+        try {
+            markInstallArrival(window.sessionStorage);
+        } catch {
+            /* no storage */
+        }
+    };
 
     /* ── Done ───────────────────────────────────────────────────────── */
     if (job.status === "COMPLETED")
@@ -500,15 +662,27 @@ function Journey({ repo, owner, title }: Props) {
                     <h2 className={s.panelTitle}>{who} is ready</h2>
                     <p className={s.muted}>
                         {who !== title && title + " is installed. "}
-                        Say hello and give it its first job.
+                        {app
+                            ? "It came with " + humanize(app) + "."
+                            : "Say hello and give it its first job."}
                     </p>
                 </div>
                 <a
                     className={s.primary}
-                    href={"/t/" + encodeURIComponent(job.pod_id)}
+                    href={landingPath(job.pod_id, plan?.steps ?? [])}
+                    onClick={markArrival}
                 >
-                    Open {who}
+                    Open {app ? humanize(app) : who}
                 </a>
+                {app && (
+                    <a
+                        className={s.quiet}
+                        href={"/t/" + encodeURIComponent(job.pod_id)}
+                        onClick={markArrival}
+                    >
+                        Or open {who} instead
+                    </a>
+                )}
                 {warnings.length > 0 && <Warnings list={warnings} />}
             </Panel>
         );
@@ -525,6 +699,16 @@ function Journey({ repo, owner, title }: Props) {
                         : job.status === "PARTIALLY_CANCELLED"
                           ? "What was already installed stays with " + who + "."
                           : "Nothing was added."}
+                    {/* A repository the pod's `github` connector could not
+                        reach as you: connecting your account is the fix. */}
+                    {job.status === "FAILED" && job.connect_url && (
+                        <>
+                            {" "}
+                            <a className={s.link} href={job.connect_url}>
+                                {connectLinkLabel(job.error_code ?? "")}
+                            </a>
+                        </>
+                    )}
                 </p>
                 <button className={s.primary} onClick={() => void back()}>
                     <ArrowsClockwise size={16} aria-hidden />
@@ -556,11 +740,18 @@ function Journey({ repo, owner, title }: Props) {
             <h2 className={s.panelTitle}>
                 {reviewing ? "What's included" : statusLine(job.status)}
             </h2>
+            {reviewing && (
+                <p className={s.muted}>
+                    {who === title ? "Everything" : who + " gets everything"}{" "}
+                    {title} brings
+                    {groups.length > 0 ? " — " + contentsLine(groups) : ""}.
+                </p>
+            )}
             {!reviewing && (
                 <Progress done={job.progress.done} total={job.progress.total} />
             )}
             {warnings.length > 0 && <Warnings list={warnings} />}
-            {groups.length > 0 && (
+            {(choosing || !reviewing) && groups.length > 0 && (
                 <div className={s.plan}>
                     {groups.map((g) => (
                         <section key={g.kind}>
@@ -601,6 +792,18 @@ function Journey({ repo, owner, title }: Props) {
                     ))}
                 </div>
             )}
+            {reviewing && groups.length > 0 && (
+                <button
+                    type="button"
+                    className={s.quiet}
+                    aria-expanded={choosing}
+                    onClick={() => setChoosing((on) => !on)}
+                >
+                    {choosing
+                        ? "Hide the details"
+                        : "I'm a developer — show me the details"}
+                </button>
+            )}
             {reviewing && plan && (
                 <form
                     className={s.confirm}
@@ -609,20 +812,34 @@ function Journey({ repo, owner, title }: Props) {
                         void install();
                     }}
                 >
-                    {asked.length > 0 && (
+                    {needsFromYou.length > 0 && (
                         <fieldset className={s.needs}>
                             <legend>Needs from you</legend>
-                            {asked.map((v) => (
+                            {needsFromYou.map((v) => (
                                 <Variable
                                     key={v.name}
                                     variable={v}
-                                    orgId={orgId}
-                                    value={values[v.name] ?? v.default ?? ""}
+                                    value={valueOf(v)}
                                     onChange={(value) =>
                                         setValues({
                                             ...values,
                                             [v.name]: value,
                                         })
+                                    }
+                                />
+                            ))}
+                        </fieldset>
+                    )}
+                    {askedConns.length > 0 && (
+                        <fieldset className={s.needs}>
+                            <legend>Connections</legend>
+                            {askedConns.map((c) => (
+                                <ConnectorField
+                                    key={c.slug}
+                                    connector={c}
+                                    pick={pickOf(c)}
+                                    onChange={(pick) =>
+                                        setPicks({ ...picks, [c.slug]: pick })
                                     }
                                 />
                             ))}
@@ -647,10 +864,11 @@ function Journey({ repo, owner, title }: Props) {
                             disabled={
                                 busy ||
                                 missing ||
+                                blocked ||
                                 (plan.has_destructive_steps && !confirm)
                             }
                         >
-                            {busy ? "Starting…" : "Install"}
+                            {busy ? "Starting…" : "Install everything"}
                         </button>
                         <button
                             type="button"
@@ -755,89 +973,100 @@ function Warnings({ list }: { list: string[] }) {
 
 function Variable({
     variable: v,
-    orgId,
     value,
     onChange,
 }: {
     variable: VariableSpec;
-    orgId: string;
     value: string;
     onChange: (value: string) => void;
 }) {
-    const accounts = useQuery({
-        queryKey: ["accounts", orgId],
-        queryFn: () => data.listAccounts(orgId),
-        enabled: v.kind === "account",
-    });
-    const label =
-        v.kind === "account" && v.connector
-            ? humanize(v.connector) + " account"
-            : humanize(v.name);
-    if (v.kind !== "account")
-        return (
-            <label className={s.field}>
-                <span>
-                    {label}
-                    {!v.required && <em> optional</em>}
-                </span>
-                {v.description && <small>{v.description}</small>}
-                <input
-                    required={v.required}
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
-                />
-            </label>
-        );
-    const usable =
-        accounts.data?.filter(
-            (a) => a.usable && (!v.connector || a.connectorId === v.connector),
-        ) ?? [];
     return (
         <label className={s.field}>
-            <span>{label}</span>
+            <span>
+                {humanize(v.name)}
+                {!v.required && <em> optional</em>}
+            </span>
             {v.description && <small>{v.description}</small>}
-            <select
+            <input
                 required={v.required}
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-            >
-                <option value="">
-                    {accounts.isPending
-                        ? "Loading accounts…"
-                        : usable.length
-                          ? "Choose an account"
-                          : "No " + label.toLowerCase() + " connected yet"}
-                </option>
-                {usable.map((a) => (
-                    <option key={a.id} value={a.id}>
-                        {a.label || a.ref || a.connectorId}
-                    </option>
-                ))}
-            </select>
-            <span className={s.fieldActions}>
-                <a
-                    href={
-                        "/t?settings=connectors&org=" +
-                        encodeURIComponent(orgId)
-                    }
-                    target="_blank"
-                    rel="noreferrer"
-                >
-                    Connect one <ArrowSquareOut size={12} aria-hidden />
-                </a>
-                <button
-                    type="button"
-                    className={s.link}
-                    onClick={() => void accounts.refetch()}
-                >
-                    Refresh
-                </button>
-            </span>
-            {accounts.isError && (
-                <small role="alert" className={s.stepError}>
-                    Could not load connected accounts.
-                </small>
-            )}
+            />
         </label>
+    );
+}
+
+/** One bundled connector: which of the organization's installations it maps
+ *  to, and for a shared one whether to share one of your own accounts. */
+function ConnectorField({
+    connector: c,
+    pick,
+    onChange,
+}: {
+    connector: ConnectorPlan;
+    pick: ConnectorPick;
+    onChange: (pick: ConnectorPick) => void;
+}) {
+    const reason = blockedBy(c, pick);
+    const pickable =
+        declares(c) &&
+        (c.installations.length !== 1 || c.can_create_installation);
+    const accounts = shareableAccounts(c, pick);
+    const sharing =
+        declares(c) &&
+        c.mode === "SHARED" &&
+        pick.installation !== "" &&
+        pick.installation !== CREATE_INSTALLATION;
+    return (
+        <div className={s.field}>
+            <span>
+                {c.slug}
+                <em> {c.mode === "SHARED" ? "shared" : "per member"}</em>
+            </span>
+            <small>{connectorLine(c)}</small>
+            {pickable && (
+                <select
+                    aria-label={"Installation for " + c.slug}
+                    value={pick.installation}
+                    onChange={(e) =>
+                        onChange({ installation: e.target.value, share: "" })
+                    }
+                >
+                    {c.installations.length === 0 && (
+                        <option value="">Choose…</option>
+                    )}
+                    {c.installations.map((o) => (
+                        <option key={o.auth_config_id} value={o.auth_config_id}>
+                            {o.name}
+                            {o.is_default ? " (default)" : ""}
+                        </option>
+                    ))}
+                    {c.can_create_installation && (
+                        <option value={CREATE_INSTALLATION}>
+                            Install Lemma&apos;s {humanize(c.connector)} app
+                        </option>
+                    )}
+                </select>
+            )}
+            {sharing && (
+                <select
+                    aria-label={"Account for " + c.slug}
+                    value={pick.share}
+                    onChange={(e) =>
+                        onChange({ ...pick, share: e.target.value })
+                    }
+                >
+                    <option value="">
+                        Don&apos;t share an account now — it waits for one
+                    </option>
+                    {accounts.map((a) => (
+                        <option key={a.account_id} value={a.account_id}>
+                            Share {a.label ?? "my account"}
+                        </option>
+                    ))}
+                </select>
+            )}
+            {reason && <small className={s.stepError}>{reason}</small>}
+        </div>
     );
 }

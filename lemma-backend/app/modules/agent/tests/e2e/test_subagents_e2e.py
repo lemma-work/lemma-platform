@@ -422,8 +422,14 @@ async def test_query_and_interact_subagent_reject_conversations_this_agent_did_n
 async def test_interact_subagent_stop_requests_a_real_running_child(
     authenticated_client, fixed_test_org, fixed_test_user
 ):
-    """Cancellation: `stop()` on a real, owned child moves it to STOP_REQUESTED,
-    and is idempotent against a run that is already stopping."""
+    """Cancellation: `stop()` on a real, owned child ends it, idempotently.
+
+    No worker holds the child's turn here (the run was written without an
+    ``agent.turn`` item), so the stop has nothing to signal and ends the run
+    STOPPED in its own transaction (``services/run_stop.py``); a stop that
+    reaches a turn a worker holds is STOP_REQUESTED instead, which
+    ``test_agent_turn_work_e2e`` covers. A second stop is a harmless no-op.
+    """
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
     supervisor = await _create_agent(
         authenticated_client, pod_id, "supervisor", "Spawns and stops children."
@@ -464,20 +470,18 @@ async def test_interact_subagent_stop_requests_a_real_running_child(
     )
     assert stopped["success"] is True
     assert stopped["conversation_id"] == str(child_id)
-    assert stopped["status"] == "STOP_REQUESTED"
+    assert stopped["status"] == "STOPPED"
 
     after = await authenticated_client.get(f"/pods/{pod_id}/conversations/{child_id}")
     assert after.status_code == status.HTTP_200_OK, after.text
-    assert after.json()["status"] == "STOP_REQUESTED"
+    assert after.json()["status"] == "STOPPED"
 
-    # STOP_REQUESTED still counts as active (nothing has finished the run
-    # yet -- there is no worker here to do that), so a second stop call finds
-    # it again and is a harmless no-op rather than an error.
+    # Already stopped: a second stop is a harmless no-op, not an error.
     stopped_again = await interact_subagent(
         ctx, InteractSubagentRequest(action="stop", conversation_id=str(child_id))
     )
     assert stopped_again["success"] is True
-    assert stopped_again["status"] == "STOP_REQUESTED"
+    assert stopped_again["status"] == "STOPPED"
 
 
 @pytest.mark.asyncio

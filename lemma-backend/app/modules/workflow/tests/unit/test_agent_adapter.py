@@ -12,6 +12,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+
 from app.modules.agent.infrastructure.adapters import workflow_control
 from app.modules.agent.infrastructure.adapters.workflow_control import (
     AgentControlAdapter,
@@ -36,7 +38,7 @@ def test_normalize_agent_output_wraps_non_dict_as_answer():
 async def test_reserved_id_returns_existing_conversation_without_side_effects(
     monkeypatch,
 ):
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     pod_id = uuid4()
     # `agent_runtime` is read to hand to the shared start path, before the
     # reserved-id branch can return. A real `Agent` always carries it; the fake
@@ -88,7 +90,7 @@ async def test_waiting_conversation_reports_wait_when_a_wait_is_active(monkeypat
     """
     conversation_id = uuid4()
     wakes_at = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     adapter.conversation_repo = Mock(
         get_conversation=AsyncMock(
             return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
@@ -110,7 +112,7 @@ async def test_waiting_conversation_reports_wait_when_a_wait_is_active(monkeypat
 @pytest.mark.anyio
 async def test_waiting_conversation_still_reports_human_without_a_wait():
     """An agent blocked on a person is the hang the ceiling exists to catch."""
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     adapter.conversation_repo = Mock(
         get_conversation=AsyncMock(
             return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
@@ -132,7 +134,7 @@ async def test_a_failed_conversation_carries_the_reason_the_agent_recorded():
     leaves "Agent conversation FAILED" as the only thing a run records, which
     is exactly as much as knowing the status.
     """
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     adapter.conversation_repo = Mock(
         get_conversation=AsyncMock(
             return_value=SimpleNamespace(
@@ -152,7 +154,7 @@ async def test_a_failed_conversation_carries_the_reason_the_agent_recorded():
 @pytest.mark.anyio
 async def test_a_failed_conversation_without_a_reason_reads_as_it_did():
     """No reason recorded is common; do not append a dangling colon for it."""
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     adapter.conversation_repo = Mock(
         get_conversation=AsyncMock(
             return_value=SimpleNamespace(
@@ -176,7 +178,7 @@ async def test_the_assistant_is_started_like_any_other_agent(monkeypatch):
     the conversation still reads as the assistant's, which is what selects its
     base prompt.
     """
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     pod_id = uuid4()
     assistant = SimpleNamespace(
         id=pod_id, pod_id=pod_id, name="pod_default", agent_runtime=None
@@ -226,7 +228,7 @@ async def test_named_agent_run_carries_the_schedule_instruction_too(monkeypatch)
     to it rather than replacing it -- `build_agent_instructions` layers agent
     instruction then conversation instructions, in that order.
     """
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     pod_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
@@ -276,7 +278,7 @@ def _schedule_input(**metadata) -> dict:
 
 
 async def _start_scheduled_run(adapter_input: dict, instructions: str | None):
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     pod_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
@@ -378,7 +380,7 @@ async def test_a_workflow_node_still_gets_the_json_envelope():
     Workflow nodes bind their inputs to this shape; only a schedule firing gets
     the wake-up rendering.
     """
-    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
     pod_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None

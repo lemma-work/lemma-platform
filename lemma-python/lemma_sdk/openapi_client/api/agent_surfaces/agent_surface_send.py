@@ -78,9 +78,9 @@ def sync_detailed(
 
      Proactively send a message to a pod member on this surface.
 
-    Powers notifications from functions/workflows. Reuses the member's existing
-    thread (bots can't cold-DM), and a 404 carries the reason it could not be
-    reached, in the vocabulary the notification API uses.
+    For functions and workflows that message a member on one platform. Reuses
+    the member's existing thread (bots can't cold-DM), and a 404 carries the
+    reason they could not be reached.
 
     Args:
         pod_id (UUID):
@@ -119,9 +119,9 @@ def sync(
 
      Proactively send a message to a pod member on this surface.
 
-    Powers notifications from functions/workflows. Reuses the member's existing
-    thread (bots can't cold-DM), and a 404 carries the reason it could not be
-    reached, in the vocabulary the notification API uses.
+    For functions and workflows that message a member on one platform. Reuses
+    the member's existing thread (bots can't cold-DM), and a 404 carries the
+    reason they could not be reached.
 
     Args:
         pod_id (UUID):
@@ -155,9 +155,9 @@ async def asyncio_detailed(
 
      Proactively send a message to a pod member on this surface.
 
-    Powers notifications from functions/workflows. Reuses the member's existing
-    thread (bots can't cold-DM), and a 404 carries the reason it could not be
-    reached, in the vocabulary the notification API uses.
+    For functions and workflows that message a member on one platform. Reuses
+    the member's existing thread (bots can't cold-DM), and a 404 carries the
+    reason they could not be reached.
 
     Args:
         pod_id (UUID):
@@ -194,9 +194,9 @@ async def asyncio(
 
      Proactively send a message to a pod member on this surface.
 
-    Powers notifications from functions/workflows. Reuses the member's existing
-    thread (bots can't cold-DM), and a 404 carries the reason it could not be
-    reached, in the vocabulary the notification API uses.
+    For functions and workflows that message a member on one platform. Reuses
+    the member's existing thread (bots can't cold-DM), and a 404 carries the
+    reason they could not be reached.
 
     Args:
         pod_id (UUID):

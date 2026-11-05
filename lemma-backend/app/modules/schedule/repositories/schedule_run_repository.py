@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.schedule.config import BREAKER_STREAK_SCAN_LIMIT
 from app.modules.schedule.domain.schedule import (
@@ -21,6 +24,27 @@ from app.modules.schedule.infrastructure.models.run import ScheduleRun
 # against it: a threshold past the scan depth is a breaker that can never trip,
 # and two copies of the number is how that becomes true silently.
 _BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
+
+#: The error a filtered fire is dead-lettered with when no decision provider
+#: answered after every retry. An outage, not the schedule's failure.
+FILTER_UNAVAILABLE = "ScheduleFilterUnavailable"
+#: ... and when the deployment has no decision provider to ask at all.
+FILTER_NOT_CONFIGURED = "ScheduleFilterNotConfigured"
+#: ... and when its question was interrupted (a crash, a lost lease, the
+#: database unreachable) every time it was asked.
+FILTER_INTERRUPTED = "ScheduleFilterInterrupted"
+#: A fire the release found waiting from before its live window and did not
+#: start (migration 0055): the upgrade's doing, not the schedule's.
+NOT_STARTED_BEFORE_UPGRADE = "ScheduleNotStartedBeforeUpgrade"
+#: Failures that belong to the deployment rather than to any schedule: the
+#: breaker passes over them. A spent budget, an event too large to judge and an
+#: invalid filter are the pod's or the schedule's, and are counted.
+DEPLOYMENT_FAILURES = (
+    FILTER_UNAVAILABLE,
+    FILTER_NOT_CONFIGURED,
+    FILTER_INTERRUPTED,
+    NOT_STARTED_BEFORE_UPGRADE,
+)
 
 
 class ScheduleRunRepository:
@@ -115,6 +139,106 @@ class ScheduleRunRepository:
         await self.session.flush()
         return model.to_entity()
 
+    async def has_run_for_event(
+        self, *, schedule_id: UUID, source_event_id: str
+    ) -> bool:
+        """Whether this event already has a run, whatever became of it."""
+        found = await self.session.scalar(
+            select(ScheduleRun.id)
+            .where(
+                ScheduleRun.schedule_id == schedule_id,
+                ScheduleRun.source_event_id == source_event_id,
+            )
+            .limit(1)
+        )
+        return found is not None
+
+    async def lock_admission(self, schedule_id: UUID) -> None:
+        """Serialize admission to one schedule until this transaction ends.
+
+        Counting runs in flight and then claiming one is a race between two
+        fires of the same schedule: both count below the cap and both claim.
+        The transaction-scoped advisory lock closes it -- the second fire's
+        count waits until the first's claim is committed -- and, unlike a lock
+        on the schedule row, it does not hold up the outcome and breaker
+        writes that lock that row.
+        """
+        digest = hashlib.blake2b(
+            schedule_id.bytes, digest_size=8, person=b"lemma-sched-cap"
+        ).digest()
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": int.from_bytes(digest, "big", signed=True)},
+        )
+        mark_transaction_scoped_lock(self.session)
+
+    async def count_in_flight(
+        self, schedule_id: UUID, *, excluding_source_event_id: str, limit: int
+    ) -> int:
+        """Runs started and not yet finished, counted up to ``limit``.
+
+        In flight is claimed (PROCESSING) or handed to its target (DISPATCHED)
+        with no outcome back yet. The caller only compares against ``limit``,
+        so counting further would read more history for nothing.
+        """
+        in_flight = (
+            select(ScheduleRun.id)
+            .where(
+                ScheduleRun.schedule_id == schedule_id,
+                ScheduleRun.target_outcome.is_(None),
+                ScheduleRun.status.in_(
+                    (
+                        ScheduleRunStatus.PROCESSING.value,
+                        ScheduleRunStatus.DISPATCHED.value,
+                    )
+                ),
+                ScheduleRun.source_event_id != excluding_source_event_id,
+            )
+            .limit(limit)
+            .subquery()
+        )
+        counted = await self.session.scalar(select(func.count()).select_from(in_flight))
+        return int(counted or 0)
+
+    async def insert_filtered(
+        self,
+        *,
+        schedule_id: UUID,
+        user_id: UUID,
+        source_event_id: str,
+        target_kind: str,
+        metadata: Mapping[str, object] | None,
+        llm_output: Mapping[str, object] | None,
+    ) -> bool:
+        """Record an event the filter skipped, as a run that finished there.
+
+        No payload and no target run: nothing was started, and a skipped
+        event's body is the bulk of the row for no reader. The filter's answers
+        are what the owner needs to see why. A repeat of the same event writes
+        nothing, so a redelivery cannot count twice.
+        """
+        now = datetime.now(timezone.utc)
+        created_id = await self.session.scalar(
+            insert(ScheduleRun)
+            .values(
+                schedule_id=schedule_id,
+                user_id=user_id,
+                source_event_id=source_event_id,
+                status=ScheduleRunStatus.FILTERED.value,
+                attempts=1,
+                target_kind=target_kind,
+                target_run_id=None,
+                payload={},
+                fire_metadata=dict(metadata or {}),
+                llm_output=dict(llm_output or {}),
+                started_at=now,
+                completed_at=now,
+            )
+            .on_conflict_do_nothing(constraint="uq_schedule_run_source_event")
+            .returning(ScheduleRun.id)
+        )
+        return created_id is not None
+
     async def mark_dispatched(self, run_id: UUID) -> None:
         """Mark launch complete unless a synchronous target outcome won the race.
 
@@ -198,13 +322,21 @@ class ScheduleRunRepository:
         completed_at: datetime | None,
         error_type: str | None = None,
     ) -> ScheduleRunEntity | None:
-        """Apply one target outcome, using the state transition as its idempotency gate."""
+        """Apply one target outcome, using the state transition as its idempotency gate.
+
+        Once recorded, an outcome is final -- with one exception. A workflow run
+        that failed can be retried from its failed step under the same run id,
+        and when it then finishes it reports again, later. That second report
+        replaces the failure: left as TARGET_FAILED, the schedule shows a run
+        that in fact succeeded, and its breaker counts it toward deactivation.
+        """
         if status not in {
             ScheduleRunStatus.COMPLETED,
             ScheduleRunStatus.TARGET_FAILED,
             ScheduleRunStatus.CANCELLED,
         }:
             raise ValueError(f"Invalid target outcome status: {status.value}")
+        completed_at = _as_utc(completed_at)
 
         model = await self.session.scalar(
             select(ScheduleRun)
@@ -214,8 +346,18 @@ class ScheduleRunRepository:
             )
             .with_for_update()
         )
-        if model is None or model.target_outcome is not None:
+        if model is None:
             return None
+        if model.target_outcome is not None:
+            if not _is_retried_workflow_outcome(
+                model, target_kind=target_kind, status=status, completed_at=completed_at
+            ):
+                return None
+            model.target_outcome = status.value
+            model.error_type = error_type
+            model.completed_at = completed_at
+            await self.session.flush()
+            return model.to_entity()
 
         if model.status in {
             ScheduleRunStatus.COMPLETED.value,
@@ -238,7 +380,9 @@ class ScheduleRunRepository:
         await self.session.flush()
         return model.to_entity()
 
-    async def consecutive_terminal_failures(self, schedule_id: UUID) -> int:
+    async def consecutive_terminal_failures(
+        self, schedule_id: UUID, *, since: datetime | None = None
+    ) -> int:
         """Length of the current failure streak, counted back from the newest run.
 
         Bounded, because this runs on *every* run completion and the ledger is
@@ -262,13 +406,35 @@ class ScheduleRunRepository:
         is the one that is actually true of the schedule. The cost is that a
         rarely-firing schedule takes a long wall-clock time to trip -- which is
         the correct amount of patience for something that rarely fires.
+
+        Two kinds of row are not the schedule's doing and are passed over. A
+        FILTERED run is an event the filter skipped -- not a failure, and not a
+        success either; left in the scan, a schedule that skips most events
+        would push its real failures out of the window. A fire dead-lettered
+        because no decision provider answered, or because the deployment has
+        none, is the deployment's failure, not the schedule's: no owner can fix
+        it, and counting it would deactivate every filtered schedule at once.
+        The operator hears of it instead, from
+        ``schedule.filter.dead_lettered.degraded``. So is a fire the upgrade found
+        waiting too long to start, and failed rather than replayed.
+
+        ``since`` is when a person last reactivated the schedule: runs that
+        completed before it belong to the streak that paused it, which the
+        reactivation forgave.
         """
+        after_reset = [] if since is None else [ScheduleRun.completed_at > since]
         rows = (
             await self.session.execute(
                 select(ScheduleRun.status, ScheduleRun.target_outcome)
                 .where(
                     ScheduleRun.schedule_id == schedule_id,
                     ScheduleRun.completed_at.is_not(None),
+                    *after_reset,
+                    ScheduleRun.status != ScheduleRunStatus.FILTERED.value,
+                    or_(
+                        ScheduleRun.error_type.is_(None),
+                        ScheduleRun.error_type.not_in(DEPLOYMENT_FAILURES),
+                    ),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
                 .limit(_BREAKER_SCAN_LIMIT)
@@ -294,7 +460,7 @@ class ScheduleRunRepository:
         *,
         schedule_id: UUID,
         run_id: UUID,
-        redriven_by_user_id: UUID,
+        redriven_by_user_id: UUID | None,
         fallback_user_id: UUID,
         required_user_id: UUID | None = None,
     ) -> tuple[ScheduleRunEntity, bool] | None:
@@ -324,9 +490,12 @@ class ScheduleRunRepository:
 
         redrive = ScheduleRun(
             schedule_id=schedule_id,
-            user_id=source.user_id or fallback_user_id,
+            # Runs as the person who asked for it again, with their access --
+            # not as whoever the first attempt ran as. Somebody retrying a
+            # run cannot borrow its owner's authority to finish it.
+            user_id=redriven_by_user_id or source.user_id or fallback_user_id,
             source_event_id=f"redrive:{source.id}",
-            status=ScheduleRunStatus.RECEIVED.value,
+            status=ScheduleRunStatus.PROCESSING.value,
             attempts=0,
             target_kind=source.target_kind,
             target_run_id=str(uuid7()),
@@ -347,13 +516,66 @@ class ScheduleRunRepository:
         *,
         limit: int = 100,
         user_id: UUID | None = None,
+        status: ScheduleRunStatus | None = None,
+        skipped: bool | None = None,
     ) -> list[ScheduleRunEntity]:
+        """Newest first. `status` matches what a run reports -- its target's
+        outcome once there is one -- and `skipped` keeps only, or leaves out,
+        the events the filter skipped."""
         stmt = select(ScheduleRun).where(ScheduleRun.schedule_id == schedule_id)
         if user_id is not None:
             stmt = stmt.where(ScheduleRun.user_id == user_id)
+        if status is not None:
+            stmt = stmt.where(
+                func.coalesce(ScheduleRun.target_outcome, ScheduleRun.status)
+                == status.value
+            )
+        if skipped is not None:
+            filtered = ScheduleRun.status == ScheduleRunStatus.FILTERED.value
+            stmt = stmt.where(filtered if skipped else ~filtered)
         rows = await self.session.scalars(
             stmt.order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc()).limit(
                 limit
             )
         )
         return [row.to_entity() for row in rows.all()]
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """A target's finish time, aware.
+
+    Workflow run times are stored with their zone now (migration 0052), so a
+    terminal event published since carries an aware ``completed_at``. Events
+    published before it carried a naive one -- UTC wall time -- and those
+    outlive the deploy: a stream entry still pending in the consumer group, an
+    older replica publishing during the rollout. Left naive, comparing one
+    with the recorded time raised, and storing it let the database read it in
+    the server's local zone. So a naive time is still read as UTC here.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
+
+
+def _is_retried_workflow_outcome(
+    model: ScheduleRun,
+    *,
+    target_kind: str,
+    status: ScheduleRunStatus,
+    completed_at: datetime | None,
+) -> bool:
+    """A failed workflow run's later, different outcome, after a retry.
+
+    Workflow only: an agent conversation is not retried under the same id.
+    Strictly later, so a redelivered copy of the original failure -- or an
+    out-of-order one -- cannot flip a recorded outcome back and forth. A failed
+    retry leaves the failure as it was.
+    """
+    return (
+        target_kind == "WORKFLOW"
+        and model.target_outcome == ScheduleRunStatus.TARGET_FAILED.value
+        and status is not ScheduleRunStatus.TARGET_FAILED
+        and completed_at is not None
+        and model.completed_at is not None
+        and completed_at > model.completed_at
+    )

@@ -6,6 +6,10 @@ import json
 from typing import Any
 
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.channel_setup import (
+    ChannelSetupKind,
+    ChannelSetupRequest,
+)
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     CHANNEL_SETUP_ACTION_ID,
     CHANNEL_SETUP_VIEW_CALLBACK_ID,
@@ -22,7 +26,7 @@ logger = get_logger(__name__)
 class SlackConfigurationParserMixin:
     def parse_channel_setup(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
-    ) -> dict[str, Any] | None:
+    ) -> ChannelSetupRequest | None:
         del headers
         try:
             payload = self._unwrap_payload(payload)
@@ -41,7 +45,7 @@ class SlackConfigurationParserMixin:
 
     def _parse_setup_click(
         self, payload: dict[str, Any], tenant_id: str | None, actor: str | None
-    ) -> dict[str, Any] | None:
+    ) -> ChannelSetupRequest | None:
         actions = [a for a in payload.get("actions") or [] if isinstance(a, dict)]
         trigger_id = str(payload.get("trigger_id") or "").strip()
         parsers = (
@@ -71,12 +75,12 @@ class SlackConfigurationParserMixin:
             prompt = str(starter.get("value") or "").strip()
             if not prompt or not actor:
                 return None
-            return {
-                "kind": "starter_prompt",
-                "prompt": prompt,
-                "tenant_id": tenant_id,
-                "actor_external_user_id": actor,
-            }
+            return ChannelSetupRequest(
+                kind=ChannelSetupKind.STARTER_PROMPT,
+                prompt=prompt,
+                tenant_id=tenant_id,
+                actor_external_user_id=actor,
+            )
         return None
 
     @staticmethod
@@ -94,12 +98,12 @@ class SlackConfigurationParserMixin:
         surface_id = str(selection.get("value") or "").strip()
         if not surface_id or not actor:
             return None
-        return {
-            "kind": "select_surface",
-            "surface_id": surface_id,
-            "tenant_id": tenant_id,
-            "actor_external_user_id": actor,
-        }
+        return ChannelSetupRequest(
+            kind=ChannelSetupKind.SELECT_SURFACE,
+            surface_id=surface_id,
+            tenant_id=tenant_id,
+            actor_external_user_id=actor,
+        )
 
     def _parse_channel_setup_action(
         self, payload, actions, trigger_id, tenant_id, actor
@@ -124,18 +128,18 @@ class SlackConfigurationParserMixin:
         ).strip()
         if not trigger_id or not channel_id:
             return None
-        return {
-            "kind": "open",
-            "trigger_id": trigger_id,
-            "channel_id": channel_id,
-            "tenant_id": tenant_id,
-            "actor_external_user_id": actor,
-            "surface_id": str(metadata.get("surface_id") or "").strip() or None,
-        }
+        return ChannelSetupRequest(
+            kind=ChannelSetupKind.OPEN,
+            trigger_id=trigger_id,
+            channel_id=channel_id,
+            tenant_id=tenant_id,
+            actor_external_user_id=actor,
+            surface_id=str(metadata.get("surface_id") or "").strip() or None,
+        )
 
     def _parse_setup_submission(
         self, payload: dict[str, Any], tenant_id: str | None, actor: str | None
-    ) -> dict[str, Any] | None:
+    ) -> ChannelSetupRequest | None:
         view = payload.get("view") or {}
         values = (view.get("state") or {}).get("values") or {}
         callback_id = view.get("callback_id")
@@ -149,7 +153,7 @@ class SlackConfigurationParserMixin:
         values: dict[str, Any],
         tenant_id: str | None,
         actor: str | None,
-    ) -> dict[str, Any] | None:
+    ) -> ChannelSetupRequest | None:
         """Allowing this channel.
 
         The channel id rides in ``private_metadata``, either inside an encoded
@@ -163,13 +167,13 @@ class SlackConfigurationParserMixin:
         channel_id = str(metadata.get("channel_id") or raw_metadata).strip()
         if not channel_id:
             return None
-        return {
-            "kind": "submit",
-            "channel_id": channel_id,
-            "tenant_id": tenant_id,
-            "actor_external_user_id": actor,
-            "surface_id": str(metadata.get("surface_id") or "").strip() or None,
-        }
+        return ChannelSetupRequest(
+            kind=ChannelSetupKind.SUBMIT,
+            channel_id=channel_id,
+            tenant_id=tenant_id,
+            actor_external_user_id=actor,
+            surface_id=str(metadata.get("surface_id") or "").strip() or None,
+        )
 
     @staticmethod
     def _decode_metadata(raw_value: str) -> dict[str, Any]:

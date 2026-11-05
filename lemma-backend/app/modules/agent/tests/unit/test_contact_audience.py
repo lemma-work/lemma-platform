@@ -1,9 +1,9 @@
-"""A contact's conversation is answered as nobody, like a group's outsiders.
+"""A contact's conversation is answered as that contact, never as its keeper.
 
-Every rule that keeps a stranger's run from reaching the member's authority
-reads the run's ``Audience``, so a contact's must answer outsiders -- and the
-contact's id, like the audience, is routing's to write and no client's to drop
-or forge.
+Every rule that keeps a contact's run from reaching the member's authority
+reads the run's ``Audience``, which comes from the conversation's
+``contact_id`` column -- a value only the server writes. What the
+conversation's metadata says, a client can change, and it decides nothing.
 """
 
 from __future__ import annotations
@@ -13,15 +13,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    CONTACT,
-    CONTACT_KEY,
-    OUTSIDERS,
-    Audience,
-    AudienceKind,
-    with_audience_kept,
-    without_audience,
+from app.modules.agent.domain.outsiders import Audience, AudienceKind
+from app.modules.agent.domain.server_metadata import (
+    client_metadata,
+    with_server_keys_kept,
 )
 from app.modules.agent.domain.surface_prompts import surface_platform_guidance
 from app.modules.agent.services.outsider_brief import render_contact_brief
@@ -31,85 +26,55 @@ pytestmark = pytest.mark.unit
 CONTACT_ID = uuid4()
 
 
-def _conversation(metadata):
-    return SimpleNamespace(metadata=metadata)
+def _conversation(contact_id=None, metadata=None):
+    return SimpleNamespace(contact_id=contact_id, metadata=metadata)
 
 
 def test_a_contacts_conversation_answers_outsiders_and_names_them():
-    conversation = _conversation({AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(CONTACT_ID)})
-
-    audience = Audience.of(conversation)
+    audience = Audience.of(_conversation(CONTACT_ID))
 
     assert audience == Audience.contact(CONTACT_ID)
     assert audience.answers_outsiders and audience.is_contact
     assert audience.contact_id == CONTACT_ID
 
 
-def test_a_groups_outsiders_name_nobody():
-    audience = Audience.of(_conversation({AUDIENCE_KEY: OUTSIDERS}))
-
-    assert audience == Audience.outsiders()
-    assert audience.answers_outsiders and not audience.is_contact
-    assert audience.contact_id is None
-
-
-def test_a_contact_id_without_the_contact_audience_names_nobody():
-    audience = Audience.of(_conversation({CONTACT_KEY: str(CONTACT_ID)}))
-
-    assert audience == Audience.member()
-    assert audience.contact_id is None
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"audience": "contact", "contact_id": str(uuid4())},
+        {"audience": "outsiders"},
+    ],
+    ids=["claims-a-contact", "claims-outsiders"],
+)
+def test_metadata_claiming_an_audience_makes_nobody_a_contact(metadata):
+    assert Audience.of(_conversation(metadata=metadata)) == Audience.member()
 
 
-@pytest.mark.parametrize("contact_id", [None, "", "not-a-uuid", 7])
-def test_a_contact_audience_without_a_readable_id_is_still_outside_the_pod(
-    contact_id,
-):
-    """Fails closed: a broken id loses the contact, never the outsider rules."""
-    audience = Audience.from_conversation_metadata(
-        {AUDIENCE_KEY: CONTACT, CONTACT_KEY: contact_id}
-    )
+def test_metadata_cannot_take_a_contacts_conversation_away_from_them():
+    wiped = _conversation(CONTACT_ID, metadata={"audience": "member"})
 
-    assert audience == Audience.outsiders()
+    assert Audience.of(wiped) == Audience.contact(CONTACT_ID)
 
 
-@pytest.mark.parametrize("metadata", [None, {}, {AUDIENCE_KEY: "member"}, "junk"])
-def test_anything_else_is_a_members_conversation(metadata):
-    assert Audience.from_conversation_metadata(metadata) == Audience.member()
-    assert not Audience.of(None).answers_outsiders
-
-
-def test_an_audience_round_trips_through_the_conversation_metadata():
-    for audience in (
-        Audience.member(),
-        Audience.outsiders(),
-        Audience.contact(CONTACT_ID),
-    ):
-        assert Audience.from_conversation_metadata(audience.to_metadata()) == audience
+@pytest.mark.parametrize("conversation", [None, SimpleNamespace(), _conversation()])
+def test_anything_else_is_a_members_conversation(conversation):
+    assert Audience.of(conversation) == Audience.member()
+    assert not Audience.of(conversation).answers_outsiders
 
 
 def test_a_contact_id_is_set_exactly_for_a_contact():
     with pytest.raises(ValueError):
         Audience(kind=AudienceKind.CONTACT)
     with pytest.raises(ValueError):
-        Audience(kind=AudienceKind.OUTSIDERS, contact_id=CONTACT_ID)
+        Audience(kind=AudienceKind.MEMBER, contact_id=CONTACT_ID)
 
 
-def test_a_client_cannot_drop_or_swap_the_contact():
-    stored = {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(CONTACT_ID), "title": "x"}
+def test_a_client_can_write_the_old_audience_keys_and_change_nothing():
+    """They are ordinary metadata now: kept as sent, and read by nobody."""
+    sent = {"audience": "contact", "contact_id": str(CONTACT_ID), "title": "x"}
 
-    kept = with_audience_kept(stored, {"title": "y", CONTACT_KEY: str(uuid4())})
-
-    assert kept == {"title": "y", AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(CONTACT_ID)}
-    assert with_audience_kept(stored, None) == {
-        AUDIENCE_KEY: CONTACT,
-        CONTACT_KEY: str(CONTACT_ID),
-    }
-
-
-def test_a_client_cannot_claim_a_contact():
-    assert without_audience(
-        {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(CONTACT_ID), "title": "x"}
-    ) == {"title": "x"}
+    assert client_metadata(sent) == sent
+    assert with_server_keys_kept({"title": "y"}, sent) == sent
 
 
 def test_a_contacts_run_is_told_the_chat_is_private():

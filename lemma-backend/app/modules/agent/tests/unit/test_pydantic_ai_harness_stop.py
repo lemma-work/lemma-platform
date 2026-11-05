@@ -262,7 +262,7 @@ class TestPausingToolsBesideFinalAnswer:
         ]
 
         assert captured["end_strategy"] == "graceful"
-        assert [event.type for event in events] == [AgentEventType.USAGE]
+        assert events == []
 
 
 @pytest.mark.asyncio
@@ -350,6 +350,33 @@ class TestAStopReachesABusyDriver:
         )
 
         assert result == ("event", "payload")
+
+    async def test_an_event_queued_during_the_stop_check_is_returned_not_dropped(
+        self,
+    ) -> None:
+        """The stop check suspends on a database read. An event the driver
+        queues during that read is already taken off the queue by the waiting
+        getter, so answering with the stop would lose it -- and a lost tool
+        return is later closed as "stopped before it returned" for a tool that
+        actually ran."""
+        import asyncio as _asyncio
+
+        queue: _asyncio.Queue = _asyncio.Queue()
+
+        async def stop_requested() -> bool:
+            await queue.put(("event", "tool_return"))
+            # Let the pending getter take it before the check answers.
+            for _ in range(3):
+                await _asyncio.sleep(0)
+            return True
+
+        result = await _asyncio.wait_for(
+            pydantic_ai_driver.next_event_or_stop(queue, stop_requested),
+            timeout=5,
+        )
+
+        assert result == ("event", "tool_return")
+        assert queue.empty()
 
     async def test_it_waits_for_the_driver_when_no_stop_is_asked_for(self) -> None:
         import asyncio as _asyncio

@@ -157,30 +157,51 @@ def test_normalize_surface_payload_channels_identity_telegram_and_status():
     }
 
 
-def test_normalize_surface_payload_carries_connector_identity():
-    surface = {
-        "platform": "slack",
-        "account_id": "acct-1",
-        "connector_id": "slack",
-        "connector_kind": "composio",
-    }
-    payload = _normalize_surface_payload(surface)
-    assert payload["connector_id"] == "slack"
-    assert payload["connector_kind"] == "composio"
-
-
-def test_normalize_surface_payload_reads_the_pre_rename_spelling():
-    """A surface exported before `provider` became `connector_kind`."""
+def test_normalize_surface_payload_carries_the_whatsapp_reengage_template():
     payload = _normalize_surface_payload(
-        {"platform": "slack", "connector_id": "slack", "provider": "COMPOSIO"}
+        {
+            "platform": "whatsapp",
+            "config": {
+                "whatsapp": {
+                    "reengage_template": "lemma_reengage",
+                    "language": "pt_BR",
+                    "other": 1,
+                }
+            },
+        }
     )
-    assert payload["connector_kind"] == "COMPOSIO"
+    assert payload["config"] == {
+        "whatsapp": {"reengage_template": "lemma_reengage", "language": "pt_BR"}
+    }
 
 
-def test_normalize_surface_payload_omits_connector_identity_when_absent():
-    payload = _normalize_surface_payload({"platform": "slack"})
-    assert "connector_id" not in payload
-    assert "connector_kind" not in payload
+def test_normalize_surface_payload_leaves_out_an_unset_whatsapp_template():
+    """A surface with no template exports no whatsapp block, not the default
+    language on its own."""
+    payload = _normalize_surface_payload(
+        {
+            "platform": "whatsapp",
+            "config": {"whatsapp": {"reengage_template": None, "language": "en_US"}},
+        }
+    )
+    assert "config" not in payload
+
+
+def test_a_surface_carries_its_pod_connector_and_never_an_account():
+    payload = _normalize_surface_payload(
+        {
+            "platform": "slack",
+            "pod_connector": "slack-shared",
+            "account_id": "acct-1",
+        }
+    )
+    assert payload["pod_connector"] == "slack-shared"
+    assert "account_id" not in payload
+
+
+def test_a_system_surface_names_no_connector():
+    payload = _normalize_surface_payload({"platform": "telegram"})
+    assert "pod_connector" not in payload
 
 
 def test_surface_platform_from_payload_falls_back_to_resource_name():
@@ -345,3 +366,68 @@ def test_normalize_schedule_payload_leaves_a_clean_config_alone():
     }
 
     assert _normalize_schedule_payload(schedule)["config"] == {"cron": "0 9 * * *"}
+
+
+def test_a_time_schedule_is_exported_without_the_filter_it_never_asked():
+    from lemma_pod_bundle.normalize import _normalize_schedule_payload
+
+    exported = _normalize_schedule_payload(
+        {
+            "name": "nightly",
+            "schedule_type": "TIME",
+            "config": {"cron": "0 2 * * *"},
+            "filter_instruction": "only weekdays",
+            "filter_output_schema": {"type": "object"},
+        }
+    )
+
+    assert "filter_instruction" not in exported
+    assert "filter_output_schema" not in exported
+
+
+def test_a_webhook_schedule_keeps_its_filter():
+    from lemma_pod_bundle.normalize import _normalize_schedule_payload
+
+    exported = _normalize_schedule_payload(
+        {"name": "inbox", "schedule_type": "WEBHOOK", "filter_instruction": "VIPs"}
+    )
+
+    assert exported["filter_instruction"] == "VIPs"
+
+
+def test_import_drops_a_time_schedule_filter_and_says_so():
+    from lemma_pod_bundle.apply_fields import without_time_schedule_filter
+
+    payload, dropped = without_time_schedule_filter(
+        {"schedule_type": "time", "filter_instruction": "x", "config": {}}
+    )
+    assert dropped is True
+    assert "filter_instruction" not in payload
+
+    unchanged, dropped = without_time_schedule_filter(
+        {"schedule_type": "TIME", "filter_instruction": "", "config": {}}
+    )
+    assert dropped is False, "an empty filter is nothing to warn about"
+    assert "filter_instruction" not in unchanged
+
+
+def test_a_one_time_schedule_is_past_only_when_its_moment_has_gone() -> None:
+    from datetime import datetime, timezone
+
+    from lemma_pod_bundle.apply_fields import is_past_one_time_schedule
+
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    def once(at: str, **extra: str) -> dict:
+        return {"schedule_type": "TIME", "config": {"scheduled_at": at, **extra}}
+
+    assert is_past_one_time_schedule(once("2026-06-01T11:00:00Z"), now=now)
+    assert not is_past_one_time_schedule(once("2026-06-01T13:00:00Z"), now=now)
+    # A bare time is read in the schedule's zone: 13:00 in Kolkata is 07:30 UTC.
+    assert is_past_one_time_schedule(
+        once("2026-06-01T13:00:00", timezone="Asia/Kolkata"), now=now
+    )
+    cron = {"schedule_type": "TIME", "config": {"cron": "0 * * * *"}}
+    assert not is_past_one_time_schedule(cron, now=now)
+    trigger = {"schedule_type": "DATASTORE", "config": {"scheduled_at": "2020-01-01"}}
+    assert not is_past_one_time_schedule(trigger, now=now)

@@ -25,8 +25,6 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
@@ -62,9 +60,6 @@ from app.modules.function.application.function_schema_dispatcher import (
 )
 from app.modules.function.application.function_runtime_http_client import (
     FunctionRuntimeHttpClientPool,
-)
-from app.modules.function.infrastructure.function_run_queue import (
-    StreaqFunctionRunQueue,
 )
 from app.modules.function.application.function_runtime_route_resolver import (
     endpoint_reuse_seconds,
@@ -161,12 +156,10 @@ def build_function_service(uow) -> FunctionService:
     """Construct a bound FunctionService (single wiring source). Used by read
     endpoints and as the per-phase collaborator the use case builds inside each
     short UoW."""
-    message_bus = get_message_bus()
     return FunctionService(
-        function_repository=FunctionRepository(uow, message_bus=message_bus),
+        function_repository=FunctionRepository(uow),
         run_repository=FunctionRunRepository(
             uow,
-            message_bus=message_bus,
         ),
         storage_factory=get_function_storage_factory(),
         icon_service=create_icon_service(),
@@ -215,6 +208,7 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
         runtime_http_client_factory=_function_runtime_http_clients.get,
         organization_resolver=resolve_function_organization_id,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+        max_running_per_pod=function_settings.function_runtime_max_concurrent_runs_per_pod,
     )
 
 
@@ -238,7 +232,6 @@ def build_function_use_cases(uow_factory: UnitOfWorkFactory) -> FunctionUseCases
         build_function_service,
         build_function_definition_compiler(build_function_schema_dispatcher()),
         dispatcher,
-        StreaqFunctionRunQueue(get_streaq_job_queue()),
     )
 
 

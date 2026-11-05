@@ -20,8 +20,10 @@ which `LOG_LEVEL=INFO` drops. Hence three outcomes rather than a bool.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -52,6 +54,16 @@ class ResumeOutcome(StrEnum):
     #: turn: doing so auto-denies the very approval the person just granted.
     #: The pause stays, so saying so and letting them retry is recoverable.
     FAILED = "FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class Resumed:
+    """A typed reply's outcome, and the pause it answered when it did one."""
+
+    outcome: ResumeOutcome
+    #: The tool call whose pause the reply resolved -- so the card asking it
+    #: can lose its buttons. Set only for ``CONSUMED``.
+    answered: str | None = None
 
 
 async def _is_an_answer(
@@ -108,6 +120,17 @@ async def maybe_resume_pending_interaction(
     *,
     uow,
 ) -> ResumeOutcome:
+    """What became of the reply; see `resume_pending_interaction`."""
+    resumed = await resume_pending_interaction(context, message_text, uow=uow)
+    return resumed.outcome
+
+
+async def resume_pending_interaction(
+    context: SurfaceChatContext,
+    message_text: str,
+    *,
+    uow,
+) -> Resumed:
     """Resume a paused ask_user or request_approval from a typed surface reply.
 
     ``_is_an_answer`` decides first whether this message is answering the pause
@@ -130,10 +153,10 @@ async def maybe_resume_pending_interaction(
     falling through would deny an approval the person granted.
     """
     if context.conversation_id is None:
-        return ResumeOutcome.NOT_A_DECISION
+        return Resumed(ResumeOutcome.NOT_A_DECISION)
     text = (message_text or "").strip()
     if not text:
-        return ResumeOutcome.NOT_A_DECISION
+        return Resumed(ResumeOutcome.NOT_A_DECISION)
     # Set the moment the decision is settled and the only thing left is the
     # write. One handler rather than two, so the module's broad-catch count does
     # not grow, and so there is exactly one place that decides which it was.
@@ -143,14 +166,14 @@ async def maybe_resume_pending_interaction(
             uow, context.conversation_id
         )
         if pending is None:
-            return ResumeOutcome.NOT_A_DECISION
+            return Resumed(ResumeOutcome.NOT_A_DECISION)
         if not await _is_an_answer(context, uow=uow, pending=pending, text=text):
             # A new message, not an answer. Falling through is the whole fix:
             # starting a turn supersedes the unanswered pause, writes the tool
             # return that tells the agent it was never answered (an approval
             # always as a denial, never an approval), and runs what the person
             # actually asked for.
-            return ResumeOutcome.NOT_A_DECISION
+            return Resumed(ResumeOutcome.NOT_A_DECISION)
 
         settled = interpret_reply_to_pending(pending, text)
         if settled is None:
@@ -160,7 +183,7 @@ async def maybe_resume_pending_interaction(
             # explicit denial the agent can see, and the person's actual words
             # arrive alongside it. Consuming this as a decision is how both the
             # words and the question used to be lost.
-            return ResumeOutcome.NOT_A_DECISION
+            return Resumed(ResumeOutcome.NOT_A_DECISION)
 
         recording = True
         try:
@@ -179,13 +202,18 @@ async def maybe_resume_pending_interaction(
             # (`interaction_sender_matches`). Somebody else in a shared thread
             # typing "approve" is just saying something, and nothing was
             # recorded: it goes on as an ordinary message.
-            return ResumeOutcome.NOT_A_DECISION
+            return Resumed(ResumeOutcome.NOT_A_DECISION)
         # The conversation was deleted between the lookup and the write. Nothing
         # was recorded and there is no pause left to deny, so the caller may
         # carry on -- which is what it did for this case before, when the
         # conversation was loaded a few lines earlier and found missing.
-        return ResumeOutcome.CONSUMED if recorded else ResumeOutcome.NOT_A_DECISION
-    except Exception:
+        return (
+            Resumed(ResumeOutcome.CONSUMED, answered=pending.tool_call_id)
+            if recorded is not None
+            else Resumed(ResumeOutcome.NOT_A_DECISION)
+        )
+    except Exception as exc:
+        raise_if_database_unavailable(exc)
         if recording:
             # The person decided and we could not write it down. Never fall
             # through: the turn that would start supersedes this pause with an
@@ -195,10 +223,10 @@ async def maybe_resume_pending_interaction(
                 conversation_id=context.conversation_id,
                 exc_info=True,
             )
-            return ResumeOutcome.FAILED
+            return Resumed(ResumeOutcome.FAILED)
         logger.warning(
             "agent_surfaces.ingress_service.typed_reply_lookup_failed.degraded",
             conversation_id=context.conversation_id,
             exc_info=True,
         )
-        return ResumeOutcome.NOT_A_DECISION
+        return Resumed(ResumeOutcome.NOT_A_DECISION)

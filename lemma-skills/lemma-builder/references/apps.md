@@ -22,8 +22,9 @@ what the pod model allows them to see — nothing special, nothing extra.
   (personal) tree, the same auto-indexed documents, the same scoped search, and
   the same derived `…/document.md` / `…/pages/*.jpg` artifacts — render a PDF page
   as an `<img>`, search a folder, show converted markdown.
-- **Connectors.** `client.connectors.operations.execute(...)` runs an operation on
-  the user's connected account (delegated) — the app never holds credentials.
+- **Connectors.** `client.connectors.pod.execute(slug, operation, payload)` runs an
+  operation through one of the pod's connectors, as the account it resolves to
+  for the signed-in person — the app never holds credentials.
 - **Runtime context.** The host injects `window.__LEMMA_CONFIG__` (`podId`,
   `apiUrl`, `authUrl`) at serve time, so the same app runs unchanged against
   local / staging / cloud. Auth is one bearer (`localStorage["lemma_token"]`) or a
@@ -338,6 +339,12 @@ adopt any one design system.
   In React use `useConversationMessages().finalOutputText`; never match first/last.
   (See `app-recipes/agent-chat.md`.)
 - `public_slug` is globally unique — conflicts auto-suffix on import.
+- **New apps are private to the pod** (`visibility: "POD"`): the app host serves
+  one to whoever may view it, after they sign in. Opening it to anyone with the
+  link is a deliberate step — `"visibility": "PUBLIC"` in
+  `apps/<name>/<name>.json` (or `lemma apps update <app> -d '{"visibility":
+  "PUBLIC"}'`, or the share dialog). An app's data calls are authorized on their
+  own either way.
 
 ## See also
 

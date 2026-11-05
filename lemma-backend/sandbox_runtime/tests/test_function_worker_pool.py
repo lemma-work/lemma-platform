@@ -460,14 +460,10 @@ async def test_idle_workers_are_reclaimed_across_revision_pools(
 
 
 @pytest.mark.asyncio
-async def test_active_workers_are_never_reclaimed(tmp_path: Path) -> None:
+def _single_worker_invoker(tmp_path: Path, registry: RevisionWorkerRegistry):
     artifact, manifest = _artifact(tmp_path)
-    registry = RevisionWorkerRegistry(max_workers=1, max_cached_revisions=4)
-    first_function = uuid4()
-    second_function = uuid4()
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
 
-    async def invoke(function_id, *, hold_ms: int = 0):
+    async def invoke(function_id, *, hold_ms: int = 0, deadline: datetime):
         return await registry.execute(
             function_id=function_id,
             revision_hash=f"sha256:{str(function_id).replace('-', '') * 2}",
@@ -483,24 +479,85 @@ async def test_active_workers_are_never_reclaimed(tmp_path: Path) -> None:
             deadline_at=deadline,
         )
 
-    active = asyncio.create_task(invoke(first_function, hold_ms=500))
-    try:
-        for _ in range(100):
-            async with registry._lock:
-                if registry._active:
-                    break
-            await asyncio.sleep(0.01)
-        else:
-            raise AssertionError("first worker never became active")
+    return invoke
 
-        with pytest.raises(RuntimeOverloaded):
-            await invoke(second_function)
-        await active
+
+async def _until_a_worker_is_active(registry: RevisionWorkerRegistry) -> None:
+    for _ in range(500):
+        async with registry._lock:
+            if registry._active:
+                return
+        await asyncio.sleep(0.01)
+    raise AssertionError("first worker never became active")
+
+
+@pytest.mark.asyncio
+async def test_full_budget_waits_for_the_active_worker_then_runs(
+    tmp_path: Path,
+) -> None:
+    registry = RevisionWorkerRegistry(max_workers=1, max_cached_revisions=4)
+    invoke = _single_worker_invoker(tmp_path, registry)
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
+
+    active = asyncio.create_task(invoke(uuid4(), hold_ms=500, deadline=deadline))
+    try:
+        await _until_a_worker_is_active(registry)
+        # The only slot is busy and nothing is idle to reclaim. This used to
+        # fail on the spot; it now queues behind the active run.
+        waited = await invoke(uuid4(), deadline=deadline)
+        first = await active
     finally:
         if not active.done():
             active.cancel()
             await asyncio.gather(active, return_exceptions=True)
         await registry.close()
+
+    # The active worker was never taken away mid-run.
+    assert first.ok and first.output_data == {"value": 1, "counter": 1}
+    assert waited.ok and waited.output_data == {"value": 1, "counter": 1}
+
+
+@pytest.mark.asyncio
+async def test_full_budget_fails_as_never_started_once_the_deadline_passes(
+    tmp_path: Path,
+) -> None:
+    registry = RevisionWorkerRegistry(max_workers=1, max_cached_revisions=4)
+    invoke = _single_worker_invoker(tmp_path, registry)
+    long_deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
+
+    active = asyncio.create_task(invoke(uuid4(), hold_ms=3_000, deadline=long_deadline))
+    try:
+        await _until_a_worker_is_active(registry)
+        short_deadline = datetime.now(timezone.utc) + timedelta(milliseconds=300)
+        with pytest.raises(RuntimeOverloaded, match="never started") as raised:
+            await invoke(uuid4(), deadline=short_deadline)
+        # Waited for its deadline rather than failing on first contact.
+        assert datetime.now(timezone.utc) >= short_deadline
+    finally:
+        active.cancel()
+        await asyncio.gather(active, return_exceptions=True)
+        await registry.close()
+
+    assert isinstance(raised.value, TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_budget_wait_wakes_on_a_release_that_raced_the_failed_reserve() -> None:
+    budget = WorkerBudget(1)
+    await budget.reserve()
+    observed = budget.generation
+    # Freed between the caller's failed attempt and its wait: the snapshot
+    # makes the wait return at once instead of sleeping to the deadline.
+    await budget.release()
+
+    await asyncio.wait_for(
+        budget.wait_for_capacity(
+            since=observed,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        ),
+        timeout=1,
+    )
+    await budget.reserve()
 
 
 @pytest.mark.asyncio

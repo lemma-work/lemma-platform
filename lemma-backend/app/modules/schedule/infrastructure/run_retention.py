@@ -22,7 +22,7 @@ can cover. At ninety days it does: a schedule failing often enough to trip has
 already tripped long before its failures age out, and failures from three months
 ago should not count toward today's streak in any case.
 
-The drain shape is taken from ``core.infrastructure.events.retention``, including
+The drain shape is taken from ``core.infrastructure.db.retention``, including
 its lesson — deleting one batch per run lets a table that grows faster than the
 batch outrun its own pruner, which is how the outbox once reached several
 hundred thousand rows.
@@ -36,7 +36,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.infrastructure.events.retention import delete_batch
+from app.core.infrastructure.db.retention import delete_batch
 from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.schedule import ScheduleRunStatus
 from app.modules.schedule.infrastructure.models.run import ScheduleRun

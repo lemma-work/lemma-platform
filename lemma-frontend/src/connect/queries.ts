@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 import { live } from "@/usage/queries";
 import type { CatalogEntry, Install } from "./install";
-import { canManage } from "@/org/membership";
+import { source } from "@/data";
+import { INSTALLATION_MANAGE } from "@/data/org-actions";
 
 /** Reading and writing installs and accounts.
  *
@@ -32,31 +33,23 @@ export function useConnector(connectorId: string | null) {
 
 /** Whether this person may create or change installs here.
  *
- *  Connecting an account needs only membership; making an install needs an
- *  owner or an editor. The backend answers a member who tries with a 404 about
- *  "no connectors in organization <uuid>" — true to its rule of not saying who
- *  is in what, and useless on a button. So the page asks first.
- *
- *  Found the way the People panel finds it, from the same cached reads: the
- *  members list is the only thing that says what I am here. `null` when that
- *  cannot be told — nothing is withheld on a guess, and the backend still
- *  refuses what it must. */
+ *  Connecting an account needs only membership; making, changing or removing
+ *  an install needs `org.installation.manage`. The backend answers a member
+ *  who tries with a 404 about "no connectors in organization <uuid>" — true to
+ *  its rule of not saying who is in what, and useless on a button. So the page
+ *  asks first, by permission rather than by role name: the server's own list
+ *  of what I hold here (`source.orgActions`), not a members list that stops
+ *  at a hundred. `null` while that cannot be told — nothing
+ *  is withheld on a guess, and the backend still refuses what it must. */
 export function useMayInstall(orgId: string | null): boolean | null {
-    const me = useQuery({
-        queryKey: ["current-user"],
-        queryFn: () => lemma().users.current(),
-        enabled: live(),
+    const actions = useQuery({
+        queryKey: ["org-actions", orgId ?? ""],
+        queryFn: () => source.orgActions(orgId!),
+        enabled: Boolean(orgId),
         staleTime: 5 * 60_000,
     });
-    const members = useQuery({
-        queryKey: ["org-members", orgId ?? ""],
-        queryFn: () => lemma().organizations.members.list(orgId!, { limit: 100 }),
-        enabled: live() && Boolean(orgId),
-    });
-    const listed = members.data as { items?: { user_id?: string; role?: string }[] } | undefined;
-    const mine = listed?.items?.find((member) => member.user_id === me.data?.id);
-    if (!mine) return null;
-    return canManage(mine.role);
+    if (!actions.isSuccess) return null;
+    return actions.data.includes(INSTALLATION_MANAGE);
 }
 
 /** Every install this organization has, across every connector. */

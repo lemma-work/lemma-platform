@@ -13,6 +13,7 @@ import asyncio
 import pytest
 
 from app.modules.workspace.providers.e2b_connections import SandboxConnections
+from sandbox_runtime.errors import SandboxUnavailable
 
 
 class _Sandbox:
@@ -120,6 +121,31 @@ async def test_expired_entries_do_not_accumulate() -> None:
     assert pool._opening == {}, "locks were kept for sandboxes nobody is using"
     assert pool._waiting == {}
     assert len(pool._epoch) <= 1
+
+
+async def test_a_caller_behind_a_hung_connect_gives_up_as_unavailable() -> None:
+    """The connect it queues behind is bounded only by the SDK's timeout; the
+    waiter is bounded by its own, and says "retry" rather than hanging."""
+    pool = SandboxConnections(acquire_timeout_seconds=0.05)
+    release = asyncio.Event()
+
+    async def hung_connect() -> object:
+        await release.wait()
+        return _Sandbox("late")
+
+    async def unused_connect() -> object:
+        raise AssertionError("a waiter that gave up must not connect")
+
+    first = asyncio.create_task(pool.get("sbx", hung_connect))
+    await asyncio.sleep(0)
+    with pytest.raises(SandboxUnavailable, match="did not finish"):
+        await pool.get("sbx", unused_connect)
+
+    release.set()
+    assert (await first).tag == "late"
+    # The waiter that gave up left nothing behind.
+    assert pool._waiting == {}
+    assert pool._opening == {}
 
 
 @pytest.mark.parametrize("ended", ["forget", "expiry"])

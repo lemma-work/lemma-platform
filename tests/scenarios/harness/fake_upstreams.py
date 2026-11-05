@@ -27,7 +27,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
@@ -427,6 +427,12 @@ def _spec_for(base_url: str) -> JSON:
     }
 
 
+#: How long the fake provider's `/slow` operation takes. Past Lemma's 45s
+#: ceiling for an `http` connector, with room for the ceiling to be measured
+#: from a little later than the request arrives.
+SLOW_PROVIDER_SECONDS = 55
+
+
 def start_fake_provider() -> FakeProvider:
     received: list[ReceivedCall] = []
     widgets: list[JSON] = []
@@ -491,9 +497,11 @@ def start_fake_provider() -> FakeProvider:
                 self._reply(500, {"error": "the provider is having a bad day"})
                 return
             if path == "/slow":
-                # Longer than any sensible outbound timeout, so the scenario is
-                # about Lemma giving up rather than about this server.
-                time.sleep(30)
+                # Longer than Lemma's ceiling for an `http` connector (45s), so
+                # the scenario is about Lemma giving up rather than about this
+                # server. It was 30s, under the ceiling: Lemma waited it out,
+                # got a 200, and the scenario called that "giving up".
+                time.sleep(SLOW_PROVIDER_SECONDS)
                 self._reply(200, {"widgets": []})
                 return
             self._reply(200, {"widgets": widgets})
@@ -504,7 +512,11 @@ def start_fake_provider() -> FakeProvider:
             widgets.append(widget)
             self._reply(201, widget)
 
-    server = HTTPServer(("127.0.0.1", 0), Handler)
+    # Threaded, because `/slow` holds its handler for longer than a minute and
+    # a single-threaded server would make every other scenario's provider call
+    # wait behind it.
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]

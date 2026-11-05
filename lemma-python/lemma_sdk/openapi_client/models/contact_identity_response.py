@@ -10,6 +10,7 @@ from dateutil.parser import isoparse
 
 from ..models.identity_kind import IdentityKind
 from ..models.identity_strength import IdentityStrength
+from ..types import UNSET, Unset
 
 T = TypeVar("T", bound="ContactIdentityResponse")
 
@@ -29,12 +30,15 @@ class ContactIdentityResponse:
             it -- so it never makes a message count as that contact on its own.
         value (str):
         verified_at (datetime.datetime):
+        opted_out (bool | Unset): They asked the pod to stop writing to this handle (STOP, an unsubscribe link, a bounce
+            or a complaint): nothing is sent to it until they write from it again. Default: False.
     """
 
     kind: IdentityKind
     strength: IdentityStrength
     value: str
     verified_at: datetime.datetime
+    opted_out: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,6 +50,8 @@ class ContactIdentityResponse:
 
         verified_at = self.verified_at.isoformat()
 
+        opted_out = self.opted_out
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -56,6 +62,8 @@ class ContactIdentityResponse:
                 "verified_at": verified_at,
             }
         )
+        if opted_out is not UNSET:
+            field_dict["opted_out"] = opted_out
 
         return field_dict
 
@@ -70,11 +78,14 @@ class ContactIdentityResponse:
 
         verified_at = isoparse(d.pop("verified_at"))
 
+        opted_out = d.pop("opted_out", UNSET)
+
         contact_identity_response = cls(
             kind=kind,
             strength=strength,
             value=value,
             verified_at=verified_at,
+            opted_out=opted_out,
         )
 
         contact_identity_response.additional_properties = d

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import get_secret_cipher
 from app.core.domain.uow import IUnitOfWork
+from app.core.infrastructure.db.integrity import violated_constraint
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
@@ -51,33 +52,6 @@ _MAX_POOL_PAGE = 500
 #: Named here because the claim is a whole surface write, and a surface write can
 #: violate several other things.
 _NUMBER_TAKEN_CONSTRAINT = "uq_agent_org_whatsapp_number"
-
-
-def _violated_constraint(error: IntegrityError) -> str | None:
-    """Which constraint the database refused on, if it said.
-
-    Three places to look, because the driver stack moves it. SQLAlchemy's
-    asyncpg dialect does not re-raise asyncpg's own `UniqueViolationError`: it
-    translates it into a DBAPI-shaped `IntegrityError` carrying only `sqlstate`,
-    and chains the original underneath. So `error.orig` is the translation and
-    `error.orig.__cause__` is the exception that actually knows the name.
-    `.diag` is psycopg's spelling, checked because the migration and test
-    tooling reach Postgres through it.
-
-    `None` means the database did not say. That is treated as "not the
-    constraint we tolerate", which is the safe direction: a mysterious integrity
-    failure reaches the caller instead of being retried twenty-five times and
-    reported as an empty pool.
-    """
-    original = error.orig
-    for candidate in (original, getattr(original, "__cause__", None)):
-        named = getattr(candidate, "constraint_name", None)
-        if isinstance(named, str) and named:
-            return named
-        named = getattr(getattr(candidate, "diag", None), "constraint_name", None)
-        if isinstance(named, str) and named:
-            return named
-    return None
 
 
 class WhatsAppNumberRepository:
@@ -216,7 +190,7 @@ class WhatsAppNumberRepository:
                 async with self.session.begin_nested():
                     await claim(number)
             except IntegrityError as error:
-                if _violated_constraint(error) != _NUMBER_TAKEN_CONSTRAINT:
+                if violated_constraint(error) != _NUMBER_TAKEN_CONSTRAINT:
                     # Not a number being taken. The claim is a whole surface
                     # write, and it can violate `uq_agent_surface_agent_type`,
                     # the composite organisation foreign key, or the pod-unique

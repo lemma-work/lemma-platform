@@ -34,6 +34,18 @@ export class OrganizationsNamespace {
     return this.client.request(() => OrganizationsService.orgNavigation());
   }
 
+  /**
+   * The organization-level permission ids you hold in it, such as
+   * `org.installation.manage`. Ask for a permission, not a role: the server
+   * decides who holds what.
+   */
+  permissionsMe(orgId: string) {
+    return this.http.request<{ organization_id: string; actions: string[] }>(
+      "GET",
+      `/organizations/${encodeURIComponent(orgId)}/permissions/me`,
+    );
+  }
+
   /** One organization's pods, with their apps, agents and your roles. */
   home(orgId: string) {
     return this.client.request(() => OrganizationsService.orgHome(orgId));

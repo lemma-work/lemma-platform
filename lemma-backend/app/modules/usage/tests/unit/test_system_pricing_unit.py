@@ -381,6 +381,27 @@ async def test_record_persists_without_cost_when_pricing_is_missing():
     assert record.metadata.get("pricing_missing") is True
 
 
+async def test_a_record_with_no_cost_always_says_its_price_is_missing():
+    # A run on a profile Lemma does not price (a member's own provider, an
+    # organization's key, an Agent Host harness) is recorded with no cost. It
+    # must still say the price is missing: a bare null sums as zero in every
+    # report, and the ledger reads as if the run were free.
+    repo = _RecordingUsageRepository()
+    service = UsageService(usage_repository=repo, usage_limit_port=None)
+
+    record = await service.record_agent_run_usage(
+        ctx=_ctx(),
+        runtime_profile=_runtime_profile("glm-5.2", scope="ORGANIZATION"),
+        usage_data=_usage("glm-5.2", input_tokens=1000, output_tokens=500),
+        status="COMPLETED",
+        reservation=None,
+    )
+
+    assert record is not None
+    assert record.cost_usd is None
+    assert record.metadata.get("pricing_missing") is True
+
+
 async def test_record_priced_model_has_no_fallback_flag():
     repo = _RecordingUsageRepository()
     service = UsageService(usage_repository=repo, usage_limit_port=None)

@@ -9,12 +9,8 @@ import pytest
 import typer
 
 from lemma_cli.cli_core.state import CliState
-from lemma_cli.cli_core.watch import (
-    _changes_ws_url,
-    _compact_payload,
-    _handle_message,
-    _short_time,
-)
+from lemma_cli.cli_core.watch import _compact_payload, _handle_message
+from lemma_sdk.live import LiveSession, live_ws_url
 
 
 def _state(output: str = "json") -> CliState:
@@ -30,57 +26,99 @@ def _state(output: str = "json") -> CliState:
     )
 
 
-def test_changes_ws_url_scheme_and_query():
+def test_live_url_scheme():
+    assert live_ws_url("https://api.x.dev", "POD") == "wss://api.x.dev/pods/POD/live"
     assert (
-        _changes_ws_url("https://api.x.dev", "POD", "notes", "5-0")
-        == "wss://api.x.dev/pods/POD/datastore/changes?table=notes&since=5-0"
-    )
-    assert (
-        _changes_ws_url("http://localhost:8711/", "POD", None, None)
-        == "ws://localhost:8711/pods/POD/datastore/changes"
+        live_ws_url("http://localhost:8711/", "POD")
+        == "ws://localhost:8711/pods/POD/live"
     )
     # Bare host (no scheme) assumes TLS, like a browser.
-    assert (
-        _changes_ws_url("//host", "POD", None, "9-0")
-        == "wss://host/pods/POD/datastore/changes?since=9-0"
-    )
+    assert live_ws_url("//host", "POD") == "wss://host/pods/POD/live"
 
 
-def test_ready_frame_advances_cursor_from_since():
-    state = _state()
-    cursor = _handle_message(state, json.dumps({"type": "ready", "since": "7-0"}), None)
-    assert cursor == "7-0"
+def test_ready_then_subscribe_resumes_from_since():
+    session = LiveSession()
+    session.add(table="notes", since="c.7")
+    assert _handle_message(_state(), session, json.dumps({"type": "ready"})) is True
+    [frame] = [json.loads(f) for f in session.subscribe_frames()]
+    assert frame == {
+        "op": "subscribe",
+        "id": "s1",
+        "topic": "records",
+        "table": "notes",
+        "since": "c.7",
+    }
 
 
-def test_record_frame_advances_cursor_from_stream_id_and_prints_ndjson(capsys):
+def test_changes_advance_the_cursor_and_print_ndjson_in_the_old_shape(capsys):
     state = _state(output="json")
-    frame = {
+    session = LiveSession()
+    session.add(table="notes")
+    _handle_message(
+        state,
+        session,
+        json.dumps(
+            {
+                "type": "changes",
+                "id": "s1",
+                "cursor": "c.12",
+                "changes": [
+                    {
+                        "op": "insert",
+                        "table": "notes",
+                        "record_id": "abc",
+                        "row": {"body": "hi"},
+                    }
+                ],
+            }
+        ),
+    )
+    assert session.cursor("s1") == "c.12"
+    out = capsys.readouterr().out.strip()
+    assert json.loads(out) == {
         "type": "datastore.record.insert",
         "table_name": "notes",
         "record_id": "abc",
         "operation": "insert",
         "payload": {"body": "hi"},
-        "stream_id": "12-0",
+        "cursor": "c.12",
+        "stream_id": "c.12",
     }
-    cursor = _handle_message(state, json.dumps(frame), "7-0")
-    assert cursor == "12-0"
-    out = capsys.readouterr().out.strip()
-    assert json.loads(out) == frame
+
+
+def test_resync_is_reported_and_moves_the_cursor(capsys):
+    session = LiveSession()
+    session.add(table="notes", since="c.1")
+    _handle_message(
+        _state(output="json"),
+        session,
+        json.dumps(
+            {"type": "resync", "id": "s1", "cursor": "c.40", "reason": "too_many"}
+        ),
+    )
+    assert session.cursor("s1") == "c.40"
+    assert json.loads(capsys.readouterr().out) == {
+        "type": "resync",
+        "cursor": "c.40",
+        "reason": "too_many",
+    }
 
 
 def test_invalid_or_unknown_messages_keep_cursor():
     state = _state()
-    assert _handle_message(state, "not json", "3-0") == "3-0"
-    assert _handle_message(state, json.dumps([1, 2]), "3-0") == "3-0"
+    session = LiveSession()
+    session.add(since="c.3")
+    assert _handle_message(state, session, "not json") is False
+    assert _handle_message(state, session, json.dumps([1, 2])) is False
+    assert _handle_message(state, session, None) is False
+    assert session.cursor("s1") == "c.3"
 
 
-def test_compact_payload_and_short_time():
+def test_compact_payload():
     assert _compact_payload({"body": "hi", "n": 3}, full=False) == "body=hi, n=3"
     assert _compact_payload({}, full=False) == ""
     long = _compact_payload({"k": "x" * 200}, full=False)
     assert long.endswith("…") and len(long) <= 120
-    assert _short_time("2026-06-21T18:49:01.309492Z") == "18:49:01"
-    assert _short_time(None) == ""
 
 
 # --- reconnect loop -----------------------------------------------------------
@@ -280,3 +318,177 @@ def test_a_forbidden_or_not_found_close_stops_without_retrying(
 
     assert excinfo.value.exit_code != 0
     assert attempts["n"] == 1
+
+
+# --- TLS -----------------------------------------------------------------------
+
+
+def test_a_plain_ws_url_passes_no_ssl_argument() -> None:
+    from lemma_cli.cli_core.watch import _ssl_option
+
+    assert _ssl_option("ws://localhost:8711/x", verify_ssl=True) is None
+    assert _ssl_option("ws://localhost:8711/x", verify_ssl=False) is None
+
+
+def test_a_wss_url_always_gets_a_tls_context() -> None:
+    """``None`` makes websockets refuse a wss:// URI outright, and ``False``
+    would mean no TLS at all rather than TLS without checks."""
+    import ssl
+
+    from lemma_cli.cli_core.watch import _ssl_option
+
+    verified = _ssl_option("wss://api.example.test/x", verify_ssl=True)
+    unverified = _ssl_option("wss://api.example.test/x", verify_ssl=False)
+
+    assert isinstance(verified, ssl.SSLContext)
+    assert verified.verify_mode is ssl.CERT_REQUIRED and verified.check_hostname
+    assert isinstance(unverified, ssl.SSLContext)
+    assert unverified.verify_mode is ssl.CERT_NONE
+    assert not unverified.check_hostname
+
+
+@pytest.fixture
+def self_signed_tls_server(tmp_path):
+    """A server-side TLS context behind a certificate nobody trusts."""
+    import shutil
+    import ssl
+    import subprocess
+
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl is needed to mint the test certificate")
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key), "-out", str(cert), "-days", "1",
+            "-subj", "/CN=localhost",
+            "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+        ],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    return context
+
+
+async def test_watch_connects_to_a_wss_server_with_verification_off(
+    self_signed_tls_server,
+) -> None:
+    """Against a real TLS websocket server on loopback, not a stub."""
+    import ssl
+
+    from websockets.asyncio.client import connect
+    from websockets.asyncio.server import serve
+
+    from lemma_cli.cli_core.watch import _ssl_option
+
+    async def _echo(websocket) -> None:
+        async for message in websocket:
+            await websocket.send(message)
+
+    async with serve(_echo, "127.0.0.1", 0, ssl=self_signed_tls_server) as server:
+        port = server.sockets[0].getsockname()[1]
+        url = f"wss://127.0.0.1:{port}/"
+
+        async with connect(url, ssl=_ssl_option(url, verify_ssl=False)) as ws:
+            await ws.send("ping")
+            assert await ws.recv() == "ping"
+
+        # Verification on is really on: the untrusted certificate is refused.
+        with pytest.raises(ssl.SSLCertVerificationError):
+            async with connect(url, ssl=_ssl_option(url, verify_ssl=True)):
+                pass
+
+
+def test_each_json_line_is_flushed_as_it_is_written(monkeypatch):
+    """QA #7: piped stdout is block-buffered, and a watch never ends on its own.
+
+    Unflushed, the NDJSON lines sat in the buffer, so a pipeline saw nothing
+    until 8 KiB had piled up, and a watch that was stopped lost them all. Each
+    line has to reach the file descriptor when it is printed.
+    """
+    import io
+    import sys
+
+    sink = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(sink, encoding="utf-8"))
+    session = LiveSession()
+    session.add(table="notes")
+
+    _handle_message(
+        _state(output="json"),
+        session,
+        json.dumps(
+            {
+                "type": "changes",
+                "id": "s1",
+                "cursor": "c.1",
+                "changes": [{"op": "insert", "table": "notes", "record_id": "a"}],
+            }
+        ),
+    )
+
+    written = sink.getvalue().decode()
+    assert written.endswith("\n"), f"the line is still in the buffer: {written!r}"
+    assert json.loads(written)["record_id"] == "a"
+
+
+def test_sigterm_stops_the_watch_and_flushes_what_it_printed():
+    """`timeout 60 lemma datastore watch --output json > changes.ndjson`.
+
+    Python dies on SIGTERM without flushing stdout, so the file came out empty.
+    It stops the way Ctrl-C does: cleanly, with whatever was printed written.
+    A subprocess, because the old behaviour this pins is the process dying.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import asyncio, os, signal
+        from lemma_cli.cli_core import watch
+
+        async def run(state, pod_id, table, since):
+            print('{"type": "ready"}')  # buffered: stdout is a pipe
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.sleep(30)
+
+        watch._run = run
+        watch.watch_datastore_changes(None, "POD", None, None)
+        """
+    )
+
+    finished = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=30
+    )
+
+    assert finished.returncode == 0, (finished.returncode, finished.stderr)
+    assert finished.stdout == '{"type": "ready"}\n'
+    assert "Stopped." in finished.stderr
+
+
+def test_a_reader_that_leaves_stops_the_watch_rather_than_reconnecting(monkeypatch):
+    """Flushing per line means `| head -1` breaks the pipe on the next line.
+
+    `BrokenPipeError` is an `OSError`, which the watch loop reads as a dropped
+    socket and reconnects on -- forever, writing to nobody. It has to arrive as
+    something the loop does not catch.
+    """
+    import sys
+
+    from lemma_cli.cli_core import watch as watch_module
+
+    class _ClosedPipe:
+        def write(self, _text):
+            raise BrokenPipeError
+
+        def flush(self):
+            raise BrokenPipeError
+
+    monkeypatch.setattr(sys, "stdout", _ClosedPipe())
+
+    with pytest.raises(watch_module._StdoutClosed) as stopped:
+        watch_module._emit({"type": "ready"})
+    assert not isinstance(stopped.value, OSError)

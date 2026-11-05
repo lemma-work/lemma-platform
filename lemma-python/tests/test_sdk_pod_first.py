@@ -11,9 +11,6 @@ from lemma_sdk.openapi_client.models.datastore_count_response import (
     DatastoreCountResponse,
 )
 from lemma_sdk.openapi_client.models.function_run_response import FunctionRunResponse
-from lemma_sdk.openapi_client.models.operation_execution_response import (
-    OperationExecutionResponse,
-)
 from lemma_sdk.openapi_client.models.record_create_response_record_create import (
     RecordCreateResponseRecordCreate,
 )
@@ -79,12 +76,6 @@ class StubTransport:
                     "target_run_id": "88888888-8888-4888-8888-888888888888",
                     "updated_at": "2026-01-01T00:00:00Z",
                     "user_id": "55555555-5555-4555-8555-555555555555",
-                }
-            )
-        if endpoint.__name__.endswith("connector_operation_execute"):
-            return OperationExecutionResponse.from_dict(
-                {
-                    "result": {"sent": True},
                 }
             )
         return None
@@ -272,37 +263,18 @@ def test_pod_schedules_retry_run_binds_schedule_and_source_run():
     )
 
 
-def test_pod_connectors_execute_uses_bound_org_id():
+def test_pod_schedules_events_lists_the_pods_catalog():
     transport = StubTransport()
-    pod = Pod(
-        "22222222-2222-4222-8222-222222222222",
-        org_id="11111111-1111-4111-8111-111111111111",
-        token="token",
-        base_url="https://api.example.test",
-    )
-    pod._transport = transport
-    pod.connectors._transport = transport
-    pod.connectors.operations._parent._transport = transport
+    pod = _bound_pod(transport)
 
-    result = pod.connectors.execute(
-        "gmail",
-        "GMAIL_SEND_EMAIL",
-        {"to": "anukul@lemma.work", "subject": "Hi"},
-    )
+    pod.schedules.events()
 
-    assert isinstance(result, OperationExecutionResponse)
-    assert result.result == {"sent": True}
+    assert transport.calls[0]["endpoint"] == (
+        "lemma_sdk.openapi_client.api.schedules.schedule_event_list"
+    )
     assert transport.calls[0]["path_args"] == (
-        UUID("11111111-1111-4111-8111-111111111111"),
-        "gmail",
-        "GMAIL_SEND_EMAIL",
+        UUID("22222222-2222-4222-8222-222222222222"),
     )
-    # The pod travels with the call, so a file argument naming `/me/...` has a
-    # pod to resolve in -- an org-level route carries none of its own.
-    assert transport.calls[0]["body"] == {
-        "payload": {"to": "anukul@lemma.work", "subject": "Hi"},
-        "pod_id": "22222222-2222-4222-8222-222222222222",
-    }
 
 
 def test_connectors_triggers_list_uses_org_and_auth_config_path_args():
@@ -412,6 +384,77 @@ def test_pod_surfaces_use_generated_models():
     )
 
 
+def test_pod_surfaces_make_slack_apps_through_generated_models():
+    transport = StubTransport()
+    pod = Pod(
+        "22222222-2222-4222-8222-222222222222",
+        org_id="11111111-1111-4111-8111-111111111111",
+        token="token",
+        base_url="https://api.example.test",
+    )
+    pod.surfaces._transport = transport
+    pod_uuid = (UUID("22222222-2222-4222-8222-222222222222"),)
+
+    pod.surfaces.slack_app_workspaces()
+    pod.surfaces.save_slack_configuration_token({"refresh_token": "xoxe-1-x"})
+    pod.surfaces.create_slack_app({"team_id": "T1"}, idempotency_key="k-1")
+    pod.surfaces.create_slack_app({"team_id": "T1"})
+    pod.surfaces.forget_slack_configuration_token("T1")
+
+    assert [call["endpoint"].rsplit(".", 1)[-1] for call in transport.calls] == [
+        "agent_surface_slack_app_creation_list",
+        "agent_surface_slack_app_creation_save",
+        "agent_surface_slack_app_create",
+        "agent_surface_slack_app_create",
+        "agent_surface_slack_app_creation_forget",
+    ]
+    assert transport.calls[1]["body_model"] == "SlackConfigurationTokenRequest"
+    assert transport.calls[2]["body_model"] == "SlackAppCreateRequest"
+    assert transport.calls[2]["kwargs"] == {"idempotency_key": "k-1"}
+    # No key sends no header, rather than an empty one.
+    assert transport.calls[3]["kwargs"] == {}
+    assert transport.calls[4]["path_args"] == (*pod_uuid, "T1")
+
+
+def test_pod_surfaces_reach_lemmas_own_slack_app_through_generated_models():
+    transport = StubTransport()
+    pod = Pod(
+        "22222222-2222-4222-8222-222222222222",
+        org_id="11111111-1111-4111-8111-111111111111",
+        token="token",
+        base_url="https://api.example.test",
+    )
+    pod.surfaces._transport = transport
+    pod_uuid = (UUID("22222222-2222-4222-8222-222222222222"),)
+
+    pod.surfaces.slack_managed_workspaces()
+    pod.surfaces.bind_slack_manager(
+        {"account_id": "33333333-3333-4333-8333-333333333333"}
+    )
+    pod.surfaces.start_slack_sign_in({"team_id": "T1", "slack_user_id": "U1"})
+    pod.surfaces.slack_install_availability()
+    pod.surfaces.start_slack_install(
+        {"organization_id": "11111111-1111-4111-8111-111111111111"}
+    )
+
+    assert [call["endpoint"].rsplit(".", 1)[-1] for call in transport.calls] == [
+        "agent_surface_slack_manager_list",
+        "agent_surface_slack_manager_bind",
+        "agent_surface_slack_person_sign_in",
+        "agent_surface_slack_install_availability",
+        "agent_surface_slack_install_start",
+    ]
+    assert transport.calls[0]["path_args"] == pod_uuid
+    assert transport.calls[1]["body_model"] == "SlackManagerBindRequest"
+    assert transport.calls[2]["body_model"] == "SlackSignInRequest"
+    # Not the pod's: a person proves who they are in a workspace.
+    assert transport.calls[2]["path_args"] == ()
+    # Nor is "Add to Slack": it names the organization in its body.
+    assert transport.calls[3]["path_args"] == ()
+    assert transport.calls[4]["body_model"] == "SlackInstallRequest"
+    assert transport.calls[4]["path_args"] == ()
+
+
 def test_user_update_profile_uses_generated_model():
     transport = StubTransport()
     lemma = Lemma(
@@ -423,7 +466,7 @@ def test_user_update_profile_uses_generated_model():
     lemma.user._transport = transport
 
     lemma.user.update_profile(
-        {"mobile_number": "+15551234567", "telegram_username": "surfaceuser"}
+        {"mobile_number": "+15551234567", "first_name": "Surface"}
     )
 
     assert transport.calls[0]["endpoint"].endswith("user_profile_upsert")
@@ -431,7 +474,7 @@ def test_user_update_profile_uses_generated_model():
     assert transport.calls[0]["body_model"] == "UserProfileRequest"
     assert transport.calls[0]["body"] == {
         "mobile_number": "+15551234567",
-        "telegram_username": "surfaceuser",
+        "first_name": "Surface",
     }
 
 

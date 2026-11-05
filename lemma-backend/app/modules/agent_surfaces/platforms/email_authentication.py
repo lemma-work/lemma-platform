@@ -20,8 +20,9 @@ untrusted copies and prepend its own, so the *first* occurrence is the one it
 wrote — which is why this reads every occurrence itself rather than going
 through ``header_map``, whose dict is last-wins and would hand an attacker's
 forged copy the final say. Where the deployment names its receiver's
-``authserv-id``, only headers bearing that id are read at all, which is the
-guarantee RFC 8601 actually intends.
+``authserv-id``, only headers bearing that id are considered, and of those only
+the first is read: a sender can write the trusted id too, and the receiver is
+not guaranteed to strip it.
 
 **Why this parses rather than pattern-matches.** The header is written by the
 receiver, but half of what it *contains* is the sender's: the envelope
@@ -54,10 +55,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from tldextract import TLDExtract
+
 __all__ = [
     "EmailAuthenticationVerdict",
     "authentication_results_values",
     "evaluate_email_authentication",
+    "header_values",
 ]
 
 
@@ -81,6 +85,15 @@ _PAIR = re.compile(
 )
 
 _METHODS = frozenset({"dmarc", "dkim", "spf"})
+
+# DMARC's relaxed alignment compares organizational domains, which RFC 7489
+# defines through the public-suffix list. Offline (`suffix_list_urls=()`) and
+# uncached because a check that can reach the network is one that can fail
+# open, and private suffixes included so `a.github.io` and `b.github.io` are
+# two organizations, as they are to a person reading the From line.
+_PUBLIC_SUFFIXES = TLDExtract(
+    suffix_list_urls=(), include_psl_private_domains=True, cache_dir=None
+)
 _DMARC_FAILURES = frozenset({"fail", "reject", "quarantine"})
 
 
@@ -215,17 +228,35 @@ def _domain_of(address: str | None) -> str:
     return domain.strip().strip(">").strip()
 
 
-def _aligned(candidate: str, from_domain: str) -> bool:
-    """Is ``candidate`` the From domain, or a parent of it (relaxed alignment)?
+def _organizational_domain(domain: str) -> str:
+    """The registrable domain ``domain`` sits under, or ``""`` for a bare suffix.
 
-    DMARC's relaxed mode aligns an organizational domain with its subdomains,
-    so mail signed by ``example.com`` aligns with ``news.example.com``. Strict
-    equality alone rejects a great deal of legitimate mail.
+    A domain no rule in the list matches still has one: the list's algorithm
+    then applies its implicit ``*`` rule, so the last label is the suffix and
+    ``mail.client.example`` sits under ``client.example``. tldextract leaves
+    that rule out and answers ``""``, which would make every domain under a TLD
+    the list does not know -- a new gTLD, an intranet's -- align with nothing.
+    """
+    parts = _PUBLIC_SUFFIXES(domain)
+    if parts.suffix:
+        return parts.top_domain_under_public_suffix.lower()
+    labels = [label for label in domain.lower().split(".") if label]
+    return ".".join(labels[-2:]) if len(labels) >= 2 else ""
+
+
+def _aligned(candidate: str, from_domain: str) -> bool:
+    """Do ``candidate`` and the From domain share an organizational domain?
+
+    DMARC's relaxed mode, in both directions: mail signed by ``example.com``
+    aligns with ``news.example.com`` and the other way round. A plain suffix
+    test aligned ``d=com`` (or ``co.uk``, ``github.io``) with every domain
+    under it, which is why the comparison goes through the public-suffix list.
     """
     candidate = candidate.strip().strip(">").lower()
     if not candidate or not from_domain:
         return False
-    return candidate == from_domain or from_domain.endswith(f".{candidate}")
+    organization = _organizational_domain(candidate)
+    return bool(organization) and organization == _organizational_domain(from_domain)
 
 
 def _authserv_id(value: str) -> str:
@@ -248,7 +279,11 @@ def _clause_passes(info: _ResInfo, from_domain: str) -> bool:
     if info.result != "pass":
         return False
     if info.method == "dmarc":
-        return True
+        # The receiver's DMARC pass is for the From domain *it* read. When it
+        # names that domain, it has to be ours: a pass for ``evil.com`` says
+        # nothing about ``ceo@victim.com``.
+        evaluated = info.properties.get("header.from")
+        return evaluated is None or _aligned(evaluated, from_domain)
     if info.method == "dkim":
         return _aligned(info.properties.get("header.d", ""), from_domain)
     envelope = _domain_of(info.properties.get("smtp.mailfrom")) or info.properties.get(
@@ -315,18 +350,19 @@ def _expand(value: Any) -> list[str]:
     return [text]
 
 
-def authentication_results_values(raw_headers: Any) -> list[str]:
-    """Every ``Authentication-Results`` header, in the order it was written.
+def header_values(raw_headers: object, name: str) -> list[str]:
+    """Every occurrence of header ``name``, in the order it was written.
 
     Handles both shapes the providers use — a ``{name: value}`` dict and a
     ``[{name, value}]`` list. The dict is what Resend actually sends, and its
     values are not always strings; see :func:`_expand`.
     """
+    wanted = name.strip().lower()
     if isinstance(raw_headers, dict):
         return [
             item
             for key, value in raw_headers.items()
-            if str(key).strip().lower() == _HEADER
+            if str(key).strip().lower() == wanted
             for item in _expand(value)
         ]
     if isinstance(raw_headers, list):
@@ -334,10 +370,15 @@ def authentication_results_values(raw_headers: Any) -> list[str]:
             item
             for header in raw_headers
             if isinstance(header, dict)
-            and str(header.get("name") or "").strip().lower() == _HEADER
+            and str(header.get("name") or "").strip().lower() == wanted
             for item in _expand(header.get("value"))
         ]
     return []
+
+
+def authentication_results_values(raw_headers: Any) -> list[str]:
+    """Every ``Authentication-Results`` header, in the order it was written."""
+    return header_values(raw_headers, _HEADER)
 
 
 def evaluate_email_authentication(
@@ -371,9 +412,17 @@ def evaluate_email_authentication(
         values = values[:1]
 
     from_domain = _domain_of(from_address)
-    verdicts = [_verdict_of(value, from_domain) for value in values]
-    if EmailAuthenticationVerdict.FAIL in verdicts:
-        return EmailAuthenticationVerdict.FAIL
-    if EmailAuthenticationVerdict.PASS in verdicts:
-        return EmailAuthenticationVerdict.PASS
-    return EmailAuthenticationVerdict.UNKNOWN
+    # The receiver prepends its own header, so the first is the one it wrote.
+    # A later header bearing the same id is the sender's, and RFC 8601 only
+    # asks the receiver to strip those, not that it does: reading every one
+    # let a forged `dmarc=pass` win whenever the real verdict was UNKNOWN.
+    verdict = _verdict_of(values[0], from_domain)
+    if verdict is EmailAuthenticationVerdict.PASS and any(
+        _verdict_of(value, from_domain) is not EmailAuthenticationVerdict.PASS
+        for value in values[1:]
+    ):
+        # Two accounts from one receiver that disagree mean the first may be
+        # the forgery (a receiver that added no header of its own). Neither
+        # can be told apart from the other, which is what UNKNOWN says.
+        return EmailAuthenticationVerdict.UNKNOWN
+    return verdict

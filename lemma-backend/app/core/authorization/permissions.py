@@ -28,6 +28,9 @@ class Permissions:
     ORG_MEMBER_MANAGE: ClassVar[str] = "org.member.manage"
     ORG_INVITATION_MANAGE: ClassVar[str] = "org.invitation.manage"
     ORG_BILLING_MANAGE: ClassVar[str] = "org.billing.manage"
+    #: Create, update, disable, re-enable and delete the organization's
+    #: connector installations, and refresh their operations.
+    ORG_INSTALLATION_MANAGE: ClassVar[str] = "org.installation.manage"
 
     POD_READ: ClassVar[str] = "pod.read"
     POD_CREATE: ClassVar[str] = "pod.create"
@@ -35,6 +38,10 @@ class Permissions:
     POD_DELETE: ClassVar[str] = "pod.delete"
     POD_MEMBER_MANAGE: ClassVar[str] = "pod.member.manage"
     POD_ROLE_MANAGE: ClassVar[str] = "pod.role.manage"
+    #: Declare, change and remove the pod's connectors, choose a SHARED
+    #: connector's account among those already shared, and remove any account
+    #: from the pod. Never share one: that is the owner's alone.
+    POD_CONNECTOR_MANAGE: ClassVar[str] = "pod.connector.manage"
 
     DATASTORE_TABLE_READ: ClassVar[str] = "datastore.table.read"
     DATASTORE_TABLE_CREATE: ClassVar[str] = "datastore.table.create"
@@ -42,10 +49,20 @@ class Permissions:
     DATASTORE_TABLE_DELETE: ClassVar[str] = "datastore.table.delete"
     DATASTORE_RECORD_READ: ClassVar[str] = "datastore.record.read"
     DATASTORE_RECORD_WRITE: ClassVar[str] = "datastore.record.write"
+    #: Delete a table's rows, one or in bulk. Its own permission, not part of
+    #: ``record.write``: whoever could write one row could otherwise empty the
+    #: table, and a workload deleting rows is destructive (audit H14).
+    DATASTORE_RECORD_DELETE: ClassVar[str] = "datastore.record.delete"
 
     FOLDER_READ: ClassVar[str] = "folder.read"
     FOLDER_WRITE: ClassVar[str] = "folder.write"
     FOLDER_DELETE: ClassVar[str] = "folder.delete"
+    #: Make a public link to a file: anyone holding it can open the file, outside
+    #: every grant. Its own permission, not part of ``folder.read``, so a named
+    #: agent or function makes one only where it was granted to (audit M22).
+    #: Every person role holds it; it does not imply ``folder.read``, which
+    #: minting a link also needs.
+    FOLDER_SHARE: ClassVar[str] = "folder.share"
 
     APP_READ: ClassVar[str] = "app.read"
     APP_CREATE: ClassVar[str] = "app.create"
@@ -79,14 +96,23 @@ class Permissions:
     CONVERSATION_READ: ClassVar[str] = "conversation.read"
     CONVERSATION_WRITE: ClassVar[str] = "conversation.write"
 
+    CHANNEL_READ: ClassVar[str] = "channel.read"
+    CHANNEL_WRITE: ClassVar[str] = "channel.write"
+    CHANNEL_MANAGE: ClassVar[str] = "channel.manage"
+
+    CONTACT_READ: ClassVar[str] = "contact.read"
     CONTACT_MESSAGE: ClassVar[str] = "contact.message"
 
+    #: Run operations through a pod connector.
     CONNECTOR_USE: ClassVar[str] = "connector.use"
-    CONNECTOR_MANAGE: ClassVar[str] = "connector.manage"
+    #: Use a pod account: the account half of a SHARED connector's call.
     CONNECTOR_ACCOUNT_USE: ClassVar[str] = "connector_account.use"
-    CONNECTOR_ACCOUNT_MANAGE: ClassVar[str] = "connector_account.manage"
+    #: Change who a pod account serves -- its visibility and the grants on it.
+    #: An owner action only (``OWNER_RESOURCE_ACTIONS``): held by no role and
+    #: grantable to nobody, because only the person whose credential it is may
+    #: put it in front of anyone else.
+    CONNECTOR_ACCOUNT_SHARE: ClassVar[str] = "connector_account.share"
     WEB_LOGIN_USE: ClassVar[str] = "web_login.use"
-    CONNECTOR_AUTH_CONFIG_MANAGE: ClassVar[str] = "connector_auth_config.manage"
 
 
 PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
@@ -121,6 +147,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Manage organization billing",
     ),
     PermissionDefinition(
+        Permissions.ORG_INSTALLATION_MANAGE,
+        PermissionScope.ORG,
+        "installation",
+        "Manage the organization's connector installations",
+    ),
+    PermissionDefinition(
         Permissions.POD_READ, PermissionScope.POD, "pod", "Read pod metadata"
     ),
     PermissionDefinition(
@@ -143,6 +175,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
     ),
     PermissionDefinition(
         Permissions.POD_ROLE_MANAGE, PermissionScope.POD, "role", "Manage pod roles"
+    ),
+    PermissionDefinition(
+        Permissions.POD_CONNECTOR_MANAGE,
+        PermissionScope.POD,
+        "pod",
+        "Declare and change the pod's connectors",
     ),
     PermissionDefinition(
         Permissions.DATASTORE_TABLE_READ,
@@ -181,6 +219,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Write datastore records",
     ),
     PermissionDefinition(
+        Permissions.DATASTORE_RECORD_DELETE,
+        PermissionScope.POD,
+        "datastore_record",
+        "Delete datastore records",
+    ),
+    PermissionDefinition(
         Permissions.FOLDER_READ, PermissionScope.POD, "folder", "Read folders and files"
     ),
     PermissionDefinition(
@@ -194,6 +238,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         PermissionScope.POD,
         "folder",
         "Delete folders and files",
+    ),
+    PermissionDefinition(
+        Permissions.FOLDER_SHARE,
+        PermissionScope.POD,
+        "folder",
+        "Make public links to files",
     ),
     PermissionDefinition(Permissions.APP_READ, PermissionScope.POD, "app", "Read apps"),
     PermissionDefinition(
@@ -284,6 +334,30 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Create and update conversations",
     ),
     PermissionDefinition(
+        Permissions.CHANNEL_READ,
+        PermissionScope.POD,
+        "channel",
+        "Read the pod's channels the member may see",
+    ),
+    PermissionDefinition(
+        Permissions.CHANNEL_WRITE,
+        PermissionScope.POD,
+        "channel",
+        "Write in channels and start groups",
+    ),
+    PermissionDefinition(
+        Permissions.CHANNEL_MANAGE,
+        PermissionScope.POD,
+        "channel",
+        "Rename, archive and delete any group, and change its members",
+    ),
+    PermissionDefinition(
+        Permissions.CONTACT_READ,
+        PermissionScope.POD,
+        "contact",
+        "See the pod's contacts and their chats",
+    ),
+    PermissionDefinition(
         Permissions.CONTACT_MESSAGE,
         PermissionScope.POD,
         "contact",
@@ -293,37 +367,25 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         Permissions.CONNECTOR_USE,
         PermissionScope.POD,
         "connector",
-        "Use pod-enabled connectors",
-    ),
-    PermissionDefinition(
-        Permissions.CONNECTOR_MANAGE,
-        PermissionScope.ORG,
-        "connector",
-        "Enable and configure organization connectors",
+        "Run operations through a pod connector",
     ),
     PermissionDefinition(
         Permissions.CONNECTOR_ACCOUNT_USE,
         PermissionScope.POD,
         "connector_account",
-        "Use connected connector accounts",
+        "Use an account shared with the pod",
     ),
     PermissionDefinition(
-        Permissions.CONNECTOR_ACCOUNT_MANAGE,
+        Permissions.CONNECTOR_ACCOUNT_SHARE,
         PermissionScope.POD,
         "connector_account",
-        "Manage connected connector accounts",
+        "Share or withdraw one's own account in a pod (owner only)",
     ),
     PermissionDefinition(
         Permissions.WEB_LOGIN_USE,
         PermissionScope.POD,
         "web_login",
         "Sign in to a saved site with a stored session",
-    ),
-    PermissionDefinition(
-        Permissions.CONNECTOR_AUTH_CONFIG_MANAGE,
-        PermissionScope.ORG,
-        "connector_auth_config",
-        "Manage organization connector auth configs",
     ),
 )
 
@@ -337,18 +399,30 @@ POD_VIEWER_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.DATASTORE_TABLE_READ,
         Permissions.DATASTORE_RECORD_READ,
         Permissions.FOLDER_READ,
+        # Whoever reads files may hand one on by a public link, as before this
+        # was its own permission. What separating it changes is software: a
+        # named agent's or function's grants decide, and a grant of
+        # ``folder.read`` no longer carries it.
+        Permissions.FOLDER_SHARE,
         Permissions.APP_READ,
         Permissions.AGENT_READ,
         Permissions.FUNCTION_READ,
         Permissions.WORKFLOW_READ,
         Permissions.SCHEDULE_READ,
         Permissions.CONVERSATION_READ,
+        Permissions.CHANNEL_READ,
     }
 )
 POD_USER_PERMISSIONS: frozenset[str] = frozenset(
     set(POD_VIEWER_PERMISSIONS)
     | {
         Permissions.DATASTORE_RECORD_WRITE,
+        # Held wherever writing is, and bounded the same way: on a table with
+        # row-level security a member reaches only the rows that are theirs,
+        # and every row only in admin mode, which takes ``table.delete``. What
+        # separating it changes is software -- a workload's delete is
+        # destructive -- and a grant of ``record.write`` no longer carries it.
+        Permissions.DATASTORE_RECORD_DELETE,
         Permissions.AGENT_EXECUTE,
         Permissions.FUNCTION_EXECUTE,
         Permissions.WORKFLOW_EXECUTE,
@@ -358,6 +432,7 @@ POD_USER_PERMISSIONS: frozenset[str] = frozenset(
         # pod-wide SCHEDULE_UPDATE/SCHEDULE_DELETE permissions that editors hold.
         Permissions.SCHEDULE_CREATE,
         Permissions.CONVERSATION_WRITE,
+        Permissions.CHANNEL_WRITE,
         Permissions.CONNECTOR_USE,
         Permissions.CONNECTOR_ACCOUNT_USE,
         Permissions.WEB_LOGIN_USE,
@@ -381,10 +456,17 @@ POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.WORKFLOW_UPDATE,
         Permissions.SCHEDULE_CREATE,
         Permissions.SCHEDULE_UPDATE,
+        # Any group's settings and roster, not only the ones they own: the
+        # same people who change the pod's agents and apps keep its rooms.
+        Permissions.CHANNEL_MANAGE,
         # Writing first to somebody outside the pod speaks for the pod, to a
         # person who did not ask, on a channel whose sender reputation the pod
         # shares. Writing in one's own conversations does not; this does.
         Permissions.CONTACT_MESSAGE,
+        # Who the pod's contacts are, and what they said to it, is theirs and
+        # the pod's -- not every member's. Those who answer for the pod see it.
+        Permissions.CONTACT_READ,
+        Permissions.POD_CONNECTOR_MANAGE,
     }
 )
 POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
@@ -401,7 +483,6 @@ POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.FUNCTION_DELETE,
         Permissions.WORKFLOW_DELETE,
         Permissions.SCHEDULE_DELETE,
-        Permissions.CONNECTOR_ACCOUNT_MANAGE,
     }
 )
 
@@ -413,12 +494,17 @@ ORG_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.ORG_MEMBER_MANAGE,
         Permissions.ORG_INVITATION_MANAGE,
         Permissions.POD_CREATE,
-        Permissions.CONNECTOR_MANAGE,
-        Permissions.CONNECTOR_AUTH_CONFIG_MANAGE,
+        Permissions.ORG_INSTALLATION_MANAGE,
     }
 )
 ORG_OWNER_PERMISSIONS: frozenset[str] = frozenset(
     set(ORG_EDITOR_PERMISSIONS)
+    # An org owner administers every pod in the organization. Held as a role's
+    # permissions, like anyone else's, so the per-request check and the SQL
+    # listings see the same thing -- it used to be a shortcut in the authorizer
+    # that the listings never knew about, and that also overrode a member's
+    # PERSONAL resources. Personal stays personal; see break-glass.
+    | set(POD_ADMIN_PERMISSIONS)
     | {
         Permissions.ORG_BILLING_MANAGE,
     }
@@ -445,10 +531,13 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
     Permissions.DATASTORE_TABLE_DELETE: frozenset(
         {Permissions.DATASTORE_TABLE_UPDATE, Permissions.DATASTORE_TABLE_READ}
     ),
-    Permissions.CONNECTOR_ACCOUNT_MANAGE: frozenset(
-        {Permissions.CONNECTOR_ACCOUNT_USE}
-    ),
     Permissions.CONVERSATION_WRITE: frozenset({Permissions.CONVERSATION_READ}),
+    Permissions.CHANNEL_WRITE: frozenset({Permissions.CHANNEL_READ}),
+    Permissions.CHANNEL_MANAGE: frozenset(
+        {Permissions.CHANNEL_WRITE, Permissions.CHANNEL_READ}
+    ),
+    # Writing to a contact is done looking at who they are and what they said.
+    Permissions.CONTACT_MESSAGE: frozenset({Permissions.CONTACT_READ}),
     # Executing a workload requires reading its definition (an agent's
     # instructions, a function's source) to run it at all, so execute-only
     # grants must satisfy read checks. Read does NOT imply execute.
@@ -471,3 +560,16 @@ def equivalent_permission_ids(permission_id: str) -> set[str]:
         if permission_id in implied:
             candidates.add(candidate)
     return candidates
+
+
+def pod_principal_may_hold(permission_id: str) -> bool:
+    """Whether another pod may ever hold ``permission_id`` here.
+
+    Reading, and running this pod's assistant -- the link itself. Nothing that
+    changes anything, whatever a grant row says. Nor the pod's contacts: people
+    who wrote to this pod did not write to the pods it is linked to -- and
+    its channels carry what they said.
+    """
+    if permission_id in (Permissions.CONTACT_READ, Permissions.CHANNEL_READ):
+        return False
+    return permission_id.endswith(".read") or permission_id == Permissions.AGENT_EXECUTE

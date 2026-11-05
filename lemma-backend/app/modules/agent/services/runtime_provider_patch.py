@@ -15,9 +15,11 @@ already been settled, so they can be read and tested separately from it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from pydantic import HttpUrl, SecretStr
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
@@ -28,6 +30,7 @@ from app.modules.agent.domain.sentinels import UnsetType
 from app.modules.agent.services.runtime_profile_creation import (
     normalize_profile_name,
     normalize_headers,
+    normalize_model_settings,
 )
 
 
@@ -38,6 +41,7 @@ class ProviderProfilePatch:
     changes: dict[str, object]
     base_url: str | HttpUrl | None
     base_url_changed: bool
+    origin_changed: bool
     headers: dict[str, str]
     model_settings: dict[str, object]
     credentials: RuntimeCredentials | None
@@ -66,11 +70,7 @@ def resolve_provider_patch(
     refresh_models: bool,
 ) -> ProviderProfilePatch:
     """Settle a PATCH against the stored profile."""
-    changes: dict[str, object] = {}
-    if not isinstance(name, UnsetType):
-        changes["name"] = normalize_profile_name(name)
-    if not isinstance(description, UnsetType):
-        changes["description"] = description.strip() if description else None
+    changes = _label_changes(name=name, description=description)
 
     next_base_url = _next_base_url(base_url, stored, is_anthropic=is_anthropic)
     base_url_changed = not isinstance(base_url, UnsetType) and str(
@@ -83,8 +83,14 @@ def resolve_provider_patch(
     next_settings = (
         stored.model_settings
         if isinstance(model_settings, UnsetType)
-        else (model_settings or {})
+        else normalize_model_settings(model_settings)
     )
+
+    origin_changed = base_url_changed and provider_origin(
+        next_base_url, is_anthropic=is_anthropic
+    ) != provider_origin(stored.base_url, is_anthropic=is_anthropic)
+    if origin_changed:
+        _refuse_carrying_secrets(profile, stored, api_key=api_key, headers=headers)
 
     next_credentials = _next_credentials(
         api_key=api_key,
@@ -101,6 +107,7 @@ def resolve_provider_patch(
         changes=changes,
         base_url=next_base_url,
         base_url_changed=base_url_changed,
+        origin_changed=origin_changed,
         headers=next_headers,
         model_settings=next_settings,
         credentials=next_credentials,
@@ -118,13 +125,81 @@ def resolve_provider_patch(
     )
 
 
+class KeyMustBeReenteredError(RuntimeProfileValidationError):
+    """A new provider address with the old key: refused, the key never moves.
+
+    The stored key is write-only -- nobody who can edit a profile can read it
+    back. Pointing the profile somewhere else and keeping the key would send it,
+    on the very next discovery, run or test, to whatever the editor chose, which
+    is the key read back by another route. So a key only ever goes to an
+    address it was entered for.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The provider address moved to a different host. Re-enter the API "
+            "key, and any custom headers, for the new address."
+        )
+
+
+def _label_changes(*, name, description) -> dict[str, object]:
+    changes: dict[str, object] = {}
+    if not isinstance(name, UnsetType):
+        changes["name"] = normalize_profile_name(name)
+    if not isinstance(description, UnsetType):
+        changes["description"] = description.strip() if description else None
+    return changes
+
+
+def _refuse_carrying_secrets(
+    profile: AgentRuntimeProfile, stored, *, api_key, headers
+) -> None:
+    """A move to another origin must bring its own key, and its own headers.
+
+    Custom headers count: once the listing shows only their names, a header
+    value is as write-only as the key, and as often a credential.
+    """
+    keeps_key = isinstance(api_key, UnsetType) and profile.credentials is not None
+    keeps_headers = isinstance(headers, UnsetType) and bool(stored.headers)
+    if keeps_key or keeps_headers:
+        raise KeyMustBeReenteredError()
+
+
+ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def provider_origin(
+    base_url: str | HttpUrl | None, *, is_anthropic: bool
+) -> tuple[str, str, int | None]:
+    """Scheme, host and port: where a credential sent to ``base_url`` lands.
+
+    The path is not part of it -- moving ``/v1`` to ``/v2`` on the same host
+    sends the key to the same party. Anthropic's absent URL is its default
+    endpoint, so clearing it is a move like any other.
+    """
+    raw = str(base_url) if base_url else ""
+    if not raw and is_anthropic:
+        raw = ANTHROPIC_DEFAULT_BASE_URL
+    parts = urlsplit(raw)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return scheme, (parts.hostname or "").lower(), port or _DEFAULT_PORTS.get(scheme)
+
+
 def _next_base_url(base_url, stored, *, is_anthropic: bool):
     """The base URL after the edit. Null is only meaningful for Anthropic."""
     if isinstance(base_url, UnsetType):
         return stored.base_url
     if base_url is None:
         if not is_anthropic:
-            raise ValueError("An OpenAI-compatible profile requires a base URL")
+            raise RuntimeProfileValidationError(
+                "An OpenAI-compatible profile requires a base URL"
+            )
         return None
     return base_url
 
@@ -140,7 +215,9 @@ def _next_credentials(*, api_key, stored_credentials, is_anthropic: bool):
         return stored_credentials
     if api_key is None or not str(api_key).strip():
         if is_anthropic:
-            raise ValueError("An Anthropic-compatible profile requires an API key")
+            raise RuntimeProfileValidationError(
+                "An Anthropic-compatible profile requires an API key"
+            )
         return None
     return ApiKeyRuntimeCredentials(api_key=SecretStr(str(api_key).strip()))
 

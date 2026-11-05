@@ -20,6 +20,7 @@ from app.modules.workspace.providers.docker import (
     DockerProviderConfig,
     DockerSandboxProvider,
     RuntimeCredentialSigner,
+    _tmpfs,
 )
 from app.modules.workspace.providers.docker_engine import (
     DockerRequestAmbiguous,
@@ -363,3 +364,21 @@ async def test_an_unreachable_runtime_still_gets_stopped() -> None:
         instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
     )
     assert engine.stopped == [instance.name]
+
+
+async def test_function_cache_tmpfs_uses_podman_compatible_options() -> None:
+    mounts = _tmpfs(is_function=True)
+
+    assert mounts["/tmp"] == "rw,noexec,nosuid,size=512m"
+    cache_options = mounts["/run/lemma-function-cache"]
+    assert "rw" in cache_options.split(",")
+    assert "exec" in cache_options.split(",")
+    assert "nosuid" in cache_options.split(",")
+    assert "nodev" in cache_options.split(",")
+    assert "mode=1777" in cache_options.split(",")
+    assert "uid=" not in cache_options
+    assert "gid=" not in cache_options
+
+
+async def test_workspace_sandbox_has_no_function_tmpfs() -> None:
+    assert _tmpfs(is_function=False) == {}

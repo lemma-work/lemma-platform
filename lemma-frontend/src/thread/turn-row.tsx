@@ -1,15 +1,17 @@
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LockIcon, MemoryIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LockIcon, MemoryIcon, TerminalIcon } from "@/ui/icons";
 import { memo, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
 import { Prose, StreamingProse } from "./markdown";
 import { ClampedProse } from "./clamped-prose";
 import { CopyButton } from "./copy-button";
 import { Mark } from "@/shell/mark";
+import { writeAddress } from "@/shell/address";
+import { PlaceLink } from "@/shell/place-link";
 import { ResourceCard } from "./resource-card";
 import { PlanCard } from "./plan-card";
 import { ToolCardView } from "./tool-card-view";
 import { InteractionCard, type Resolve } from "./interaction-card";
-import { liveNote, spanOf, type HumanMessage, type Note, type Streaming, type Turn } from "./turns";
+import { liveNote, relayedBy, spanOf, type HumanMessage, type Note, type Streaming, type Turn } from "./turns";
 import type { Persona } from "@/data";
 import type { Noted } from "./memory-notes";
 
@@ -148,13 +150,25 @@ function Human({
     onRetry?: (id: string) => void;
     onEdit?: (id: string) => void;
 }) {
-    const guest = Boolean(outsiders && message.from);
+    const teammate = relayedBy(message);
+    const guest = Boolean(outsiders && message.from) || Boolean(teammate);
     const at = message.pending === "sending" ? "Sending…" : message.pending === "failed" ? "Not sent" : message.at;
     return (
         <div className={"msg msg--you" + (guest ? " msg--guest" : "")} data-pending={message.pending}>
             <div className="msg__head">
-                <span className="msg__who">{guest ? message.from : "You"}</span>
-                {guest && <span className="msg__chip">Not in {outsiders}</span>}
+                <span className="msg__who">{teammate ? teammate.name : guest ? message.from : "You"}</span>
+                {teammate && (teammate.place
+                    ? (
+                        <PlaceLink
+                            className="msg__chip msg__chip--link"
+                            href={writeAddress({ ...teammate.place, tabId: "conversation", agentName: null })}
+                            title={"Open " + teammate.name + "’s conversation"}
+                        >
+                            {teammate.chip}
+                        </PlaceLink>
+                    )
+                    : <span className="msg__chip">{teammate.chip}</span>)}
+                {guest && !teammate && <span className="msg__chip">Not in {outsiders}</span>}
                 <span className="msg__at">{at}</span>
             </div>
             {message.note && (
@@ -215,6 +229,7 @@ export const TurnRow = memo(function TurnRow({
     outsiders,
     dockedId,
     runEnded,
+    resumesOnAnswer,
     onOpenApp,
     onOpenFile,
     onOpenTable,
@@ -232,6 +247,8 @@ export const TurnRow = memo(function TurnRow({
     outsiders?: string;
     dockedId?: string | null;
     runEnded: boolean;
+    /** The conversation is waiting on its pauses; see `InteractionCard`. */
+    resumesOnAnswer?: boolean;
     onOpenApp?: (name: string) => void;
     onOpenFile?: (path: string) => void;
     onOpenTable?: (name: string) => void;
@@ -257,7 +274,7 @@ export const TurnRow = memo(function TurnRow({
                 <Human message={turn.human} bot={teammate.name} outsiders={outsiders} onRetry={onRetrySend} onEdit={onEditSend} />
             )}
 
-            {(notes.length > 0 || turn.items.length > 0 || merging) && (
+            {(notes.length > 0 || turn.items.length > 0 || merging || Boolean(turn.runtimeNotes?.length)) && (
                 <Reply
                     seed={seed}
                     teammate={teammate}
@@ -330,6 +347,7 @@ export const TurnRow = memo(function TurnRow({
                                     teammate={teammate.name}
                                     onResolve={onResolve}
                                     runEnded={runEnded}
+                                    resumesOnAnswer={resumesOnAnswer}
                                 />
                             </div>
                         );
@@ -344,6 +362,17 @@ export const TurnRow = memo(function TurnRow({
                     {turn.noted && turn.noted.length > 0 && (
                         <NotedLine teammate={teammate.name} noted={turn.noted} onOpenFile={onOpenFile} />
                     )}
+
+                    {/* What the agent's runtime said about the run — a model it
+                        no longer offers, a session it restarted. The run went
+                        on, so this is a quiet line beside the reply rather than
+                        an error over it. */}
+                    {turn.runtimeNotes?.map((note) => (
+                        <p className="noted" role="note" key={note}>
+                            <TerminalIcon size={13} />
+                            <span>{note}</span>
+                        </p>
+                    ))}
                 </Reply>
             )}
         </div>

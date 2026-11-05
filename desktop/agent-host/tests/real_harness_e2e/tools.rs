@@ -20,6 +20,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
             adapter: manifest.resolve("codex").unwrap(),
             agent_environment: std::collections::BTreeMap::default(),
             own_settings: false,
+            lemma_cli_bin: None,
             run_spec: RunSpec {
                 agent_run_id: Uuid::new_v4(),
                 conversation_id: Uuid::new_v4(),
@@ -47,6 +48,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
                 system_prompt_delivery: None,
+                pre_approvals: Vec::new(),
             },
             scratch_directory: scratch.path().to_path_buf(),
             mcp_server: None,
@@ -132,6 +134,67 @@ async fn real_agents_discover_and_call_a_lemma_mcp_tool() {
         );
         println!("{agent}: LEMMA_REAL_MCP_TOOL_CALL_OK");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires an authenticated Claude Code and spends real provider quota"]
+async fn claude_code_calls_lemmas_tool_without_searching_for_it_first() {
+    // Claude Code holds an MCP server's tools back behind its own tool search
+    // unless told otherwise. A model that has to look Lemma's tool up spends a
+    // whole request on `ToolSearch` before its first real call, on every run.
+    // A tool the model was never shown can only be called after that search,
+    // so a call with no search before it is a tool that was in the prompt.
+    if !configured_agents()
+        .iter()
+        .any(|agent| agent == "claude-code")
+    {
+        eprintln!("claude-code is not among the selected live agents");
+        return;
+    }
+    let endpoint = support::LemmaMcpEndpoint::new();
+    let (_directory, control) = paired_real_run(
+        "claude-code",
+        concat!(
+            "Call the Lemma MCP tool named lemma_echo with the argument ",
+            "text set to exactly LEMMA_REAL_MCP_OK. Do not use any other ",
+            "tool and do not write files. Reply with exactly the text the ",
+            "tool returned."
+        ),
+        endpoint.run_configuration(),
+        Some(&endpoint),
+        support::PermissionAnswer::AllowOnce,
+        Duration::from_secs(300),
+    )
+    .await;
+
+    let calls: Vec<String> = control
+        .events()
+        .iter()
+        .filter(|event| event.event_type == EventType::ToolCall)
+        .map(|event| {
+            event.payload["tool"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert!(
+        !calls.iter().any(|name| name == "tool_search"),
+        "Claude Code searched for Lemma's tools instead of being shown them; calls={calls:?}"
+    );
+    assert!(
+        endpoint
+            .requests()
+            .iter()
+            .any(|record| record.method == "tools/call" && record.params["name"] == "lemma_echo"),
+        "Claude Code never called lemma_echo; calls={calls:?}"
+    );
+    assert!(
+        control.assistant_text().contains("LEMMA_REAL_MCP_OK"),
+        "Claude Code did not report the tool's result: {:?}",
+        control.assistant_text()
+    );
+    println!("claude-code: LEMMA_TOOLS_LISTED_UP_FRONT_OK calls={calls:?}");
 }
 
 /// A per-run file outside every adapter's sandbox, plus the shell command that

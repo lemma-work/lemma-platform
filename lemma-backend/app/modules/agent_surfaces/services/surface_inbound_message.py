@@ -7,6 +7,9 @@ transcribed first, recent channel history a group mention needs for context.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
+from dataclasses import dataclass, field
 from typing import Any
 from datetime import datetime, timezone
 
@@ -33,9 +36,17 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
 )
+from app.modules.agent_surfaces.services.channel_lines import (
+    ChannelLines,
+    ChannelLinesInDatabase,
+)
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
-    maybe_resume_pending_interaction,
+    Resumed,
+    resume_pending_interaction,
+)
+from app.modules.agent_surfaces.services.attachment_ingest_memo import (
+    AttachmentIngestMemo,
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
@@ -135,7 +146,9 @@ async def write_inbound_message(
     message_text: str,
     metadata: dict[str, Any],
     uow: SqlAlchemyUnitOfWork,
-):
+    *,
+    lines: ChannelLines | None = None,
+) -> FinishedPauses:
     """Persist the inbound message, or resume the run it answers.
 
     Free functions rather than a mixin, and the reason is visible in the
@@ -146,6 +159,11 @@ async def write_inbound_message(
     What went with the mixin is a mode. This used to pick between
     ``self._uow_factory`` and ``self.uow`` and raise ``RuntimeError`` when it had
     neither; the caller opens the scope it wants and hands it over.
+
+    Returns the pauses this message finished, by tool call id, because their
+    cards are still on screen: the ones a new turn cancelled (starting a turn
+    denies every undecided pause on the person's behalf), or the one it
+    answered in words.
     """
     if context.pod_id is None:
         raise ValueError("Surface chat context requires a pod")
@@ -162,7 +180,7 @@ async def write_inbound_message(
         ):
             raise ValueError("The onboarding handoff is unavailable")
         if pending.message_committed_at is not None:
-            return None
+            return FinishedPauses()
         # This marker commits with transcript persistence and the run's outbox
         # event. A queue retry cannot record or execute the request twice.
         pending.message_committed_at = datetime.now(timezone.utc)
@@ -176,7 +194,42 @@ async def write_inbound_message(
             conversation_id=str(context.conversation_id),
             platform=context.platform,
         )
-        return None
+        return FinishedPauses()
+    # On the channel's timeline whatever the message turns out to be -- an
+    # answer to a pause is still something the person said. Written after the
+    # turn it starts: the line holds its channel's row from there to the
+    # commit, not across the turn.
+    heard = _Heard(lines or ChannelLinesInDatabase(uow), context, message_text)
+    finished = await _answer_or_start(context, message_text, metadata, uow, heard)
+    await heard.once()
+    return finished
+
+
+@dataclass(slots=True)
+class _Heard:
+    """The inbound message as a line, written once."""
+
+    lines: ChannelLines
+    context: SurfaceChatContext
+    text: str
+    written: bool = False
+
+    async def once(self) -> None:
+        if not self.written:
+            self.written = True
+            await self.lines.heard(self.context, text=self.text)
+
+
+async def _answer_or_start(
+    context: SurfaceChatContext,
+    message_text: str,
+    metadata: dict[str, Any],
+    uow: SqlAlchemyUnitOfWork,
+    heard: _Heard,
+) -> FinishedPauses:
+    """Resume the pause the message answers, or start the turn it asks for."""
+    if context.pod_id is None:
+        raise ValueError("Surface chat context requires a pod")
     auth_ctx = await create_authorization_data_service(uow).build_user_context(
         user_id=context.user_id,
         pod_id=context.pod_id,
@@ -193,39 +246,67 @@ async def write_inbound_message(
         # decision as theirs -- a stranger typing "approve" would approve as
         # the member, with the member's authority. Their runs never pause, so
         # there is nothing of theirs to answer either.
-        outcome = (
-            await maybe_resume_pending_interaction(context, message_text, uow=uow)
+        resumed = (
+            await resume_pending_interaction(context, message_text, uow=uow)
             if may_answer_a_pause(context)
-            else ResumeOutcome.NOT_A_DECISION
+            else Resumed(ResumeOutcome.NOT_A_DECISION)
         )
-        if outcome is ResumeOutcome.FAILED:
+        if resumed.outcome is ResumeOutcome.FAILED:
             # They decided and we could not write it down. Starting a turn
             # here is what turned an "approve" into a cancellation: it
             # supersedes the pause with an auto-DENY. The pause is still
             # there, so saying so and letting them answer again is the one
-            # move that loses nothing.
+            # move that loses nothing. Their line goes before the reply.
+            await heard.once()
             await _say_the_decision_was_not_recorded(context, uow)
-            return None
-        if outcome is ResumeOutcome.NOT_A_DECISION:
-            return await agent_conversations.start_surface_turn(
-                uow,
-                conversation_id=context.conversation_id,
-                user_id=context.user_id,
-                content=message_text,
-                pod_id=context.pod_id,
-                agent_name=context.agent_name,
-                message_metadata=metadata,
+            return FinishedPauses()
+        if resumed.outcome is ResumeOutcome.NOT_A_DECISION:
+            return FinishedPauses(
+                superseded=await _start_turn(context, message_text, metadata, uow)
             )
-        return None
+        return FinishedPauses(answered=[resumed.answered] if resumed.answered else [])
     finally:
         reset_current_context(token)
+
+
+@dataclass(frozen=True, slots=True)
+class FinishedPauses:
+    """Pauses an inbound message finished, whose cards should lose their
+    controls."""
+
+    #: Cancelled by the turn the message started.
+    superseded: list[str] = field(default_factory=list)
+    #: Answered by the message itself, in words.
+    answered: list[str] = field(default_factory=list)
+
+
+async def _start_turn(
+    context: SurfaceChatContext,
+    message_text: str,
+    metadata: dict[str, object],
+    uow: SqlAlchemyUnitOfWork,
+) -> list[str]:
+    """Start the turn this message asks for; the pauses it cancelled."""
+    undecided = await agent_conversations.undecided_pauses(uow, context.conversation_id)
+    started = await agent_conversations.start_surface_turn(
+        uow,
+        conversation_id=context.conversation_id,
+        user_id=context.user_id,
+        content=message_text,
+        pod_id=context.pod_id,
+        agent_name=context.agent_name,
+        message_metadata=metadata,
+    )
+    # Only a turn that starts supersedes: a message arriving while a run is
+    # going joins that run, and the pauses it holds stay open.
+    return undecided if started is not None else []
 
 
 async def fetch_channel_context(
     *,
     adapter: SurfacePlatformAdapterPort,
     context: SurfaceChatContext,
-    credentials: dict[str, Any],
+    credentials: SurfaceCredentials,
 ) -> list[dict[str, Any]]:
     """Best-effort recent thread/channel messages for a group mention, as a
     list of ``{author, text, ts}`` dicts. Fetched fresh per run; never raises."""
@@ -249,6 +330,7 @@ async def transcribe_voice_attachments(
     ingested: list[IngestedAttachment],
     original_text: str | None,
     metadata: dict[str, Any],
+    memo: AttachmentIngestMemo | None = None,
 ) -> str:
     """Transcribe inbound voice notes and fold them into the message text.
 
@@ -264,7 +346,7 @@ async def transcribe_voice_attachments(
         return original
 
     results = await _transcribe_all(
-        [item for item in ingested if item.is_audio and item.audio_bytes is not None]
+        [item for item in ingested if item.is_audio], memo=memo
     )
     combined = _combined_voice_text(_record_transcripts(results, metadata))
     if original and not _is_a_type_word(original, ingested):
@@ -273,16 +355,42 @@ async def transcribe_voice_attachments(
 
 
 async def _transcribe_all(
-    items: list[IngestedAttachment],
+    items: list[IngestedAttachment], *, memo: AttachmentIngestMemo | None
 ) -> list[tuple[IngestedAttachment, VoiceTranscript | None]]:
-    """Transcribe every voice note at once; a failure yields None for that one."""
-    transcripts = await transcribe_voice_notes(
+    """Transcribe every voice note at once; a failure yields None for that one.
+
+    A transcript a previous attempt at this message already paid for is reused
+    rather than bought again (see ``attachment_ingest_memo``).
+    """
+    known: dict[int, VoiceTranscript] = {}
+    if memo is not None:
+        for index, item in enumerate(items):
+            cached = await memo.transcript(item.memo_key)
+            if cached is not None:
+                known[index] = cached
+    pending = [
+        (index, item)
+        for index, item in enumerate(items)
+        if index not in known and item.audio_bytes is not None
+    ]
+    fresh = await transcribe_voice_notes(
         [
             VoiceClip(audio_bytes=item.audio_bytes, mime=item.mime or "audio/ogg")
-            for item in items
+            for _, item in pending
+            if item.audio_bytes is not None
         ]
     )
-    return list(zip(items, transcripts))
+    for (index, item), transcript in zip(pending, fresh):
+        if transcript is None:
+            continue
+        known[index] = transcript
+        if memo is not None:
+            await memo.remember_transcript(item.memo_key, transcript)
+    return [
+        (item, known.get(index))
+        for index, item in enumerate(items)
+        if index in known or item.audio_bytes is not None
+    ]
 
 
 async def _say_the_decision_was_not_recorded(

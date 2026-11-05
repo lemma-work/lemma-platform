@@ -15,7 +15,12 @@ from uuid import uuid7
 
 from fakeredis import aioredis as fake_aioredis
 
-from app.modules.agent.services.agent_host_link_tool_calls import ToolCallLedger
+from app.modules.agent.services.agent_host_link_tool_calls import (
+    MAX_RECORDED_RESULT_BYTES,
+    ToolCallLedger,
+    ToolCallOutcome,
+    tool_call_key,
+)
 from app.modules.agent.services.realtime import conversation_channel
 from app.modules.agent.tests.unit.agent_host_link_fakes import (
     TOKEN,
@@ -147,6 +152,68 @@ async def test_a_call_that_finished_after_its_link_closed_is_answered_from_the_r
     assert answer["type"] == "mcp_ok"
     assert len(service.calls) == 1
     await second.close()
+
+
+async def test_a_duplicate_of_a_call_whose_replica_died_is_answered_at_once():
+    """A replica killed mid-call leaves its claim reading "running" with nobody
+    behind it. The retry used to poll that for half an hour, stalling the
+    agent's turn; the heartbeat that died with the replica says so at once."""
+    redis = fake_aioredis.FakeRedis(decode_responses=True)
+    ledger = ToolCallLedger(redis)
+    link = Link(ledger=ledger)
+    await link.open()
+    run_id = uuid7()
+    key = tool_call_key(run_id, "call-1")
+    assert await ledger.claim_call(key)  # some other replica's arrival...
+    await redis.delete(f"{key}:alive")  # ...which then died
+
+    answer = await link.socket.answer_to(
+        link.socket.send("mcp", _call(link, run_id=run_id)), timeout=2.0
+    )
+
+    assert answer["type"] == "error"
+    assert answer["body"]["code"] == "INTERNAL"
+    assert answer["body"]["retryable"] is False
+    assert "may have run" in answer["body"]["message"]
+    assert link.mcp_service.calls == [], "the call ran a second time"
+    await link.close()
+
+
+async def test_a_live_claim_keeps_its_duplicate_waiting():
+    redis = fake_aioredis.FakeRedis(decode_responses=True)
+    ledger = ToolCallLedger(redis, wait_seconds=0.2)
+    key = tool_call_key(uuid7(), "call-1")
+    assert await ledger.claim_call(key)
+
+    # Still beating: the duplicate waits out its whole window, not one poll.
+    assert await ledger.wait_for_outcome(key) is None
+    assert await redis.exists(f"{key}:alive")
+
+
+async def test_a_result_too_large_to_keep_is_not_kept():
+    """Whole MCP results -- images and all -- were stored per call for an hour.
+    Past the cap the retry is told the call finished, and nothing is re-run."""
+    redis = fake_aioredis.FakeRedis(decode_responses=True)
+    ledger = ToolCallLedger(redis)
+    link = Link(ledger=ledger)
+    await link.open()
+    run_id = uuid7()
+    key = tool_call_key(run_id, "call-1")
+    assert await ledger.claim_call(key)
+    huge = {"content": [{"type": "text", "text": "x" * MAX_RECORDED_RESULT_BYTES}]}
+    await ledger.record_outcome(key, ToolCallOutcome(state="done", result=huge))
+
+    stored = await redis.get(key)
+    answer = await link.socket.answer_to(
+        link.socket.send("mcp", _call(link, run_id=run_id))
+    )
+
+    assert len(stored) < MAX_RECORDED_RESULT_BYTES
+    assert not await redis.exists(f"{key}:alive")
+    assert answer["type"] == "error"
+    assert "too large to keep" in answer["body"]["message"]
+    assert link.mcp_service.calls == []
+    await link.close()
 
 
 # ------------------------------------------- failures after dispatch are final

@@ -124,6 +124,8 @@ export function sayHeldBy(step: FlowStep | null, run: RunRow): string {
         case "AGENT": return "With an agent";
         case "FUNCTION": return "Running a function";
         case "TIME": return "Waiting for a set time";
+        case "DECISION": return "Weighing a question";
+        case "QUEUED": return "Waiting its turn";
     }
     switch (step?.kind) {
         case "FORM": return "Waiting on a person";

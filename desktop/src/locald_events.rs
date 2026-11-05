@@ -1,14 +1,39 @@
 use super::*;
 
+/// The daemon commands that hold the shell's one operation slot: the ones
+/// `send_local_operation` reserves it for, and that always end in `done`.
+///
+/// Every other command -- sharing, settings, Agent Host, snapshots -- answers
+/// with an `ack` and an `id` too, and ends in its own event or in none. Read as
+/// operations, a sharing ack took the empty slot and nothing ever freed it, so
+/// every later Start, Stop or Restart was refused as busy until the daemon
+/// disconnected.
+pub(crate) const SLOT_COMMANDS: [&str; 6] = [
+    "start",
+    "stop",
+    "restart",
+    "runtime.prepare",
+    "local.reset-data",
+    "shutdown-daemon",
+];
+
 pub(crate) fn locald_event_operation_id(event: &Value) -> Option<&str> {
-    event
-        .get("operation_id")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            matches!(event["event"].as_str(), Some("ack" | "done" | "error"))
-                .then(|| event.get("id").and_then(Value::as_str))
-                .flatten()
-        })
+    if let Some(id) = event.get("operation_id").and_then(Value::as_str) {
+        return Some(id);
+    }
+    let kind = event["event"].as_str();
+    if !matches!(kind, Some("ack" | "done" | "error")) {
+        return None;
+    }
+    // An error names no command; whether it belongs to the operation on
+    // screen is decided against the slot, in `handle_locald_event`.
+    let names_another_command = event["cmd"]
+        .as_str()
+        .is_some_and(|command| !SLOT_COMMANDS.contains(&command));
+    if kind != Some("error") && names_another_command {
+        return None;
+    }
+    event.get("id").and_then(Value::as_str)
 }
 
 pub(crate) fn event_applies_during_shutdown(event: &Value) -> bool {
@@ -248,6 +273,11 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
                 }
             }
         }
+        // An error with an id that is not the operation on screen answers some
+        // other request -- a settings save, a snapshot -- and is shown where
+        // that request was made. Read here, a rejected settings save put a
+        // healthy, running workspace into the error state.
+        "error" if event_operation_id.is_some_and(|id| id != ui.active_operation_id) => {}
         "error" => {
             let code = event["code"].as_str().unwrap_or_default();
             if code == "busy" {
@@ -271,6 +301,13 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
                 ui.error = false;
                 ui.error_code.clear();
             } else {
+                // Some refusals -- `stopping`, `supervisor-unavailable` -- are
+                // the whole answer, with no `done` after them. The operation
+                // is over either way, so the slot is freed here rather than
+                // left to refuse every later Start as busy.
+                if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
+                    finish_active_operation(ui);
+                }
                 ui.error = true;
                 ui.error_code = code.into();
                 ui.status = event["message"].as_str().unwrap_or("startup failed").into();
@@ -313,12 +350,7 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
             }
         }
         "done" if event_operation_id.is_some_and(|id| id == ui.active_operation_id) => {
-            let completed_operation_id = ui.active_operation_id.clone();
-            ui.completed_operation_ids.push(completed_operation_id);
-            if ui.completed_operation_ids.len() > 16 {
-                ui.completed_operation_ids.remove(0);
-            }
-            ui.active_operation_id.clear();
+            finish_active_operation(ui);
         }
         _ => {}
     }
@@ -375,6 +407,16 @@ fn perform_event_side_effects(outcome: &mut EventOutcome) {
         // A worker, because it syncs twice; the target is advisory, so late
         // is fine and lost is survivable.
         std::thread::spawn(move || write_resume_target(&url, &api_url, &generation));
+    }
+}
+
+/// Move the operation on screen to the finished list, so a late straggler of
+/// it is ignored rather than adopted again.
+pub(crate) fn finish_active_operation(ui: &mut UiState) {
+    let completed_operation_id = std::mem::take(&mut ui.active_operation_id);
+    ui.completed_operation_ids.push(completed_operation_id);
+    if ui.completed_operation_ids.len() > 16 {
+        ui.completed_operation_ids.remove(0);
     }
 }
 
@@ -437,7 +479,18 @@ pub(crate) fn handle_locald_event(app: &AppHandle, event: &Value) {
             &ui.completed_operation_ids,
             event_operation_id,
         ) {
-            EventAdmission::Ignore => return,
+            // An error for another request still belongs in Local settings,
+            // where a sharing failure is what re-enables its button.
+            EventAdmission::Ignore => {
+                if kind == "error" {
+                    let _ = app.emit_to("control", "lemma:locald-event", event.clone());
+                }
+                return;
+            }
+            // Only an operation's own ack or progress puts it on screen; an
+            // error with nothing in flight answers another request, and goes
+            // to Local settings below without taking the slot.
+            EventAdmission::Adopt if kind == "error" => {}
             EventAdmission::Adopt => ui.active_operation_id = event_operation_id.to_owned(),
             EventAdmission::Apply => {}
         }

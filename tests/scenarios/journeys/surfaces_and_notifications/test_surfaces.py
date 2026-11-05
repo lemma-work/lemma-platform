@@ -101,8 +101,8 @@ async def test_an_outsider_cannot_touch_surfaces(world, pod):
         json={"platform": "slack", "name": "trespass"},
     )
 
-    assert listed.status_code >= 400, listed.status_code
-    assert created.status_code >= 400, created.status_code
+    assert listed.status_code == 403, listed.status_code
+    assert created.status_code == 403, created.status_code
 
 
 @scenario("A platform's verification challenge is answered without a session")
@@ -133,7 +133,7 @@ async def test_an_unsigned_webhook_is_rejected(world, pod):
         "POST", "/surfaces/webhooks/slack", json={"type": "event_callback", "event": {}}
     )
 
-    assert response.status_code >= 400, (
+    assert response.status_code == 401, (
         "an unsigned payload claiming to be from Slack must not be acted on "
         f"(got {response.status_code})"
     )

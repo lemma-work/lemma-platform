@@ -9,6 +9,7 @@ import type { ConversationStatus } from "../openapi_client/models/ConversationSt
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
 import type { HarnessKind } from "../openapi_client/models/HarnessKind.js";
+import type { PendingInteractionListResponse } from "../openapi_client/models/PendingInteractionListResponse.js";
 import type { ResolveUserApprovalRequest } from "../openapi_client/models/ResolveUserApprovalRequest.js";
 import type { SendMessageRequest } from "../openapi_client/models/SendMessageRequest.js";
 import type { UpdateConversationRequest } from "../openapi_client/models/UpdateConversationRequest.js";
@@ -40,6 +41,31 @@ type ConversationUpdateInput = UpdateConversationRequest & {
   model_name?: ConversationModel | null;
   profile_id?: string | null;
 };
+
+/** A message to send, and the id that makes sending it again safe.
+ *
+ *  `client_message_id` names this send: the server stores a message once per
+ *  id per conversation, and answers a repeat with the first send's run and
+ *  `deduplicated: true`. Reuse it when retrying the same message; leave it out
+ *  and one is made for each call. An id already in the metadata -- where the
+ *  web app first carried it -- is used as is. */
+export type SendMessageInput = SendMessageRequest & { client_message_id?: string | null };
+
+function newClientMessageId(): string {
+  const crypto = globalThis.crypto;
+  if (crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** The payload with its client message id settled, once, before it is sent. */
+export function withClientMessageId(payload: SendMessageInput): SendMessageInput {
+  if (payload.client_message_id) return payload;
+  const carried = payload.metadata?.client_message_id;
+  return {
+    ...payload,
+    client_message_id: typeof carried === "string" && carried ? carried : newClientMessageId(),
+  };
+}
 
 type UserApprovalDecision = ResolveUserApprovalRequest["decision"] | "APPROVE_ONCE" | "APPROVE_FOR_SESSION" | "DENY";
 
@@ -180,6 +206,9 @@ export class ConversationsNamespace {
     archived?: boolean | null;
     // Titles containing this, case-insensitively; paged like the rest.
     search?: string | null;
+    // false: only conversations of no channel (the chats list); true: only
+    // those in a channel. Omitted: both.
+    in_channel?: boolean | null;
     limit?: number;
     page_token?: string | null;
   } = {}): Promise<ConversationListResponse> {
@@ -194,6 +223,7 @@ export class ConversationsNamespace {
         status: options.status,
         archived: options.archived,
         search: options.search,
+        in_channel: options.in_channel,
         limit: options.limit ?? 20,
         page_token: options.page_token,
       },
@@ -215,6 +245,7 @@ export class ConversationsNamespace {
     options: {
       pod_id?: string | null;
       search?: string | null;
+      in_channel?: boolean | null;
       limit?: number;
       page_token?: string | null;
     } = {},
@@ -302,13 +333,13 @@ export class ConversationsNamespace {
 
   sendMessageStream(
     conversationId: string,
-    payload: SendMessageRequest,
+    payload: SendMessageInput,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},
   ) {
     const podId = this.requirePodId(options.pod_id);
     return this.http.stream(`/pods/${podId}/conversations/${conversationId}/messages`, {
       method: "POST",
-      body: payload,
+      body: withClientMessageId(payload),
       signal: options.signal,
       headers: {
         "Content-Type": "application/json",
@@ -319,7 +350,7 @@ export class ConversationsNamespace {
 
   appendMessage(
     conversationId: string,
-    payload: SendMessageRequest,
+    payload: SendMessageInput,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},
   ): Promise<AgentRunStartResponse> {
     const podId = this.requirePodId(options.pod_id);
@@ -327,7 +358,7 @@ export class ConversationsNamespace {
       "POST",
       `/pods/${podId}/conversations/${conversationId}/messages/append`,
       {
-        body: payload,
+        body: withClientMessageId(payload),
         signal: options.signal,
       },
     );
@@ -421,15 +452,34 @@ export class ConversationsNamespace {
 
     send: (
       conversationId: string,
-      payload: SendMessageRequest,
+      payload: SendMessageInput,
       options: { pod_id?: string | null } = {},
     ): Promise<unknown> => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request<unknown>("POST", `/pods/${podId}/conversations/${conversationId}/messages`, {
-        body: payload,
+        body: withClientMessageId(payload),
       });
     },
   };
+
+  /**
+   * Questions, approvals and Agent Host permission requests waiting on the
+   * caller, across their own conversations in the pod, longest-waiting first.
+   * Answer one with `approvals.resolve`, passing its `tool_call_id` as the
+   * approval id. Mirrors the Python SDK's `pending_interactions`.
+   */
+  pendingInteractions(options: {
+    pod_id?: string | null;
+    limit?: number;
+    page_token?: string | null;
+  } = {}): Promise<PendingInteractionListResponse> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<PendingInteractionListResponse>(
+      "GET",
+      `/pods/${podId}/conversations/pending-interactions`,
+      { params: { limit: options.limit ?? 50, page_token: options.page_token } },
+    );
+  }
 
   readonly approvals = {
     list: (

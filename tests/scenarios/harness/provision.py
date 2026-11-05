@@ -200,7 +200,6 @@ async def provision(
             await _administers(boss, administrator, pod, ledger)
             if reset:
                 await _clear_run_debris(boss, pod, ledger, mine=made_by_a_run)
-        await _known_on_telegram(holder, ledger)
         await _standing_reach(holder, standing_pods, ledger)
 
         written = ledger.report(
@@ -593,23 +592,6 @@ async def _clear_run_pods(
             ledger.did(f"removed leftover pod {name!r}")
 
 
-async def _known_on_telegram(holder: Person, ledger: Ledger) -> None:
-    """Tell Lemma which Telegram account the holder is.
-
-    Without it every inbound message is from a stranger — correctly, and the
-    stranger is told how to get access rather than answered. So the live lane
-    would prove the refusal path and never the conversation.
-    """
-    handle = os.getenv("SCENARIOS_TELEGRAM_HANDLE", "").strip().lstrip("@")
-    if not handle:
-        return
-    try:
-        await holder.is_known_on_telegram_as(handle)
-        ledger.did(f"{holder.label} is known on Telegram as @{handle}")
-    except Exception as exc:
-        ledger.did(f"could not set the Telegram handle: {_one_line(exc)}")
-
-
 async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger) -> None:
     """Give the tenant a surface that keeps its reach between runs.
 
@@ -664,12 +646,19 @@ async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger)
             )
             continue
         try:
+            # A surface runs as a SHARED pod connector, not as an account named
+            # on the request. The holder connected the bot, so sharing it with
+            # the standing pod is theirs to do; done again on a later run it
+            # finds the connector already there.
+            connector = await holder.shares_as_pod_connector(
+                account, in_pod=pod, slug=reach.connector
+            )
             await holder.connects_a_surface(
                 in_pod=pod,
                 platform=reach.platform,
                 named=reach.name,
                 agent=reach.agent,
-                account=account,
+                pod_connector=connector,
             )
             ledger.did(f"created surface {reach.name!r} on {reach.pod!r}")
         except Exception as exc:

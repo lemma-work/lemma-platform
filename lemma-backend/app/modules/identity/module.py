@@ -13,6 +13,9 @@ def _routers():
     from app.modules.identity.api.controllers.organization_navigation_controller import (
         router as organization_navigation,
     )
+    from app.modules.identity.api.controllers.organization_permission_controller import (
+        router as organization_permissions,
+    )
     from app.modules.identity.api.controllers.first_workspace_controller import (
         router as first_workspace,
     )
@@ -41,6 +44,7 @@ def _routers():
         email_delivery,
         user,
         organization_navigation,
+        organization_permissions,
         organization,
         auth,
         email_login,
@@ -49,10 +53,8 @@ def _routers():
     ]
 
 
-def _event_routers():
-    from app.modules.identity.events.handlers import router
-
-    return [router]
+def _register_work() -> None:
+    import app.modules.identity.events.identity_work  # noqa: F401
 
 
 @asynccontextmanager
@@ -105,11 +107,7 @@ async def _configure_supertokens(context):
 module = LemmaModule(
     name="identity",
     routers=_routers,
-    event_routers=_event_routers,
+    register_work=_register_work,
     api_lifespans=(_close_user_cache,),
     worker_lifespans=(_configure_supertokens,),
-    stream_groups=(
-        ("identity_events", "identity-email-events"),
-        ("identity_events", "identity-mobile-verification-events"),
-    ),
 )

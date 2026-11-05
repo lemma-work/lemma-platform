@@ -190,6 +190,10 @@ class ProcessDescriptor:
     cwd: str = ""
     command: str = ""
     tty: bool = False
+    # The sandbox no longer runs it, but nobody saw it exit, so there is no exit
+    # code. Ended, not failed: `state` keeps saying the watch was lost, and this
+    # is what stops a reader treating that as "still running" until a deadline.
+    exited_unobserved: bool = False
 
 
 @dataclass(frozen=True, slots=True)

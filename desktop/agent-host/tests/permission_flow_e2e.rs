@@ -346,11 +346,12 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
     let callbacks = Arc::new(Capture::default());
     let started = std::time::Instant::now();
 
-    let outcome = AcpDriver
+    let outcome = AcpDriver::default()
         .run(
             AcpRunRequest {
                 agent_environment: std::collections::BTreeMap::default(),
                 own_settings: false,
+                lemma_cli_bin: None,
                 adapter,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
@@ -367,6 +368,7 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(2),
                     system_prompt_delivery: None,
+                    pre_approvals: Vec::new(),
                 },
                 scratch_directory: scratch.path().join("run"),
                 mcp_server: None,
@@ -441,4 +443,147 @@ async fn a_decision_cannot_resolve_another_runs_request() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(waiter.await.unwrap(), allow);
+}
+
+// ---------------------------------------------------------------------------
+// An approval carried in from a turn that ended while it waited.
+// ---------------------------------------------------------------------------
+
+/// The scripted `permission` agent's run through the real driver, with these
+/// approvals carried in, answering nothing the gate is asked.
+async fn run_carrying(
+    pre_approvals: Vec<lemma_agent_host::protocol::PreApproval>,
+    permission_timeout: Duration,
+) -> Vec<(EventType, JsonMap)> {
+    let scratch = TempDir::new().unwrap();
+    let log = scratch.path().join("acp.jsonl");
+    let callbacks = Arc::new(Capture::default());
+    let outcome = AcpDriver::default()
+        .run(
+            AcpRunRequest {
+                agent_environment: std::collections::BTreeMap::default(),
+                own_settings: false,
+                lemma_cli_bin: None,
+                adapter: scripted_adapter(&log),
+                run_spec: RunSpec {
+                    agent_run_id: Uuid::new_v4(),
+                    conversation_id: Uuid::new_v4(),
+                    harness_id: Uuid::new_v4(),
+                    profile_revision: "pre-approval-e2e".into(),
+                    model_name: None,
+                    config_selections: JsonMap::new(),
+                    system_prompt: String::new(),
+                    prompt: vec![json!({"type": "text", "text": "Delete the build directory."})],
+                    resume_session_id: None,
+                    workspace_cwd: None,
+                    context: JsonMap::new(),
+                    mcp: Value::Null,
+                    run_deadline: Utc::now() + chrono::Duration::minutes(2),
+                    system_prompt_delivery: None,
+                    pre_approvals,
+                },
+                scratch_directory: scratch.path().join("run"),
+                mcp_server: None,
+                can_load_session: false,
+                published_config_options: Vec::new(),
+                permissions: PermissionGate::new(),
+                permission_timeout,
+                cancel: lemma_agent_host::acp::never_cancelled(),
+                cancel_grace: Duration::from_secs(5),
+                steer: lemma_agent_host::acp::SteerInbox::default(),
+            },
+            callbacks.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.state, RunState::Succeeded);
+    callbacks.events.lock().unwrap().clone()
+}
+
+fn answer_in(events: &[(EventType, JsonMap)]) -> String {
+    events
+        .iter()
+        .filter(|(kind, _)| *kind == EventType::AgentMessageChunk)
+        .filter_map(|(_, payload)| payload.get("text").and_then(Value::as_str))
+        .collect()
+}
+
+fn the_request(events: &[(EventType, JsonMap)]) -> JsonMap {
+    let requests: Vec<&JsonMap> = events
+        .iter()
+        .filter(|(kind, _)| *kind == EventType::PermissionRequest)
+        .map(|(_, payload)| payload)
+        .collect();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    requests[0].clone()
+}
+
+fn carried(
+    tool_name: &str,
+    input: Value,
+    decision: &str,
+) -> lemma_agent_host::protocol::PreApproval {
+    lemma_agent_host::protocol::PreApproval {
+        approval_id: "agent-host-permission:native-shell".to_owned(),
+        tool_name: tool_name.to_owned(),
+        input,
+        decision: decision.to_owned(),
+    }
+}
+
+/// The person approved this after the turn that asked had been ended; the
+/// resumed turn asks for it again and is answered from that approval, once,
+/// without the request waiting on anyone -- and the transcript says so.
+#[tokio::test]
+async fn a_carried_approval_answers_the_same_request_without_asking() {
+    // What the request looks like to Lemma: the canonical tool and input its
+    // card showed, which is what an approval of it carries back.
+    let asked = the_request(&run_carrying(Vec::new(), Duration::from_millis(200)).await);
+    let tool_name = asked["tool"]["name"].as_str().unwrap().to_owned();
+    let input = asked["input"].clone();
+    assert!(!asked.contains_key("pre_approved"), "{asked:?}");
+
+    let started = std::time::Instant::now();
+    let events = run_carrying(
+        vec![carried(&tool_name, input, "APPROVE_FOR_SESSION")],
+        // Long enough that waiting on the gate would show in the time.
+        Duration::from_secs(60),
+    )
+    .await;
+
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(
+        answer_in(&events).contains("LEMMA_PERMISSION_ALLOWED:once"),
+        "allowed through the agent's own allow-once, never its always; answer={:?}",
+        answer_in(&events)
+    );
+    let request = the_request(&events);
+    assert_eq!(
+        request["pre_approved"],
+        json!({ "approval_id": "agent-host-permission:native-shell" })
+    );
+}
+
+/// Anything but that exact call is asked about as before, and a denial is
+/// never carried as anything.
+#[tokio::test]
+async fn a_request_the_carried_approval_does_not_match_still_asks() {
+    let asked = the_request(&run_carrying(Vec::new(), Duration::from_millis(200)).await);
+    let tool_name = asked["tool"]["name"].as_str().unwrap().to_owned();
+    let input = asked["input"].clone();
+
+    for approval in [
+        carried(&tool_name, json!({ "command": "rm -rf /" }), "APPROVE_ONCE"),
+        carried("some_other_tool", input.clone(), "APPROVE_ONCE"),
+        carried(&tool_name, input.clone(), "DENY"),
+    ] {
+        let events = run_carrying(vec![approval.clone()], Duration::from_millis(200)).await;
+        let request = the_request(&events);
+        assert!(!request.contains_key("pre_approved"), "{approval:?}");
+        assert!(
+            answer_in(&events).contains("LEMMA_PERMISSION_DENIED:cancelled"),
+            "{approval:?} let an unanswered request through; answer={:?}",
+            answer_in(&events)
+        );
+    }
 }

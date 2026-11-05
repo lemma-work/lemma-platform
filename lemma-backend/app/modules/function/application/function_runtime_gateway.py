@@ -9,7 +9,7 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.concurrency.offload import run_blocking
-from app.core.redaction import redact_text
+from app.modules.function.application.dispatch_failures import runtime_error_message
 from app.core.log.log import get_logger
 from app.modules.function.contracts.runtime import (
     RuntimeEventResponse,
@@ -183,9 +183,6 @@ class FunctionRuntimeGateway:
 
 
 def _runtime_failure_message(error: RuntimeFailure) -> str:
-    # asyncio.wait_for raises the built-in TimeoutError without a message. The
-    # runtime preserves the exception type, so normalize that empty detail into
-    # the stable timeout semantic expected by API and job function clients.
-    if error.name == "TimeoutError":
-        return "Function execution timed out (deadline exceeded)"
-    return redact_text(f"{error.name}: {error.message}")[:16_384]
+    # One wording for a failure whichever path reports it: the synchronous
+    # response and this callback must not describe the same failure two ways.
+    return runtime_error_message(error.name, error.message)

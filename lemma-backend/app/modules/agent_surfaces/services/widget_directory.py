@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from redis.exceptions import RedisError
 
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import WEB_WIDGET_KEYS, surface_caches
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.web_widgets import WebWidget
@@ -28,18 +28,9 @@ logger = get_logger(__name__)
 _FOUND_SECONDS = 60
 _MISSING_SECONDS = 15
 
-_cache: RedisJsonCache[dict[str, object]] | None = None
-
 
 def _widgets() -> RedisJsonCache[dict[str, object]]:
-    global _cache
-    if _cache is None:
-        _cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="web-widget:key",
-            ttl_seconds=_FOUND_SECONDS,
-        )
-    return _cache
+    return surface_caches.get(WEB_WIDGET_KEYS)
 
 
 def _degraded(exc: Exception) -> None:

@@ -3,7 +3,7 @@
 A person outside a pod who writes to one of its bots has no account the pod can
 grant anything to, and no role in it. The run that answers them still has to be
 authorized as *somebody*, and the honest somebody is nobody:
-``ActorType.ANONYMOUS``, which the authorizer answers with reads of Public
+an anonymous ``Outsider``, which the authorizer answers with reads of Public
 resources and nothing else -- in ``Authorizer.authorize`` and in the SQL
 projection alike.
 
@@ -33,7 +33,11 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.authorizer import Authorizer
-from app.core.authorization.context import ActorType, Context
+from app.core.authorization.context import (
+    Context,
+    Outsider,
+    OutsiderKind,
+)
 
 
 def build_anonymous_context(
@@ -51,7 +55,7 @@ def build_anonymous_context(
     context for any grant to match.
     """
     return Context(
-        actor_type=ActorType.ANONYMOUS,
+        actor=Outsider(kind=OutsiderKind.ANONYMOUS),
         actor_id=actor_id,
         authorizer=Authorizer(session),
         request_id=request_id,
@@ -86,7 +90,7 @@ def build_outsider_context(
             request_id=request_id,
         )
     return Context(
-        actor_type=ActorType.CONTACT,
+        actor=Outsider(kind=OutsiderKind.CONTACT, contact_id=contact_id),
         actor_id=actor_id or f"contact:{contact_id}",
         authorizer=Authorizer(session),
         request_id=request_id,

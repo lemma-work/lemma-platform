@@ -279,21 +279,3 @@ async def seed_account(
     created = await repo.create(entity)
     await db_session.commit()
     return str(created.id)
-
-
-def build_account_resolution_service(db_session):
-    from app.core.crypto import get_secret_cipher
-    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.connectors.infrastructure.repositories.account_repository import (
-        AccountRepository,
-    )
-    from app.modules.connectors.services.account_resolution_service import (
-        AccountResolutionService,
-    )
-    from app.core.authorization.factory import create_authorization_data_service
-
-    uow = SqlAlchemyUnitOfWork(db_session)
-    return AccountResolutionService(
-        account_repository=AccountRepository(uow, encryption=get_secret_cipher()),
-        authorization_service=create_authorization_data_service(uow),
-    )

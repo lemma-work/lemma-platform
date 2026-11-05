@@ -314,6 +314,16 @@
     }
 }
 
+/* The whole pane takes a drop, not only the column the list is drawn in. A
+   file let go beside the list used to land nowhere, which reads as a rejection
+   rather than as missing the target. */
+.all-zone {
+    min-height: 100%;
+    /* Asked about its own width, not the window's: a list beside a
+       conversation is narrow on a wide screen. */
+    container-type: inline-size;
+}
+
 /* A files view with files dragged over it, before they land. */
 .all--drop {
     border-radius: var(--r-xl);

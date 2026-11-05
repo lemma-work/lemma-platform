@@ -251,6 +251,52 @@ lemma-agent-host own-settings disable claude-code   # Lemma's only (the default)
 
 The setting is `own_settings` in `config.json`, read by each run as it starts.
 
+Each run's agent may run one `lemma` CLI without a permission request
+(`src/lemma_cli.rs`): the one the local install's backend names, or, for every
+other pairing, the one the app carries in `Contents/Resources/lemma-cli`
+(`make desktop-dmg` stages it with `scripts/build_desktop_lemma_cli.py`), else
+one the host downloaded for its own release. From source there is no app
+bundle, so stage one and name it:
+
+```bash
+uv run --no-project python scripts/build_desktop_lemma_cli.py --output /tmp/lemma-cli
+LEMMA_AGENT_HOST_CLI_ROOT=/tmp/lemma-cli cargo run -p lemma-agent-host -- serve
+```
+
+The shipped online app carries no CLI, so a release build downloads
+`lemma-cli-<platform>.tar.gz` from its own GitHub release the first time a
+hosted run needs one (`src/lemma_cli/download.rs`): the manifest URL is
+compiled in, never taken from a server, and the archive's SHA-256 is checked
+against it before it is unpacked into `<data dir>/cli/<version>/`. A failed
+download costs that run its CLI, not its start, and is retried later. To try
+it from source, publish the archive and point a debug build at its manifest:
+
+```bash
+uv run --no-project python scripts/build_desktop_lemma_cli.py --output /tmp/lemma-cli \
+  --archive /tmp/release --release-version 0.9.0 --release-url http://127.0.0.1:8000
+(cd /tmp/release && python3 -m http.server 8000) &
+LEMMA_AGENT_HOST_CLI_MANIFEST_URL=http://127.0.0.1:8000/lemma-cli-aarch64-apple-darwin.json \
+  cargo run -p lemma-agent-host -- serve
+```
+
+Both variables are read by debug builds only. The version in the manifest has
+to be the host's own (`cargo pkgid -p lemma-agent-host`).
+
+## How many runs at once
+
+A computer takes up to 20 runs at once, across all its pairings. More wait in
+Lemma's queue for a slot. The person can choose another limit, from 1 to 128:
+
+```bash
+lemma-agent-host max-runs          # show it
+lemma-agent-host max-runs 8        # choose it; applies when the host next starts
+```
+
+The setting is `max_runs` in `config.json`, with `max_runs_chosen` recording
+that the person set it. Older builds wrote their default of 2 into every
+config; a 2 nobody chose is lifted to the current default when the config is
+read, and a chosen one is kept.
+
 ## Host execution
 
 On macOS the host can also run the paired user's Lemma agent commands on this
@@ -412,7 +458,8 @@ Codex, Claude Code, and OpenCode installations, then pairs a complete
 It checks that assistant text arrives before completion, the final answer is
 complete, and the event sequence has one terminal event with no gaps or duplicates.
 Follow-up tests exercise session continuity, missing sessions, cancellation,
-native-tool approval and denial, and Lemma MCP tools. Use a disposable Agent Host
+native-tool approval and denial, and Lemma MCP tools, which Claude Code must
+call without first searching for them. Use a disposable Agent Host
 data directory containing copies of the verified adapters:
 
 ```bash

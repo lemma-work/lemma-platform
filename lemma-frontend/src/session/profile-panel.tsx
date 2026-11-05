@@ -109,22 +109,12 @@ export function ProfilePanel({ user }: { user: UserResponse }) {
                 </label>
             </div>
 
-            <div className="profile-form__pair">
-                <label className="field">
-                    <span>Mobile number</span>
-                    <input value={draft.mobile_number} onChange={(e) => set("mobile_number", e.target.value)} autoComplete="tel" inputMode="tel" />
-                </label>
-                <label className="field">
-                    <span>Telegram</span>
-                    <input
-                        value={draft.telegram_username ? "@" + draft.telegram_username : ""}
-                        onChange={(e) => set("telegram_username", e.target.value)}
-                        placeholder="@handle"
-                    />
-                </label>
-            </div>
+            <label className="field">
+                <span>Mobile number</span>
+                <input value={draft.mobile_number} onChange={(e) => set("mobile_number", e.target.value)} autoComplete="tel" inputMode="tel" />
+            </label>
 
-            {/* Below the pair rather than inside it: a QR and three lines of
+            {/* Full width beneath the number: a QR and three lines of
                 explanation in a half-width column is a column of one word per
                 line. */}
             {verified ? (

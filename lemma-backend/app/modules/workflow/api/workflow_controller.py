@@ -1,7 +1,7 @@
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid5
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -39,6 +39,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 router = APIRouter(prefix="/pods/{pod_id}/workflows", tags=["workflows"])
+
+#: Namespace for run ids derived from an `Idempotency-Key`. Fixed for good: a
+#: change would let a retry spanning a deploy start a second run.
+_IDEMPOTENT_RUNS = UUID("0b6c2f7a-5d1e-4c8b-9a3f-2e7d1c4b8a60")
 
 
 def _verify_pod(workflow: WorkflowEntity | None, pod_id: UUID):
@@ -94,6 +98,7 @@ async def create_workflow(
         requester_user_id=user.id,
         ctx=ctx,
         run_title=data.run_title,
+        max_concurrent_runs=data.max_concurrent_runs,
     )
     workflow = await service.get_workflow_by_name(
         pod_id,
@@ -293,7 +298,9 @@ async def delete_workflow(
         "(see `active_wait` in the response) and input is submitted via "
         "`workflow.run.form.submit`; otherwise the run executes immediately. "
         "Trigger payloads for scheduled/event/datastore starts are supplied by "
-        "the platform, not through this endpoint."
+        "the platform, not through this endpoint. Send an `Idempotency-Key` "
+        "header to make a retry safe: the same key, from the same person, for "
+        "the same workflow, returns the run it already created."
     ),
     dependencies=[WorkflowResourceExecuteDep],
 )
@@ -304,6 +311,9 @@ async def create_workflow_run(
     workflow_name: str,
     service: WorkflowServiceDep,
     ctx: PodContextDep,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", min_length=1, max_length=255
+    ),
 ) -> WorkflowRunResponse:
     workflow = await service.get_workflow_by_name(
         pod_id,
@@ -315,7 +325,15 @@ async def create_workflow_run(
     assert workflow is not None
 
     engine = build_workflow_engine(uow)
-    run = await engine.start_run(workflow.id, user.id, ctx=ctx)
+    # A double click, or a retry of a request whose answer was lost, used to
+    # start a second run. The key names the run instead: `start_run` returns a
+    # run that already holds the id it was asked to reserve.
+    run_id = (
+        uuid5(_IDEMPOTENT_RUNS, f"{workflow.id}:{user.id}:{idempotency_key}")
+        if idempotency_key is not None
+        else None
+    )
+    run = await engine.start_run(workflow.id, user.id, run_id=run_id, ctx=ctx)
     active_wait = await engine.get_active_wait(run.id)
     return run_response_from_domain(run, active_wait, workflow.run_title)
 

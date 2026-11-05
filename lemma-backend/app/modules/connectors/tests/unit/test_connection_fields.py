@@ -143,16 +143,19 @@ async def test_composio_receives_the_store_as_oauth2_connection_state():
 @pytest.mark.asyncio
 async def test_a_sign_in_without_fields_uses_link_not_the_retiring_initiate():
     """Composio is retiring `initiate()` for redirect sign-ins and warns on each
-    call; `link()` returns the same connected-account id and redirect."""
+    call; a Connect Link returns the same connected-account id and redirect."""
     link = MagicMock(
-        return_value=SimpleNamespace(id="ca_g", redirect_url="https://g/oauth")
+        return_value=SimpleNamespace(
+            connected_account_id="ca_g", redirect_url="https://g/oauth"
+        )
     )
     initiate = MagicMock()
     composio = SimpleNamespace(
         auth_configs=SimpleNamespace(
             create=MagicMock(return_value=SimpleNamespace(id="ac_g"))
         ),
-        connected_accounts=SimpleNamespace(initiate=initiate, link=link),
+        connected_accounts=SimpleNamespace(initiate=initiate),
+        client=SimpleNamespace(link=SimpleNamespace(create=link)),
     )
     provider = ComposioAuthProvider(
         connector_repository=AsyncMock(), composio_client_factory=lambda: composio

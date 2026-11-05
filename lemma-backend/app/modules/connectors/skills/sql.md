@@ -10,7 +10,7 @@ operations**, because a database describes itself:
 | Operation | |
 | --- | --- |
 | `list_tables` | What is in the database. |
-| `describe_table` | One table's columns and types. |
+| `describe_table` | One table's columns: type, length, nullability, default, enum labels and CHECK constraints. |
 | `execute_query` | A read-only `SELECT`. |
 
 **Install config:** `dialect` (`postgresql`, the only engine supported today),

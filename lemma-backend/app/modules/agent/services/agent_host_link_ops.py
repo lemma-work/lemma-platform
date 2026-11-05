@@ -20,6 +20,8 @@ with its own bookkeeping, and the session is a lifecycle, not a router.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import itertools
 from collections.abc import Awaitable, Callable
 from uuid import UUID
@@ -28,6 +30,7 @@ from pydantic import ValidationError
 from redis.exceptions import RedisError
 
 from app.core.config import settings
+from app.core.server_limits import WS_MAX_BYTES
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
@@ -43,12 +46,27 @@ from app.modules.agent.domain.agent_host_link import (
 from app.modules.agent.domain.agent_host_ops import (
     INVALID_ANSWER,
     LINK_LOST,
+    LINK_UNAVAILABLE,
     TIMEOUT,
+    TRANSFER_INCOMPLETE,
     OpFailure,
     OpNotice,
     OpReply,
 )
-from app.modules.agent.services.agent_host_link_wire import LinkWriter
+from app.modules.agent.domain.agent_host_transfer import (
+    LINK_INLINE_DATA_BYTES,
+    sha256_hex,
+)
+from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.infrastructure.agent_host.transfers import (
+    AgentHostTransferStore,
+    TransferRefusal,
+    TransferRefused,
+)
+from app.modules.agent.services.agent_host_link_wire import (
+    LinkWriter,
+    OutboundFrameTooLarge,
+)
 
 
 logger = get_logger(__name__)
@@ -101,6 +119,7 @@ class LinkOpRelay:
         writer: LinkWriter,
         channels: RealtimeChannel,
         claim: Claim = redis_claim,
+        transfers: AgentHostTransferStore | None = None,
     ) -> None:
         self._writer = writer
         self._channels = channels
@@ -110,6 +129,11 @@ class LinkOpRelay:
         self._pending: dict[str, asyncio.Future[OpReply]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._closed = False
+        #: Whether the host on this link moves file data itself. The session
+        #: sets it from ``hello``; until then, and for a host released before
+        #: transfers, this relay moves the data for it (``OldHostTransfers``).
+        self.host_moves_transfers = False
+        self._old_host = OldHostTransfers(transfers)
 
     @property
     def in_flight(self) -> int:
@@ -146,13 +170,23 @@ class LinkOpRelay:
         frame_id = f"{OP_ID_PREFIX}{next(self._ids)}"
         waiter: asyncio.Future[OpReply] = asyncio.get_running_loop().create_future()
         self._pending[frame_id] = waiter
+        transfer = None if self.host_moves_transfers else op_transfer(notice.params)
         try:
+            params = (
+                notice.params
+                if self.host_moves_transfers
+                else old_host_params(notice.method, notice.params)
+            )
+            if transfer is not None:
+                params = await self._old_host.outbound(
+                    notice.method, params, transfer, host_id=host_id
+                )
             await self._writer.send_frame(
                 ServerFrameType.OP,
                 OpBody(
                     workspace=notice.workspace,
                     method=notice.method,
-                    params=notice.params,
+                    params=params,
                     deadline_ms=notice.deadline_ms,
                 ),
                 id=frame_id,
@@ -163,11 +197,44 @@ class LinkOpRelay:
                 reply = await asyncio.wait_for(
                     asyncio.shield(waiter), timeout=notice.deadline_ms / 1000
                 )
+            if transfer is not None and reply.result is not None:
+                reply = OpReply(
+                    type="result",
+                    result=await self._old_host.inbound(
+                        notice.method, reply.result, transfer, host_id=host_id
+                    ),
+                )
         except TimeoutError:
             reply = _failure(
                 LinkErrorCode.OP_FAILED.value,
                 TIMEOUT,
                 f"{notice.method} did not finish before its deadline",
+                retryable=True,
+            )
+        except OutboundFrameTooLarge as refused:
+            reply = _failure(
+                LinkErrorCode.OP_FAILED.value,
+                "too_large",
+                f"{notice.method}: {refused}",
+            )
+        except TransferRefused as refused:
+            reply = _failure(
+                LinkErrorCode.OP_FAILED.value,
+                TRANSFER_INCOMPLETE,
+                f"{notice.method}: {refused.message}",
+                retryable=True,
+            )
+        except RedisError, OSError:
+            logger.warning(
+                "agent.agent_host_link.old_host_transfer_unavailable.degraded",
+                host_id=str(host_id),
+                method=notice.method,
+                exc_info=True,
+            )
+            reply = _failure(
+                "UNAVAILABLE",
+                LINK_UNAVAILABLE,
+                f"{notice.method}: Lemma could not hold the file data just now",
                 retryable=True,
             )
         finally:
@@ -240,3 +307,115 @@ class LinkOpRelay:
         )
         for task in still_running:
             task.cancel()
+
+
+#: The most one byte of a process's output can cost in an old host's
+#: ``process.read`` answer: every chunk is ``{"sequence":…,"stream":…,"data":…}``
+#: with its data base64'd, and a process that flushes a byte at a time makes a
+#: chunk of each. 72 covers a 20-digit sequence, ``stderr`` and JSON spacing.
+_OLD_HOST_WORST_BYTES_PER_OUTPUT_BYTE = 72
+#: The answer's own envelope -- ``op_ok``, its id, the state, the cursors.
+_OLD_HOST_REPLY_HEADROOM = 4 * 1024
+#: What a host released before transfers keeps of a process's output between
+#: two reads: as much as still fits the message ceiling in the worst case.
+OLD_HOST_OUTPUT_LIMIT_BYTES = (
+    WS_MAX_BYTES - _OLD_HOST_REPLY_HEADROOM
+) // _OLD_HOST_WORST_BYTES_PER_OUTPUT_BYTE
+
+
+def old_host_params(method: str, params: JsonObject) -> JsonObject:
+    """An op's params as a host released before transfers is sent them.
+
+    Such a host ignores ``process.read``'s ``max_bytes`` and answers a read
+    with everything its process kept since the last one, a JSON object per
+    chunk. What it keeps is bounded by the ``output_limit_bytes`` it is started
+    with (newest kept, the rest reported dropped), and only in raw bytes -- so
+    the bound is the one that keeps even a byte-per-chunk answer inside the
+    API's message ceiling (``OLD_HOST_OUTPUT_LIMIT_BYTES``). Past it the link
+    would close with 1009 mid-run; under it a burst between two reads loses
+    its oldest part, which the reader is told (``process_output``).
+    """
+    if method != "process.start":
+        return params
+    asked = params.get("output_limit_bytes")
+    limit = OLD_HOST_OUTPUT_LIMIT_BYTES
+    # ``True`` is an ``int`` in Python; it is not a byte count.
+    if isinstance(asked, int) and not isinstance(asked, bool) and asked > 0:
+        limit = asked
+    return {**params, "output_limit_bytes": min(limit, OLD_HOST_OUTPUT_LIMIT_BYTES)}
+
+
+def op_transfer(params: JsonObject) -> JsonObject | None:
+    """The transfer an op names, if it names one."""
+    transfer = params.get("transfer")
+    return transfer if isinstance(transfer, dict) else None
+
+
+class OldHostTransfers:
+    """File data for a host released before transfers, moved by this relay.
+
+    Such a host reads ``data`` off a ``file.write`` and puts it on a
+    ``file.read``'s answer, and knows nothing of transfers -- a write that
+    named one would reach its exec-server with no data at all. So on its link
+    the relay does the host's half here, where the bytes are a Redis read
+    away: it fetches a write's chunk into the op, and delivers a read's
+    answer into the slot. The caller sees the same transfer either way.
+
+    A write's chunk travels to the host inline, as it always did; only what
+    the host *sends* meets the API's message ceiling, so a read asks for no
+    more than ``LINK_INLINE_DATA_BYTES``, which base64 keeps inside it. Its
+    ``process.read`` answers are bounded where the process starts
+    (``old_host_params``).
+    """
+
+    def __init__(self, store: AgentHostTransferStore | None = None) -> None:
+        self._store = store or AgentHostTransferStore()
+
+    async def outbound(
+        self,
+        method: str,
+        params: JsonObject,
+        transfer: JsonObject,
+        *,
+        host_id: UUID,
+    ) -> JsonObject:
+        """The op as the old host reads it."""
+        inline = {key: value for key, value in params.items() if key != "transfer"}
+        if method == "file.write":
+            data, _ = await self._store.fetch_by_host(
+                str(transfer.get("id")), host_id=host_id
+            )
+            inline["data"] = base64.b64encode(data).decode("ascii")
+        elif method == "file.read":
+            length = inline.get("length")
+            asked = length if isinstance(length, int) else LINK_INLINE_DATA_BYTES
+            inline["length"] = max(0, min(asked, LINK_INLINE_DATA_BYTES))
+        return inline
+
+    async def inbound(
+        self,
+        method: str,
+        result: JsonObject,
+        transfer: JsonObject,
+        *,
+        host_id: UUID,
+    ) -> JsonObject:
+        """The old host's answer as the caller reads it."""
+        if method != "file.read":
+            return result
+        answer = {key: value for key, value in result.items() if key != "data"}
+        encoded = result.get("data")
+        try:
+            data = base64.b64decode(encoded) if isinstance(encoded, str) else b""
+        except binascii.Error, ValueError:
+            raise TransferRefused(
+                TransferRefusal.DIGEST_MISMATCH, "the host's data is not base64"
+            ) from None
+        digest = sha256_hex(data)
+        if data:
+            await self._store.deliver_by_host(
+                str(transfer.get("id")), host_id=host_id, data=data, sha256=digest
+            )
+        answer["size"] = len(data)
+        answer["sha256"] = digest
+        return answer

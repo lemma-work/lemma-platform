@@ -1,3 +1,4 @@
+import { grantNote, sessionScopeSentence } from "./approval-scope";
 import { toolKey } from "./tool-name";
 
 export interface ApprovalDetails {
@@ -13,6 +14,14 @@ export interface ApprovalDetails {
     /** What "approve for this conversation" is called, when the asker named
      *  it — a coding agent's own "Always allow" option. */
     sessionLabel?: string;
+    /** What approving for the conversation allows, in words: it covers the
+     *  permission, not the one call ("Delete records in any table for the
+     *  rest of this conversation"). */
+    sessionScope?: string;
+    /** Set when approving gives a named agent a connector for good rather
+     *  than lending it once: what the card says instead of the session
+     *  option, which it does not offer. */
+    grantNote?: string;
     /** A coding agent on a computer asking before it uses one of its own
      *  tools. It waits inside a live run, and not for ever: see
      *  {@link HOST_PERMISSION_WINDOW_MS}. */
@@ -27,12 +36,21 @@ export interface ApprovalDetails {
 export const HOST_PERMISSION_WINDOW_MS = 30 * 60_000;
 
 /** Whether a coding agent's request can no longer be answered: its window
- *  has passed, or the run it paused has ended. */
+ *  has passed, or the run it paused has ended.
+ *
+ *  Neither applies while the conversation is waiting on it. Lemma ends a turn
+ *  left parked on a request (the parked window, well inside the computer's
+ *  own), keeps the request open, and resumes a new run with the decision. */
 export function hostPermissionExpired(
     details: Pick<ApprovalDetails, "hostPermission">,
-    { askedAtMs, nowMs, runEnded }: { askedAtMs?: number; nowMs: number; runEnded: boolean },
+    {
+        askedAtMs,
+        nowMs,
+        runEnded,
+        resumesOnAnswer = false,
+    }: { askedAtMs?: number; nowMs: number; runEnded: boolean; resumesOnAnswer?: boolean },
 ): boolean {
-    if (!details.hostPermission) return false;
+    if (!details.hostPermission || resumesOnAnswer) return false;
     if (runEnded) return true;
     return askedAtMs !== undefined && nowMs >= askedAtMs + HOST_PERMISSION_WINDOW_MS;
 }
@@ -132,37 +150,14 @@ function optionKind(value: unknown): string {
     return asString(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/** Some tool names carry their command as one long string. That string is the
- *  single most useful thing on the card, so it is never truncated here — the
- *  card wraps it instead. */
-/** The tool that records a member's answer to a question passed on to them.
- *  Approving it for a question from outside the pod sends the answer back to
- *  that stranger, so its card is Lemma's words, not the agent's. */
-const OUTSIDE_ANSWER_TOOL = "respond_to_notification";
-
+/** What an approval card says about a tool call. Some tool names carry their
+ *  command as one long string; that string is the single most useful thing
+ *  on the card, so it is never truncated here — the card wraps it instead. */
 export function approvalDetails(toolArgs: unknown, fallbackText?: string): ApprovalDetails {
     const args = asRecord(toolArgs);
     const toolName = asString(args.tool_name);
     const title = asString(args.title);
     const reason = asString(args.reason);
-
-    if (toolName === OUTSIDE_ANSWER_TOOL) {
-        /* The agent drafted this with all of your access, and its title and
-           reason could have been steered by the stranger's question. So the
-           card says what is actually decided -- these exact words go to the
-           person outside the pod who asked -- shows every one of them, and is
-           approved once, never for the session. */
-        const answer = asString(asRecord(args.args).summary);
-        return {
-            title: "Send this answer outside the pod?",
-            request:
-                "Someone outside the pod asked this in a group. Nothing is passed on " +
-                "until you approve, and then only these exact words go back to them.",
-            params: answer ? [{ name: "Answer", value: answer }] : [],
-            toolName,
-            canApproveForSession: false,
-        };
-    }
 
     /* A coding agent's request carries what it would run under the marker the
        backend routes the decision by, since nothing in it is Lemma's to run. */
@@ -198,6 +193,16 @@ export function approvalDetails(toolArgs: unknown, fallbackText?: string): Appro
         };
     }
 
+    const permissionIds = Array.isArray(args.permission_ids)
+        ? args.permission_ids.map(asString).filter(Boolean)
+        : [];
+    /* A named agent refused a pod connector asks to be given it, and a yes
+       adds the grant — once or not — so there is no conversation-long option
+       to offer, only the plain statement of what approving does. */
+    const offersGrant =
+        (toolName === "run_connector_operation" || toolName === "describe_connector_operation") &&
+        permissionIds.includes("connector.use");
+
     return {
         /* Empty when the call gave nothing to name it with, and left that way
            on purpose: what a nameless pause should be called depends on who is
@@ -213,7 +218,9 @@ export function approvalDetails(toolArgs: unknown, fallbackText?: string): Appro
         /* Approving for the session keeps this kind of action from asking
            again until it expires. Lemma's own approvals always can; a coding
            agent's can only when it offered an "always" option, above. */
-        canApproveForSession: true,
+        canApproveForSession: !offersGrant,
+        sessionScope: sessionScopeSentence(permissionIds),
+        grantNote: offersGrant ? grantNote(asString(inner.connector)) : undefined,
     };
 }
 

@@ -453,7 +453,8 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
         """Re-aiming at a harness that cannot take work loses the sentence.
 
         AUTH_REQUIRED is the one a user can act on, so it must reach them
-        rather than being replaced by a second revision mismatch later.
+        rather than being replaced by a second revision mismatch later -- as
+        the fix, not as the raw code.
         """
         session, command, lease, rejection, host_id = self._stale(
             harness_health="AUTH_REQUIRED"
@@ -462,7 +463,10 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
         await apply_rejection(session, host_id=host_id, rejection=rejection)
 
         assert command.state == AgentHostCommandState.ACKNOWLEDGED.value
-        assert "AUTH_REQUIRED" in (lease.error_detail or "")
+        detail = lease.error_detail or ""
+        assert "Claude Code on your computer needs signing in" in detail
+        assert "`claude auth login`" in detail
+        assert "AUTH_REQUIRED" not in detail
 
     async def test_agreeing_revisions_are_not_requeued(self) -> None:
         """The spin this exists to avoid, in its purest form.

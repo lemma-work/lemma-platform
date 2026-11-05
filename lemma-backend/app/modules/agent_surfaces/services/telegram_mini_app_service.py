@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    TelegramCredentials,
+)
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
@@ -11,7 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.telegram.client import TelegramClient
 from app.modules.apps.contracts import get_ready_pod_app_by_name
 
@@ -75,7 +79,7 @@ async def resolve_telegram_mini_app(
 class TelegramMiniAppSync:
     """What the two Telegram calls need, resolved while the session is open."""
 
-    credentials: dict[str, object]
+    credentials: TelegramCredentials
     menu_button: dict[str, object]
 
 
@@ -96,8 +100,8 @@ async def prepare_telegram_mini_app_sync(
         or credential_resolver is None
     ):
         return None
-    credentials = await credential_resolver.for_surface(surface)
-    if not str(credentials.get("bot_token") or "").strip():
+    credentials = TelegramCredentials.of(await credential_resolver.for_surface(surface))
+    if credentials.bot_token is None:
         raise AgentSurfaceValidationError("Telegram bot credentials are unavailable")
     mini_app = await resolve_telegram_mini_app(
         uow=uow,
@@ -156,7 +160,7 @@ async def apply_mini_app_sync_absorbing_outages(
     """
     try:
         await apply_telegram_mini_app_sync(plan, client_factory=client_factory)
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.warning(
             "agent_surfaces.telegram.mini_app_sync_failed.degraded",
             surface_id=str(surface_id),

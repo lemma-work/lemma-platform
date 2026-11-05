@@ -7,8 +7,7 @@ contributes only typed platform facts. Remote harnesses, which have no
 capability layer, get the same text from ``build_system_prompt``.
 
 This is a pure-instructions capability (no toolset) — the surface *tools* are
-contributed separately via ``SurfacePlatformToolFactory``. Mirrors
-``CurrentTimeCapability`` in carrying no ``get_toolset``.
+contributed separately via ``SurfacePlatformToolFactory``.
 """
 
 from __future__ import annotations

@@ -7,4 +7,6 @@ export enum WorkflowRunWaitType {
     AGENT = 'AGENT',
     FUNCTION = 'FUNCTION',
     TIME = 'TIME',
+    DECISION = 'DECISION',
+    QUEUED = 'QUEUED',
 }

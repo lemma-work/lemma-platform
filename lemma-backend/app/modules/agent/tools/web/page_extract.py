@@ -86,6 +86,10 @@ class ExtractedPage:
     #: Whether a bot defence refused us. `NOT_BLOCKED` by default, so a
     #: caller constructing one of these by hand gets today's behaviour.
     verdict: BlockVerdict = NOT_BLOCKED
+    #: The response was a text document -- JSON, plain text, CSV -- rather
+    #: than a web page. ``markdown`` then holds the body verbatim: there is no
+    #: article to extract, and a browser would only wrap it in a viewer.
+    raw: bool = False
 
 
 #: Statuses where the body was measured to be the real page rather than an
@@ -110,6 +114,42 @@ class PageFetchError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.verdict = verdict
+
+
+class PageUnreachableFetchError(PageFetchError):
+    """Nothing answered: DNS, a refused connection, a timeout.
+
+    Its own type because the answer to it is not the browser. The sandbox
+    reaches the network the same way, so a render only spends another long
+    wait learning the same thing.
+    """
+
+
+class NotAWebPageError(PageFetchError):
+    """The URL serves a file -- a PDF, an image, an archive -- not a page."""
+
+    def __init__(self, message: str, *, status: int | None, content_type: str):
+        super().__init__(message, status=status)
+        self.content_type = content_type
+
+
+#: Bodies that are documents in their own right, saved as they came.
+_TEXT_DOCUMENT_TYPES = (
+    "text/",
+    "application/json",
+    "+json",
+    "application/x-ndjson",
+    "application/javascript",
+    "application/yaml",
+    "application/x-yaml",
+    "application/toml",
+    "application/sql",
+)
+
+
+def is_text_document(content_type: str | None) -> bool:
+    lowered = (content_type or "").lower()
+    return any(marker in lowered for marker in _TEXT_DOCUMENT_TYPES)
 
 
 def _looks_like_html(content_type: str | None) -> bool:
@@ -258,7 +298,7 @@ async def fetch_and_clean(
             f"That URL is not a permitted fetch target ({exc.reason})."
         ) from exc
     except (PageUnreachableError, httpx.HTTPError) as exc:
-        raise PageFetchError(
+        raise PageUnreachableFetchError(
             f"The page could not be reached ({type(exc).__name__})."
         ) from exc
 
@@ -287,10 +327,24 @@ async def fetch_and_clean(
 
     content_type = page.content_type
     if not _looks_like_html(content_type):
-        raise PageFetchError(
-            f"That URL is {content_type or 'not a web page'}, not an article. "
-            "Download it with `exec_command` if you need the file itself.",
+        if is_text_document(content_type):
+            # An API answer, a raw file on a code host, a CSV: the body is
+            # the thing that was asked for. Sending it through a browser cost
+            # a full render to get back a viewer's rendering of the same text.
+            return ExtractedPage(
+                url=url,
+                title=None,
+                markdown=page.body.decode("utf-8", "replace"),
+                content_type=content_type,
+                final_url=page.final_url or url,
+                status=page.status,
+                verdict=verdict,
+                raw=True,
+            )
+        raise NotAWebPageError(
+            f"That URL is {content_type}, not a web page.",
             status=page.status,
+            content_type=str(content_type),
         )
 
     title, markdown = await extract_markdown_off_loop(page.body, url=url)

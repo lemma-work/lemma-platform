@@ -9,7 +9,7 @@ Every tool surface the in-process agent runs with is realized as a *capability*
     ``ToolSearch`` via ``.defer_loading()`` so their schemas never enter the
     prompt prefix (smaller context, preserved prompt caching); the model reveals
     them on demand through the local ``search_tools`` tool,
-  * behavioural capabilities (current-time, prompt-caching, todo).
+  * behavioural capabilities (the run's context part, prompt-caching, todo).
 
 The extra tools run in-process — the toolset objects already live in this worker,
 so routing them back through the HTTP MCP server would only add a self-call with
@@ -28,7 +28,12 @@ from pydantic_ai.capabilities import Toolset as ToolsetCapability
 from pydantic_ai.toolsets import AbstractToolset
 
 from app.core.log.log import get_logger
-from app.modules.agent.capabilities.current_time import CurrentTimeCapability
+from app.modules.agent.capabilities.unique_tool_call_ids import (
+    UniqueToolCallIdsCapability,
+)
+from app.modules.agent.capabilities.reveal_referenced_tools import (
+    RevealReferencedToolsCapability,
+)
 from app.modules.agent.capabilities.deferred_hint import (
     DeferredToolsHintCapability,
     build_deferred_tools_hint,
@@ -41,9 +46,11 @@ from app.modules.agent.capabilities.prompt_caching import PromptCachingCapabilit
 from app.modules.agent.capabilities.pending_user_messages import (
     PendingUserMessagesCapability,
 )
-from app.modules.agent.capabilities.open_notifications import (
-    build_open_notifications_capability,
+from app.modules.agent.capabilities.open_questions import (
+    OpenQuestionsCapability,
 )
+from app.modules.agent.capabilities.run_context import RunContextCapability
+from app.modules.agent.domain.run_context_prompt import run_context_for
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
 from app.modules.agent.domain.surface_prompts import is_group_conversation
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
@@ -57,6 +64,7 @@ from app.modules.agent.domain.prompts import (
     load_pod_prompt,
     load_skills_prompt,
     load_speech_prompt,
+    load_subagents_prompt,
     load_web_search_prompt,
     load_user_interaction_prompt,
     load_workspace_cli_prompt,
@@ -71,6 +79,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 )
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
+from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
@@ -80,20 +89,6 @@ from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
 from app.modules.agent_surfaces.contracts.platforms import platform_is_known
 
 logger = get_logger(__name__)
-
-_caching_capability_cls: type[PromptCachingCapability] = PromptCachingCapability
-
-
-def configure_caching_capability(cls: type[PromptCachingCapability]) -> None:
-    """Override the caching capability class used when prompt caching is enabled.
-
-    Call at application startup (e.g. from a cloud module) to inject a
-    provider-specific subclass (e.g. one that adds an ``x-session-affinity``
-    header for Fireworks session routing).
-    """
-    global _caching_capability_cls
-    _caching_capability_cls = cls
-
 
 _EXTRA_TOOLSET_IDS = frozenset(id(obj) for obj in EXTRA_TOOLSET_OBJECTS)
 
@@ -117,6 +112,10 @@ _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
     # `pod_*` sits behind a search with a one-line hint. Runs that never thought
     # to search did every read through the CLI. The fragment names the default.
     (pod_toolset, "pod", load_pod_prompt),
+    # Deferred for the pod default assistant. The hint names the three tools;
+    # it cannot say that the cheap way to collect a child is `wait_for` and
+    # ending the turn, not blocking in `interact_subagent`.
+    (subagents_toolset, "subagents", load_subagents_prompt),
 )
 
 
@@ -177,18 +176,26 @@ def _graceful(
     return toolset  # pragma: no cover - defensive
 
 
+#: Guidance a run answering somebody outside the pod is not given: how to
+#: write records and files, build tables, post to members and channels -- all
+#: of it withheld there, and a run told it believed it could.
+_NOT_FOR_OUTSIDERS: frozenset[int] = frozenset({id(pod_toolset), id(messaging_toolset)})
+
+
 def _instructions_for(
-    toolset: object, *, host_execution: bool = False
+    toolset: object, *, host_execution: bool = False, answers_outsider: bool = False
 ) -> tuple[str, Callable[[], str]] | None:
     """The usage guidance a toolset carries, whether it ends up visible or deferred.
 
     One lookup for both wrappers, because deferral is supposed to hide a
     toolset's *schemas*, never its *contract*. Messaging is the case that proves
-    it: ``message_user`` does not pause the turn, so an agent that was never
-    taught the send → wait_for → check_messages loop sends a message and then sits
+    it: ``channel_post`` does not pause the turn, so an agent that was never
+    taught the send → wait_for → channel_read(asked_by_me=True) loop sends a message and then sits
     waiting for a reply that arrives as a tool result never. Advertising the
     tool in the deferred hint while withholding that is the worst of both.
     """
+    if answers_outsider and id(toolset) in _NOT_FOR_OUTSIDERS:
+        return None
     if is_workspace_cli_toolset(toolset):
         # The VM's contract -- a persistent home, preinstalled libraries,
         # `lit` -- is not the Mac's, and an agent told otherwise installs into
@@ -206,6 +213,7 @@ def _visible_capability(
     toolset: AbstractToolset[ConversationContext],
     *,
     host_execution: bool = False,
+    answers_outsider: bool = False,
 ) -> AgentCapability[ConversationContext]:
     """Wrap one visible toolset as a capability.
 
@@ -217,7 +225,9 @@ def _visible_capability(
     """
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
-    guidance = _instructions_for(toolset, host_execution=host_execution)
+    guidance = _instructions_for(
+        toolset, host_execution=host_execution, answers_outsider=answers_outsider
+    )
     if guidance is None:
         return ToolsetCapability(_graceful(toolset))
     name, loader = guidance
@@ -230,6 +240,7 @@ def _deferred_capability(
     toolset: AbstractToolset[ConversationContext],
     *,
     host_execution: bool = False,
+    answers_outsider: bool = False,
 ) -> AgentCapability[ConversationContext]:
     """Wrap one extra toolset as a deferred-loading capability.
 
@@ -242,7 +253,9 @@ def _deferred_capability(
     if not isinstance(toolset, AbstractToolset):
         return ToolsetCapability(toolset)  # pragma: no cover - defensive
     deferred = GracefulToolset(toolset).defer_loading()
-    guidance = _instructions_for(toolset, host_execution=host_execution)
+    guidance = _instructions_for(
+        toolset, host_execution=host_execution, answers_outsider=answers_outsider
+    )
     if guidance is None:
         return ToolsetCapability(deferred)
     name, loader = guidance
@@ -291,10 +304,26 @@ async def _build_lemma_harness_tooling(
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
     host_execution = getattr(ctx, "host_workspace", None) is not None
+    outsider = run_audience(ctx).answers_outsiders
     capabilities: list[AgentCapability[ConversationContext]] = [
-        _visible_capability(obj, host_execution=host_execution) for obj in core
+        _visible_capability(
+            obj, host_execution=host_execution, answers_outsider=outsider
+        )
+        for obj in core
     ]
-    capabilities.append(CurrentTimeCapability())
+    # A provider that repeats a tool call under one id must not run it twice.
+    # No instructions, so the cached prefix is untouched.
+    capabilities.append(UniqueToolCallIdsCapability())
+    # What changes run to run, next to the current turn instead of in the
+    # system prompt. Contributes no instructions, so it cannot disturb the
+    # cached prefix the fragments below form.
+    capabilities.append(
+        RunContextCapability(
+            run_context_for(ctx),
+            mark_cache_boundary=enable_prompt_caching
+            and protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+        )
+    )
 
     # Anything the person says while this run is working is steered into it
     # rather than left for a run nobody starts. Appended first among the
@@ -308,12 +337,14 @@ async def _build_lemma_harness_tooling(
     # contract; append it here from the flag the run-context builder resolved.
     # Stable per run, so it rides in the cached prefix with the fragments above.
     if getattr(ctx, "memory_enabled", False):
-        capabilities.append(MemoryCapability())
+        capabilities.append(
+            MemoryCapability(after_turn=getattr(ctx, "memory_after_turn", False))
+        )
 
-    # When the run is on a third-party surface, append standing per-platform
-    # guidance (delivery/forms/formatting/channel-context). Stable per
-    # conversation, so it rides in the cached prefix alongside the other
-    # instruction-bearing capabilities.
+    # When the run talks over a third-party surface, append standing
+    # per-platform guidance (delivery/forms/formatting/channel-context). The
+    # platform is the run's: none for a run asked in Lemma, whatever platform
+    # its conversation was last heard on.
     surface_platform = getattr(ctx, "surface_platform", None)
     audience = run_audience(ctx)
     answers_outsider = audience.answers_outsiders
@@ -326,49 +357,40 @@ async def _build_lemma_harness_tooling(
             )
         )
 
-    # Somebody may be waiting on the person this agent is talking to. Their next
-    # message is often the answer, and without this the agent has no idea a
-    # question is open or what the asker wanted done with the reply — so the
-    # reply stays a chat message and the asking run waits forever.
-    #
-    # Appended AFTER the caching-sensitive fragments above and rebuilt each run
-    # on purpose: unlike per-platform guidance, this changes the moment somebody
-    # answers, and a cached copy would have the agent chasing a closed question.
     if extra:
         # Tool search reveals the deferred extra tools on demand (provider-native
         # on Anthropic/OpenAI, a local search_tools function on Fireworks, and
         # local everywhere under a monetary limit -- the native search has no
         # price, see `MeteredModel`).
         capabilities.append(ToolSearch())
+        # A run is not made to search again for what it is already told about:
+        # what earlier runs found, what its history called, and what its
+        # wake-up names (see `reveal_referenced_tools`).
+        capabilities.append(RevealReferencedToolsCapability())
         capabilities.extend(
-            _deferred_capability(obj, host_execution=host_execution) for obj in extra
+            _deferred_capability(
+                obj, host_execution=host_execution, answers_outsider=outsider
+            )
+            for obj in extra
         )
         # ...and a static hint so the model knows those tools exist to search for.
-        # Ahead of open notifications: this is the largest stable block here and
         # `deferred_hint` sorts its tool names specifically to keep it
-        # byte-identical between runs. Behind volatile text it would be re-read
-        # every time somebody answered a question.
+        # byte-identical between runs.
         hint = build_deferred_tools_hint(extra)
         if hint:
             capabilities.append(DeferredToolsHintCapability(hint))
 
-    # Last of the instruction-bearing capabilities, because it is the only one
-    # that changes the moment somebody answers. Everything above it stays in the
-    # cached prefix when it does.
-    # Never on a stranger's run: an open notification is the owner's question
-    # to answer, and this capability hands the run the tools to answer it.
-    open_notifications = (
-        None
-        if answers_outsider
-        else await build_open_notifications_capability(ctx.conversation_id)
-    )
-    if open_notifications is not None:
-        capabilities.append(open_notifications)
+    # Somebody may be waiting on the person this agent is talking to. What they
+    # asked is in the run's context part; this hands the run the tools that
+    # answer it. Never on a stranger's run: a question waiting on a member is
+    # theirs to answer, not somebody's outside the pod.
+    if not answers_outsider and getattr(ctx, "open_questions", None):
+        capabilities.append(OpenQuestionsCapability())
 
     if enable_prompt_caching:
         pod_id = getattr(ctx, "pod_id", None)
         capabilities.append(
-            _caching_capability_cls(
+            PromptCachingCapability(
                 conversation_id=ctx.conversation_id,
                 protocol=protocol,
                 affinity_key=(

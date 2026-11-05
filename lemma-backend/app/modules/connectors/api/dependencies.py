@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 from uuid import UUID
 
@@ -5,10 +6,10 @@ from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
+from app.core.config import settings
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.cache.resilient_cache import ResilientJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.authorization.factory import create_authorization_data_service
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
 )
@@ -47,8 +48,12 @@ from app.modules.connectors.infrastructure.repositories.connector_trigger_reposi
 from app.modules.connectors.infrastructure.repositories.connect_request_repository import (
     ConnectRequestRepository,
 )
-from app.modules.connectors.services.account_resolution_service import (
-    AccountResolutionService,
+from app.modules.connectors.services import pod_connector_composition
+from app.modules.connectors.services.pod_connector_resolution import (
+    PodConnectorResolver,
+)
+from app.modules.connectors.services.pod_connector_service import (
+    PodConnectorService,
 )
 from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
@@ -61,8 +66,14 @@ from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.services.trigger_service import ConnectorTriggerService
 
 if TYPE_CHECKING:
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
     from app.modules.connectors.api.schemas.connector_operation_schemas import (
         OperationExecutionResponse,
+    )
+    from app.modules.connectors.services.installation_reach import (
+        InstallationReach,
     )
     from app.modules.connectors.services.files.operation_files import (
         FoundFile,
@@ -71,14 +82,13 @@ if TYPE_CHECKING:
 
 
 def _connector_repository(uow: UoWDep) -> ConnectorRepository:
-    return ConnectorRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectorRepository(uow=uow)
 
 
 def _account_repository(uow: UoWDep) -> AccountRepository:
     return AccountRepository(
         uow=uow,
         encryption=get_secret_cipher(),
-        message_bus=get_message_bus(),
     )
 
 
@@ -86,20 +96,35 @@ def _auth_config_repository(uow: UoWDep) -> AuthConfigRepository:
     return AuthConfigRepository(
         uow=uow,
         encryption=get_secret_cipher(),
-        message_bus=get_message_bus(),
     )
 
 
 def _connect_request_repository(uow: UoWDep) -> ConnectRequestRepository:
-    return ConnectRequestRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectRequestRepository(uow=uow)
 
 
 def _trigger_repository(uow: UoWDep) -> ConnectorTriggerRepository:
-    return ConnectorTriggerRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectorTriggerRepository(uow=uow)
 
 
 def _operation_repository(uow: UoWDep) -> ConnectorOperationRepository:
-    return ConnectorOperationRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectorOperationRepository(uow=uow)
+
+
+#: A Composio auth config outlives any one connect; a week bounds how long an
+#: id made under a since-rotated API key is tried before being made again.
+_COMPOSIO_AUTH_CONFIG_TTL_SECONDS = 7 * 24 * 3600
+
+
+@lru_cache(maxsize=1)
+def _composio_auth_config_ids() -> ResilientJsonCache:
+    """Composio auth config ids, shared by every replica through Redis."""
+    return ResilientJsonCache(
+        name="composio_auth_config_ids",
+        key_prefix="connectors:composio-auth-config",
+        redis_url=settings.redis_url,
+        ttl_seconds=_COMPOSIO_AUTH_CONFIG_TTL_SECONDS,
+    )
 
 
 def _auth_provider_registry(uow: UoWDep) -> AuthProviderRegistry:
@@ -108,7 +133,8 @@ def _auth_provider_registry(uow: UoWDep) -> AuthProviderRegistry:
         providers={
             AuthProvider.LEMMA.value: LemmaAuthProvider(),
             AuthProvider.COMPOSIO.value: ComposioAuthProvider(
-                connector_repository=connector_repository
+                connector_repository=connector_repository,
+                auth_config_ids=_composio_auth_config_ids(),
             ),
         }
     )
@@ -165,17 +191,24 @@ def build_connector_operation_service(
         operation_gateway=BoundedComposioGateway(
             connector_repository=connector_repository
         ),
-        account_resolution_service=get_account_resolution_service(uow),
+        pod_connector_resolver=build_pod_connector_resolver(uow),
         connector_service=get_connector_service(uow),
     )
 
 
-def get_account_resolution_service(uow: UoWDep) -> AccountResolutionService:
-    return AccountResolutionService(
-        account_repository=_account_repository(uow),
-        authorization_service=create_authorization_data_service(uow),
-        organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
-    )
+def build_pod_connector_resolver(uow: UoWDep) -> PodConnectorResolver:
+    return pod_connector_composition.build_pod_connector_resolver(uow)
+
+
+def get_pod_connector_service(uow: UoWDep) -> PodConnectorService:
+    return pod_connector_composition.build_pod_connector_service(uow)
+
+
+def build_installation_reach(
+    uow: UoWDep,
+) -> "InstallationReach":
+    """What the agent's connector tools reach beyond the pod's connectors."""
+    return pod_connector_composition.build_installation_reach(uow)
 
 
 ConnectorServiceDep = Annotated[ConnectorService, Depends(get_connector_service)]
@@ -244,6 +277,43 @@ def get_connector_operation_use_cases(
 ConnectorOperationUseCasesDep = Annotated[
     ConnectorOperationUseCases, Depends(get_connector_operation_use_cases)
 ]
-AccountResolutionServiceDep = Annotated[
-    AccountResolutionService, Depends(get_account_resolution_service)
+PodConnectorServiceDep = Annotated[
+    PodConnectorService, Depends(get_pod_connector_service)
+]
+
+
+def get_pod_connector_coverage_service(
+    uow: UoWDep,
+) -> "PodConnectorCoverageService":
+    # Imported here: the adapters reach `channels` and `pod` contracts, which
+    # every process importing a connector route would otherwise pay for.
+    from app.modules.connectors.infrastructure.adapters.member_coverage import (
+        RedisAskLedger,
+        connector_title_through_catalog,
+        member_context_through_authorizer,
+        people_through_contracts,
+        tell_through_channels,
+    )
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
+
+    return PodConnectorCoverageService(
+        uow=uow,
+        pod_connectors=PodConnectorRepository(uow),
+        people=people_through_contracts,
+        member_context=member_context_through_authorizer,
+        ledger=RedisAskLedger(uow.session),
+        tell=tell_through_channels,
+        connector_title=connector_title_through_catalog(
+            uow, _auth_config_repository(uow)
+        ),
+    )
+
+
+PodConnectorCoverageServiceDep = Annotated[
+    "PodConnectorCoverageService", Depends(get_pod_connector_coverage_service)
 ]

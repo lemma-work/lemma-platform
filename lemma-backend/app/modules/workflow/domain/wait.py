@@ -15,6 +15,18 @@ class WorkflowRunWaitType(str, Enum):
     AGENT = "AGENT"
     FUNCTION = "FUNCTION"
     TIME = "TIME"
+    DECISION = "DECISION"
+    # Waiting for the workflow's max_concurrent_runs to allow another run in.
+    QUEUED = "QUEUED"
+
+
+def wait_expire_key(wait_id: UUID) -> str:
+    """The dedup key of a wait's ``workflow.wait_expire`` item.
+
+    Named here so the item can be written with the wait and dropped when the
+    wait resolves, from either side of the execution package.
+    """
+    return f"workflow-expire:{wait_id}"
 
 
 class WorkflowRunWaitStatus(str, Enum):
@@ -27,8 +39,9 @@ class WorkflowRunWaitStatus(str, Enum):
 class WaitRequest(BaseModel):
     """Explicit wait description returned by a suspending executor.
 
-    External refs (agent conversation id, function run id, timer id) live
-    here and on the wait row — never in the run context.
+    External refs (agent conversation id, function run id, timer id, the id a
+    pending decision is asked under) live here and on the wait row — never in
+    the run context.
     """
 
     wait_type: WorkflowRunWaitType

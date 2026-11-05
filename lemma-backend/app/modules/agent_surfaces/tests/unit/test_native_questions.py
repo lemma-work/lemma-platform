@@ -25,8 +25,11 @@ from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     _decode_webhook_payload,
 )
 from app.modules.agent_surfaces.platforms.telegram.adapter import TelegramSurfaceAdapter
-from app.modules.agent_surfaces.platforms.telegram.service import _OTHER_CALLBACK_VALUE
+from app.modules.agent_surfaces.platforms.telegram.choice_cards import (
+    OTHER_CALLBACK_VALUE,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
+from app.modules.agent_surfaces.tests.fakes import answer_json, platform_http
 
 
 def _plan() -> SurfaceQuestionRenderPlan:
@@ -202,6 +205,25 @@ def test_decode_webhook_payload_handles_form_encoded_and_json():
     assert _decode_webhook_payload(b"", {}) == {}
 
 
+@pytest.mark.parametrize(
+    ("body", "content_type"),
+    [
+        (b"{not json", "application/json"),
+        (b"\xff\xfe", "application/json"),
+        (b"[1, 2]", "application/json"),
+        (b"payload=%7Bbroken", "application/x-www-form-urlencoded"),
+    ],
+    ids=["bad-json", "not-utf8", "not-an-object", "bad-form-payload"],
+)
+def test_an_undecodable_webhook_body_is_refused_not_read_as_empty(body, content_type):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as refused:
+        _decode_webhook_payload(body, {"content-type": content_type})
+
+    assert refused.value.status_code == 400
+
+
 # ── Telegram native inline keyboards ─────────────────────────────────────────
 
 
@@ -239,13 +261,15 @@ async def test_telegram_send_questions_builds_inline_keyboard():
     tokens = iter(["tok0", "tok1", "tokother"])
     with (
         patch(
-            "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+            "app.modules.agent_surfaces.platforms.telegram.choice_cards.put_callback_token",
             new=AsyncMock(side_effect=lambda payload: next(tokens)),
         ),
         patch(
             "app.modules.agent_surfaces.platforms.telegram.service."
             "TelegramPlatformService.send_message",
-            new=AsyncMock(),
+            # The id of the message sent: None, as for a send Telegram did
+            # not number, so no card is remembered.
+            new=AsyncMock(return_value=None),
         ) as send_message,
     ):
         ok = await adapter._render_choices(
@@ -355,7 +379,7 @@ async def test_telegram_parse_inbound_interaction_other_and_unknown_are_acknowle
     other = {
         "callback_id": "conv-1|tool-1",
         "header": "country",
-        "value": _OTHER_CALLBACK_VALUE,
+        "value": OTHER_CALLBACK_VALUE,
     }
     with patch(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
@@ -391,23 +415,8 @@ def _whatsapp_event() -> ParsedInboundSurfaceEvent:
 @pytest.mark.asyncio
 async def test_whatsapp_send_questions_uses_buttons_for_few_options():
     adapter = WhatsAppSurfaceAdapter()
-    captured = {}
 
-    async def _fake_post(self, url, json, headers):  # noqa: ANN001
-        captured["payload"] = json
-
-        class _Resp:
-            status_code = 200
-
-            def json(self):
-                return {"messages": [{"id": "wamid.1"}]}
-
-            def raise_for_status(self):
-                return None
-
-        return _Resp()
-
-    with patch("httpx.AsyncClient.post", new=_fake_post):
+    with platform_http(answer_json({"messages": [{"id": "wamid.1"}]})) as http:
         ok = await adapter._render_choices(
             credentials={"access_token": "t", "phone_number_id": "pn1"},
             event=_whatsapp_event(),
@@ -415,7 +424,7 @@ async def test_whatsapp_send_questions_uses_buttons_for_few_options():
         )
 
     assert ok is True
-    interactive = captured["payload"]["interactive"]
+    interactive = http.json_of(http.requests[-1])["interactive"]
     assert interactive["type"] == "button"
     buttons = interactive["action"]["buttons"]
     assert [b["reply"]["title"] for b in buttons] == ["US", "CA"]

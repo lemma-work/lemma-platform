@@ -54,7 +54,8 @@ def _media_type(filename: str | None, declared: str | None) -> str:
 def _refused(message: str, *, field: str, reason: str) -> ConnectorValidationError:
     # A validation error that keeps its message, deliberately: this is about
     # the caller's own argument -- which field, and why -- not a provider's
-    # reply, which is what `OperationExecutionValidationError` exists to scrub.
+    # reply, which is what `OperationExecutionValidationError` writes its
+    # message from.
     return ConnectorValidationError(message, details={"reason": reason, "field": field})
 
 

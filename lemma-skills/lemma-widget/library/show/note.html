@@ -1,0 +1,43 @@
+<!--
+widget: show/note
+description: A note in markdown -- a claim, bullets, a checklist, a small table, code -- with a title, sanitized and themed to the page.
+connector: none
+kind: view
+operations: none
+data: { title?, markdown }
+version: 1
+-->
+<script type="application/json" data-lemma-sample>
+{
+  "title": "Goa offsite, three venues",
+  "markdown": "| Venue | Nightly | Sleeps |\n|---|---|---|\n| **Casa Palacio** | 60k | 20 |\n| La Cabana | 62k | 16 |\n| The Unseen | 35k | 15 |\n\n- December rates rise in peak weeks\n- La Cabana is the only one with a conference hall"
+}
+</script>
+<style>
+  .sn__title { margin: 0 0 10px; font-size: 19px; line-height: 1.25; }
+  .sn__body { font-size: 15px; line-height: 1.55; }
+  .sn__body h1, .sn__body h2, .sn__body h3 { font-size: 16px; margin: 14px 0 6px; }
+  .sn__body ul, .sn__body ol { padding-left: 20px; margin: 6px 0; }
+  .sn__body table { border-collapse: collapse; font-size: 13.5px; }
+  .sn__body th, .sn__body td { border-bottom: 1px solid var(--w-line-2, #e5e5e5); padding: 5px 10px 5px 0; text-align: left; }
+  .sn__body code { font-family: var(--w-mono, ui-monospace, monospace); font-size: 13px; }
+</style>
+<section class="w" data-lemma-widget-version="1">
+  <div class="w-card">
+    <h2 class="sn__title" id="sn-title" hidden></h2>
+    <div class="sn__body" id="sn-body"></div>
+  </div>
+</section>
+<script type="module">
+  const d = lemma.data || {};
+  if (d.title) Object.assign(document.getElementById("sn-title"), { textContent: d.title, hidden: false });
+  try {
+    const [{ marked }, { default: DOMPurify }] = await Promise.all([
+      import("https://cdn.jsdelivr.net/npm/marked@15.0.7/lib/marked.esm.js"),
+      import("https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.es.mjs"),
+    ]);
+    document.getElementById("sn-body").innerHTML = DOMPurify.sanitize(marked.parse(d.markdown || ""));
+  } catch (error) {
+    lemma.fail((error && error.message) || "The note could not be drawn.", "sn-body");
+  }
+</script>

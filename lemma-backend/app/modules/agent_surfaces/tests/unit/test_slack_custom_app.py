@@ -33,7 +33,7 @@ def _surface(*, webhook_secret: str | None = None) -> AgentSurfaceEntity:
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         config=SurfaceConfig(),
         is_active=True,
         webhook_secret=webhook_secret,
@@ -59,11 +59,13 @@ async def test_a_workspaces_own_slack_app_verifies_against_its_own_secret(monkey
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback"}'
 
-    await SurfaceWebhookSecurityService().verify_surface_request(
+    accepted = await SurfaceWebhookSecurityService().verify_surface_request(
         surface=_surface(webhook_secret=OWN_SECRET),
         headers=_signed(OWN_SECRET, body),
         raw_body=body,
     )
+
+    assert accepted is None
 
 
 async def test_the_deployments_secret_cannot_sign_for_a_custom_app(monkeypatch):
@@ -89,11 +91,13 @@ async def test_a_surface_without_its_own_secret_still_uses_the_deployments(monke
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback"}'
 
-    await SurfaceWebhookSecurityService().verify_surface_request(
+    accepted = await SurfaceWebhookSecurityService().verify_surface_request(
         surface=_surface(webhook_secret=None),
         headers=_signed(DEPLOYMENT_SECRET, body),
         raw_body=body,
     )
+
+    assert accepted is None
 
 
 async def test_a_custom_app_delivers_to_the_same_shared_endpoint(monkeypatch):
@@ -165,6 +169,17 @@ async def test_the_manifest_subscribes_to_everything_this_branch_needs():
     assert {
         "app_home_opened",  # the App Home tab
         "member_joined_channel",  # invite-is-setup
+        # A mirrored channel's people, and the bot itself, leaving it.
+        "member_left_channel",
+        "channel_left",
+        "group_left",
+        # Shared with another company, or no longer.
+        "channel_shared",
+        "channel_unshared",
+        # The app removed, or its bot token revoked: neither is sent to an app
+        # that did not ask, and without them a removed app reads as connected.
+        "app_uninstalled",
+        "tokens_revoked",
         "app_mention",
         "message.im",
         "message.channels",

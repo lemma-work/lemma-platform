@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.core.infrastructure.db.session import get_session_maker
@@ -22,7 +22,7 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
+from app.core.infrastructure.work import periodic_job
 from app.modules.apps.config import apps_settings
 from app.core.log.log import get_logger
 
@@ -33,10 +33,9 @@ def _uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(get_session_maker())
 
 
-@streaq_cron(
-    apps_settings.app_release_retention_cron,
-    name="sweep_app_releases",
-    lane=Lane.BULK,
+@periodic_job(
+    "apps.release_retention",
+    every=timedelta(seconds=apps_settings.app_release_retention_interval_seconds),
 )
 async def sweep_app_releases() -> None:
     from app.modules.apps.services.app_release_retention import PRUNE_FAILURES

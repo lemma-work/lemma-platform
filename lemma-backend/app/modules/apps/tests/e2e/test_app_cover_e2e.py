@@ -54,6 +54,7 @@ async def publish_app(authenticated_client, pod_id: str, archive: bytes) -> str:
             "name": app_name,
             "public_slug": public_slug,
             "description": "Every open deal and who owns it",
+            "visibility": "PUBLIC",
         },
     )
     assert created.status_code == status.HTTP_201_CREATED, created.text

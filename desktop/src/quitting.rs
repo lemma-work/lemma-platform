@@ -105,14 +105,33 @@ pub(crate) fn request_quit(app: &AppHandle) {
         std::thread::spawn(move || stop_then_quit(&handle));
         return;
     }
+    // The prompt already on screen answers this quit too: AppKit is owed one
+    // reply, and that prompt gives it. Asking again was refused as a second
+    // confirmation, and the refusal cancelled the quit and drew an error over
+    // the prompt the person was about to answer.
+    if app
+        .state::<Shell>()
+        .quit_prompt_open
+        .swap(true, Ordering::AcqRel)
+    {
+        if let Some(prompt) = app.get_webview("confirmation") {
+            let _ = prompt.window().set_focus();
+        }
+        return;
+    }
     let handle = app.clone();
     std::thread::spawn(move || {
-        match confirm_destructive_action_impl(
+        let answer = confirm_destructive_action_impl(
             handle.clone(),
             "Stop Lemma and quit?".into(),
             quit_prompt_body(&impact),
             "Stop and Quit".into(),
-        ) {
+        );
+        handle
+            .state::<Shell>()
+            .quit_prompt_open
+            .store(false, Ordering::Release);
+        match answer {
             Ok(true) => stop_then_quit(&handle),
             Ok(false) => answer_os_quit(&handle, false),
             Err(error) => {

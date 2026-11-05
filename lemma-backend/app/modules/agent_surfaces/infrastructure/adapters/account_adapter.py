@@ -9,6 +9,15 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountSummary,
     SurfaceAuthConfigInfo,
 )
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceEntity,
+    SurfacePlatform,
+)
+from app.modules.agent_surfaces.services.surface_connector import (
+    account_for_binding,
+    bound_account_id,
+)
+from app.modules.connectors.contracts.pod_connectors import shared_account_ids
 from app.modules.connectors.contracts.surfaces import (
     account_summaries,
     account_with_secrets,
@@ -52,6 +61,21 @@ class SqlAlchemySurfaceAccountAdapter:
                 await account_summaries(self._uow, account_ids)
             ).items()
         }
+
+    async def account_for_binding(
+        self, *, pod_id: UUID, slug: str, platform: SurfacePlatform, ctx: object
+    ) -> UUID:
+        return await account_for_binding(
+            self._uow, ctx, pod_id=pod_id, slug=slug, platform=platform
+        )
+
+    async def bound_account_id(self, surface: AgentSurfaceEntity) -> UUID | None:
+        return await bound_account_id(self._uow, surface)
+
+    async def accounts_behind_connectors(
+        self, connectors: Sequence[tuple[UUID, str]]
+    ) -> dict[tuple[UUID, str], UUID]:
+        return await shared_account_ids(self._uow, list(connectors))
 
 
 class SqlAlchemySurfaceAuthConfigAdapter:

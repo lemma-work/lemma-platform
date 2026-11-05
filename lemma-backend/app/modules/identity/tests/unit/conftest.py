@@ -19,7 +19,6 @@ def user_repository_mock() -> AsyncMock:
     mock.get.return_value = UserEntity(email="test+owner@example.com")
     mock.get_by_email.return_value = None
     mock.get_id_by_mobile_digits.return_value = None
-    mock.get_id_by_telegram_lower.return_value = None
     return mock
 
 

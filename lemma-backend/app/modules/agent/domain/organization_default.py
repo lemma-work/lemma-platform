@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
+    ORGANIZATION_DEFAULT_KEY,
     AgentRuntimeProfile,
     RuntimeProfileKind,
     RuntimeProfileScope,
@@ -25,7 +27,6 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 
-ORGANIZATION_DEFAULT_KEY = "organization_default"
 
 # The user a listing is scoped to when only organization-wide profiles are
 # wanted: nobody's personal profile belongs to the nil id, so what comes back is
@@ -44,7 +45,7 @@ def can_be_organization_default(profile: AgentRuntimeProfile) -> bool:
 
 def is_marked_default(profile: AgentRuntimeProfile) -> bool:
     """Whether the mark is stored on ``profile``, eligible or not."""
-    return isinstance(profile.metadata.get(ORGANIZATION_DEFAULT_KEY), dict)
+    return profile.carries_organization_default_mark
 
 
 def organization_default_of(
@@ -78,18 +79,20 @@ def with_default_mark(
 ) -> AgentRuntimeProfile:
     """``profile`` carrying the mark, on ``model_name`` or its own default.
 
-    Raises ``ValueError`` for a profile that may not be the default, or a model
+    Raises `RuntimeProfileValidationError` for a profile that may not be the default, or a model
     the provider does not list -- both are caller mistakes worth a 400.
     """
     if not can_be_organization_default(profile):
-        raise ValueError(
+        raise RuntimeProfileValidationError(
             "Only an active, organization-wide model provider can be the "
             "organization's default"
         )
     if model_name is not None and model_name not in {
         entry.name for entry in profile.model_catalog
     }:
-        raise ValueError(f"{profile.name} does not offer the model {model_name!r}")
+        raise RuntimeProfileValidationError(
+            f"{profile.name} does not offer the model {model_name!r}"
+        )
     return profile.with_changes(
         metadata={
             **profile.metadata,

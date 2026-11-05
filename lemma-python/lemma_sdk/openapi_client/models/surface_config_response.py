@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
     from ..models.surface_slack_config_response import SurfaceSlackConfigResponse
     from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
+    from ..models.surface_whats_app_config_input import SurfaceWhatsAppConfigInput
 
 
 T = TypeVar("T", bound="SurfaceConfigResponse")
@@ -34,6 +35,7 @@ class SurfaceConfigResponse:
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
         slack (SurfaceSlackConfigResponse | Unset): Slack settings as read back.
         telegram (SurfaceTelegramConfigInput | Unset): Selects the pod app exposed as this bot's Telegram Mini App.
+        whatsapp (SurfaceWhatsAppConfigInput | Unset): WhatsApp settings. Mirrored across request and response.
     """
 
     channels: list[SurfaceChannelRouteResponse] | Unset = UNSET
@@ -43,6 +45,7 @@ class SurfaceConfigResponse:
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
     slack: SurfaceSlackConfigResponse | Unset = UNSET
     telegram: SurfaceTelegramConfigInput | Unset = UNSET
+    whatsapp: SurfaceWhatsAppConfigInput | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -77,6 +80,10 @@ class SurfaceConfigResponse:
         if not isinstance(self.telegram, Unset):
             telegram = self.telegram.to_dict()
 
+        whatsapp: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.whatsapp, Unset):
+            whatsapp = self.whatsapp.to_dict()
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
@@ -94,6 +101,8 @@ class SurfaceConfigResponse:
             field_dict["slack"] = slack
         if telegram is not UNSET:
             field_dict["telegram"] = telegram
+        if whatsapp is not UNSET:
+            field_dict["whatsapp"] = whatsapp
 
         return field_dict
 
@@ -108,6 +117,7 @@ class SurfaceConfigResponse:
         from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
         from ..models.surface_slack_config_response import SurfaceSlackConfigResponse
         from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
+        from ..models.surface_whats_app_config_input import SurfaceWhatsAppConfigInput
 
         d = dict(src_dict)
         _channels = d.pop("channels", UNSET)
@@ -163,6 +173,13 @@ class SurfaceConfigResponse:
         else:
             telegram = SurfaceTelegramConfigInput.from_dict(_telegram)
 
+        _whatsapp = d.pop("whatsapp", UNSET)
+        whatsapp: SurfaceWhatsAppConfigInput | Unset
+        if isinstance(_whatsapp, Unset):
+            whatsapp = UNSET
+        else:
+            whatsapp = SurfaceWhatsAppConfigInput.from_dict(_whatsapp)
+
         surface_config_response = cls(
             channels=channels,
             contacts=contacts,
@@ -171,6 +188,7 @@ class SurfaceConfigResponse:
             send_policy=send_policy,
             slack=slack,
             telegram=telegram,
+            whatsapp=whatsapp,
         )
 
         surface_config_response.additional_properties = d

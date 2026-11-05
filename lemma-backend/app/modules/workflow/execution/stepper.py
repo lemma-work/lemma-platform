@@ -6,11 +6,13 @@ return outcomes; the stepper interprets them and manages transitions.
 
 from dataclasses import dataclass
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.authorization.context import Context
+from app.core.infrastructure.work import WorkWriter
 from app.modules.workflow.domain.context import LoopScope, RunContextReader
 from app.modules.workflow.domain.errors import WorkflowDomainError
 from app.modules.workflow.domain.workflow import WorkflowEntity
-from app.modules.workflow.domain.ports import AgentPort, FunctionPort, SchedulePort
+from app.modules.workflow.domain.ports import AgentAccessPort, AgentPort, FunctionPort
 from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
@@ -51,13 +53,15 @@ class RunStepper:
         *,
         agent: AgentPort,
         function: FunctionPort,
-        schedule: SchedulePort,
+        work: WorkWriter,
         authz_ctx: Context | None = None,
         registry: dict[NodeType, NodeExecutor] | None = None,
+        agent_access: AgentAccessPort | None = None,
     ):
         self._agent = agent
+        self._agent_access = agent_access
         self._function = function
-        self._schedule = schedule
+        self._work = work
         self._authz_ctx = authz_ctx
         self._registry = registry or EXECUTOR_REGISTRY
 
@@ -113,6 +117,7 @@ class RunStepper:
                 run.fail(exc.message, node_id=node.id)
                 break
             except Exception as exc:  # noqa: BLE001 — every executor error fails the run
+                raise_if_database_unavailable(exc)
                 run.fail(f"Node '{node.id}' execution failed: {exc}", node_id=node.id)
                 break
 
@@ -172,10 +177,19 @@ class RunStepper:
         return StepResult()
 
     async def continue_after(
-        self, run: WorkflowRunEntity, flow: WorkflowEntity, node_id: str
+        self,
+        run: WorkflowRunEntity,
+        flow: WorkflowEntity,
+        node_id: str,
+        *,
+        forced: str | None = None,
     ) -> StepResult:
-        """Continue execution after node_id completed externally (resume)."""
-        self.move_past(run, flow, node_id)
+        """Continue execution after node_id completed externally (resume).
+
+        `forced` is the node a decision's answer chose; without it the run
+        follows node_id's outgoing edge, as every other resume does.
+        """
+        self.move_past(run, flow, node_id, forced=forced)
         if run.status != WorkflowRunStatus.RUNNING:
             self._log_outcome(run)
             return StepResult()
@@ -250,13 +264,15 @@ class RunStepper:
         return StepContext(
             run_id=run.id,
             flow_id=flow.id,
+            flow_name=flow.name,
             pod_id=run.pod_id,
             user_id=run.user_id,
             context=RunContextReader(run.execution_context),
             agent=self._agent,
             function=self._function,
-            schedule=self._schedule,
+            work=self._work,
             authz_ctx=self._authz_ctx,
+            agent_access=self._agent_access,
         )
 
     def _log_outcome(self, run: WorkflowRunEntity) -> None:

@@ -6,7 +6,5 @@ export enum RuntimeModelCapability {
     TEXT = 'TEXT',
     TOOLS = 'TOOLS',
     VISION = 'VISION',
-    AUDIO = 'AUDIO',
-    STRUCTURED_OUTPUT = 'STRUCTURED_OUTPUT',
     REASONING = 'REASONING',
 }

@@ -25,7 +25,7 @@ from app.modules.agent.domain.entities import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.runtime_history import ELISION_BLOCK_RUNS
 from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
 from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
 from app.modules.agent.services.runtime_history import bound_runtime_history
@@ -34,9 +34,14 @@ from app.modules.agent.services.runtime_history import first_sequence_of_run
 from app.modules.agent.services.runtime_history import oldest_carried_sequence
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 from app.modules.agent.services.runtime_history import select_runtime_history
-from app.modules.agent.services.runtime_history import unattached_notification_window
+from app.modules.agent.services.runtime_history import unattached_message_window
 
 _BASE = datetime.now(timezone.utc) - timedelta(hours=1)
+
+
+#: The fewest runs a conversation has before any is elided: the newest are kept
+#: whole, and the oldest go a whole block at a time.
+_ELIDES_ONE_BLOCK = FULL_HISTORY_AGENT_RUN_COUNT + ELISION_BLOCK_RUNS
 
 
 def _run(conversation_id: UUID, run_index: int, message_count: int) -> AgentRun:
@@ -104,10 +109,6 @@ def _as_bounded(runs: list[AgentRun]) -> list[AgentRun]:
     return bounded
 
 
-def _runner() -> AgentRunnerService:
-    return AgentRunnerService(uow_factory=object(), harness_registry=object())
-
-
 def _fingerprint(messages: list[Message]) -> list[tuple]:
     return [
         (
@@ -144,10 +145,9 @@ def _shapes() -> list[list[AgentRun]]:
 
 
 def test_bounded_history_selects_what_the_full_load_selected() -> None:
-    runner = _runner()
     for index, runs in enumerate(_shapes()):
-        full = _fingerprint(runner._select_runtime_history(runs))
-        bounded = _fingerprint(runner._select_runtime_history(_as_bounded(runs)))
+        full = _fingerprint(select_runtime_history(runs))
+        bounded = _fingerprint(select_runtime_history(_as_bounded(runs)))
         assert bounded == full, f"shape {index} diverged"
 
 
@@ -158,20 +158,18 @@ def test_the_elision_notice_counts_messages_that_were_never_loaded() -> None:
     would claim nothing was skipped.
     """
     conversation_id = uuid4()
-    runs = [
-        _run(conversation_id, i, 9) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)
-    ]
+    runs = [_run(conversation_id, i, 9) for i in range(_ELIDES_ONE_BLOCK)]
     bounded = _as_bounded(runs)
 
-    selected = _runner()._select_runtime_history(bounded)
+    selected = select_runtime_history(bounded)
 
     notices = [
         message
         for message in selected
         if (message.metadata or {}).get("summary_kind") == "agent_run_middle_elision"
     ]
-    assert len(notices) == 1
-    assert notices[0].metadata["elided_message_count"] == 7
+    assert len(notices) == ELISION_BLOCK_RUNS
+    assert all(notice.metadata["elided_message_count"] == 7 for notice in notices)
 
 
 def test_a_run_reports_its_real_size_not_the_loaded_one() -> None:
@@ -179,9 +177,10 @@ def test_a_run_reports_its_real_size_not_the_loaded_one() -> None:
     run = _run(conversation_id, 0, 9)
     assert run.message_count == 9  # nothing elided: falls back to what is loaded
 
-    # Six distinct runs, so the first falls outside the full-history window and
+    # Enough runs that the first falls outside the full-history window and
     # comes back elided to its first and last message.
-    older = _as_bounded([run, *(_run(conversation_id, i, 3) for i in range(1, 6))])[0]
+    newer = (_run(conversation_id, i, 3) for i in range(1, _ELIDES_ONE_BLOCK))
+    older = _as_bounded([run, *newer])[0]
     assert len(older.messages) == 2
     assert older.message_count == 9
 
@@ -243,8 +242,7 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
         conversation_id = uuid4()
         old = self._resume_run(conversation_id, 0)
         recent = [
-            _run(conversation_id, index, 2)
-            for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
+            _run(conversation_id, index, 2) for index in range(1, _ELIDES_ONE_BLOCK)
         ]
         return select_runtime_history([old, *recent]), old.id
 
@@ -279,8 +277,7 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
         conversation_id = uuid4()
         old = _run(conversation_id, 0, 6)
         recent = [
-            _run(conversation_id, index, 2)
-            for index in range(1, FULL_HISTORY_AGENT_RUN_COUNT + 1)
+            _run(conversation_id, index, 2) for index in range(1, _ELIDES_ONE_BLOCK)
         ]
 
         selected = select_runtime_history([old, *recent])
@@ -303,7 +300,7 @@ class TestTheUsersOwnMessagesAreNeverElided:
         conversation_id = uuid4()
         runs = [
             _run(conversation_id, index, message_count=9)
-            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+            for index in range(_ELIDES_ONE_BLOCK)
         ]
         # A follow-up the person typed while the run was still working. It is
         # not the run's first message and not its last, so first-and-last
@@ -393,7 +390,7 @@ class TestAPausingRunsAnswerSurvivesElision:
         conversation_id = uuid4()
         runs = [
             _run(conversation_id, index, message_count=9)
-            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+            for index in range(_ELIDES_ONE_BLOCK)
         ]
         oldest = runs[0]
         oldest.messages[-1] = oldest.messages[-1].model_copy(
@@ -430,7 +427,7 @@ class TestAPausingRunsAnswerSurvivesElision:
         conversation_id = uuid4()
         runs = [
             _run(conversation_id, index, message_count=9)
-            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+            for index in range(_ELIDES_ONE_BLOCK)
         ]
 
         selected = select_runtime_history(_as_bounded(runs))
@@ -453,7 +450,12 @@ class TestHistoryIsBoundedForEveryConversation:
     def test_a_very_long_conversation_stops_growing(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS * 3)
 
-        assert len(cap_history_runs(runs)) == MAX_HISTORY_AGENT_RUNS
+        kept = cap_history_runs(runs)
+
+        # Dropped a block at a time, so the count settles inside one block of
+        # the ceiling and never past it.
+        assert len(kept) <= MAX_HISTORY_AGENT_RUNS
+        assert len(kept) >= MAX_HISTORY_AGENT_RUNS - ELISION_BLOCK_RUNS
 
     def test_it_is_the_oldest_runs_that_go(self) -> None:
         runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 5)
@@ -499,7 +501,8 @@ class TestDroppedRunsAreAnnounced:
             == "conversation_runs_dropped"
         ]
         assert len(notices) == 1
-        assert notices[0].metadata["dropped_run_count"] == 12
+        # Whole blocks: the count moves once every few runs, not on each.
+        assert notices[0].metadata["dropped_run_count"] == 15
 
     def test_it_comes_before_the_history_it_explains(self) -> None:
         conversation_id = uuid4()
@@ -537,7 +540,7 @@ class TestTheUnpairedCallGuardActuallyRuns:
         conversation_id = uuid4()
         runs = [
             _run(conversation_id, index, message_count=6)
-            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+            for index in range(_ELIDES_ONE_BLOCK)
         ]
         oldest = runs[0]
         oldest.messages[-1] = oldest.messages[-1].model_copy(
@@ -584,7 +587,7 @@ class TestElisionNoticesStayOutOfTheSystemChannel:
         conversation_id = uuid4()
         runs = [
             _run(conversation_id, index, message_count=9)
-            for index in range(FULL_HISTORY_AGENT_RUN_COUNT + 2)
+            for index in range(_ELIDES_ONE_BLOCK)
         ]
 
         selected = select_runtime_history(_as_bounded(runs))
@@ -619,8 +622,8 @@ class TestTheWindowIsAppliedBeforeMessagesAreLoaded:
 
         bounded, dropped = bound_runtime_history(runs)
 
-        assert len(bounded) == MAX_HISTORY_AGENT_RUNS
-        assert dropped == 12
+        assert dropped == 15
+        assert len(bounded) == len(runs) - 15
         assert bounded[-1] is runs[-1]
 
     def test_trimming_first_selects_what_trimming_last_selected(self) -> None:
@@ -647,7 +650,7 @@ class TestTheWindowIsAppliedBeforeMessagesAreLoaded:
             == "conversation_runs_dropped"
         ]
         assert len(notices) == 1
-        assert notices[0].metadata["dropped_run_count"] == 12
+        assert notices[0].metadata["dropped_run_count"] == 15
 
 
 class TestLongToolHeavyRunsDoNotEraseThePast:
@@ -716,9 +719,7 @@ class TestTheNotificationWindowFollowsWhetherHistoryWasCut:
     def test_uncut_history_has_no_lower_bound(self) -> None:
         runs = [_run(uuid4(), i, 3) for i in range(3)]
 
-        after, before = unattached_notification_window(
-            runs, runs[-1].id, dropped_runs=0
-        )
+        after, before = unattached_message_window(runs, runs[-1].id, dropped_runs=0)
 
         assert after is None, (
             "nothing was dropped, so nothing is older than the history"
@@ -728,9 +729,7 @@ class TestTheNotificationWindowFollowsWhetherHistoryWasCut:
     def test_cut_history_keeps_older_notifications_out(self) -> None:
         runs = [_run(uuid4(), i, 3) for i in range(3)]
 
-        after, before = unattached_notification_window(
-            runs, runs[-1].id, dropped_runs=4
-        )
+        after, before = unattached_message_window(runs, runs[-1].id, dropped_runs=4)
 
         assert after == oldest_carried_sequence(runs)
         assert before == first_sequence_of_run(runs, runs[-1].id)

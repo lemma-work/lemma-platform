@@ -4,7 +4,7 @@
  * An operation that takes a file — a Gmail attachment, a Drive upload — takes a
  * reference to one, and the server reads it with the caller's own access:
  *
- *   client.connectors.operations.execute(scope, "GMAIL_SEND_EMAIL", {
+ *   client.connectors.pod.execute("gmail", "GMAIL_SEND_EMAIL", {
  *     recipient_email: "anukul@lemma.work",
  *     attachment: podFile("/me/reports/q3.pdf"),
  *   });

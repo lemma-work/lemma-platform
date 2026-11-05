@@ -8,6 +8,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..models.harness_kind import HarnessKind
+from ..models.runtime_profile_availability import RuntimeProfileAvailability
 from ..models.runtime_profile_kind import RuntimeProfileKind
 from ..models.runtime_profile_protocol import RuntimeProfileProtocol
 from ..models.runtime_profile_scope import RuntimeProfileScope
@@ -17,9 +18,6 @@ from ..types import UNSET, Unset
 if TYPE_CHECKING:
     from ..models.agent_runtime_profile_response_config import (
         AgentRuntimeProfileResponseConfig,
-    )
-    from ..models.agent_runtime_profile_response_metadata import (
-        AgentRuntimeProfileResponseMetadata,
     )
     from ..models.runtime_model_catalog_entry import RuntimeModelCatalogEntry
 
@@ -56,14 +54,15 @@ class AgentRuntimeProfileResponse:
             than failing the whole listing.
         scope (RuntimeProfileScope):
         status (RuntimeProfileStatus):
-        availability_status (None | str | Unset):
+        availability_status (None | RuntimeProfileAvailability | Unset):
         config (AgentRuntimeProfileResponseConfig | Unset):
         default_model_name (None | str | Unset):
         description (None | str | Unset):
         harness_id (None | Unset | UUID):
+        harness_key (None | str | Unset):
         has_credentials (bool | Unset):  Default: False.
-        metadata (AgentRuntimeProfileResponseMetadata | Unset):
         model_catalog (list[RuntimeModelCatalogEntry] | Unset):
+        organization_default (bool | Unset):  Default: False.
         organization_id (None | Unset | UUID):
         user_id (None | Unset | UUID):
     """
@@ -75,14 +74,15 @@ class AgentRuntimeProfileResponse:
     protocol: RuntimeProfileProtocol
     scope: RuntimeProfileScope
     status: RuntimeProfileStatus
-    availability_status: None | str | Unset = UNSET
+    availability_status: None | RuntimeProfileAvailability | Unset = UNSET
     config: AgentRuntimeProfileResponseConfig | Unset = UNSET
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
     harness_id: None | Unset | UUID = UNSET
+    harness_key: None | str | Unset = UNSET
     has_credentials: bool | Unset = False
-    metadata: AgentRuntimeProfileResponseMetadata | Unset = UNSET
     model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
+    organization_default: bool | Unset = False
     organization_id: None | Unset | UUID = UNSET
     user_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -105,6 +105,8 @@ class AgentRuntimeProfileResponse:
         availability_status: None | str | Unset
         if isinstance(self.availability_status, Unset):
             availability_status = UNSET
+        elif isinstance(self.availability_status, RuntimeProfileAvailability):
+            availability_status = self.availability_status.value
         else:
             availability_status = self.availability_status
 
@@ -132,11 +134,13 @@ class AgentRuntimeProfileResponse:
         else:
             harness_id = self.harness_id
 
-        has_credentials = self.has_credentials
+        harness_key: None | str | Unset
+        if isinstance(self.harness_key, Unset):
+            harness_key = UNSET
+        else:
+            harness_key = self.harness_key
 
-        metadata: dict[str, Any] | Unset = UNSET
-        if not isinstance(self.metadata, Unset):
-            metadata = self.metadata.to_dict()
+        has_credentials = self.has_credentials
 
         model_catalog: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.model_catalog, Unset):
@@ -144,6 +148,8 @@ class AgentRuntimeProfileResponse:
             for model_catalog_item_data in self.model_catalog:
                 model_catalog_item = model_catalog_item_data.to_dict()
                 model_catalog.append(model_catalog_item)
+
+        organization_default = self.organization_default
 
         organization_id: None | str | Unset
         if isinstance(self.organization_id, Unset):
@@ -184,12 +190,14 @@ class AgentRuntimeProfileResponse:
             field_dict["description"] = description
         if harness_id is not UNSET:
             field_dict["harness_id"] = harness_id
+        if harness_key is not UNSET:
+            field_dict["harness_key"] = harness_key
         if has_credentials is not UNSET:
             field_dict["has_credentials"] = has_credentials
-        if metadata is not UNSET:
-            field_dict["metadata"] = metadata
         if model_catalog is not UNSET:
             field_dict["model_catalog"] = model_catalog
+        if organization_default is not UNSET:
+            field_dict["organization_default"] = organization_default
         if organization_id is not UNSET:
             field_dict["organization_id"] = organization_id
         if user_id is not UNSET:
@@ -201,9 +209,6 @@ class AgentRuntimeProfileResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.agent_runtime_profile_response_config import (
             AgentRuntimeProfileResponseConfig,
-        )
-        from ..models.agent_runtime_profile_response_metadata import (
-            AgentRuntimeProfileResponseMetadata,
         )
         from ..models.runtime_model_catalog_entry import RuntimeModelCatalogEntry
 
@@ -222,12 +227,22 @@ class AgentRuntimeProfileResponse:
 
         status = RuntimeProfileStatus(d.pop("status"))
 
-        def _parse_availability_status(data: object) -> None | str | Unset:
+        def _parse_availability_status(
+            data: object,
+        ) -> None | RuntimeProfileAvailability | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            return cast(None | str | Unset, data)
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                availability_status_type_0 = RuntimeProfileAvailability(data)
+
+                return availability_status_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | RuntimeProfileAvailability | Unset, data)
 
         availability_status = _parse_availability_status(
             d.pop("availability_status", UNSET)
@@ -277,14 +292,16 @@ class AgentRuntimeProfileResponse:
 
         harness_id = _parse_harness_id(d.pop("harness_id", UNSET))
 
-        has_credentials = d.pop("has_credentials", UNSET)
+        def _parse_harness_key(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
 
-        _metadata = d.pop("metadata", UNSET)
-        metadata: AgentRuntimeProfileResponseMetadata | Unset
-        if isinstance(_metadata, Unset):
-            metadata = UNSET
-        else:
-            metadata = AgentRuntimeProfileResponseMetadata.from_dict(_metadata)
+        harness_key = _parse_harness_key(d.pop("harness_key", UNSET))
+
+        has_credentials = d.pop("has_credentials", UNSET)
 
         _model_catalog = d.pop("model_catalog", UNSET)
         model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
@@ -296,6 +313,8 @@ class AgentRuntimeProfileResponse:
                 )
 
                 model_catalog.append(model_catalog_item)
+
+        organization_default = d.pop("organization_default", UNSET)
 
         def _parse_organization_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -344,9 +363,10 @@ class AgentRuntimeProfileResponse:
             default_model_name=default_model_name,
             description=description,
             harness_id=harness_id,
+            harness_key=harness_key,
             has_credentials=has_credentials,
-            metadata=metadata,
             model_catalog=model_catalog,
+            organization_default=organization_default,
             organization_id=organization_id,
             user_id=user_id,
         )

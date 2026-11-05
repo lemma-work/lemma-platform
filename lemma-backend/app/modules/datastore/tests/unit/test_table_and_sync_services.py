@@ -613,3 +613,55 @@ async def test_a_contact_owned_table_whose_policy_fails_is_not_left_half_made(
 
     schema_manager_mock.create_table.assert_awaited_once()
     schema_manager_mock.drop_table.assert_awaited_once_with(pod_id, "tickets")
+
+
+class TestANewColumnNameMustBeReadableBySql:
+    """The platform quotes every name it writes, so `check` and `Order` worked
+    for records -- and then every query written by hand failed on them, as a
+    syntax error or a column that "does not exist"."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", ["check", "Order"])
+    async def test_creating_a_table_with_one_is_refused_before_anything_is_written(
+        self,
+        name: str,
+        table_service: TableService,
+        table_repository_mock: AsyncMock,
+        schema_manager_mock,
+    ) -> None:
+        pod_id = uuid4()
+        user_id = uuid4()
+        table_repository_mock.get_by_datastore_and_name.return_value = None
+
+        with pytest.raises(DatastoreValidationError, match=name):
+            await table_service.create_table(
+                pod_id=pod_id,
+                table_name="audits",
+                primary_key_column="id",
+                columns=[ColumnSchema(name=name, type=DatastoreDataType.TEXT)],
+                config=None,
+                enable_rls=False,
+                ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
+            )
+
+        table_repository_mock.create.assert_not_awaited()
+        schema_manager_mock.create_table.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_adding_one_is_refused_too(
+        self,
+        table_service: TableService,
+        table_repository_mock: AsyncMock,
+    ) -> None:
+        pod_id = uuid4()
+        user_id = uuid4()
+
+        with pytest.raises(DatastoreValidationError, match="reserved word"):
+            await table_service.add_column(
+                pod_id,
+                "audits",
+                ColumnSchema(name="group", type=DatastoreDataType.TEXT),
+                allow_all_context(user_id=user_id, pod_id=pod_id),
+            )
+
+        table_repository_mock.update.assert_not_awaited()

@@ -71,15 +71,21 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         if not messages:
             return node
 
+        # A steered message can bring a group's background with it; what this
+        # run may do unasked follows what it now reads (``outside_text``).
+        from app.modules.agent.services.outside_text import note_steered_messages
+
+        await note_steered_messages(messages)
+
         # Rendered exactly as history renders a user message, so a steered one
         # reads the same as one the run started with -- sender label, quoted
         # message, the paths of whatever they attached.
-        from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
-            user_prompt_text,
+        from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+            timed_user_prompt_text,
         )
 
         for message in messages:
-            ctx.enqueue(user_prompt_text(message))
+            ctx.enqueue(timed_user_prompt_text(message))
         # The claim is committed and the prompts are in the run: the frame only
         # tells the client. Failing it must not cost the turn the messages it
         # just took -- a reload reads the same claim. Publishing already
@@ -125,6 +131,9 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         from app.modules.agent.infrastructure.repositories import (
             ConversationRepository,
         )
+        from app.modules.agent.services.channel_background import (
+            with_channel_background,
+        )
 
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
             # Only the run's own kind: a private note never steers an answer
@@ -132,6 +141,17 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
             claimed = await ConversationRepository(uow).claim_queued_user_messages(
                 self._agent_run_id, as_run=True
             )
-            if claimed:
-                await uow.commit()
-            return claimed
+            if not claimed:
+                return claimed
+            await uow.commit()
+            # The channel around each, read as history reads it. The claim is
+            # committed: a failed read costs the background, never the words.
+            try:
+                return await with_channel_background(uow, claimed)
+            except SQLAlchemyError:
+                logger.warning(
+                    "agent.pending_user_messages.background_failed.degraded",
+                    agent_run_id=self._agent_run_id,
+                    exc_info=True,
+                )
+                return claimed

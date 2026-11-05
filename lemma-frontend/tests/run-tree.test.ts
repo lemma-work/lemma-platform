@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTree, entryOf, idsIn, leadOf, progressOf, readGraph, stateOfTrace, tracesByNode } from "../src/workflow/run-tree.ts";
+import { buildTree, entryOf, idsIn, leadOf, progressOf, readGraph, sayDecided, stateOfTrace, tracesByNode } from "../src/workflow/run-tree.ts";
 import { readSteps } from "../src/workflow/runs.ts";
 
 const node = (id: string, type: string, config: Record<string, unknown> = {}, label: string | null = null) => ({ id, type, label, config });
@@ -40,6 +40,70 @@ test("a decision's default edge is the Otherwise arm", () => {
     if (decision.type !== "decision") return;
     assert.deepEqual(decision.arms.map((arm) => arm.label), ["Rule 1", "Otherwise"]);
     assert.equal(decision.arms[1].condition, null);
+});
+
+test("a question's routes are its arms, named by the answers that take them", () => {
+    // A decision that asks a question branches on config.question.routes and
+    // unsure_next_node_id, not on rules (domain/nodes/decision.py). Answers
+    // routed to the same node are one arm, and the default edge is Otherwise.
+    const graph = readGraph({
+        nodes: [
+            node("triage", "DECISION", {
+                question: {
+                    answer: { type: "boolean", description: "Is it a refund?" },
+                    routes: { true: "refund", false: "reply" },
+                    unsure_next_node_id: "ask",
+                },
+            }),
+            node("refund", "FUNCTION"),
+            node("reply", "AGENT"),
+            node("ask", "FORM"),
+            node("other", "AGENT"),
+            node("end", "END"),
+        ],
+        edges: [edge("triage", "other"), edge("refund", "end"), edge("reply", "end"), edge("ask", "end"), edge("other", "end")],
+    })!;
+    assert.equal(entryOf(graph), "triage", "route targets point at their nodes");
+    const [decision, end] = buildTree(graph);
+    assert.equal(end?.id, "end");
+    assert.ok(decision.type === "decision");
+    if (decision.type !== "decision") return;
+    assert.deepEqual(decision.arms.map((arm) => [arm.label, arm.condition, idsIn(arm.items)]), [
+        ["If yes", null, ["refund"]],
+        ["If no", null, ["reply"]],
+        ["If it cannot tell", null, ["ask"]],
+        ["Otherwise", null, ["other"]],
+    ]);
+
+    const shared = readGraph({
+        nodes: [
+            node("triage", "DECISION", { question: { routes: { billing: "refund", bug: "refund", other: "reply" } } }),
+            node("refund", "FUNCTION"),
+            node("reply", "FUNCTION"),
+        ],
+        edges: [],
+    })!;
+    const [merged] = buildTree(shared);
+    assert.ok(merged.type === "decision");
+    if (merged.type !== "decision") return;
+    assert.deepEqual(merged.arms.map((arm) => arm.label), ["If billing or bug", "If other"]);
+});
+
+test("a decision says what it decided, from either kind of output", () => {
+    const names = (id: string) => ({ refund: "Issue the refund" })[id] ?? id;
+    assert.equal(
+        sayDecided({ answer: "billing", confidence: 0.82, provider: "typesafe", model: "m", route: "refund" }, names),
+        "Answered billing (82% sure), so it went on to Issue the refund.",
+    );
+    assert.equal(sayDecided({ answer: false, confidence: null, route: "reply" }), "Answered no, so it went on to reply.");
+    assert.equal(sayDecided({ answer: null, confidence: null, route: "ask" }), "Could not tell from what it was given, so it went on to ask.");
+    // A run failed for want of a route records the answer and no route.
+    assert.equal(sayDecided({ answer: 3, error: "no route" }), "Answered 3.");
+    assert.equal(sayDecided({ matched_condition: "a > 1" }), "Matched a > 1.");
+    assert.equal(sayDecided({ matched_condition: null }), "No rule matched, so it took the default path.");
+    // A question still being weighed has no output yet.
+    assert.equal(sayDecided(undefined), "Not decided yet.");
+    assert.equal(sayDecided({ something: "else" }), "Decided.");
 });
 
 test("a loop holds its body and does not walk round it forever", () => {

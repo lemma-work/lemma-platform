@@ -31,7 +31,6 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.services import approval_reconciliation
 from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
-    dispatch_agent_host_permission,
 )
 from app.modules.agent.services.pause_resume import PauseResume
 from app.modules.agent.services.conversation_resume_return import (
@@ -159,6 +158,32 @@ class TestDecisionMapping:
 
         assert request.option_for(AgentRunApprovalDecision.APPROVE_ONCE) is None
 
+    def test_a_one_time_approval_never_becomes_always(self) -> None:
+        """The host caches an "always" answer for the rest of the session, so
+        picking it for a one-time yes turned that yes into a standing one."""
+        request = _request(
+            {
+                "options": [
+                    {"optionId": "no", "kind": "reject_once"},
+                    {"optionId": "always", "kind": "allow_always"},
+                ]
+            }
+        )
+
+        assert request.option_for(AgentRunApprovalDecision.APPROVE_ONCE) is None
+        assert request.refuses_a_one_time_approval(
+            AgentRunApprovalDecision.APPROVE_ONCE
+        )
+        assert (
+            request.option_for(AgentRunApprovalDecision.APPROVE_FOR_SESSION) == "always"
+        )
+
+    def test_an_ordinary_request_refuses_nothing(self) -> None:
+        assert not _request().refuses_a_one_time_approval(
+            AgentRunApprovalDecision.APPROVE_ONCE
+        )
+        assert not _request().refuses_a_one_time_approval(AgentRunApprovalDecision.DENY)
+
     def test_an_unlabelled_option_is_still_usable(self) -> None:
         """An adapter that omits `kind` must not make the approval unanswerable."""
         request = _request({"options": [{"optionId": "proceed"}]})
@@ -173,88 +198,82 @@ class _Command:
 
 class TestDispatch:
     @pytest.mark.asyncio
-    async def test_decision_is_queued_and_the_host_is_woken(
+    async def test_the_command_is_written_with_the_return_and_the_poke_waits(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The poke wakes the host's link to push the decision now; without it
-        the decision waits for the link's next push while the user watches an
-        agent that looks stuck."""
+        """The RESOLVE_PERMISSION command goes into the caller's transaction,
+        beside the tool return, so the two commit or roll back together. Only
+        the wake-up waits for the commit: a Redis publish has no business in an
+        open write transaction, and without it the decision would wait for the
+        link's floor tick while the person watches an agent that looks stuck."""
         host_id = uuid4()
         run_id = uuid7()
         enqueued: dict = {}
         poked: list = []
-
         _patch_agent_host(
-            monkeypatch,
-            enqueued=enqueued,
-            command=_Command(host_id),
-            poked=poked,
+            monkeypatch, enqueued=enqueued, command=_Command(host_id), poked=poked
         )
+        uow = _RecordingUow()
 
-        delivered = await dispatch_agent_host_permission(
+        result = await agent_host_permission_tool_return(
+            uow=uow,
             request=_request(),
             agent_run_id=run_id,
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            response={},
         )
 
-        assert delivered is True
+        assert enqueued.pop("uow") is uow, "queued outside the caller's transaction"
         assert enqueued == {
             "run_id": run_id,
             "request_id": "call-9",
             "option_id": "once",
         }
-        assert poked == [host_id]
-
-    @pytest.mark.asyncio
-    async def test_the_dispatch_waits_for_the_commit(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Nothing reaches the host until the transcript is durable.
-
-        This used to await the dispatch inline and branch on the result, which
-        put a Redis publish and a second session inside the caller's open write
-        transaction -- a pooled connection held on a path a user is waiting on.
-        Now the decision is queued through `after_commit`, so a caller that
-        rolls back never hands a decision to a host for a transcript nobody has.
-        """
-        enqueued: dict = {}
-        poked: list = []
-        _patch_agent_host(
-            monkeypatch, enqueued=enqueued, command=_Command(uuid4()), poked=poked
-        )
-        uow = _RecordingUow()
-
-        await agent_host_permission_tool_return(
-            uow=uow,
-            request=_request(),
-            agent_run_id=uuid7(),
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            response={},
-        )
-
-        assert enqueued == {}, "the host was told before the transcript committed"
-        assert poked == []
+        assert poked == [], "the host was woken before the decision committed"
+        assert "queued for the local agent" in result["message"]
 
         await uow.commit()
 
-        assert enqueued["option_id"] == "once"
-        assert poked != []
+        assert poked == [host_id]
 
     @pytest.mark.asyncio
-    async def test_a_finished_run_still_reads_as_queued(
+    async def test_a_failed_enqueue_fails_the_whole_decision(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The one case deferring costs, recorded so it is not a surprise.
+        """It used to run after the commit: the transcript already read
+        "Approved" and the card was closed when the enqueue failed, and the host
+        auto-denied the request half an hour later. Raising here, inside the
+        transaction, is what rolls the return back with it."""
 
-        The repository returns None once the run is terminal, and the message
-        used to say so: "the local agent's run ended before this decision
-        reached it". It cannot any more -- the message is written before the
-        dispatch runs -- so the agent reads "queued" instead.
+        class _Unavailable(Exception):
+            pass
 
-        Accepted deliberately (product decision, Aug 2026): agent-host delivery
-        is asynchronous by nature, the wording never claimed delivery, and an
-        orphaned run is cancelled by `reconcile_agent_host_dispatch` regardless.
-        """
+        _patch_agent_host(
+            monkeypatch,
+            enqueued={},
+            command=None,
+            poked=[],
+            error=_Unavailable("database went away"),
+        )
+        uow = _RecordingUow()
+
+        with pytest.raises(_Unavailable):
+            await agent_host_permission_tool_return(
+                uow=uow,
+                request=_request(),
+                agent_run_id=uuid7(),
+                decision=AgentRunApprovalDecision.APPROVE_ONCE,
+                response={},
+            )
+        assert uow.pending() == 0
+
+    @pytest.mark.asyncio
+    async def test_a_finished_run_is_told_so(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The repository returns None once the run is terminal. Known before
+        the message is written now, so the agent reads the truth rather than
+        "queued" for a decision nobody will collect."""
         poked: list = []
         _patch_agent_host(monkeypatch, enqueued={}, command=None, poked=poked)
         uow = _RecordingUow()
@@ -269,8 +288,7 @@ class TestDispatch:
         await uow.commit()
 
         assert result["success"] is True
-        assert "queued for the local agent" in result["message"]
-        # Still true and still the point: Lemma ran nothing itself.
+        assert "ended before this decision reached it" in result["message"]
         assert result["executed"] is False
         assert poked == [], "a terminal run has no live host to poke"
 
@@ -298,6 +316,29 @@ class TestDispatch:
         assert enqueued["option_id"] is None
         assert result["success"] is True
         assert result["executed"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_one_time_approval_of_an_always_only_request_says_no(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        enqueued: dict = {}
+        _patch_agent_host(
+            monkeypatch, enqueued=enqueued, command=_Command(uuid4()), poked=[]
+        )
+
+        result = await agent_host_permission_tool_return(
+            uow=_RecordingUow(),
+            request=_request(
+                {"options": [{"optionId": "always", "kind": "allow_always"}]}
+            ),
+            agent_run_id=uuid7(),
+            decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            response={},
+        )
+
+        assert enqueued["option_id"] is None
+        assert result["message"].startswith("Not approved.")
+        assert "for the session" in result["message"]
 
 
 class _AfterCommitUow:
@@ -332,27 +373,13 @@ class _RecordingUow:
     def after_commit(self, callback) -> None:
         self._callbacks.append(callback)
 
+    def pending(self) -> int:
+        return len(self._callbacks)
+
     async def commit(self) -> None:
         callbacks, self._callbacks = self._callbacks, []
         for callback in callbacks:
             await callback()
-
-
-class _FakeUowFactory:
-    """A unit of work that touches no database."""
-
-    def __call__(self):
-        return self
-
-    async def __aenter__(self):
-        # `after_commit` is part of the real unit of work now: the host dispatch
-        # is queued on it rather than awaited inline.
-        return SimpleNamespace(
-            commit=_noop, session=None, after_commit=lambda _callback: None
-        )
-
-    async def __aexit__(self, *_exc):
-        return False
 
 
 async def _noop(*_args, **_kwargs) -> None:
@@ -365,6 +392,7 @@ def _patch_agent_host(
     enqueued: dict,
     command,
     poked: list,
+    error: Exception | None = None,
 ) -> None:
     """Stub the Agent Host infrastructure the dispatch imports lazily."""
     channels = types.ModuleType("app.modules.agent.infrastructure.agent_host.channels")
@@ -376,23 +404,35 @@ def _patch_agent_host(
 
     class _Repository:
         def __init__(self, uow) -> None:
-            del uow
+            self.uow = uow
 
         async def enqueue_permission_decision(self, **kwargs):
+            if error is not None:
+                raise error
             enqueued.update(kwargs)
+            # Which transaction it was written in, for the test to compare.
+            enqueued.setdefault("uow", self.uow)
             return command
 
     dispatch = types.ModuleType(
         "app.modules.agent.infrastructure.agent_host.dispatch_repository"
     )
     dispatch.AgentHostDispatchRepository = _Repository
+
+    class _Runs:
+        """A run Lemma never ended for a parked window: it has no mark."""
+
+        def __init__(self, uow) -> None:
+            del uow
+
+        async def get_agent_run(self, agent_run_id):
+            return SimpleNamespace(id=agent_run_id, metadata={})
+
+    repositories = types.ModuleType("app.modules.agent.infrastructure.repositories")
+    repositories.ConversationRepository = _Runs
     monkeypatch.setitem(sys.modules, channels.__name__, channels)
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
-    monkeypatch.setattr(
-        approval_reconciliation,
-        "SessionUnitOfWorkFactory",
-        lambda _maker: _FakeUowFactory(),
-    )
+    monkeypatch.setitem(sys.modules, repositories.__name__, repositories)
 
 
 class _ConversationRepository:
@@ -479,12 +519,10 @@ class TestResolutionRouting:
             tool_args=args,
         )
         repository = _ConversationRepository(call)
-        # The host dispatch is queued on the unit of work now rather than
-        # awaited inline, so the fake has to accept it. It fires the callback
-        # eagerly: these tests are about WHETHER the decision reaches the host,
-        # and a fake that swallowed the callback would let them pass while
-        # nothing happened. That it waits for the commit is asserted separately,
-        # in `test_the_dispatch_waits_for_the_commit`.
+        # The host's wake-up is queued on the unit of work, so the fake has to
+        # accept it. What reaches the host -- the command, written in the
+        # caller's transaction -- is recorded by the stub below; that the
+        # wake-up waits for the commit is asserted in `TestDispatch`.
         uow = _AfterCommitUow()
         # The real coordinator, not a stand-in and not a half-built service:
         # what these tests check is its routing, so anything less would certify
@@ -496,15 +534,15 @@ class TestResolutionRouting:
             PauseResume(uow, repository, None),
         )
 
-        async def _dispatch(*, request, agent_run_id, decision):
+        async def _enqueue(uow, *, request, agent_run_id, decision):
+            del uow
             dispatched.append((request.request_id, agent_run_id, decision))
-            return True
+            return uuid4()
 
         monkeypatch.setattr(
-            "app.modules.agent.services.approval_reconciliation"
-            ".dispatch_agent_host_permission",
-            _dispatch,
+            approval_reconciliation, "stage_agent_host_permission", _enqueue
         )
+        monkeypatch.setattr(approval_reconciliation, "_wake_host", _noop)
         monkeypatch.setattr(
             "app.modules.agent.services.pause_resume.publish_conversation_event",
             _noop,
@@ -597,7 +635,7 @@ class TestResolutionRouting:
     async def test_host_permissions_are_never_deferred_to_a_worker(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Deferral exists for tools that run for minutes. A queued command plus
+        """The worker is for tools that run for minutes. A queued command plus
         a wake-up is milliseconds, and someone is watching the agent wait."""
         dispatched: list = []
         service, repository, _ = self._service(monkeypatch, dispatched)
@@ -615,7 +653,6 @@ class TestResolutionRouting:
             user_id=conversation.user_id,
             pod_id=conversation.pod_id,
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            defer_reconciliation=True,
         )
 
         assert resolution.status == "resolved"
@@ -679,10 +716,10 @@ class TestAParkedInteractionDoesNotResume:
     polling for. The turn carries on the moment it reads it, so dispatching a
     resume run here would put two runs on the same turn.
 
-    Keyed on the run still running rather than on a marker in the call's
-    arguments, unlike the ACP permission above: those arguments come from the
-    model, not from Lemma, so there is nothing of ours to read back. "Still
-    running" is also the honest condition — it is what makes a resume wrong.
+    Keyed on the mark Lemma writes on the call when it records it over MCP
+    (`parked_in_run`), with the run still running: not on the call's arguments,
+    which come from the model, and not on the run's status alone, which an
+    in-process pause answered before its run was written WAITING shares.
     """
 
     @pytest.mark.asyncio
@@ -695,6 +732,7 @@ class TestAParkedInteractionDoesNotResume:
         # An ordinary request_approval — no ACP marker, so only the run's own
         # state can tell this apart from an in-process pause.
         repository.call.tool_args = {"tool_name": "exec_command", "args": {}}
+        repository.call.metadata = {"parked_in_run": True}
         repository.paused_run = SimpleNamespace(
             id=run_id, status=AgentRunStatus.RUNNING
         )

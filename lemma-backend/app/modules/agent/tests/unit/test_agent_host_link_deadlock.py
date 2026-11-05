@@ -24,10 +24,10 @@ import pytest
 from sqlalchemy.exc import DBAPIError
 
 from app.modules.agent.domain.agent_host import AgentHostCapacity, HostHello
+from app.core.infrastructure.db.transient_errors import is_deadlock
 from app.modules.agent.services.agent_host_link_store import (
     AgentHostLinkStore,
     ControlUpdates,
-    is_deadlock,
 )
 
 

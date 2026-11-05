@@ -38,7 +38,7 @@ POD_DEFAULT_AGENT_TOOLSETS = (
     AgentToolset.SPEECH,
     AgentToolset.TODO,
     # Reaching a colleague, and being able to wait for their answer. These two
-    # are one capability: `message_user` does not block, so without `wait_for` the
+    # are one capability: `channel_post` does not block, so without `wait_for` the
     # agent is told to send and then has no way to be around when the reply
     # lands. Both are deferred (see EXTRA_TOOLSETS) so neither shows up in the
     # prompt prefix of an ordinary chat.

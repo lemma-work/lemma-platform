@@ -24,7 +24,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from app.core.file_types import is_untyped_mime
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
@@ -37,16 +37,24 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.domain.envelope import EnvelopeVoice, SurfaceEnvelope
+from app.modules.agent_surfaces.domain.envelope import (
+    DeliveryReceipt,
+    PartDelivery,
+    SurfaceEnvelope,
+)
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
+from app.modules.agent_surfaces.platforms.delivery import note_tried
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
+from app.modules.agent_surfaces.services.channel_exposure import (
+    deliver_withheld,
+    outsiders_would_see,
+)
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
 )
 from app.modules.agent_surfaces.services.display_resource_content import (
     apply_file_facts,
     apply_table_rows,
-    load_pod_file_bytes,
     resolve_pod_file_parts,
     resolve_table_preview,
 )
@@ -56,6 +64,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
+from app.modules.agent_surfaces.services.egress_voice import send_voice_note
 from app.modules.agent_surfaces.services.approval_cards import approval_plan
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_free_text_answer_wanted,
@@ -66,6 +75,8 @@ from app.modules.agent_surfaces.services.one_reply_attachments import (
     release_held_files,
 )
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
+from app.modules.channels.contracts import Source
+from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 from app.modules.agent.contracts.interaction_replies import ask_user_request_dict
 from app.modules.agent_surfaces.services.surface_sign_in import (
     sign_in_prompt_envelope,
@@ -121,14 +132,19 @@ class SurfaceEgress:
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
             return None
-        sent = await adapter.send_cold_email(
-            credentials=await self.delivery.egress_credentials(surface),
-            recipient_email=recipient_email,
-            subject=subject,
-            message=clean_message,
-            thread_seed_id=thread_seed_id,
-            metadata=metadata,
-        )
+        credentials = await self.delivery.egress_credentials(surface)
+        # The send is the provider's round trip and asks nothing of the
+        # database; the caller writes the thread down afterwards.
+        async with connection_released(self.uow.session):
+            note_tried(surface.surface_type.value)
+            sent = await adapter.send_cold_email(
+                credentials=credentials,
+                recipient_email=recipient_email,
+                subject=subject,
+                message=clean_message,
+                thread_seed_id=thread_seed_id,
+                metadata=metadata,
+            )
         if sent is None:
             return None
         return build_cold_email_thread(
@@ -142,21 +158,53 @@ class SurfaceEgress:
         message: str,
         metadata: dict[str, Any] | None = None,
         attach_files_of: RunFiles | None = None,
+        sender_only: bool = False,
+        at: Source | None = None,
     ) -> bool:
-        """Send a message; ``attach_files_of`` names the run whose held files ride it.
+        """Send a message; whether it arrived. See ``deliver_message``."""
+        receipt = await self.deliver_message(
+            conversation_id=conversation_id,
+            message=message,
+            metadata=metadata,
+            attach_files_of=attach_files_of,
+            sender_only=sender_only,
+            at=at,
+        )
+        return receipt is not None
+
+    async def deliver_message(
+        self,
+        *,
+        conversation_id: UUID,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        attach_files_of: RunFiles | None = None,
+        sender_only: bool = False,
+        at: Source | None = None,
+    ) -> DeliveryReceipt | None:
+        """Send a message; its receipt -- with the platform's id for it -- or
+        None when it reached nobody. ``attach_files_of`` names the run whose
+        held files ride it.
+
+        ``at`` is a place chosen for it -- a notification's -- rather than where
+        the conversation's answer would go.
 
         Left out, nothing is attached: a notification or a nudge is not the reply
         those files were shown for, and one run's files are never another's.
+        ``sender_only`` keeps it to the person the thread answers, dropping the
+        copies a reply-all would carry.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(conversation_id, at=at)
         if target is None:
-            return False
+            return None
+        if sender_only:
+            target = target.to_sender_only()
         # Safety net: never deliver model reasoning/thinking tokens
         # (``<tool_call>…``) as a chat message to any surface. Some
         # OpenAI-compatible models emit these inline in the text content.
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
-            return False
+            return None
         # A failure notice is not the reply the files were shown for. Attaching
         # them to it sent a person a half-finished run's files under an apology,
         # and -- since held files were drained on read -- spent them on it.
@@ -170,20 +218,49 @@ class SurfaceEgress:
                 run=attach_files_of,
             )
         )
-        delivered = await self.delivery.deliver_envelope(
+        return await self._deliver_with_held_files(
             target,
             envelope=SurfaceEnvelope(text=clean_message, files=files),
             metadata=await self.delivery.egress_metadata(target, metadata),
             conversation_id=conversation_id,
+            run=attach_files_of,
+            held=held,
         )
-        if delivered and held and attach_files_of is not None:
+
+    async def _deliver_with_held_files(
+        self,
+        target: SurfaceEgressTarget,
+        *,
+        envelope: SurfaceEnvelope,
+        metadata: dict[str, object],
+        conversation_id: UUID,
+        run: RunFiles | None,
+        held: list[str],
+    ) -> DeliveryReceipt | None:
+        """Deliver an envelope; release the held files only if theirs arrived.
+
+        A reply can land while its attachments do not, and releasing on "the
+        envelope arrived" dropped those files from the hold: the reply the person
+        got did not have them, and nothing that came after could carry them.
+        """
+        receipt = await self.delivery.deliver_envelope_receipt(
+            target,
+            envelope=envelope,
+            metadata=metadata,
+            conversation_id=conversation_id,
+        )
+        if receipt is None:
+            return None
+        files_arrived = all(
+            outcome is not PartDelivery.UNDELIVERED
+            for part, outcome in receipt.parts.items()
+            if part == "files" or part.startswith("files[")
+        )
+        if held and run is not None and files_arrived:
             await release_held_files(
-                uow=self.uow,
-                conversation_id=conversation_id,
-                run=attach_files_of,
-                paths=held,
+                uow=self.uow, conversation_id=conversation_id, run=run, paths=held
             )
-        return delivered
+        return receipt
 
     async def send_display_resource_for_conversation(
         self,
@@ -196,10 +273,8 @@ class SurfaceEgress:
     ) -> bool:
         """Show one resource -- a file, a table, a card -- on the surface.
 
-        ``request`` is the validated model. It used to also accept the raw dict
-        and validate it here, which no caller ever needed: the tool path hands
-        over a `DisplayResourceRequest` and always did. Only two tests used the
-        dict, so the branch existed to be tested.
+        A member's file or rows are not posted where people outside the pod
+        read them; see `channel_exposure`.
         """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
@@ -213,6 +288,14 @@ class SurfaceEgress:
             tool_output=tool_output,
         )
         message_metadata = await self.delivery.egress_metadata(target, metadata)
+        if outsiders_would_see(target, display_request):
+            return await deliver_withheld(
+                self.delivery,
+                target,
+                render_plan=render_plan,
+                metadata=message_metadata,
+                conversation_id=conversation_id,
+            )
         # A FILE resource is delivered as a native attachment when it fits the
         # platform's cap; otherwise we fall through to the card render plan, whose
         # action is a Lemma app deep link — openable only by a recipient with pod
@@ -317,7 +400,7 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             run=attach_files_of,
         )
-        delivered = await self.delivery.deliver_envelope(
+        receipt = await self._deliver_with_held_files(
             target,
             # The lead-in and the question are one thing the person receives.
             # Sent as two, they arrive as two on a chat surface and as two
@@ -325,15 +408,10 @@ class SurfaceEgress:
             envelope=SurfaceEnvelope(text=narration, choices=plan, files=files),
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
+            run=attach_files_of,
+            held=held,
         )
-        if delivered and held and attach_files_of is not None:
-            await release_held_files(
-                uow=self.uow,
-                conversation_id=conversation_id,
-                run=attach_files_of,
-                paths=held,
-            )
-        return delivered
+        return receipt is not None
 
     async def send_prompt_as_text_for_conversation(
         self,
@@ -486,7 +564,7 @@ class SurfaceEgress:
             conversation_id=conversation_id,
             run=attach_files_of,
         )
-        delivered = await self.delivery.deliver_envelope(
+        receipt = await self._deliver_with_held_files(
             target,
             envelope=SurfaceEnvelope(
                 text=narration,
@@ -497,15 +575,10 @@ class SurfaceEgress:
             ),
             metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
+            run=attach_files_of,
+            held=held,
         )
-        if delivered and held and attach_files_of is not None:
-            await release_held_files(
-                uow=self.uow,
-                conversation_id=conversation_id,
-                run=attach_files_of,
-                paths=held,
-            )
-        return delivered
+        return receipt is not None
 
     async def send_voice_note_for_conversation(
         self,
@@ -514,58 +587,11 @@ class SurfaceEgress:
         path: str,
         caption: str | None = None,
     ) -> bool:
-        """Deliver a pod audio file as a native voice note on the surface.
-
-        Called by the ``say`` tool. Tries the platform's native voice note
-        (Telegram sendVoice / audio message); falls back to a normal file
-        attachment (an inline audio player on most platforms) and then a link.
-        """
-        target = await self.delivery.resolve_egress_target(conversation_id)
-        if target is None:
-            return False
-        # The caption is model-authored — strip any reasoning before delivery.
-        caption = sanitize_user_visible_text(caption) if caption else caption
-        loaded = await load_pod_file_bytes(
+        """Deliver a pod audio file as a voice note; the ``say`` tool's verb."""
+        return await send_voice_note(
             uow=self.uow,
-            target=target,
+            delivery=self.delivery,
             conversation_id=conversation_id,
             path=path,
-        )
-        if loaded is None:
-            # A warning: `say` reads this False as "the person did not hear it".
-            logger.warning(
-                "agent_surfaces.egress.voice_note_not_fetched.degraded",
-                conversation_id=str(conversation_id),
-                path=path,
-            )
-            return False
-        entity, content = loaded
-
-        # `or` was not enough: a file stored without an extension is typed
-        # `application/octet-stream`, which is truthy, so the fallback never
-        # fired and Telegram was handed a blob where sendVoice wants OGG.
-        mime = "audio/ogg" if is_untyped_mime(entity.mime_type) else entity.mime_type
-
-        # Voice note, then the same bytes as an attachment (an audio player on
-        # most platforms), then the link card. Three rungs that used to be
-        # written out here; the envelope walks them.
-        return await self.delivery.deliver_envelope(
-            target,
-            envelope=SurfaceEnvelope(
-                voice=EnvelopeVoice(
-                    file_name=entity.name,
-                    content=content,
-                    mime_type=mime,
-                    caption=caption,
-                    fallback=build_display_resource_render_plan(
-                        pod_id=target.pod_id,
-                        request=DisplayResourceRequest(
-                            type=DisplayResourceType.FILE, path=path
-                        ),
-                        conversation_id=conversation_id,
-                    ),
-                )
-            ),
-            metadata=await self.delivery.egress_metadata(target),
-            conversation_id=conversation_id,
+            caption=caption,
         )

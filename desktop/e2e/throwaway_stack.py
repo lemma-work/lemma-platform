@@ -462,6 +462,8 @@ def start_backend(pack: Path, env: dict, root: Path, port: int) -> subprocess.Po
             str(port),
             "--ws",
             "websockets-sansio",
+            "--ws-max-size",
+            "1048576",
         ],
         cwd=str(pack / "backend"),
         env={**env, "PATH": os.environ.get("PATH", "")},

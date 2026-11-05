@@ -18,7 +18,7 @@ can hang on somebody else's network.
 
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import UUID, uuid7
 
 from pydantic import HttpUrl, SecretStr
 
@@ -32,7 +32,12 @@ from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
+    DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
+    HARNESS_KEY,
+    with_reasoning_declared,
+    checked_profile,
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
@@ -42,6 +47,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    refuse_redacted_values,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
@@ -52,6 +58,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
 from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.services.generation_settings import validated_stored_settings
 from app.modules.agent.services.runtime_system_profiles import (
     agent_host_model_catalog,
 )
@@ -60,11 +67,21 @@ from app.modules.agent.services.runtime_system_profiles import (
 def normalize_profile_name(name: str) -> str:
     normalized = name.strip()
     if not normalized:
-        raise ValueError("Profile name cannot be empty")
+        raise RuntimeProfileValidationError("Profile name cannot be empty")
     return normalized
 
 
+def normalize_model_settings(
+    model_settings: dict[str, object] | None,
+) -> dict[str, object]:
+    refuse_redacted_values(model_settings, field="model_settings")
+    # Refused here, not at the first run: a value no run can use used to be
+    # saved and then fail every run on the profile.
+    return validated_stored_settings(model_settings)
+
+
 def normalize_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    refuse_redacted_values(headers, field="headers")
     normalized: dict[str, str] = {}
     for key, value in (headers or {}).items():
         header_name = key.strip()
@@ -117,7 +134,7 @@ class RuntimeProfileCreation:
         description: str | None = None,
         default_model_name: str | None = None,
         config_selections: JsonObject | None = None,
-        host_wait_timeout_seconds: int = 300,
+        host_wait_timeout_seconds: int = DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     ) -> AgentRuntimeProfile:
         """Bind a runtime profile to one harness on one paired Agent Host.
 
@@ -133,7 +150,7 @@ class RuntimeProfileCreation:
             RuntimeProfileScope.ORGANIZATION,
             RuntimeProfileScope.PERSONAL,
         }:
-            raise ValueError(
+            raise RuntimeProfileValidationError(
                 "Agent Host profile scope must be ORGANIZATION or PERSONAL"
             )
 
@@ -145,16 +162,19 @@ class RuntimeProfileCreation:
             scope=scope,
         )
         config_options = list(harness.config_options or [])
-        selections = validate_agent_host_selections(
-            config_options=config_options,
-            selections=config_selections or {},
-        )
         selected_model = validate_agent_host_model(
             config_options=config_options,
             model_name=default_model_name,
         )
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
+        # Against the chosen model's options: some values exist for one model
+        # only, and the machine's default model is not necessarily this one.
+        selections = validate_agent_host_selections(
+            config_options=config_options,
+            selections=config_selections or {},
+            model_name=selected_model,
+        )
+        profile = checked_profile(
+            id=str(uuid7()),
             organization_id=organization_id,
             user_id=user_id if scope is RuntimeProfileScope.PERSONAL else None,
             harness_id=harness_id,
@@ -180,7 +200,7 @@ class RuntimeProfileCreation:
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "AGENT_HOST",
-                "harness_key": harness.harness_key,
+                HARNESS_KEY: harness.harness_key,
             },
         )
         return await self.repository.create(profile)
@@ -196,6 +216,7 @@ class RuntimeProfileCreation:
         default_model_name: str | None = None,
         model_names: list[str] | None = None,
         vision_model_names: list[str] | None = None,
+        reasoning_model_names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         model_settings: dict[str, object] | None = None,
     ) -> AgentRuntimeProfile:
@@ -203,6 +224,7 @@ class RuntimeProfileCreation:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = normalize_profile_name(name)
         normalized_headers = normalize_headers(headers)
+        normalized_settings = normalize_model_settings(model_settings)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
@@ -215,7 +237,9 @@ class RuntimeProfileCreation:
                     headers=normalized_headers,
                 )
         except discovery.ProviderKeyRejectedError as exc:
-            raise ValueError(discovery.key_rejected_message(normalized_name)) from exc
+            raise RuntimeProfileValidationError(
+                discovery.key_rejected_message(normalized_name)
+            ) from exc
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
@@ -224,12 +248,13 @@ class RuntimeProfileCreation:
                 name.strip() for name in (vision_model_names or []) if name.strip()
             },
         )
+        catalog = with_reasoning_declared(catalog, reasoning_model_names or [])
         selected_default_model = discovery._select_provider_default_model(
             requested_model_name=default_model_name,
             catalog=catalog,
         )
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
+        profile = checked_profile(
+            id=str(uuid7()),
             organization_id=organization_id,
             scope=RuntimeProfileScope.ORGANIZATION,
             kind=RuntimeProfileKind.MODEL_PROVIDER,
@@ -241,7 +266,7 @@ class RuntimeProfileCreation:
             config=OpenAICompatibleRuntimeConfig(
                 base_url=HttpUrl(base_url),
                 headers=normalized_headers,
-                model_settings=model_settings or {},
+                model_settings=normalized_settings,
             ),
             credentials=(
                 ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip()))
@@ -266,6 +291,7 @@ class RuntimeProfileCreation:
         description: str | None = None,
         default_model_name: str | None = None,
         model_names: list[str] | None = None,
+        reasoning_model_names: list[str] | None = None,
         headers: dict[str, str] | None = None,
         model_settings: dict[str, object] | None = None,
     ) -> AgentRuntimeProfile:
@@ -273,6 +299,7 @@ class RuntimeProfileCreation:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = normalize_profile_name(name)
         normalized_headers = normalize_headers(headers)
+        normalized_settings = normalize_model_settings(model_settings)
         # Nothing has been read or written yet, so the caller's connection goes
         # back for the provider round trip -- an HTTP call to a base URL the
         # caller supplied, which is as slow as whatever answers it. The writes
@@ -287,7 +314,9 @@ class RuntimeProfileCreation:
                     )
                 )
         except discovery.ProviderKeyRejectedError as exc:
-            raise ValueError(discovery.key_rejected_message(normalized_name)) from exc
+            raise RuntimeProfileValidationError(
+                discovery.key_rejected_message(normalized_name)
+            ) from exc
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
@@ -296,12 +325,13 @@ class RuntimeProfileCreation:
             # an Anthropic-compatible profile keeps the vision tools.
             default_vision=True,
         )
+        catalog = with_reasoning_declared(catalog, reasoning_model_names or [])
         selected_default_model = discovery._select_provider_default_model(
             requested_model_name=default_model_name,
             catalog=catalog,
         )
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
+        profile = checked_profile(
+            id=str(uuid7()),
             organization_id=organization_id,
             scope=RuntimeProfileScope.ORGANIZATION,
             kind=RuntimeProfileKind.MODEL_PROVIDER,
@@ -313,7 +343,7 @@ class RuntimeProfileCreation:
             config=AnthropicCompatibleRuntimeConfig(
                 base_url=HttpUrl(base_url) if base_url is not None else None,
                 headers=normalized_headers,
-                model_settings=model_settings or {},
+                model_settings=normalized_settings,
             ),
             credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip())),
             status=RuntimeProfileStatus.ACTIVE,
@@ -336,7 +366,7 @@ class RuntimeProfileCreation:
         assert self.host_repository is not None
         harness = await self.host_repository.get_harness(harness_id=harness_id)
         if harness is None:
-            raise ValueError("Agent Host harness is not available")
+            raise RuntimeProfileValidationError("Agent Host harness is not available")
         if require_owner:
             host = await self.host_repository.get_for_user(
                 host_id=harness.host_id,
@@ -348,7 +378,9 @@ class RuntimeProfileCreation:
             # profile a colleague created, while dispatch imposes no such check.
             host = await self.host_repository.get(host_id=harness.host_id)
         if host is None or host.revoked_at is not None:
-            raise ValueError("Agent Host harness is not owned by the current user")
+            raise RuntimeProfileValidationError(
+                "Agent Host harness is not owned by the current user"
+            )
         # A paired computer belongs to the person who paired it, not to a
         # workspace: it runs on their machine, with their credentials. Sharing
         # it is the *profile's* decision - giving a profile ORGANIZATION scope
@@ -359,7 +391,11 @@ class RuntimeProfileCreation:
             effective_agent_host_status(host.status, host.last_seen_at)
             is not AgentHostStatus.ONLINE
         ):
-            raise ValueError("Agent Host is offline or not accepting new runs")
+            raise RuntimeProfileValidationError(
+                "Agent Host is offline or not accepting new runs"
+            )
         if harness.health != AgentHostHarnessHealth.READY.value:
-            raise ValueError(f"Agent Host harness is not ready: {harness.health}")
+            raise RuntimeProfileValidationError(
+                f"Agent Host harness is not ready: {harness.health}"
+            )
         return harness

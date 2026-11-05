@@ -19,6 +19,7 @@ the rest.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 #: Roughly 12k tokens. `workspace_cli.helper` carried a constant of exactly this
@@ -81,6 +82,31 @@ def bounded_tool_payload(
             "narrower slice of it -- fewer items, or one field at a time."
         ),
     }
+
+
+def bounded_rows[RowT](
+    rows: Sequence[RowT], *, limit: int = DEFAULT_TOOL_PAYLOAD_LIMIT
+) -> tuple[list[RowT], int]:
+    """The leading rows that fit in `limit` characters, and how many did not.
+
+    A row cap alone does not bound a result: a thousand rows of a wide text or
+    JSON column is megabytes, carried in the conversation from then on. Rows
+    are kept whole and in order -- half a row is not a smaller row -- so the
+    reader gets a true prefix of the result and a count of what is missing.
+    A single row too large on its own is replaced by a marked stand-in rather
+    than dropped silently.
+    """
+    kept: list[RowT] = []
+    used = 2  # the enclosing brackets
+    for row in rows:
+        size = _rendered_length(row) + 1
+        if used + size > limit:
+            break
+        kept.append(row)
+        used += size
+    if not kept and rows:
+        kept.append(bounded_tool_payload(rows[0], limit=limit, what="row"))
+    return kept, len(rows) - len(kept)
 
 
 def bounded_tool_text(

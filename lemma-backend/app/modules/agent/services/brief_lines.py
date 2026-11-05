@@ -16,11 +16,17 @@ whether a person was typing or a schedule had fired at six in the morning.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
+from typing import TYPE_CHECKING
+
 from uuid import UUID
 
 from app.modules.agent.config import agent_settings
 
 from app.modules.agent.infrastructure.context_brief_repository import UserProfile
+
+if TYPE_CHECKING:
+    from app.modules.datastore.contracts import ColumnSchema
 
 #: Columns past this are named as a count rather than listed.
 MAX_COLUMNS = 40
@@ -142,15 +148,29 @@ def run_source_of(agent_run) -> str | None:
     *conversation* once, so the conversation cannot say whether a person is here
     on this turn. Only the run can.
     """
-    metadata = getattr(agent_run, "metadata", None)
-    if not isinstance(metadata, dict):
-        return None
-    source = metadata.get("source")
-    return str(source) if source else None
+    return source_of(getattr(agent_run, "metadata", None))
 
 
-def with_run_framing(brief: str, *, conversation, run_source: str | None = None) -> str:
+def call_brief(conversation) -> str:
+    """The coordinator's brief, while a live call is held in this conversation.
+
+    Per run rather than in the conversation's instructions: a call can happen
+    in any chat, and the chat must read as itself again once the call ends.
+    """
+    from app.modules.agent.domain.calls import call_mark, coordinator_brief
+
+    metadata = getattr(conversation, "metadata", None)
+    mark = call_mark(metadata if isinstance(metadata, dict) else None)
+    return coordinator_brief() if mark is not None and mark.live_coordinator else ""
+
+
+def run_framing(
+    conversation, *, run_source: str | None = None, platform: str | None = None
+) -> str:
     """Say what started **this run**, and whether anybody is waiting on it.
+
+    Changes from run to run, so it goes in the run's context part rather than
+    the system prompt (``domain/run_context_prompt``).
 
     Every run read identically before this: a person typing, a message from
     Slack, and a schedule firing at six in the morning all produced the same
@@ -167,18 +187,20 @@ def with_run_framing(brief: str, *, conversation, run_source: str | None = None)
 
     So: the conversation says how it began, ``run_source`` says what started this
     turn, and the unattended claim needs the source to be positively known
-    automatic. Anything unrecognised is not called unattended.
+    automatic. Anything unrecognised is not called unattended. ``platform`` is
+    the one the run talks over (``surface_context_for_run``), never the
+    conversation's: a member's conversation in a channel was last heard on
+    WhatsApp as often as not when they ask in Lemma.
     """
     metadata = getattr(conversation, "metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
     started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
     unattended = run_is_unattended(run_source)
-    platform = metadata.get("surface_platform")
-    where = f" from {str(platform).lower()}" if platform else ""
+    where = f" from {platform.lower()}" if platform else ""
 
     if run_source == RESUMED_BY_PERSON:
         return _with_budget(
-            f"{brief}\n\n## This run\n"
+            "## This run\n"
             "- A person answered what you were waiting on — an approval, or a "
             "reply to `ask_user`. Their answer is in your history above. Carry "
             "on from where you paused, and tell them what happened.",
@@ -189,7 +211,7 @@ def with_run_framing(brief: str, *, conversation, run_source: str | None = None)
         name = metadata.get("schedule_name")
         named = f" (`{name}`)" if name else ""
         return _with_budget(
-            f"{brief}\n\n## This run\n"
+            "## This run\n"
             f"- A schedule{named} started this, and nothing since has come from "
             "a person. **Assume nobody is watching right now** — `ask_user` "
             "pauses the run until somebody answers, which on an unattended "
@@ -203,7 +225,7 @@ def with_run_framing(brief: str, *, conversation, run_source: str | None = None)
 
     if started_by_schedule:
         return _with_budget(
-            f"{brief}\n\n## This run\n"
+            "## This run\n"
             "- This conversation was started by a schedule, and a person is now "
             f"asking in it{where}. Answer them here.",
             unattended=False,
@@ -211,12 +233,12 @@ def with_run_framing(brief: str, *, conversation, run_source: str | None = None)
 
     if platform:
         return _with_budget(
-            f"{brief}\n\n## This run\n"
+            "## This run\n"
             f"- This arrived{where}, and the person is waiting there. Your reply "
             "goes back to the same conversation.",
             unattended=False,
         )
-    return _with_budget(f"{brief}\n\n## This run", unattended=False)
+    return _with_budget("## This run", unattended=False)
 
 
 def user_lines(profile: UserProfile, user_id: UUID) -> list[str]:
@@ -255,24 +277,13 @@ def user_lines(profile: UserProfile, user_id: UUID) -> list[str]:
     return lines
 
 
-def column_spec(column) -> str:
+def column_spec(column: ColumnSchema) -> str:
     """Write constraints only; full descriptions are available on inspection."""
-    type_name = getattr(column.type, "value", column.type)
-    marks: list[str] = []
-    if getattr(column, "system", False) or getattr(column, "auto", False):
-        marks.append("auto")
-    elif getattr(column, "required", False):
-        marks.append("required")
-    if getattr(column, "unique", False):
-        marks.append("unique")
-    fk = getattr(column, "foreign_key", None)
-    references = getattr(fk, "references", None) if fk is not None else None
-    if references:
-        marks.append(f"→{references}")
-    spec = f"{column.name}:{type_name}"
-    if marks:
-        spec += "(" + " ".join(marks) + ")"
-    return spec
+    # Imported here: the datastore contracts pull in its API schemas, and the
+    # brief is imported on paths that never render a table.
+    from app.modules.datastore.contracts import describe_column
+
+    return describe_column(column).brief()
 
 
 def table_line(table) -> str:

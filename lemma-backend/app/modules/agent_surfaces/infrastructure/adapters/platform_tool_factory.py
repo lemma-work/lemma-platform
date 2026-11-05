@@ -18,12 +18,13 @@ from app.modules.agent_surfaces.platforms.teams.tools import (
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
-from app.modules.agent_surfaces.platforms.surface_send_tools import (
+from app.modules.agent_surfaces.services.surface_send_tools import (
     build_surface_send_toolset,
 )
-from app.modules.agent_surfaces.platforms.whatsapp.tools import (
+from app.modules.agent_surfaces.services.whatsapp_group_tool import (
     build_whatsapp_group_toolset,
 )
+from app.modules.agent_surfaces.platforms.credential_checks import can_deliver
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
     has_native_credentials,
@@ -87,7 +88,7 @@ class SurfacePlatformToolFactory:
             credentials = await resolver.for_surface(
                 surface, prefer_native=True, force_refresh=True
             )
-            if not credentials:
+            if not can_deliver(surface.surface_type, credentials):
                 return []
             allow_send = surface.config.send_policy.allow_send
 
@@ -95,7 +96,7 @@ class SurfacePlatformToolFactory:
         if builder is not None:
             toolsets.append(builder(credentials=credentials))
         if caps.bot_creates_groups and metadata.get("conversation_kind") == "DM":
-            # Only in a member's own chat: see `platforms/whatsapp/tools`.
+            # Only in a member's own chat: see `services/whatsapp_group_tool`.
             toolsets.append(
                 build_whatsapp_group_toolset(
                     uow_factory=self.uow_factory, surface_id=surface.id

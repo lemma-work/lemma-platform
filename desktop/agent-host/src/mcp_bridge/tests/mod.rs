@@ -2,5 +2,6 @@
 // the bridge through here.
 pub(super) use crate::mcp_bridge::*;
 
+mod params_tests;
 mod parked_tests;
 mod relay_client_tests;

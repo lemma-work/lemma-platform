@@ -21,8 +21,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.context import ActorType, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
+from app.core.domain.errors import DomainError
 from app.core.authorization.delegation import (
     effective_agent_id,
     is_pod_default_agent,
@@ -33,7 +34,8 @@ from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
+from app.modules.agent.domain.conversation_ports import ConversationLookup
+from app.modules.agent.domain.ports import AgentRepository
 
 
 def validate_conversation_access(
@@ -144,7 +146,7 @@ async def resolve_expected_agent_id(
 
 
 async def authorized_conversation(
-    conversation_repository: ConversationRepository,
+    conversation_repository: ConversationLookup,
     agent_repository: AgentRepository,
     *,
     conversation_id: UUID,
@@ -152,24 +154,34 @@ async def authorized_conversation(
     pod_id: UUID,
     agent_name: str | None,
     action: str,
+    include_runs: bool = False,
+    require_grant: bool = True,
 ) -> Conversation:
+    """Resolve the agent the caller names, load the conversation, check both.
+
+    ``require_grant=False`` is for an agent working on its own conversation
+    tree: ownership is still checked, but the agent holds no grant on itself.
+    """
     agent_id = await resolve_expected_agent_id(
         agent_repository,
         pod_id=pod_id,
         agent_name=agent_name,
     )
     conversation = validate_conversation_access(
-        await conversation_repository.get_conversation(conversation_id),
+        await conversation_repository.get_conversation(
+            conversation_id, include_runs=include_runs
+        ),
         user_id=user_id,
         pod_id=pod_id,
         agent_id=agent_id,
     )
-    await require_agent_action(
-        user_id=user_id,
-        pod_id=pod_id,
-        agent_id=conversation.agent_id,
-        action=action,
-    )
+    if require_grant:
+        await require_agent_action(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=conversation.agent_id,
+            action=action,
+        )
     return conversation
 
 
@@ -195,10 +207,24 @@ async def require_agent_actions(
     agent_id: UUID | None,
     actions: Sequence[str],
 ) -> None:
-    _ = user_id
     ctx = get_current_context()
     if ctx is None:
         raise RuntimeError("Context is required for conversation authorization")
+    # The check below runs against the ambient context, so it says nothing
+    # about `user_id` unless that context is the same person's -- their own, or
+    # a workload acting for them. A worker or delegated path whose context is
+    # somebody else's would otherwise authorize the wrong subject silently.
+    # Another pod asking over a link is nobody's: the conversation it opens is
+    # its steward's, and what it may do there is the link's grant, checked below.
+    if ctx.actor_type != ActorType.POD and user_id not in {
+        ctx.user_id,
+        ctx.delegating_user_id,
+    }:
+        raise DomainError(
+            "The request's identity does not match the conversation's user",
+            code="CONTEXT_USER_MISMATCH",
+            status_code=403,
+        )
     # The assistant authorizes against the *pod*, and keeps doing so now that
     # it has a row. Both arms would name the same id -- the row's id is the
     # pod's -- but the resource *type* is not cosmetic: grants match on

@@ -132,13 +132,27 @@ class OperationExecutionRequest(BaseModel):
             "`output_path` chooses where a file result lands in the pod."
         )
     )
-    account_id: str | None = None
+    # No account: the pod connector's mode and the caller decide it. An
+    # account id here was a free argument a model could type to run as a
+    # colleague.
+
+
+class InstallationOperationExecutionRequest(OperationExecutionRequest):
+    """The deprecated org-level execute's body: an installation, maybe an account."""
+
+    account_id: str | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated. Served only if it is the account a pod connector for "
+            "this installation resolves to, or your own on a per-member one."
+        ),
+    )
     pod_id: UUID | None = Field(
         default=None,
         description=(
-            "The pod that `pod_path` and `file_id` references resolve in, and "
-            "that file results land in. Implied for a call made from inside a "
-            "pod; name it when calling as a person from outside one."
+            "The pod whose connectors serve the call, and that file references "
+            "resolve in. Implied for a call made from inside a pod."
         ),
     )
 

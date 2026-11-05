@@ -1,28 +1,44 @@
-"""What every chat platform has to be able to do.
+"""What every chat platform has to be able to do, split by use case.
 
-One contract, implemented by every adapter under `platforms/` and by nothing
-else. It lives apart from `ports.py`, which holds the module's *infrastructure*
-seams -- repositories, a dedup store, a user directory, a membership lookup,
-each with one implementation in `infrastructure/`. Those answer "where does this
-row come from". This answers "what can Slack do that email cannot", which is the
-module's central question and the thing `platform_capabilities` describes in
-prose.
+One adapter per platform implements these, under `platforms/`, and nothing
+else does. It lives apart from `ports.py`, which holds the module's
+*infrastructure* seams -- repositories, a dedup store, a user directory -- each
+with one implementation in `infrastructure/`. Those answer "where does this row
+come from". This answers "what can Slack do that email cannot".
 
-The split is not a page count. It is that four separate reviews found this
-protocol missing an operation every adapter already implemented -- most recently
-the four in-chat set-up calls below -- and each time it was invisible because
-the caller reached the adapter through something the type checker could not see
-through. Keeping the platform contract in a file of its own is what makes "does
-the port say this exists?" a question with somewhere to look.
+It was one protocol of twenty-six methods, and four reviews running found it
+missing an operation every adapter implemented, each time invisible because the
+caller reached the adapter through something the type checker could not see
+through. Split by who calls what:
 
-`BaseSurfaceAdapter` supplies a default for everything optional here, so an
-adapter declares only what its platform can actually do.
+- `InboundParser` reads a platform's payload. Pure: no credentials, no I/O.
+- `InboundReader` reads what a payload did not carry -- the sender's profile,
+  the thread so far, an attachment's bytes -- with the surface's credentials.
+- `OutboundDelivery` is everything that reaches the person: the reply, the
+  progress line, the answer to a tap.
+- `InChatSetup` is optional. Only a platform that is configured from inside the
+  chat app (Slack's home tab and channel modal) implements it, and callers ask
+  `in_chat_setup(adapter)` rather than calling inert defaults on every platform.
+
+`SurfacePlatformAdapterPort` is the three a platform must have, which is what
+the registry holds. `BaseSurfaceAdapter` supplies defaults for the optional
+parts of those three, so an adapter declares only what its platform can do.
+
+Credentials are the platform's model (`domain.credentials`). A progress line is
+a `ProgressHandle`. Outbound `metadata` is still a mapping: the agent's display
+name and icon and a platform's own extras ride in it.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeIs
 
+from app.modules.agent_surfaces.domain.channel_setup import ChannelSetupRequest
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -30,190 +46,289 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceEnvelope
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts
+from app.modules.agent_surfaces.domain.surface_config import ReengageTemplate
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
+    ProgressHandle,
     StreamAppendResult,
     SurfaceChannelInfo,
     SurfaceContextMessage,
     SurfaceSenderProfile,
 )
 
+# Any: a webhook body and an outbound metadata mapping are provider JSON with no
+# shape until the platform's own parser or sender reads them.
+Payload = dict[str, Any]
+OutboundMetadata = dict[str, Any]
 
-class SurfacePlatformAdapterPort(Protocol):
+#: Outbound metadata naming the send, for a platform that dedupes on a key
+#: (Resend): every try of one delivery is then the same message.
+IDEMPOTENCY_KEY = "idempotency_key"
+
+
+class InboundParser(Protocol):
+    """Reading a platform's payload into the module's events. No I/O."""
+
     platform: str
 
-    def split_inbound_payloads(
-        self, payload: dict[str, Any]
-    ) -> list[dict[str, Any]]: ...
+    def split_inbound_payloads(self, payload: Payload) -> list[Payload]:
+        """One delivery, as the one-or-more messages it carries."""
+        ...
 
     async def parse_inbound_event(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+        self, payload: Payload, headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None: ...
 
+    async def parse_inbound_interaction(
+        self, payload: Payload, headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceInteraction | None:
+        """A tap or form submission, or None when the payload is not one."""
+        ...
+
+    async def parse_inbound_lifecycle(
+        self, payload: Payload, headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceLifecycleEvent | None:
+        """An event about the app itself -- added to a channel, home opened."""
+        ...
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        """What happened to groups themselves; empty on a bot that creates none."""
+        ...
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        """Messages heard that the platform says were edited or deleted."""
+        ...
+
+    def mention_is_provisional(self, event: ParsedInboundSurfaceEvent) -> bool:
+        """Whether a group message's ``mentioned_agent`` waits on knowing which
+        bot this is -- settled by `InboundReader.settle_mention` before anything
+        decides whether the message is for us."""
+        ...
+
+    def unresolved_sender_reply(
+        self, event: ParsedInboundSurfaceEvent
+    ) -> tuple[str, Payload] | None:
+        """(message, reply_metadata) for an unresolved sender; None for the
+        default sign-up prompt."""
+        ...
+
+    def linked_sender_confirmation(
+        self, event: ParsedInboundSurfaceEvent
+    ) -> tuple[str, Payload] | None:
+        """A reply to send instead of a chat when the event only completed an
+        identity-linking step."""
+        ...
+
+
+class InboundReader(Protocol):
+    """What an inbound event did not carry, read with the surface's credentials."""
+
     async def enrich_inbound_event(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
-    ) -> ParsedInboundSurfaceEvent: ...
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
+    ) -> ParsedInboundSurfaceEvent | None:
+        """The event with what its webhook left out filled in -- an email's body
+        -- or None when there is nothing to act on."""
+        ...
 
-    async def fetch_sender_profile(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
-    ) -> SurfaceSenderProfile | None: ...
-
-    async def send_message(
+    async def settle_mention(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        message: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None: ...
+        bot_user_id: str | None,
+    ) -> ParsedInboundSurfaceEvent:
+        """The group message with ``mentioned_agent`` meaning *this* bot.
 
-    # The text primitive `deliver` degrades onto, and the only way to say
-    # something before a conversation exists (the signup and setup replies).
+        A parser sees who was mentioned but not which bot it is; this knows,
+        from the credentials or ``bot_user_id``. Unchanged where the parser's
+        answer already means this bot.
+        """
+        ...
+
+    async def fetch_sender_profile(
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
+    ) -> SurfaceSenderProfile | None: ...
+
+    async def fetch_thread_context(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        limit: int = 15,
+    ) -> list[SurfaceContextMessage]:
+        """The last few messages of the thread, for continuity on a mention."""
+        ...
+
+    async def download_attachment(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        attachment: Payload,
+    ) -> tuple[bytes, str, str] | None:
+        """(content, file_name, mime_type) of an inbound attachment."""
+        ...
+
+
+class OutboundDelivery(Protocol):
+    """Everything that reaches the person."""
 
     async def deliver(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         envelope: SurfaceEnvelope,
-        metadata: dict[str, Any] | None = None,
+        metadata: OutboundMetadata | None = None,
     ) -> DeliveryReceipt:
         """The one outbound seam for conversation content.
 
         Every kind of content is a field on the envelope, and the receipt says
         how each part landed -- natively, degraded to text or a link, or
-        reaching nobody.
-
-        The ``_render_*`` hooks it composes are deliberately not declared on
-        this port. They are a platform's private half of this call, and naming
-        them here made the seam read as six verbs a caller could choose between
-        -- which is how content came to be rendered past ``deliver`` in the
-        first place.
+        reaching nobody. The ``_render_*`` hooks it composes are a platform's
+        private half of this call and deliberately not declared here.
         """
         ...
 
-    async def fetch_thread_context(
+    async def send_message(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        limit: int = 15,
-    ) -> list["SurfaceContextMessage"]: ...
-
-    # Fetch the last few messages of the inbound thread/channel for background
-    # context on a group mention (each user has a separate conversation, so this
-    # gives continuity). Best-effort, fetched fresh per run. Default: none.
-
-    async def parse_inbound_interaction(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
-    ) -> "ParsedSurfaceInteraction | None": ...
-
-    async def acknowledge_interaction(
-        self,
-        *,
-        credentials: dict[str, Any],
-        interaction: "ParsedSurfaceInteraction",
-        text: str | None = None,
-        show_alert: bool = False,
-        clear_actions: bool = False,
-    ) -> None:
-        raise NotImplementedError
-
-    # Parse an interaction submission (Slack block_actions, Teams Action.Submit)
-    # into a routable interaction, or None when the payload is not an interaction.
-
-    async def set_thread_title(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        title: str,
-    ) -> bool: ...
-
-    # Name the thread on the platform, where it has a name to set. False on
-    # every platform that does not, which is the default on `BaseSurfaceAdapter`
-    # -- best-effort by construction, and called once, when a conversation is
-    # brand new.
+        message: str,
+        metadata: OutboundMetadata | None = None,
+    ) -> str | None:
+        """The text primitive `deliver` degrades onto, and the only way to say
+        something before a conversation exists. The platform's id for what it
+        sent (the first message of a long one), when it names one: what a
+        later status report about it, or a reply in its thread, refers to."""
+        ...
 
     async def add_processing_indicator(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        metadata: dict[str, Any] | None = None,
+        metadata: OutboundMetadata | None = None,
     ) -> None: ...
 
     async def stream_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None: ...
-
-    # Show live progress text on platforms that support an editable message
-    # (Telegram, Teams). Returns an opaque handle (e.g. {"message_id": ...}) to
-    # pass back on the next call so the same message is edited. None → platform
-    # has no editable progress; the caller keeps using typing indicators.
-    #
-    # `metadata` carries the agent's display name and icon: the answer that
-    # closes this same message is authored by the agent, so the stream must be
-    # too or the thread reads as two speakers. It was on every adapter and
-    # absent here, which is why `SurfaceProgress` calling it was a type error.
+        progress_handle: ProgressHandle | None = None,
+        metadata: OutboundMetadata | None = None,
+    ) -> ProgressHandle | None:
+        """Show live progress where a message can be edited; the handle to pass
+        back next time. None: no editable progress here, keep to typing."""
+        ...
 
     async def append_stream_text(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         text: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> StreamAppendResult: ...
-
-    # Append model text to a live stream, token by token. The default on
-    # `BaseSurfaceAdapter` reports `appended=False`, which is every platform
-    # except Slack.
+        metadata: OutboundMetadata | None = None,
+    ) -> StreamAppendResult:
+        """Append model text to a live stream (Slack); not appended elsewhere."""
+        ...
 
     async def finish_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         message: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool: ...
-
-    # Close a live stream *with* the final answer, so steps and answer are one
-    # message. False means "I did not deliver it" and the caller falls back to
-    # clearing progress and sending the answer separately.
+        metadata: OutboundMetadata | None = None,
+    ) -> bool:
+        """Close a live stream *with* the answer. False: not delivered, so the
+        caller clears progress and sends the answer on its own."""
+        ...
 
     async def end_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
+    ) -> None:
+        """Clean up a progress message that will not carry the answer."""
+        ...
+
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
     ) -> None: ...
 
-    # Clean up the streaming progress message at run end (e.g. delete it before
-    # the final answer is delivered).
+    async def retire_decision_card(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
+    ) -> None:
+        """Take the buttons off a card whose pause is over -- cancelled by a
+        new message or answered by a typed one. A no-op where the platform
+        keeps no handle to edit by."""
+        ...
 
-    # The in-chat set-up flow. Only Slack drives configuration from inside the
-    # chat app today, and every other adapter takes `BaseSurfaceAdapter`'s
-    # default -- but `AppEventHandler` calls all four on whatever the registry
-    # hands it, so the port has to say they exist. It did not, which is the
-    # fourth time a port here has omitted an operation every adapter implements;
-    # each time it was invisible until a caller the type checker could see
-    # through reached for it.
+    async def set_thread_title(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        title: str,
+    ) -> bool:
+        """Name a brand-new thread, where the platform has names. Best-effort."""
+        ...
+
+    async def send_cold_email(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        recipient_email: str,
+        subject: str,
+        message: str,
+        thread_seed_id: str,
+        metadata: OutboundMetadata | None = None,
+    ) -> ColdEmailSendResult | None:
+        """Start a thread with somebody who has never written. None on every
+        platform but mail."""
+        ...
+
+
+class InChatSetup(Protocol):
+    """Configuring the app from inside the chat. Optional; Slack only today.
+
+    Checked with `in_chat_setup`, never called blind: a platform without it
+    simply has no in-chat set-up, and an inert default on every adapter was how
+    a missing implementation went unnoticed.
+    """
+
+    async def parse_channel_setup(
+        self, payload: Payload, headers: dict[str, str] | None = None
+    ) -> ChannelSetupRequest | None:
+        """A payload of the set-up flow, or None for an ordinary message."""
+        ...
 
     async def publish_home_view(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         user_id: str,
         pod_name: str | None,
         agent_name: str,
@@ -226,39 +341,21 @@ class SurfacePlatformAdapterPort(Protocol):
         access_message: str | None = None,
     ) -> bool: ...
 
-    # The app's home tab. False where the platform has none. `agent_name` is
-    # required and has no default on any implementation -- which one caller had
-    # been omitting, on the path that tells somebody they have no access to a
-    # connected pod, so that message raised `TypeError` instead of rendering.
-
-    async def parse_channel_setup(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
-    ) -> dict[str, Any] | None: ...
-
-    # A payload belonging to the in-chat set-up flow, or None when this platform
-    # drives set-up from the web UI only -- in which case the caller goes on
-    # treating the payload as an ordinary message.
-
-    async def parse_inbound_lifecycle(
-        self, payload: dict[str, Any], headers: dict[str, str] | None = None
-    ) -> ParsedSurfaceLifecycleEvent | None: ...
-
-    # An event about the app itself -- installed, added to a channel, home
-    # opened. None when the payload is not one.
-
-    def parse_group_updates(
-        self, payload: dict[str, object]
-    ) -> list[ParsedGroupUpdate]: ...
-
-    # What the platform says happened to groups themselves -- a creation the
-    # bot asked for confirmed or refused, a group deleted. Empty for a payload
-    # that carries none, which is every payload on a platform whose bot cannot
-    # create groups.
+    async def open_channel_setup_modal(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        trigger_id: str,
+        channel_id: str,
+        channel_label: str | None,
+        agent_name: str,
+        surface_id: str | None = None,
+    ) -> bool: ...
 
     async def send_channel_setup_prompt(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         channel_id: str,
         user_id: str,
         channel_name: str | None = None,
@@ -267,57 +364,111 @@ class SurfacePlatformAdapterPort(Protocol):
         configuration_error: str | None = None,
     ) -> bool: ...
 
-    # Offer to configure a freshly joined channel. False where the platform has
-    # nowhere to put the offer.
+    async def send_starter_prompt(
+        self, *, credentials: SurfaceCredentials, user_id: str, prompt: str
+    ) -> bool: ...
 
     async def channel_name(
-        self, *, credentials: dict[str, Any], channel_id: str
+        self, *, credentials: SurfaceCredentials, channel_id: str
     ) -> str | None: ...
 
-    # What a person calls this channel, where the platform can say.
-
-    async def send_cold_email(
-        self,
-        *,
-        credentials: dict[str, Any],
-        recipient_email: str,
-        subject: str,
-        message: str,
-        thread_seed_id: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> ColdEmailSendResult | None: ...
-
-    # Start a thread with somebody who has never written to us. None on every
-    # platform that cannot address a recipient it has no prior message from,
-    # which is all of them except mail.
-
-    async def download_attachment(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        attachment: dict[str, Any],
-    ) -> tuple[bytes, str, str] | None: ...
-
-    # (content, file_name, mime_type) for a user-provided inbound attachment, or
-    # None when it cannot be downloaded. Used by inbound auto-ingest; not an
-    # agent tool.
-
     async def list_channels(
-        self, *, credentials: dict[str, Any]
-    ) -> list[SurfaceChannelInfo]: ...
+        self, *, credentials: SurfaceCredentials
+    ) -> list[SurfaceChannelInfo]:
+        """Channels the bot can be pointed at, for the web UI's picker."""
+        ...
 
-    # Channels/groups the bot can be configured in (Slack/Teams). Empty for
-    # platforms without an enumerable channel concept.
 
-    def unresolved_sender_reply(
-        self, event: ParsedInboundSurfaceEvent
-    ) -> tuple[str, dict[str, Any]] | None: ...
+class ReplyWindowReopener(Protocol):
+    """Asking somebody to write again once the platform's reply window has
+    closed. Optional; WhatsApp only, where an approved template is the one
+    message a business may start after 24 hours of silence.
 
-    # (message, reply_metadata) for unresolved senders; None → default signup prompt.
+    Checked with `reply_window_reopener`, like `InChatSetup`.
+    """
 
-    def linked_sender_confirmation(
-        self, event: ParsedInboundSurfaceEvent
-    ) -> tuple[str, dict[str, Any]] | None: ...
+    async def reopen_reply_window(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        template: ReengageTemplate,
+    ) -> None:
+        """Send ``template`` to the person ``event`` is from. Raises when it
+        could not go: the caller holds a message on the strength of it."""
+        ...
 
-    # Non-None → send this reply instead of starting a chat (identity-link events).
+
+class PlacePrivacyReader(Protocol):
+    """Asking the platform whether a place is kept to its members. Optional;
+    Slack (``conversations.info``) and Teams (Graph's ``membershipType``),
+    whose events do not always say.
+
+    Checked with `place_privacy_reader`, like `InChatSetup`.
+    """
+
+    async def read_place_privacy(
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
+    ) -> PlaceFacts | None:
+        """What the platform says about the place ``event`` was said in, or
+        None when it would not say -- which the caller reads as private."""
+        ...
+
+
+class SurfacePlatformAdapterPort(
+    InboundParser, InboundReader, OutboundDelivery, Protocol
+):
+    """A platform adapter: what the registry holds."""
+
+
+_IN_CHAT_SETUP_METHODS = tuple(
+    name
+    for name, value in vars(InChatSetup).items()
+    if not name.startswith("_") and callable(value)
+)
+
+
+def _has_in_chat_setup(adapter: object) -> TypeIs[InChatSetup]:
+    # Asked by name rather than with `isinstance`: a protocol check reads
+    # attributes statically, which a stand-in adapter built in a test cannot
+    # answer, and the question is only ever "does it have these methods".
+    return all(
+        callable(getattr(adapter, name, None)) for name in _IN_CHAT_SETUP_METHODS
+    )
+
+
+def in_chat_setup(adapter: object) -> InChatSetup | None:
+    """The adapter's in-chat set-up, or None where its platform has none."""
+    return adapter if _has_in_chat_setup(adapter) else None
+
+
+def _reopens_reply_window(adapter: object) -> TypeIs[ReplyWindowReopener]:
+    return callable(getattr(adapter, "reopen_reply_window", None))
+
+
+def reply_window_reopener(adapter: object) -> ReplyWindowReopener | None:
+    """The adapter's way to reopen a closed window, or None where it has none."""
+    return adapter if _reopens_reply_window(adapter) else None
+
+
+def _reads_place_privacy(adapter: object) -> TypeIs[PlacePrivacyReader]:
+    return callable(getattr(adapter, "read_place_privacy", None))
+
+
+def place_privacy_reader(adapter: object) -> PlacePrivacyReader | None:
+    """The adapter's privacy lookup, or None where its platform has none."""
+    return adapter if _reads_place_privacy(adapter) else None
+
+
+__all__ = [
+    "InChatSetup",
+    "PlacePrivacyReader",
+    "InboundParser",
+    "InboundReader",
+    "OutboundDelivery",
+    "ReplyWindowReopener",
+    "SurfacePlatformAdapterPort",
+    "in_chat_setup",
+    "place_privacy_reader",
+    "reply_window_reopener",
+]

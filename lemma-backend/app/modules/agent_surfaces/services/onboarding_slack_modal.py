@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
 import asyncio
 from uuid import UUID
 from pydantic import JsonValue, TypeAdapter
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -23,6 +28,7 @@ from app.modules.agent_surfaces.services.onboarding_inputs import (
 from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     PrivateDeliveryUnavailable,
 )
+from app.modules.agent_surfaces.services.surface_connector import bound_account_ids
 from app.modules.connectors.contracts.surfaces import account_with_secrets
 from app.modules.pod.contracts.agent_access import live_pod_organization_id
 
@@ -93,8 +99,9 @@ async def _open_onboarding_modal(
         tenant=tenant,
         receiver_ids=receiver_ids,
     )
-    if section(payload, "channel").get("id") != bound.destination.reply_target.get(
-        "channel"
+    if (
+        section(payload, "channel").get("id")
+        != reply_target_as(bound.destination, SlackReplyTarget).channel
     ):
         raise PrivateDeliveryUnavailable("Open setup from its private conversation")
     credentials = await _installation_credentials(uows, bound.installation_id, tenant)
@@ -107,7 +114,7 @@ async def _open_onboarding_modal(
                     token, bound.step, prefill=bound.destination.sender_email or ""
                 ),
             )
-    except (SlackApiError, TimeoutError) as error:
+    except (slack_api_error(), TimeoutError) as error:
         # The private prompt already offers typed replies. Do not retry an
         # expired trigger, or send setup material back to the channel.
         logger.warning(
@@ -132,10 +139,16 @@ async def _installation_credentials(
             or not surface.is_active
             or not surface.status.accepts_inbound_events()
             or not surface.matches_tenant(tenant)
-            or surface.account_id is None
+            or surface.pod_connector_slug is None
         ):
             raise PrivateDeliveryUnavailable("The Slack installation is unavailable")
-        found = await account_with_secrets(uow, surface.account_id)
+        # Read with no side effect: this answers inside Slack's three seconds.
+        account_id = (await bound_account_ids(uow, [surface])).get(surface.id)
+        found = (
+            await account_with_secrets(uow, account_id)
+            if account_id is not None
+            else None
+        )
         organization_id = await live_pod_organization_id(uow, surface.pod_id)
         if (
             found is None

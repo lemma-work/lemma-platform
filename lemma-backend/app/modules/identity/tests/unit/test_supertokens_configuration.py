@@ -12,7 +12,10 @@ from app.modules.identity.infrastructure.supertokens_auth.initialization import 
     email_verification_mode,
     initialize_supertokens,
 )
-from app.modules.test_support.e2e_base import _reset_supertokens_testing_state
+from app.modules.test_support.e2e_base import (
+    _reset_supertokens_testing_state,
+    supertokens_state_restored,
+)
 from app.modules.identity.config import IdentitySettings, identity_settings
 
 
@@ -75,24 +78,62 @@ def test_disabled_email_verification_recipe_is_not_registered(monkeypatch):
         ),
     )
 
-    _reset_supertokens_testing_state()
-    try:
+    with supertokens_state_restored():
         initialize_supertokens()
-    finally:
-        _reset_supertokens_testing_state()
 
 
 def test_e2e_reset_allows_repeated_supertokens_initialization(monkeypatch):
     """Every SDK-owned singleton must be reset between function-scoped apps."""
 
     monkeypatch.setenv("SUPERTOKENS_ENV", "testing")
-    _reset_supertokens_testing_state()
-    try:
+    with supertokens_state_restored():
         initialize_supertokens()
         _reset_supertokens_testing_state()
         initialize_supertokens()
-    finally:
-        _reset_supertokens_testing_state()
+
+
+def test_reset_inside_a_test_leaves_the_process_initialised_as_it_found_it(
+    monkeypatch,
+):
+    """Importing the app initialises the SDK once for the whole worker.
+
+    Unit tests that call the app without its lifespan depend on that, so a test
+    that resets the SDK must hand the same instance back -- otherwise whichever
+    test xdist schedules next in this worker gets "Initialisation not done".
+    """
+    from supertokens_python.supertokens import Supertokens
+
+    import app.app  # noqa: F401 -- initialises the SDK, as any app test would
+
+    monkeypatch.setenv("SUPERTOKENS_ENV", "testing")
+    before = Supertokens.get_instance()
+
+    with supertokens_state_restored():
+        initialize_supertokens()
+        assert Supertokens.get_instance() is not before
+
+    assert Supertokens.get_instance() is before
+
+
+def test_the_querier_configuration_a_test_installs_is_taken_back(monkeypatch):
+    """``network_interceptor`` and ``api_version`` are plain class attributes,
+    not name-mangled ones, so a snapshot of only the mangled state left a
+    test's interceptor installed for every later request in the worker."""
+    from supertokens_python.querier import Querier
+
+    monkeypatch.setenv("SUPERTOKENS_ENV", "testing")
+    interceptor_before = Querier.network_interceptor
+    version_before = Querier.api_version
+
+    def interceptor(*args: object) -> tuple[object, ...]:
+        return args
+
+    with supertokens_state_restored():
+        Querier.network_interceptor = interceptor
+        Querier.api_version = "0.0-test"
+
+    assert Querier.network_interceptor is interceptor_before
+    assert Querier.api_version == version_before
 
 
 def test_build_supertokens_app_info_uses_origin_when_gateway_contains_api_prefix():

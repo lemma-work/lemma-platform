@@ -12,7 +12,7 @@ Pod membership is deliberately owned by the [pod module](pod.md).
 | Contribution | Behavior |
 | --- | --- |
 | API routers | `/users`, `/organizations`, `/auth` |
-| Redis consumer | Sends invitation, welcome, and invitation-accepted emails from identity events |
+| Work kinds | `identity.email` (invitation, welcome and invitation-accepted emails) and `identity.whatsapp_verification` (`delivery`), written in the transaction that causes them; `UserMobileChanged` is a fact emitted with the number change |
 | API lifespan | Closes the Redis-backed user cache |
 | External systems | SuperTokens and SMTP/email adapter |
 
@@ -36,6 +36,7 @@ are a different authorization layer.
 | `GET/POST /users/me...` | Read current user/profile and upsert profile preferences |
 | `/organizations` | Create and list organizations, suggestions, slug availability, and auto-join |
 | `/organizations/{org_id}` | Read/update organization and manage members/invitations |
+| `/organizations/{org_id}/permissions/me` | The organization-level permission ids the caller holds, asked of the authorizer: what pages gate on (`org.installation.manage`), never a role |
 | `/organizations/invitations...` | Inspect, accept, and revoke invitations |
 | `/auth/verify-token` | Resolve bearer/delegation claims into user, pod, organization, function, and scope context |
 | `/auth/cli/*` | Publish CLI login metadata, mint a CLI session from a browser session, and refresh CLI tokens |

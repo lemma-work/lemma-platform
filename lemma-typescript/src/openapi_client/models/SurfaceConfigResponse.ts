@@ -9,6 +9,7 @@ import type { SurfaceIdentityConfigResponse } from './SurfaceIdentityConfigRespo
 import type { SurfaceSendPolicyConfig } from './SurfaceSendPolicyConfig.js';
 import type { SurfaceSlackConfigResponse } from './SurfaceSlackConfigResponse.js';
 import type { SurfaceTelegramConfigInput } from './SurfaceTelegramConfigInput.js';
+import type { SurfaceWhatsAppConfigInput } from './SurfaceWhatsAppConfigInput.js';
 /**
  * Mirrors SurfaceBehaviorConfigInput: what you send is what you get back.
  */
@@ -20,4 +21,5 @@ export type SurfaceConfigResponse = {
     send_policy?: SurfaceSendPolicyConfig;
     slack?: SurfaceSlackConfigResponse;
     telegram?: SurfaceTelegramConfigInput;
+    whatsapp?: SurfaceWhatsAppConfigInput;
 };

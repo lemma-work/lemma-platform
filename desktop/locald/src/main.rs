@@ -97,7 +97,8 @@ fn client_request(request: Value) -> io::Result<()> {
     let paths = LocalPaths::discover()?;
     let token = std::fs::read_to_string(&paths.token)?;
     let stream = LocalSocketStream::connect(paths.socket_name()?)?;
-    let (receive, mut send) = stream.split();
+    // `&Stream` is `Read` and `Write`; one borrow writes, another reads.
+    let mut send = &stream;
     writeln!(
         send,
         "{}",
@@ -111,7 +112,7 @@ fn client_request(request: Value) -> io::Result<()> {
         .get("cmd")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let mut reader = BufReader::new(receive);
+    let mut reader = BufReader::new(&stream);
     while let Some(line) = read_bounded_line(&mut reader)? {
         println!("{line}");
         let Ok(event) = serde_json::from_str::<Value>(&line) else {
@@ -150,6 +151,12 @@ fn client_event_finishes(command: &str, event: &str) -> bool {
         "config.apply" => event == "config.applied",
         "runtime.prepare" => event == "done",
         "disk.cleanup" => event == "disk.cleanup",
+        // These answer with their own event and never a `done`; waiting for
+        // one hung `send` until the socket closed.
+        "sandbox.prepare" => event == "sandbox-prepare-started",
+        "app-alias.resolve" => event == "app-alias",
+        "config.discover-models" => event == "config.models",
+        "config.test" => event == "config.tested",
         // The reset broadcasts `local.data-reset` on the way past; the run is
         // over when the stack has come back up, not when the wipe finished.
         "local.reset-data" => event == "done",
@@ -187,6 +194,16 @@ mod tests {
             "runtime.prepared"
         ));
         assert!(client_event_finishes("start", "done"));
+        assert!(client_event_finishes(
+            "sandbox.prepare",
+            "sandbox-prepare-started"
+        ));
+        assert!(client_event_finishes("app-alias.resolve", "app-alias"));
+        assert!(client_event_finishes(
+            "config.discover-models",
+            "config.models"
+        ));
+        assert!(client_event_finishes("config.test", "config.tested"));
         assert!(client_event_finishes("anything", "error"));
         assert!(!client_event_finishes("control.snapshot", "state"));
     }

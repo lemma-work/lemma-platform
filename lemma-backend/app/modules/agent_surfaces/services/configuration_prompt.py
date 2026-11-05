@@ -12,11 +12,13 @@ at the file-size ceiling.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
+from app.modules.agent_surfaces.domain.adapter_port import InChatSetup
 from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
     SurfaceLifecycleKind,
@@ -26,10 +28,10 @@ from app.modules.agent_surfaces.domain.entities import (
 async def prompt_for_configuration(
     session: AsyncSession | None,
     *,
-    adapter: SurfacePlatformAdapterPort,
+    adapter: InChatSetup,
     parsed: ParsedSurfaceLifecycleEvent,
     actor_external_user_id: str,
-    credentials: dict[str, object],
+    credentials: SurfaceCredentials,
     surface_choices: list[tuple[str, str]] | None,
 ) -> None:
     """Ask which pod, or explain why nothing can be shown.

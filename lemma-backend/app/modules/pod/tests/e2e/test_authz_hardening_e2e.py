@@ -204,4 +204,4 @@ async def test_default_pod_agent_cannot_approve_join_request(
         headers=agent_headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
-    assert response.json()["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert response.json()["code"] == "WORKLOAD_NOT_ALLOWED"

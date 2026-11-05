@@ -33,10 +33,6 @@ from app.modules.agent.domain.agent_host import (
     AgentHostToolResultPayload,
     AgentHostToolStatus,
 )
-from app.modules.agent.domain.agent_host_permissions import (
-    permission_approval_events,
-    permission_approval_tool_call_id,
-)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -44,28 +40,33 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
+    config_update_event,
     Segment,
     error_event,
     event_text,
     is_terminal_event,
     narration_event,
-    no_terminal_message,
     status_event,
     terminal_event,
     thought_event,
     usage_event,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.events_terminal import (
+    events_without_terminal,
+    permission_request_events,
+    terminal_events,
 )
 from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     missing_tool_return_events,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.tool_calls import (
-    OpenToolCall,
     ToolCallLedger,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.tool_events import (
     TOOL_OUTPUT_TOKEN_KIND,
     final_answer_in,
+    is_lemma_final_answer,
     left_to_lemma,
     open_tool_call,
     parsed_payload,
@@ -136,6 +137,17 @@ class AgentHostEventNormalizer:
         self._final_answer: JsonObject | None = None
         self._final_answer_tool_call_id: str | None = None
 
+    @property
+    def quiescent(self) -> bool:
+        """Whether everything read so far has become a message.
+
+        True between the agent's words: after a step was flushed and before
+        the next chunk. A worker that resumes the run's stream from a point
+        where this held loses nothing, because nothing read before it was
+        still waiting to be persisted (``stream_resume``).
+        """
+        return self._message.empty and self._thought.empty
+
     def adopt_final_answer(
         self, record: JsonObject | None, *, tool_call_id: str | None = None
     ) -> None:
@@ -191,10 +203,19 @@ class AgentHostEventNormalizer:
                         sequence=row.sequence,
                     ),
                 ]
+            case AgentHostEventType.CONFIG_UPDATE:
+                return [
+                    *self._drain_tokens(),
+                    config_update_event(
+                        agent_run_id=self.agent_run_id,
+                        payload=payload,
+                        metadata=metadata,
+                        sequence=row.sequence,
+                    ),
+                ]
             case (
                 AgentHostEventType.RUN_STATE
                 | AgentHostEventType.SESSION_UPDATE
-                | AgentHostEventType.CONFIG_UPDATE
                 | AgentHostEventType.STEER_RESULT
             ):
                 return [
@@ -208,9 +229,15 @@ class AgentHostEventNormalizer:
                     ),
                 ]
             case AgentHostEventType.PERMISSION_REQUEST:
-                return self._permission_request(row, payload, metadata)
+                return permission_request_events(
+                    self,
+                    request_id=row.object_id or f"permission-{row.sequence}",
+                    sequence=row.sequence,
+                    payload=payload,
+                    metadata=metadata,
+                )
             case AgentHostEventType.TERMINAL:
-                return self._terminal(row, payload)
+                return terminal_events(self, sequence=row.sequence, payload=payload)
         return []
 
     # ------------------------------------------------------------------ text
@@ -327,7 +354,7 @@ class AgentHostEventNormalizer:
             *self._flush_narration(),
         ]
 
-    def _flush_messages(
+    def flush_messages(
         self,
         *,
         final: bool,
@@ -449,7 +476,9 @@ class AgentHostEventNormalizer:
     def _tool_call_result(
         self, row: AgentHostEventEnvelope, call_id: str
     ) -> list[AgentEvent]:
-        if call_id in self.tool_calls.dropped:
+        if call_id in self.tool_calls.dropped or call_id in self.tool_calls.closed:
+            # A closed call's result is already on the record: a second one
+            # from the host, or one a resumed run reads again past its cursor.
             # The other half of the pausing-tool drop: with no call on the
             # record under this id, a return under it pairs with nothing. What
             # the model was actually told -- a park's answer, a wait's "you are
@@ -471,8 +500,10 @@ class AgentHostEventNormalizer:
                     agent_host_sequence=row.sequence,
                 )
             return self._drain_tokens()
-        if result.status is AgentHostToolStatus.COMPLETED:
-            record = final_answer_in(result.output, call.input)
+        if result.status is AgentHostToolStatus.COMPLETED and is_lemma_final_answer(
+            call
+        ):
+            record = final_answer_in(result.output)
             if record is not None:
                 self.adopt_final_answer(record, tool_call_id=call_id)
         return [
@@ -506,95 +537,11 @@ class AgentHostEventNormalizer:
 
     # ---------------------------------------------------------------- other
 
-    def _permission_request(
-        self,
-        row: AgentHostEventEnvelope,
-        payload: JsonObject,
-        metadata: JsonObject,
-    ) -> list[AgentEvent]:
-        """Turn a permission request into an ordinary Lemma approval.
-
-        Rendering it as a ``request_approval`` call is what lets the web client,
-        Slack, Teams and Telegram all show and resolve it with the machinery they
-        already have; see ``domain.agent_host_permissions`` for the shape and for
-        why this pause emits no WAITING event.
-
-        The host releases the call this request gates before sending it, so the
-        call is already on the record and the approval card follows it.
-        """
-        request_id = row.object_id or f"permission-{row.sequence}"
-        gated = payload.get("tool_call_id")
-        gated_call = (
-            self.tool_calls.calls.get(gated) if isinstance(gated, str) else None
-        )
-        # Tracked like any other open call, so a run that ends without an answer
-        # closes it. An approval card outlives its run otherwise: the host is no
-        # longer holding the request — its own timeout denied it — but the card
-        # still offers buttons, and pressing one lands on a run that ended hours
-        # ago. Answering it *does* write a return, and a synthesized return
-        # never replaces a real one, so this closes only the abandoned ones.
-        self.tool_calls.open(
-            permission_approval_tool_call_id(request_id),
-            OpenToolCall(name="request_approval"),
-        )
-        return [
-            *self._flush_messages(final=False),
-            *permission_approval_events(
-                agent_run_id=self.agent_run_id,
-                request_id=request_id,
-                sequence=row.sequence,
-                payload=payload,
-                metadata=metadata,
-                # The name the gated call is showing under, so the card and the
-                # call it interrupts say the same word.
-                tool_name=gated_call.name if gated_call is not None else None,
-            ),
-        ]
-
-    def _terminal(
-        self,
-        row: AgentHostEventEnvelope,
-        payload: JsonObject,
-    ) -> list[AgentEvent]:
-        # The host says so when its terminal message is a rewrite of text the
-        # adapter already streamed -- a signed-out agent reports itself once as
-        # ordinary assistant text and again as the reason the turn ended. Both
-        # reached the transcript, so the user saw the failure twice, in two
-        # different voices.
-        #
-        # Dropping the streamed half is not only tidier. Retry is offered only
-        # on a failed run whose messages are all the user's
-        # (`AgentRun.is_safely_retryable`), so persisting the adapter's own
-        # error as an assistant message is what took the button away from the
-        # one failure a retry actually fixes.
-        events = self._flush_messages(
-            final=True,
-            discard_text=bool(payload.get("supersedes_stream")),
-        )
-        terminal = terminal_event(
-            agent_run_id=self.agent_run_id,
-            state=str(payload.get("state") or payload.get("status") or "FAILED"),
-            payload=payload,
-            sequence=row.sequence,
-        )
-        events.extend(self.close_outstanding(terminal))
-        events.append(terminal)
-        return events
-
     def finish_without_terminal(
         self,
         *,
         state: AgentHostRunState,
         detail: str | None = None,
     ) -> list[AgentEvent]:
-        """End a run whose lease terminalized without a terminal event.
-
-        ``detail`` is what the lease recorded, and it wins: a run the Agent
-        Host refused before it started journals nothing at all, so that one
-        sentence is the whole of what reaches the person who pressed send.
-        """
-        events = self._flush_messages(final=True)
-        terminal = error_event(self.agent_run_id, detail or no_terminal_message(state))
-        events.extend(self.close_outstanding(terminal))
-        events.append(terminal)
-        return events
+        """End a run whose lease terminalized without a terminal event."""
+        return events_without_terminal(self, state=state, detail=detail)

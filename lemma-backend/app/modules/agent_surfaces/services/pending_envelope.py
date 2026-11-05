@@ -41,8 +41,8 @@ from uuid import UUID
 
 from redis.exceptions import RedisError
 
-from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import PENDING_DISPLAY_PATHS, surface_caches
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -57,18 +57,9 @@ _MAX_PENDING_PATHS = 20
 # hours is longer than any run is allowed to take.
 _TTL_SECONDS = 6 * 60 * 60
 
-_cache: RedisJsonCache | None = None
-
 
 def _get_cache() -> RedisJsonCache:
-    global _cache
-    if _cache is None or _cache._redis_url != settings.redis_url:
-        _cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:pending-display-paths",
-            ttl_seconds=_TTL_SECONDS,
-        )
-    return _cache
+    return surface_caches.get(PENDING_DISPLAY_PATHS)
 
 
 @dataclass(frozen=True)

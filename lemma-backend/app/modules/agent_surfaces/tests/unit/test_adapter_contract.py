@@ -1,15 +1,15 @@
 """The adapter contract: what shared code may call on any platform.
 
-`AppEventHandler` and the ingress service reach for an adapter by
-platform and call methods on whatever comes back. Nothing checked that every
-adapter could answer those calls, so #303 added `parse_channel_setup` to Slack
-alone and every Telegram and WhatsApp webhook raised `AttributeError` in the
-worker — retried, dead-lettered, and the message reached nobody.
+`AppEventHandler` and the ingress service reach for an adapter by platform and
+call methods on whatever comes back. Nothing checked that every adapter could
+answer those calls, so #303 added `parse_channel_setup` to Slack alone and every
+Telegram and WhatsApp webhook raised `AttributeError` in the worker.
 
-The rule these tests enforce: a method one adapter exposes publicly is part of
-the contract and belongs on `BaseSurfaceAdapter`, with a default for platforms
-that cannot do it. Anything genuinely private to one platform is underscored
-and shared code cannot reach it.
+The rules these tests enforce: a method an adapter exposes publicly is either on
+the port every adapter implements (with a default on `BaseSurfaceAdapter` where
+a platform may not do it) or on the optional `InChatSetup` capability, which a
+caller asks for with `in_chat_setup` rather than calling blind. Anything
+genuinely private to one platform is underscored.
 """
 
 from __future__ import annotations
@@ -21,6 +21,16 @@ import pytest
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
+)
+from app.modules.agent_surfaces.domain.adapter_port import (
+    InboundParser,
+    InboundReader,
+    InChatSetup,
+    OutboundDelivery,
+    PlacePrivacyReader,
+    ReplyWindowReopener,
+    in_chat_setup,
+    reply_window_reopener,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 
@@ -49,25 +59,75 @@ def _public_methods(cls: type) -> set[str]:
     }
 
 
-@pytest.mark.parametrize("platform, adapter", _registered_adapters())
-def test_adapter_exposes_nothing_shared_code_cannot_call(platform, adapter):
-    """A public adapter method must be on the base, so any platform answers it."""
-    base_surface = {
-        name for name, _ in inspect.getmembers(BaseSurfaceAdapter, callable)
+def _port_methods(protocol: type) -> set[str]:
+    return {
+        name
+        for name, value in vars(protocol).items()
+        if not name.startswith("_") and callable(value)
     }
-    undeclared = sorted(
+
+
+_PORT = (
+    _port_methods(InboundParser)
+    | _port_methods(InboundReader)
+    | _port_methods(OutboundDelivery)
+)
+_IN_CHAT_SETUP = _port_methods(InChatSetup)
+_REPLY_WINDOW = _port_methods(ReplyWindowReopener)
+_PLACE_PRIVACY = _port_methods(PlacePrivacyReader)
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+def test_adapter_exposes_nothing_the_port_does_not_name(platform, adapter):
+    """Every public adapter method is on the port or on `InChatSetup`."""
+    exposed = {
         name
         for cls in type(adapter).__mro__
-        if cls is not BaseSurfaceAdapter and issubclass(cls, BaseSurfaceAdapter)
+        if cls is not object
         for name in _public_methods(cls)
-        if name not in base_surface and name not in REQUIRED_OF_EVERY_ADAPTER
+    }
+    undeclared = sorted(
+        exposed - _PORT - _IN_CHAT_SETUP - _REPLY_WINDOW - _PLACE_PRIVACY
     )
     assert not undeclared, (
-        f"{platform} exposes {undeclared} but BaseSurfaceAdapter does not declare "
-        "them. Shared services call adapters by platform, so a method only one "
-        "adapter has raises AttributeError on every other. Add it to the base "
-        "with an inert default, or make it private to this adapter."
+        f"{platform} exposes {undeclared}, which no port declares. Shared code "
+        "reaches adapters through the port, so a method it does not name is "
+        "either unreachable or called on the wrong type. Declare it, or make it "
+        "private to this adapter."
     )
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+def test_every_adapter_answers_the_whole_port(platform, adapter):
+    missing = sorted(
+        name for name in _PORT if not callable(getattr(adapter, name, None))
+    )
+    assert not missing, f"{platform} does not answer {missing}"
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+def test_in_chat_setup_is_all_or_nothing(platform, adapter):
+    """Half a set-up flow is a modal that opens and a submit nobody parses."""
+    present = {name for name in _IN_CHAT_SETUP if hasattr(adapter, name)}
+    assert present in (set(), _IN_CHAT_SETUP), (
+        f"{platform} implements {sorted(present)} of InChatSetup, not all of it"
+    )
+    assert (in_chat_setup(adapter) is not None) == bool(present)
+
+
+def test_only_a_platform_with_a_reply_window_can_reopen_one():
+    """WhatsApp's 24 hours; nowhere else closes a chat on the bot."""
+    reopening = sorted(
+        platform
+        for platform, adapter in _registered_adapters()
+        if reply_window_reopener(adapter) is not None
+    )
+    assert reopening == ["WHATSAPP"]
+
+
+def test_the_base_adapter_claims_no_in_chat_setup():
+    """Inert defaults on the base made every platform read as configurable."""
+    assert in_chat_setup(BaseSurfaceAdapter()) is None
 
 
 @pytest.mark.parametrize("platform, adapter", _registered_adapters())
@@ -76,12 +136,6 @@ def test_adapter_implements_the_required_core(platform, adapter, method):
     assert callable(getattr(adapter, method, None)), (
         f"{platform} does not implement {method}(), which every surface needs."
     )
-
-
-@pytest.mark.parametrize("platform, adapter", _registered_adapters())
-async def test_channel_setup_is_answerable_by_every_platform(platform, adapter):
-    """The specific regression: this is called on every inbound webhook."""
-    assert await adapter.parse_channel_setup({}, {}) is None
 
 
 @pytest.mark.parametrize("platform, adapter", _registered_adapters())
@@ -174,16 +228,16 @@ def test_the_delivery_port_exposes_no_public_verb_for_a_kind_of_content():
     indistinguishable from a platform that genuinely declined. They are
     `_render_*` hooks now, reachable only from `deliver`.
 
-    Chrome is not in scope here and does not need excluding: App Home, modals,
-    setup prompts and thread titles live on `SurfaceChromeMixin`, which is why
-    this list no longer carries six Slack-shaped exceptions.
+    Chrome is not in scope: naming a thread is not content, and App Home,
+    modals and setup prompts are `InChatSetup`, which the base does not
+    implement.
     """
     delivery_only = {
         name
         for cls in (BaseSurfaceAdapter,)
         for name in dir(cls)
         if name.startswith(("send_", "publish_", "open_", "set_thread"))
-        and not _declared_on_chrome(name)
+        and name != "set_thread_title"
     }
     unexpected = sorted(delivery_only - _PUBLIC_SENDS_THAT_ARE_NOT_CONTENT)
     assert not unexpected, (
@@ -192,27 +246,16 @@ def test_the_delivery_port_exposes_no_public_verb_for_a_kind_of_content():
     )
 
 
-def _declared_on_chrome(name: str) -> bool:
-    from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
-
-    return name in vars(SurfaceChromeMixin)
-
-
-def test_chrome_is_a_separate_contract_from_delivery():
+def test_in_chat_setup_is_a_separate_contract_from_delivery():
     """The split that stopped every non-Slack platform reading as half-done.
 
-    An App Home tab is not a message. Mixing them made a platform contract of
-    eighteen verbs, six of which only one platform has.
+    An App Home tab is not a message, and a platform with none is not missing
+    a feature.
     """
-    from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
-    from app.modules.agent_surfaces.platforms.envelope_delivery import (
-        EnvelopeDeliveryMixin,
-    )
-
-    assert "publish_home_view" in vars(SurfaceChromeMixin)
-    assert "publish_home_view" not in vars(EnvelopeDeliveryMixin)
-    assert "deliver" in vars(EnvelopeDeliveryMixin)
-    assert "deliver" not in vars(SurfaceChromeMixin)
+    assert "publish_home_view" in _IN_CHAT_SETUP
+    assert "publish_home_view" not in _PORT
+    assert "deliver" in _port_methods(OutboundDelivery)
+    assert "deliver" not in _IN_CHAT_SETUP
 
 
 def test_nothing_outside_the_delivery_mixin_renders_content_itself():

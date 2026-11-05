@@ -241,16 +241,20 @@ async def _forged(world, run, egress):
     chat_id = 66600 + (uuid4().int % 9000)
     bot_token = f"{uuid4().int % 10**10}:scenarios"
     alice = await world.person("daniel")
-    await alice.is_known_on_telegram_as(handle)
+    phone = await alice.has_a_mobile_number()
     pod = await alice.creates_a_pod(named=run.name("surface"))
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD", "USER_INTERACTION"])
     await alice.becomes_reachable_on_telegram(
         in_pod=pod, agent=agent["name"], bot_token=bot_token
     )
+    chat = ForgedChat(alice, view, handle=handle, chat_id=chat_id, phone=phone)
+    # She writes with a handle, which proves nothing; sharing her own contact
+    # is what makes the account hers, once, and every message after it is hers.
+    await chat.proves_who_they_are()
     yield Reachable(
         alice=alice,
         pod=pod,
-        chat=ForgedChat(alice, view, handle=handle, chat_id=chat_id),
+        chat=chat,
         _before=await _already_in(alice, pod),
     )
 
@@ -284,41 +288,7 @@ async def _live(world):
     bot = await _bot_handle()
     person = await a_person_on_telegram()
     try:
-        if not person.username:
-            pytest.skip(
-                "the Telegram account in TELEGRAM_SESSION has no @username, and "
-                "that is how Lemma recognises a sender — an inbound message from "
-                "it resolves to nobody, so the agent correctly answers a stranger "
-                "rather than a colleague. Set one in Telegram's settings "
-                "(Settings → Username); everyone the product is built for has one."
-            )
-        # Tell Lemma which colleague this account is. Without it the sender is a
-        # stranger — which the product handles well, and is a different promise
-        # from the ones these scenarios are about.
-        claimed = await holder.api.call(
-            "POST",
-            "/users/me/profile",
-            json={"telegram_username": person.username},
-        )
-        if claimed.status_code == 409:
-            # Telegram handles are unique per deployment, and somebody else on
-            # this deployment already holds this one. The usual cause is a
-            # tenant provisioned twice — once with SCENARIOS_MAILBOX set and
-            # once without — which leaves two casts and two Daniels, only one
-            # of whom is in the pod carrying the surface. See
-            # `tenant.mailbox`'s docstring, which predicts exactly this.
-            pytest.skip(
-                f"@{person.username} is already claimed by a different user on "
-                f"this deployment, so an inbound message from it resolves to "
-                f"somebody who is not {holder.label}. Usually a tenant "
-                f"provisioned twice: export SCENARIOS_MAILBOX so the cast is "
-                f"the one that was provisioned, and release the handle from "
-                f"the other cast member before running the live lane"
-            )
-        assert claimed.status_code < 400, (
-            f"{holder.label} could not declare their Telegram username: "
-            f"{claimed.status_code} {claimed.text[:200]}"
-        )
+        await _proves_the_account_is_theirs(holder, person, bot)
         before = await _already_in(holder, pod)
         async with person.talking_to(bot) as conversation:
             yield Reachable(
@@ -329,6 +299,38 @@ async def _live(world):
             )
     finally:
         await person.aclose()
+
+
+async def _proves_the_account_is_theirs(holder, person, bot: str) -> None:
+    """Share the account's own contact, so Lemma knows it is the holder's.
+
+    The proof is Telegram's word for the number of a contact shared about oneself,
+    matched against the number verified on the holder's profile. Once proven
+    the account stays the holder's, so on later runs this only repeats a
+    confirmation. In its own conversation, so the confirmation is never read as
+    an answer to a scenario.
+    """
+    profile = await holder.profile()
+    number = "".join(ch for ch in str(profile.get("mobile_number") or "") if ch.isdigit())
+    if (
+        not person.phone
+        or number != person.phone
+        or not profile.get("mobile_verified_at")
+    ):
+        pytest.skip(
+            f"{holder.label}'s Lemma profile does not have this Telegram account's "
+            f"number verified, and that number -- shared from the account itself "
+            f"-- is how Lemma knows the account is theirs; a Telegram handle "
+            f"is a claim anybody can make. Sign in as {holder.label} and verify "
+            f"the number in account settings (Verify with Telegram), once."
+        )
+    async with person.talking_to(bot) as proving:
+        await proving.shares_own_contact(person.phone, person.first_name)
+        confirmed = await proving.waits_for_a_reply()
+    assert "linked" in confirmed.text.lower(), (
+        f"sharing the account's own contact should prove it is {holder.label}'s; "
+        f"the bot said {confirmed.text!r}"
+    )
 
 
 async def _bot_handle() -> str:

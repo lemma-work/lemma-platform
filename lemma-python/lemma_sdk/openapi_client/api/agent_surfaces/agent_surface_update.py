@@ -79,9 +79,9 @@ def sync_detailed(
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
-    Passing ``account_id`` rebinds the surface to a different connected account
-    — the repair when the account it runs on expires, or its owner leaves the
-    pod. It must be an account the caller owns.
+    Passing ``pod_connector`` rebinds the surface to a different SHARED pod
+    connector -- the repair when the account it runs as is withdrawn or
+    expires. The caller must be able to use that connector and its account.
 
     Args:
         pod_id (UUID):
@@ -125,9 +125,9 @@ def sync(
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
-    Passing ``account_id`` rebinds the surface to a different connected account
-    — the repair when the account it runs on expires, or its owner leaves the
-    pod. It must be an account the caller owns.
+    Passing ``pod_connector`` rebinds the surface to a different SHARED pod
+    connector -- the repair when the account it runs as is withdrawn or
+    expires. The caller must be able to use that connector and its account.
 
     Args:
         pod_id (UUID):
@@ -166,9 +166,9 @@ async def asyncio_detailed(
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
-    Passing ``account_id`` rebinds the surface to a different connected account
-    — the repair when the account it runs on expires, or its owner leaves the
-    pod. It must be an account the caller owns.
+    Passing ``pod_connector`` rebinds the surface to a different SHARED pod
+    connector -- the repair when the account it runs as is withdrawn or
+    expires. The caller must be able to use that connector and its account.
 
     Args:
         pod_id (UUID):
@@ -210,9 +210,9 @@ async def asyncio(
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
-    Passing ``account_id`` rebinds the surface to a different connected account
-    — the repair when the account it runs on expires, or its owner leaves the
-    pod. It must be an account the caller owns.
+    Passing ``pod_connector`` rebinds the surface to a different SHARED pod
+    connector -- the repair when the account it runs as is withdrawn or
+    expires. The caller must be able to use that connector and its account.
 
     Args:
         pod_id (UUID):

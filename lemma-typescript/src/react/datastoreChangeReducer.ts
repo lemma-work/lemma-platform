@@ -59,7 +59,8 @@ export function applyDatastoreChange<TRecord extends Record<string, unknown>>(
   const idKey = options.idKey ?? "id";
   const id = frame.record_id;
 
-  if (frame.operation === "delete") {
+  // Lower-cased: the previous server spelled operations in capitals.
+  if (String(frame.operation).toLowerCase() === "delete") {
     return rows.filter((row) => row[idKey] !== id);
   }
 

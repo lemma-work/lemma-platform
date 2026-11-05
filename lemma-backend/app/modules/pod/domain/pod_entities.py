@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Mapping, Optional
+from typing import Literal, Mapping, Optional
 from uuid import UUID
 from pydantic import (
     BaseModel,
@@ -24,6 +24,18 @@ class PodJoinPolicy(str, Enum):
     PUBLIC = "PUBLIC"  # any Lemma user may self-join (auto-added to the org)
 
 
+class PodCreationSource(str, Enum):
+    """Whether somebody asked for a pod, or the platform made it for them.
+
+    Carried on ``PodCreatedEvent`` so a count of pods people chose to build is
+    not also a count of people who signed up: joining an organization
+    provisions a personal workspace whether or not anyone wanted one.
+    """
+
+    PERSON = "person"
+    PROVISIONED = "provisioned"
+
+
 class PodRecipe(BaseModel):
     """A record of a bundle installed into this pod (the durable trace of an
     import; the ephemeral import job state is not kept). ``kind`` distinguishes an
@@ -35,6 +47,38 @@ class PodRecipe(BaseModel):
     format_version: int | None = None
     imported_at: datetime
     imported_by: UUID
+
+
+TriggerWriteModeSetting = Literal["skip", "each", "batch"]
+
+
+class PodTriggerSettings(BaseModel):
+    """Pod-wide defaults for the pod's DATASTORE triggers."""
+
+    bulk_writes_default: TriggerWriteModeSetting | None = Field(
+        default=None,
+        description=(
+            "What a bulk write does to this pod's triggers that do not say: "
+            "skip (recorded as skipped), each (fire per matching row) or batch "
+            "(one fire with the rows). Omitted means skip."
+        ),
+    )
+
+
+class PodContactSettings(BaseModel):
+    """How the pod treats the people outside it who write to it."""
+
+    auto_acknowledge: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description=(
+            "Said once to a contact who writes while their channel's agents are "
+            'off -- for example "Thanks, someone from {pod} will reply" -- '
+            "until a member writes to them or their channel is closed. "
+            "``{pod}`` is the pod's name. Omitted means nothing is said."
+        ),
+    )
 
 
 class PodConfig(BaseModel):
@@ -50,6 +94,8 @@ class PodConfig(BaseModel):
     # Bundles installed into this pod, appended on each successful import. Omitted
     # from the serialized config when empty so legacy config blobs are unchanged.
     recipes: list[PodRecipe] = Field(default_factory=list)
+    triggers: PodTriggerSettings | None = None
+    contacts: PodContactSettings | None = None
 
     @field_validator("default_profile_id")
     @classmethod
@@ -93,6 +139,10 @@ class PodConfig(BaseModel):
             data.pop("default_runtime", None)
         if not data.get("recipes"):
             data.pop("recipes", None)
+        if data.get("triggers") is None:
+            data.pop("triggers", None)
+        if data.get("contacts") is None:
+            data.pop("contacts", None)
         return data
 
 
@@ -107,7 +157,12 @@ class PodEntity(AggregateRoot):
     config: PodConfig = Field(default_factory=PodConfig)
     is_deleted: bool = False
 
-    def mark_created(self, creator_id: UUID) -> None:
+    def mark_created(
+        self,
+        creator_id: UUID,
+        *,
+        source: PodCreationSource = PodCreationSource.PERSON,
+    ) -> None:
         """Add pod created event to aggregate."""
         from app.modules.pod.domain.events import PodCreatedEvent
 
@@ -117,6 +172,7 @@ class PodEntity(AggregateRoot):
                 organization_id=self.organization_id,
                 creator_id=creator_id,
                 name=self.name,
+                source=source.value,
             )
         )
 
@@ -132,6 +188,7 @@ class PodEntity(AggregateRoot):
                 pod_id=self.id,
                 organization_id=self.organization_id,
                 deleted_by_user_id=getattr(actor, "user_id", None),
+                pod_created_at=self.created_at,
             )
         )
 

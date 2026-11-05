@@ -1,6 +1,6 @@
 import type { Pod } from "@/data";
 import { isLandingPreview } from "@/marketing/preview-mode";
-import { isAskTool } from "./approval";
+import { NOWHERE, writeAddress } from "@/shell/address";
 
 /** A conversation paused on the person looking at it.
  *
@@ -8,43 +8,56 @@ import { isAskTool } from "./approval";
  *  stopped on `ask_user` or `request_approval` never reached the rail, the
  *  Teammates page or Home. That is the conversation a scheduled run leaves
  *  behind when it stops to ask something: it reads as quiet everywhere while
- *  it waits for somebody who is not there. */
+ *  it waits for somebody who is not there.
+ *
+ *  A permission request is the third kind: an agent running on an Agent Host
+ *  asking before it uses a tool on that computer. Its conversation stays
+ *  running while it asks, which is why reading WAITING conversations never
+ *  found it. */
 export interface AskedRow {
     podId: string;
     podName: string;
     conversationId: string;
     title: string;
-    kind: "question" | "approval";
+    kind: "question" | "approval" | "permission";
+    /** The question, or what it wants to do, on one line — when it said. */
+    summary: string | null;
     /** When it asked, for "waiting 3h" and for the order: longest first. */
     sinceMs: number;
 }
 
-interface WaitingConversation { id: string; title?: string | null }
-interface PendingAsk { tool_name?: string | null; metadata?: Record<string, unknown> | null; created_at?: string | null }
+/** One pause as `conversations.pendingInteractions` lists it. */
+interface PendingAsk {
+    conversation_id: string;
+    conversation_title?: string | null;
+    kind?: string | null;
+    summary?: string | null;
+    created_at?: string | null;
+}
 
-/** The rows for one pod, from what the two endpoints said.
+const KINDS: Record<string, AskedRow["kind"]> = { QUESTION: "question", APPROVAL: "approval", PERMISSION: "permission" };
+
+/** The rows for one pod, one per conversation, from what the server listed.
  *
- *  A conversation is WAITING for several reasons, and only some are a person:
- *  a timer, a sub-agent or a process can hold it too. The pending approvals
- *  are what say it is waiting on you — an empty list means it is waiting on
- *  something else and is not owed by anybody. */
-export function askedRows(pod: { id: string; name: string }, waiting: readonly WaitingConversation[], pending: ReadonlyMap<string, readonly PendingAsk[]>): AskedRow[] {
-    const rows: AskedRow[] = [];
-    for (const conversation of waiting) {
-        const asks = pending.get(conversation.id) ?? [];
-        if (asks.length === 0) continue;
-        const last = asks[asks.length - 1];
-        const since = last.created_at ? new Date(last.created_at).getTime() : Number.NaN;
-        rows.push({
+ *  The list is longest-waiting first, so the first pause seen for a
+ *  conversation is the one that has waited longest — the row says how long
+ *  the conversation has been waiting, not how long its newest ask has. */
+export function askedRows(pod: { id: string; name: string }, pending: readonly PendingAsk[]): AskedRow[] {
+    const rows = new Map<string, AskedRow>();
+    for (const ask of pending) {
+        if (rows.has(ask.conversation_id)) continue;
+        const since = ask.created_at ? new Date(ask.created_at).getTime() : Number.NaN;
+        rows.set(ask.conversation_id, {
             podId: pod.id,
             podName: pod.name,
-            conversationId: conversation.id,
-            title: (conversation.title ?? "").trim() || "A conversation",
-            kind: isAskTool(last.tool_name, last.metadata ?? null) ? "question" : "approval",
+            conversationId: ask.conversation_id,
+            title: (ask.conversation_title ?? "").trim() || "A conversation",
+            kind: KINDS[ask.kind ?? ""] ?? "approval",
+            summary: (ask.summary ?? "").trim() || null,
             sinceMs: Number.isNaN(since) ? Date.now() : since,
         });
     }
-    return rows;
+    return [...rows.values()];
 }
 
 /** After this, an ask has gone quiet: still listed on Home behind "older",
@@ -68,36 +81,59 @@ export function byAskedLongest(rows: readonly AskedRow[]): AskedRow[] {
 
 /** What a row says under its title. */
 export function sayAsked(row: AskedRow): string {
-    return row.kind === "question" ? "Asked you something" : "Needs your approval";
+    if (row.kind === "question") return "Asked you something";
+    if (row.kind === "permission") return "Asks permission to go on";
+    return "Needs your approval";
+}
+
+/** Where a row opens: its conversation, in its own teammate's space — the
+ *  inbox crosses teammates, so it cannot assume the one on screen. */
+export function askedHref(row: Pick<AskedRow, "podId" | "conversationId">): string {
+    return writeAddress({ ...NOWHERE, podId: row.podId, tabId: "conversation", conversationId: row.conversationId });
 }
 
 /** Every conversation, in every pod given, paused on the caller.
  *
- *  One list call per pod — the status filter does the narrowing server-side,
- *  and the list is the caller's own conversations — then one approvals call
- *  per waiting conversation, which on a normal day is none. `allSettled`, so a
- *  pod that refuses does not empty the answer for the others. */
-export async function gatherAsked(pods: readonly Pod[], sample: boolean): Promise<AskedRow[]> {
+ *  One request per pod: the server lists every pause waiting on the caller
+ *  across their conversations there, permission requests included. It used to
+ *  be a list of WAITING conversations and then a request per conversation,
+ *  which could not see a permission request at all. `allSettled`, so a pod
+ *  that refuses does not empty the answer for the others. */
+export async function gatherAsked(pods: readonly Pick<Pod, "id" | "name">[], sample: boolean): Promise<AskedRow[]> {
     if (sample) {
         /* The landing tour's teammates say what they wait on in their own
            words; a sample conversation asking something would be a second
            voice in a scripted scene. */
         const first = pods[0];
         if (!first || isLandingPreview()) return [];
-        return [{ podId: first.id, podName: first.name, conversationId: "fixture", title: "Monday launch", kind: "question", sinceMs: Date.now() - 2 * 3_600_000 }];
+        return [{ podId: first.id, podName: first.name, conversationId: "fixture", title: "Monday launch", kind: "question", summary: "Which day should the launch post go out?", sinceMs: Date.now() - 2 * 3_600_000 }];
     }
     /* Imported here so the pure helpers above load without a session. */
     const { lemma } = await import("@/session/client");
     const perPod = await Promise.allSettled(pods.map(async (pod) => {
-        const client = lemma(pod.id);
-        const listed = await client.conversations.list({ pod_id: pod.id, status: "WAITING", limit: 20 });
-        const waiting = (listed.items ?? []) as WaitingConversation[];
-        const pending = new Map<string, PendingAsk[]>();
-        await Promise.allSettled(waiting.map(async (conversation) => {
-            const asks = await client.conversations.approvals.list(conversation.id, { pod_id: pod.id });
-            pending.set(conversation.id, (asks.items ?? []) as PendingAsk[]);
-        }));
-        return askedRows(pod, waiting, pending);
+        const listed = await lemma(pod.id).conversations.pendingInteractions({ pod_id: pod.id, limit: 100 });
+        return askedRows(pod, (listed.items ?? []) as PendingAsk[]);
     }));
     return byAskedLongest(perPod.flatMap((one) => one.status === "fulfilled" ? one.value : []));
+}
+
+/** The query every "waiting on you" list reads: the inbox beside the bell,
+ *  the rail's badges and Home. One key, so the three share one request.
+ *
+ *  Polled once a minute while it is on screen. Nothing pushes a new ask — a
+ *  run that stops on a question in another conversation tells nobody — so a
+ *  list that only refreshed on navigation could sit on a page for an hour
+ *  saying nothing was owed. React Query does not poll a hidden tab, so the
+ *  poll costs nothing while the window is in the background. */
+export const CONVERSATION_ASKS = "conversation-asks";
+export const ASKS_REFETCH_MS = 60_000;
+
+export function conversationAsksQuery(pods: readonly Pick<Pod, "id" | "name">[], sample: boolean, enabled = true) {
+    return {
+        queryKey: [CONVERSATION_ASKS, pods.map((pod) => pod.id).join(",")],
+        queryFn: () => gatherAsked(pods, sample),
+        enabled: enabled && pods.length > 0,
+        staleTime: ASKS_REFETCH_MS,
+        refetchInterval: ASKS_REFETCH_MS,
+    };
 }

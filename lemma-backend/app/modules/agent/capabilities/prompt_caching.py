@@ -11,14 +11,13 @@ conversation id is the fallback. Never the agent-run id, which changes every
 turn and would scatter routing, defeating cross-turn reuse.
 
 Anthropic caches nothing without an explicit breakpoint, so we ask pydantic-ai
-to mark one after the static instruction blocks. That only pays off because the
-current-time note is a ``UserPromptPart`` rather than a ``SystemPromptPart``:
-Anthropic hoists system parts into the top-level ``system`` parameter ahead of
-the instruction blocks, so a per-turn timestamp there would change the prefix on
-every request and the breakpoint would never hit. See ``current_time.py``.
-
-Provider-specific extensions (e.g. Fireworks ``x-session-affinity`` header) can
-be layered in subclasses via ``configure_caching_capability()`` in assembler.py.
+to mark them: after the tool definitions, after the system prompt, and on the
+last message block, so a multi-step run reads its own history from cache rather
+than paying for all of it on every step. The run's context part adds one more,
+in front of itself (``run_context.py``). All of it only pays off because nothing
+per-run is a ``SystemPromptPart``: Anthropic hoists system parts into the
+top-level ``system`` parameter ahead of the instruction blocks, so per-run text
+there would change the prefix on every request and no breakpoint would hit.
 """
 
 from __future__ import annotations
@@ -62,8 +61,10 @@ class PromptCachingCapability(AbstractCapability[object]):
     def get_model_settings(self) -> dict[str, object]:
         if self._protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE:
             return {
-                # Marks a cache breakpoint after the last static instruction
-                # block — for us, the block ending in the task list.
+                # A breakpoint after the last system block, which ends with the
+                # conversation's own section -- working directory and brief --
+                # since everything that changes run to run is in the run's
+                # context part instead.
                 "anthropic_cache_instructions": _ANTHROPIC_CACHE_TTL,
                 # And one after the tool definitions. Anthropic's cache is a
                 # prefix over [tools, system, messages], so a changed tool array
@@ -73,6 +74,13 @@ class PromptCachingCapability(AbstractCapability[object]):
                 # this, the first search costs a full re-read of the system
                 # prompt for the rest of the run.
                 "anthropic_cache_tool_definitions": _ANTHROPIC_CACHE_TTL,
+                # And one on the last message block. Without it the history was
+                # never cached, so every step of a long run paid full price for
+                # every message before it. `anthropic_cache_messages` rather
+                # than the automatic `anthropic_cache`: it is plain per-block
+                # `cache_control`, which an Anthropic-compatible gateway accepts
+                # where the top-level parameter is not supported.
+                "anthropic_cache_messages": _ANTHROPIC_CACHE_TTL,
             }
         affinity = self._affinity_key
         return {
@@ -88,7 +96,5 @@ class PromptCachingCapability(AbstractCapability[object]):
             # Google's answers `400 Unknown name "prompt_cache_key"`, failing
             # every turn of every Gemini run. Nothing real is lost: caching
             # applies automatically to prefixes over 1024 tokens, keyed or not.
-            # A provider known to accept it adds it in the subclass registered
-            # through `configure_caching_capability()`.
             "openai_user": affinity,
         }

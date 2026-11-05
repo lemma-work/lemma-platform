@@ -34,30 +34,47 @@ pytestmark = [
 
 
 @pytest.fixture
-async def slack(world):
-    """The holder, and the auth config their Slack account hangs from."""
+async def slack(world, run):
+    """The holder, and a pod of this run's whose Slack connector is theirs.
+
+    The auth config and the account are the tenant's and stand between runs;
+    an operation runs only through a pod connector, so the pod declares one
+    over the standing install. PER_MEMBER: each call runs as the caller's own
+    account, which here is the holder's, picked up on the first call.
+    """
     holder = await world.person(CONNECTOR_HOLDER)
     needs(SLACK)
-    return holder, holder.organization["id"], standing_auth_config_name("slack")
+    wanted = standing_auth_config_name("slack")
+    [auth_config] = [
+        config
+        for config in await holder.auth_configs_in(holder.organization)
+        if config.get("name") == wanted
+    ]
+    pod = await holder.creates_a_pod(named=run.name("slack"))
+    try:
+        connector = await holder.declares_pod_connector(
+            auth_config, in_pod=pod, slug="slack"
+        )
+        yield holder, pod, connector
+    finally:
+        await holder.deletes_pod(pod)
 
 
-async def _run(holder, organization, config, operation, payload):
+async def _run(holder, pod, connector, operation, payload):
     """One connector operation, as an agent or a person would run it."""
-    answered = await holder.api.post(
-        f"/organizations/{organization}/connectors/{config}/operations/{operation}/execute",
-        what=f"running {operation}",
-        json={"payload": payload},
+    answered = await holder.runs_operation(
+        operation, through=connector, in_pod=pod, payload=payload
     )
     return answered.get("result") or {}
 
 
 @scenario("Connecting Slack tells Lemma which workspace it is")
 @proves("PS-CONN-011", "PS-CONN-020")
-@covers("connector.operation.execute")
+@covers("pod.connector.operation.execute")
 async def test_connecting_slack_identifies_the_workspace(slack):
-    holder, organization, config = slack
+    holder, pod, connector = slack
 
-    identity = await _run(holder, organization, config, "auth_test", {})
+    identity = await _run(holder, pod, connector, "auth_test", {})
 
     assert identity.get("ok") is True, f"Slack refused auth.test: {identity}"
     assert identity.get("team"), (
@@ -68,13 +85,11 @@ async def test_connecting_slack_identifies_the_workspace(slack):
 
 @scenario("A message posted through Lemma really is in the channel")
 @proves("PS-CONN-030")
-@covers("connector.operation.execute")
+@covers("pod.connector.operation.execute")
 async def test_a_message_is_posted_and_taken_back(slack):
-    holder, organization, config = slack
+    holder, pod, connector = slack
 
-    channels = await _run(
-        holder, organization, config, "conversations_list", {"limit": 200}
-    )
+    channels = await _run(holder, pod, connector, "conversations_list", {"limit": 200})
     joined = [c for c in channels.get("channels") or [] if c.get("is_member")]
     if not joined:
         pytest.skip(
@@ -90,8 +105,8 @@ async def test_a_message_is_posted_and_taken_back(slack):
     try:
         posted = await _run(
             holder,
-            organization,
-            config,
+            pod,
+            connector,
             "chat_post_message",
             {"body": {"channel": channel, "text": f"Lemma scenario suite — {mark}"}},
         )
@@ -99,8 +114,8 @@ async def test_a_message_is_posted_and_taken_back(slack):
 
         history = await _run(
             holder,
-            organization,
-            config,
+            pod,
+            connector,
             "conversations_history",
             {"channel": channel, "limit": 20},
         )
@@ -115,8 +130,8 @@ async def test_a_message_is_posted_and_taken_back(slack):
             # messages accumulating in somebody's workspace.
             await _run(
                 holder,
-                organization,
-                config,
+                pod,
+                connector,
                 "chat_delete",
                 {"body": {"channel": channel, "ts": posted["ts"]}},
             )

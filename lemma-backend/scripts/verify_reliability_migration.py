@@ -191,12 +191,20 @@ def main() -> int:
             """
             SELECT to_regclass(name) IS NOT NULL
             FROM unnest(ARRAY[
-                'domain_event_outbox', 'domain_event_inbox', 'schedule_runs',
-                'pod_bundle_jobs', 'pod_bundle_job_steps'
+                'schedule_runs', 'pod_bundle_jobs', 'pod_bundle_job_steps'
             ]) AS name
             """
         )
         assert all(row[0] for row in cursor.fetchall())
+        # 0057 drops the old event transport's tables: the cutover replays
+        # nothing from them.
+        cursor.execute(
+            """
+            SELECT to_regclass('domain_event_outbox') IS NULL,
+                   to_regclass('domain_event_inbox') IS NULL
+            """
+        )
+        assert cursor.fetchone() == (True, True)
         cursor.execute(
             """
             SELECT consecutive_failures
@@ -271,16 +279,14 @@ def main() -> int:
         )
         # This runs at head, so it asserts the schema as it finally stands.
         # 0003 created ix_schedule_runs_retryable_recovery for the recovery
-        # sweep; 0018 replaced it with ix_schedule_runs_recoverable because the
-        # original predicate covered RECEIVED/PROCESSING/FAILED while the query
-        # asks about PROCESSING/FAILED/DISPATCHED, so Postgres could never use
-        # it. The property under test is unchanged -- the recovery sweep has a
-        # supporting index -- only the name is.
+        # sweep and 0018 renamed it ix_schedule_runs_recoverable; 0057 drops it
+        # with the sweep, since a run's outcome now reaches its schedule run in
+        # the run's finishing transaction and nothing reads that order.
         cursor.execute(
             """
             SELECT
                 to_regclass('uq_schedule_runs_target') IS NOT NULL,
-                to_regclass('ix_schedule_runs_recoverable') IS NOT NULL,
+                to_regclass('ix_schedule_runs_recoverable') IS NULL,
                 is_nullable
             FROM information_schema.columns
             WHERE table_name = 'schedule_runs'

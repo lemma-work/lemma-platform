@@ -1,3 +1,9 @@
+"""What a retry checks before it starts a run: the runtime, usage and access.
+
+Which runs may be retried at all is decided by SQL over the run's messages, so
+those cases run against Postgres in `tests/e2e/test_conversation_retry_e2e.py`.
+"""
+
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -5,20 +11,21 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
-from app.modules.agent.domain.errors import ConversationStateError
+from app.modules.agent.domain.errors import (
+    RuntimeUnavailableError,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
     MessageRole,
 )
-import app.modules.agent.services.conversation_queries as queries
 import app.modules.agent.services.conversation_retry_service as retry_service_module
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
+from app.modules.agent.services.conversation_service import ConversationService
 
 
 def _run(
@@ -50,22 +57,51 @@ def _run(
     return run
 
 
-def _service(usage_service: object | None = None):
+class _RuntimeCheck:
+    """Records the runtime each retry was checked against, and can refuse it."""
+
+    def __init__(self, refusal: Exception | None = None) -> None:
+        self.checked: list[AgentRuntimeConfig] = []
+        self._refusal = refusal
+
+    async def __call__(self, _uow, runtime, *, organization_id, user_id) -> None:
+        self.checked.append(runtime)
+        if self._refusal is not None:
+            raise self._refusal
+
+
+_CURRENT_RUNTIME = AgentRuntimeConfig(profile_id="system:standard", model_name="now")
+
+
+def _service(
+    usage_service: object | None = None,
+    runtime_check: _RuntimeCheck | None = None,
+):
     repository = SimpleNamespace(
         get_conversation=AsyncMock(),
         lock_conversation=AsyncMock(),
         get_active_agent_run_for_update=AsyncMock(return_value=None),
         get_latest_agent_run_for_conversation=AsyncMock(),
-        run_has_only_user_messages=AsyncMock(return_value=True),
+        run_is_replay_safe=AsyncMock(return_value=True),
         create_agent_run=AsyncMock(),
+        conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
-    uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
-    service = ConversationRetryService(
+    uow = SimpleNamespace(
+        collect_events=MagicMock(),
+        commit=AsyncMock(),
+        # The pod names no default runtime of its own.
+        session=RecordingWorkSession(),
+    )
+    service = ConversationService(
         uow=uow,
         conversation_repository=repository,
-        agent_repository=SimpleNamespace(),
-        authorization_service=SimpleNamespace(),
+        agent_repository=SimpleNamespace(
+            get=AsyncMock(
+                return_value=SimpleNamespace(name="lem", kind=None, agent_runtime=None)
+            )
+        ),
         usage_service=usage_service,
+        turn_runtime_check=runtime_check or _RuntimeCheck(),
     )
     return service, repository, uow
 
@@ -89,33 +125,28 @@ def _authorize(
 
 def _usage_service(*, allowed: bool) -> SimpleNamespace:
     return SimpleNamespace(
-        get_usage_limits=AsyncMock(
-            return_value={
-                "allowed": allowed,
-                "org_monthly": {"allowed": allowed},
-                "user_weekly": {"allowed": True},
-                "user_monthly": {"allowed": True},
-            }
-        )
+        spent_windows=AsyncMock(return_value=() if allowed else ("org_month",))
     )
 
 
 @pytest.mark.asyncio
-async def test_retry_failed_run_reuses_runtime_without_appending_message(
+async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, repository, uow = _service()
+    check = _RuntimeCheck()
+    service, repository, uow = _service(runtime_check=check)
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
+        agent_runtime=_CURRENT_RUNTIME,
     )
     failed_run = _run(status=AgentRunStatus.FAILED)
     failed_run.conversation_id = conversation.id
     retry_run = _run(status=AgentRunStatus.RUNNING)
     retry_run.conversation_id = conversation.id
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
-    repository.run_has_only_user_messages.return_value = True
+    repository.run_is_replay_safe.return_value = True
     repository.create_agent_run.return_value = retry_run
     authorize = _authorize(monkeypatch, conversation)
 
@@ -129,16 +160,19 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message(
     repository.create_agent_run.assert_awaited_once_with(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
-        agent_runtime=failed_run.agent_runtime,
+        agent_runtime=_CURRENT_RUNTIME,
         metadata={
             "source": "manual_retry",
             "retried_agent_run_id": str(failed_run.id),
         },
     )
-    uow.collect_events.assert_called_once()
+    # Re-pointing the teammate at another model is how a retired-model failure
+    # is fixed, so the retry must not replay the dead runtime.
+    assert check.checked == [_CURRENT_RUNTIME]
+    assert uow.session.kinds() == ["agent.turn"]
     uow.commit.assert_awaited_once()
     # Asked about this one run, not handed every run of the conversation.
-    repository.run_has_only_user_messages.assert_awaited_once_with(failed_run.id)
+    repository.run_is_replay_safe.assert_awaited_once_with(failed_run.id)
     # Retrying runs the agent again, so it demands execute rather than read.
     authorize.assert_awaited_once_with(
         repository,
@@ -151,182 +185,19 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message(
     )
 
 
-@pytest.mark.asyncio
-async def test_retry_failed_run_rejects_non_failed_latest_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, repository, _ = _service()
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    repository.get_latest_agent_run_for_conversation.return_value = _run(
-        status=AgentRunStatus.COMPLETED
-    )
-    _authorize(monkeypatch, conversation)
-
-    with pytest.raises(ConversationStateError, match="did not fail"):
-        await service.retry_failed_run(
-            conversation_id=conversation.id,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-        )
-
-    repository.create_agent_run.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_run_rejects_an_active_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, repository, _ = _service()
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    repository.get_active_agent_run_for_update.return_value = _run(
-        status=AgentRunStatus.RUNNING
-    )
-    _authorize(monkeypatch, conversation)
-
-    with pytest.raises(ConversationStateError, match="active run"):
-        await service.retry_failed_run(
-            conversation_id=conversation.id,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-        )
-
-    repository.get_latest_agent_run_for_conversation.assert_not_awaited()
-    repository.create_agent_run.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_run_returns_active_manual_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, repository, uow = _service()
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    active_retry = _run(
-        status=AgentRunStatus.RUNNING,
-        metadata={"source": "manual_retry"},
-    )
-    active_retry.conversation_id = conversation.id
-    repository.get_active_agent_run_for_update.return_value = active_retry
-    _authorize(monkeypatch, conversation)
-
-    result = await service.retry_failed_run(
-        conversation_id=conversation.id,
-        user_id=conversation.user_id,
-        pod_id=conversation.pod_id,
-    )
-
-    assert result.agent_run_id == active_retry.id
-    assert result.started_new_run is False
-    repository.get_latest_agent_run_for_conversation.assert_not_awaited()
-    repository.create_agent_run.assert_not_awaited()
-    uow.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_run_rejects_failed_run_with_non_user_activity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, repository, _ = _service()
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    failed_run = _run(status=AgentRunStatus.FAILED)
-    failed_run.conversation_id = conversation.id
-    repository.get_latest_agent_run_for_conversation.return_value = failed_run
-    failed_run.messages.append(
-        Message.create(
-            conversation_id=conversation.id,
-            sequence=1,
-            agent_run_id=failed_run.id,
-            role=MessageRole.ASSISTANT,
-            text="partial output",
-        )
-    )
-    # The run said something, so the database reports it is not replay-safe.
-    repository.run_has_only_user_messages.return_value = False
-    _authorize(monkeypatch, conversation)
-
-    with pytest.raises(ConversationStateError, match="retried safely"):
-        await service.retry_failed_run(
-            conversation_id=conversation.id,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-        )
-
-    repository.create_agent_run.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_retry_failed_run_requires_a_persisted_user_turn(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, repository, _ = _service()
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    failed_run = _run(status=AgentRunStatus.FAILED)
-    failed_run.conversation_id = conversation.id
-    failed_run.messages = []
-    repository.get_latest_agent_run_for_conversation.return_value = failed_run
-    # No messages at all: there is no user turn to replay.
-    repository.run_has_only_user_messages.return_value = False
-    _authorize(monkeypatch, conversation)
-
-    with pytest.raises(ConversationStateError, match="retried safely"):
-        await service.retry_failed_run(
-            conversation_id=conversation.id,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-        )
-
-    repository.create_agent_run.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("has_non_user_activity", "expected_retryable"),
-    [(False, True), (True, False)],
-)
-async def test_conversation_detail_reports_persisted_retryability(
-    has_non_user_activity: bool,
-    expected_retryable: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, repository, _ = _service()
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
-    failed_run = _run(status=AgentRunStatus.FAILED)
-    failed_run.conversation_id = conversation.id
-    if has_non_user_activity:
-        failed_run.messages.append(
-            Message.create(
-                conversation_id=conversation.id,
-                sequence=1,
-                agent_run_id=failed_run.id,
-                role=MessageRole.TOOL,
-                text="tool activity",
-            )
-        )
-    conversation.agent_runs = [failed_run]
-    conversation.last_run_status = AgentRunStatus.FAILED
-    repository.get_conversation.return_value = conversation
-    repository.run_has_only_user_messages.return_value = not has_non_user_activity
-    monkeypatch.setattr(
-        queries, "resolve_expected_agent_id", AsyncMock(return_value=None)
-    )
-    monkeypatch.setattr(queries, "require_agent_action", AsyncMock())
-
-    result = await service.queries.get_conversation(
-        conversation_id=conversation.id,
-        user_id=conversation.user_id,
-        pod_id=conversation.pod_id,
-    )
-
-    assert result.last_run_retryable is expected_retryable
-
-
 def _metered_retry_setup(
     monkeypatch: pytest.MonkeyPatch,
     *,
     allowed: bool,
-) -> tuple[ConversationRetryService, SimpleNamespace, AgentRun, Conversation]:
+) -> tuple[ConversationService, SimpleNamespace, AgentRun, Conversation]:
     usage_service = _usage_service(allowed=allowed)
     service, repository, _ = _service(usage_service)
-    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        agent_runtime=_CURRENT_RUNTIME,
+    )
     # A "system:" profile is the metered one -- a user's own key is not counted,
     # so only this profile makes the preflight consult the usage service at all.
     failed_run = _run(status=AgentRunStatus.FAILED, profile_id="system:standard")
@@ -360,7 +231,7 @@ async def test_retry_failed_run_refuses_when_the_usage_limit_is_reached(
 
 
 @pytest.mark.asyncio
-async def test_retry_failed_run_asks_about_the_failed_run_s_own_runtime(
+async def test_retry_failed_run_asks_usage_about_the_runtime_it_will_run_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, repository, failed_run, conversation = _metered_retry_setup(
@@ -375,12 +246,71 @@ async def test_retry_failed_run_asks_about_the_failed_run_s_own_runtime(
     )
 
     assert service.usage_service is not None
-    service.usage_service.get_usage_limits.assert_awaited_once_with(
+    service.usage_service.spent_windows.assert_awaited_once_with(
         organization_id=conversation.organization_id,
         user_id=user_id,
+        outside_audience=False,
     )
     repository.create_agent_run.assert_awaited_once()
     assert (
         repository.create_agent_run.await_args.kwargs["agent_runtime"]
-        is failed_run.agent_runtime
+        == _CURRENT_RUNTIME
     )
+
+
+@pytest.mark.asyncio
+async def test_a_retry_on_a_model_that_is_gone_is_refused_before_a_run_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refusal = RuntimeUnavailableError("gone")
+    service, repository, uow = _service(runtime_check=_RuntimeCheck(refusal))
+    conversation = Conversation(
+        pod_id=uuid4(), user_id=uuid4(), agent_runtime=_CURRENT_RUNTIME
+    )
+    failed_run = _run(status=AgentRunStatus.FAILED)
+    repository.get_latest_agent_run_for_conversation.return_value = failed_run
+    _authorize(monkeypatch, conversation)
+
+    with pytest.raises(RuntimeUnavailableError):
+        await service.retry_failed_run(
+            conversation_id=conversation.id,
+            user_id=conversation.user_id,
+            pod_id=conversation.pod_id,
+        )
+
+    repository.create_agent_run.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+
+def _bare_failed_run(metadata: dict[str, object] | None) -> AgentRun:
+    return AgentRun(
+        conversation_id=uuid4(),
+        status=AgentRunStatus.FAILED,
+        agent_runtime=_CURRENT_RUNTIME,
+        started_at=datetime.now(timezone.utc),
+        metadata=metadata,
+    )
+
+
+def test_a_failed_retry_owning_no_messages_is_safely_retryable() -> None:
+    """The turn a retry replays belongs to the run it retried."""
+    assert _bare_failed_run({"source": "manual_retry"}).is_safely_retryable
+
+
+def test_a_failed_run_with_no_turn_and_no_retry_behind_it_is_not() -> None:
+    assert not _bare_failed_run({"source": "user_message"}).is_safely_retryable
+    assert not _bare_failed_run(None).is_safely_retryable
+
+
+def test_a_failed_retry_that_replied_is_not_safely_retryable() -> None:
+    retry = _bare_failed_run({"source": "manual_retry"})
+    retry.messages = [
+        Message.create(
+            conversation_id=retry.conversation_id,
+            sequence=1,
+            agent_run_id=retry.id,
+            role=MessageRole.ASSISTANT,
+            text="Here is half",
+        )
+    ]
+    assert not retry.is_safely_retryable

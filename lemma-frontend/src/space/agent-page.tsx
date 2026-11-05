@@ -6,14 +6,16 @@ import { source, type ConversationRef, type Pod, type Surface } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { lemma } from "@/session/client";
 import {
-    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may, runtimeLine, surfacesLost, whyNot,
+    AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, connectorGrantSlugs, may, surfacesLost, whyNot, withConnectorGrants,
     type AgentDetail,
 } from "@/data/agents";
+import { connectorLabel, modeBadge } from "@/data/pod-connectors";
+import { ProblemLine } from "@/connect/connection-problem";
 import { displayAgentName } from "@/data/agent-names";
 import { surfacesForAgent, surfaceStatus } from "@/data/surface-settings";
-import { groupsSupported } from "@/data/surface-groups";
+import { groupsSupported } from "@/channels/sources";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
-import { ConfirmRemove, Editor } from "@/stage/agents-view";
+import { ConfirmRemove, Editor, useRunsOn } from "@/stage/agents-view";
 import { useSchedules } from "@/schedule/queries";
 import { wakeFor, wakeRequest } from "@/docpages/comments/wake";
 import { readWorkflows, sayWhen } from "@/workflow/runs";
@@ -43,7 +45,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
     onBack: () => void;
     onOpenConversation: (id: string) => void;
     /** Start a conversation in the Chat tab, with this bot when it is named. */
-    onAsk: (text: string, createWith?: Record<string, unknown>) => void;
+    onAsk: (text: string, createWith?: Record<string, unknown>, files?: File[]) => void;
     onOpenSchedules: () => void;
     onOpenWorkflows: () => void;
 }) {
@@ -123,7 +125,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                                 {editing ? (
                                     <section className="agentpage__card">
                                         <h2>Edit {detail.label}</h2>
-                                        <Editor key={detail.name} podId={pod.id} detail={detail} onDone={() => setEditing(false)} />
+                                        <Editor key={detail.name} podId={pod.id} orgId={pod.orgId} detail={detail} onDone={() => setEditing(false)} />
                                     </section>
                                 ) : (
                                     <>
@@ -135,8 +137,9 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                             <aside className="agentpage__rail" aria-label={"About " + detail.label}>
                                 <Instructions detail={detail} />
                                 <Abilities detail={detail} />
+                                <Connectors pod={pod} detail={detail} />
                                 <Channels space={pod} detail={detail} surfaces={surfaces.data ?? []} loading={surfaces.isPending} />
-                                <Facts detail={detail} />
+                                <Facts orgId={pod.orgId} detail={detail} />
                                 <CommentReplies pod={pod} detail={detail} />
                                 <UsedBy pod={pod} detail={detail} onOpenSchedules={onOpenSchedules} onOpenWorkflows={onOpenWorkflows} />
                                 <Access pod={pod} detail={detail} />
@@ -153,7 +156,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
 
 /** The box. Sending starts a conversation with this bot — made with its
  *  `agent_name`, so it is this bot answering — in the Chat tab. */
-function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, createWith?: Record<string, unknown>) => void }) {
+function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, createWith?: Record<string, unknown>, files?: File[]) => void }) {
     if (detail.takesInput) {
         return (
             <p className="agentpage__card agentpage__called">
@@ -167,7 +170,7 @@ function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, cre
     return (
         <div className="agentpage__ask">
             <AskBox placeholder={"Message " + detail.label + "…"}
-                onAsk={(text) => onAsk(text, detail.front ? undefined : { agent_name: detail.name })} />
+                onAsk={(text, files) => onAsk(text, detail.front ? undefined : { agent_name: detail.name }, files)} />
         </div>
     );
 }
@@ -274,6 +277,8 @@ function Instructions({ detail }: { detail: AgentDetail }) {
 
 function Abilities({ detail }: { detail: AgentDetail }) {
     const list = capabilityList(grantedToolsets(detail.toolsets, detail.front));
+    /* Connector grants have a rail of their own, by slug. */
+    const others = detail.grants.filter((grant) => grant.resource.toLowerCase() !== "connector");
     return (
         <Rail title="Can">
             {list.length === 0 ? <p className="agentpage__quiet">Only read and reply — no tools.</p> : (
@@ -283,9 +288,9 @@ function Abilities({ detail }: { detail: AgentDetail }) {
                     ))}
                 </ul>
             )}
-            {detail.grants.length > 0 && (
+            {others.length > 0 && (
                 <ul className="agentpage__grants">
-                    {detail.grants.map((grant) => (
+                    {others.map((grant) => (
                         <li key={grant.resource + grant.name}>
                             <span>{grant.name}</span>
                             <small>{grant.resource.toLowerCase().replace(/_/g, " ")} · {sayPermissions(grant.permissions)}</small>
@@ -293,6 +298,63 @@ function Abilities({ detail }: { detail: AgentDetail }) {
                     ))}
                 </ul>
             )}
+        </Rail>
+    );
+}
+
+/** The pod connectors this agent may run operations through, granted by
+ *  slug from the pod's own list — never an account, and never an id typed
+ *  in. Whose account a call runs as is the connector's decision: the
+ *  person the agent works for, or the one account shared for everyone. */
+function Connectors({ pod, detail }: { pod: Pod; detail: AgentDetail }) {
+    const cache = useQueryClient();
+    const editable = may(detail, AGENT_EDIT);
+    const [adding, setAdding] = useState("");
+    const connectors = useQuery({ queryKey: ["pod-connectors", pod.id], queryFn: () => source.listPodConnectors(pod.id), staleTime: 30_000 });
+    const granted = connectorGrantSlugs(detail.grants);
+    const save = useMutation({
+        mutationFn: (slugs: string[]) => source.setAgentGrants(pod.id, detail.name, withConnectorGrants(detail.grants, slugs)),
+        onSuccess: (grants) => {
+            cache.setQueryData(["agent", pod.id, detail.name], { ...detail, grants });
+            void cache.invalidateQueries({ queryKey: ["agent", pod.id, detail.name] });
+            setAdding("");
+        },
+    });
+    const list = connectors.data ?? [];
+    const offered = list.filter((one) => !granted.includes(one.slug));
+    if (!editable && granted.length === 0) return null;
+    return (
+        <Rail title="Connectors">
+            {granted.length === 0
+                ? <p className="agentpage__quiet">None. It cannot act in any connected app.</p>
+                : (
+                    <ul className="agentconn">
+                        {granted.map((slug) => {
+                            const known = list.find((one) => one.slug === slug);
+                            return (
+                                <li key={slug}>
+                                    <code>{slug}</code>
+                                    <small>{known ? modeBadge(known) : connectors.isSuccess ? "no longer one of " + pod.name + "’s connectors" : ""}</small>
+                                    {editable && (
+                                        <button className="linkish" disabled={save.isPending} aria-label={"Stop " + detail.label + " using " + slug}
+                                            onClick={() => save.mutate(granted.filter((one) => one !== slug))}>Remove</button>
+                                    )}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
+            {editable && connectors.isSuccess && (offered.length > 0 ? (
+                <form className="agentconn__add" onSubmit={(event) => { event.preventDefault(); if (adding) save.mutate([...granted, adding]); }}>
+                    <select aria-label="Connector to let it use" value={adding} onChange={(event) => setAdding(event.target.value)}>
+                        <option value="">Let it use…</option>
+                        {offered.map((one) => <option key={one.slug} value={one.slug}>{connectorLabel(one)}</option>)}
+                    </select>
+                    <button className="btn" type="submit" disabled={!adding || save.isPending}>{save.isPending ? "Saving…" : "Add"}</button>
+                </form>
+            ) : list.length === 0 ? <p className="agentpage__quiet">{pod.name} has no connectors yet. Add them under About {pod.name} → Connections.</p> : null)}
+            {connectors.isError && <p className="agentpage__quiet" role="alert">Couldn’t read {pod.name}’s connectors.</p>}
+            {save.isError && <ProblemLine className="agentpage__quiet" error={save.error} fallback="That could not be saved." />}
         </Rail>
     );
 }
@@ -310,11 +372,6 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
     const [selected, setSelected] = useState<Surface | null>(null);
     const pod = useQuery({ queryKey: ["surface-pod", podId], queryFn: () => source.getPod(podId), enabled: Boolean(selected) });
     const own = surfacesForAgent(surfaces, detail.front ? "pod_default" : detail.name);
-    /* A group's switches take what configuring the bot takes. Read off the
-       bot's own actions rather than `may`, which also says no to editing the
-       main bot's definition — a different question. An empty list is a bot
-       that did not say, and not saying is not a refusal. */
-    const canChange = detail.actions.length > 0 ? detail.actions.includes(AGENT_EDIT) : undefined;
     const saved = () => {
         for (const key of [["surfaces", 2, podId], ["surface-detail", podId], ["surface-setup", podId], ["surface-channels", podId], ["my-surfaces"]]) {
             void cache.invalidateQueries({ queryKey: key });
@@ -346,8 +403,6 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
                                         surface={surface}
                                         bot={detail.label}
                                         space={space.name}
-                                        members={space.members}
-                                        canChange={canChange}
                                     />
                                 )}
                             </li>
@@ -365,10 +420,10 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
     );
 }
 
-function Facts({ detail }: { detail: AgentDetail }) {
-    const runtime = runtimeLine(detail);
+function Facts({ orgId, detail }: { orgId: string; detail: AgentDetail }) {
+    const runtime = useRunsOn(orgId, detail);
     return (
-        <Rail title="Runs on">
+        <Rail title="Model">
             <p className="agentpage__fact">{runtime || "The default model here"}</p>
             {(detail.input || detail.output) && (
                 <dl className="agentpage__schema">

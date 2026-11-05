@@ -3,6 +3,7 @@ from __future__ import annotations
 from sandbox_runtime.errors import SandboxUnavailable
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -32,10 +33,17 @@ from app.modules.function.domain.entities import (
 )
 
 
+class _IdlePod:
+    """A session over a pod with nothing running: the gate's count is zero."""
+
+    async def scalar(self, _statement):
+        return 0
+
+
 class _UowFactory:
     @asynccontextmanager
     async def __call__(self):
-        yield object()
+        yield SimpleNamespace(session=_IdlePod())
 
 
 async def _token_minter(**_kwargs) -> FunctionSessionToken:
@@ -63,6 +71,7 @@ def _dispatch(
         config={"mode": "test"},
         mode=mode,
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        execution_seconds=30,
         revision_hash=f"sha256:{'a' * 64}",
         input_data={"value": 7},
     )
@@ -120,6 +129,7 @@ def _dispatcher(runtime_client) -> FunctionDispatcher:
         runtime_http_client_factory=lambda: runtime_client,
         organization_resolver=_organization_resolver,
         delegated_tokens_enabled=True,
+        max_running_per_pod=1_000,
     )
 
 
@@ -239,7 +249,7 @@ async def test_ambiguous_response_is_not_replayed() -> None:
     context = _context(dispatch)
     requests = []
 
-    class _Runtime:
+    class _Runtime(_LiveProbe):
         async def post(self, url, **kwargs):
             requests.append((url, kwargs))
             if len(requests) == 1:
@@ -325,7 +335,11 @@ async def test_unavailable_allocation_is_refreshed_once_before_runtime_work(
             f"functions/{dispatch.function_id}/runs/{dispatch.run_id}"
         ),
     ]
-    resolver.assert_awaited_once_with(dispatch)
+    resolver.assert_awaited_once_with(
+        dispatch,
+        execution_ends_at=context.deadline_at,
+        wait_until=context.deadline_at,
+    )
 
 
 @pytest.mark.asyncio
@@ -423,13 +437,31 @@ def test_terminal_logs_redacts_a_secret_that_straddles_the_size_limit():
 
 # -- a runtime that has stopped serving must not be handed to the next run ----
 #
-# One slow cold start left an E2B sandbox whose runtime process had died: the
-# VM was still running, so adoption kept succeeding, and port 8090 answered 502.
-# Every later run was handed that same sandbox and failed, for 100 minutes,
-# until someone deleted it by hand. 13+ consecutive failures, and nothing
-# self-healed, because `InvocationOutcomeUnconfirmed` is deliberately never
-# retried -- so the only thing that could have recovered it was refusing to
-# hand the endpoint out again.
+# A sandbox whose runtime process had died stayed "running" to the provider, so
+# adoption kept succeeding and the runtime port answered 502. Every later run
+# was handed it, and nothing self-healed, because `InvocationOutcomeUnconfirmed`
+# is deliberately never retried -- so the only thing that could recover it was
+# refusing to hand the endpoint out again.
+#
+# But one sandbox serves every run in its pod, so destroying it on one failed
+# request killed all of them. The failure only nominates the sandbox; its health
+# probe decides.
+
+
+class _DeadProbe:
+    """A runtime whose health probe fails too: really dead."""
+
+    async def get(self, url, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+
+class _LiveProbe:
+    """A runtime that still answers its health probe."""
+
+    async def get(self, url, **kwargs):
+        return httpx.Response(
+            200, request=httpx.Request("GET", url), json={"ready": True}
+        )
 
 
 async def _invoke_and_capture_quarantine(
@@ -437,13 +469,13 @@ async def _invoke_and_capture_quarantine(
 ):
     dispatch = _dispatch(mode=mode)
     dispatcher = _dispatcher(runtime)
-    quarantined = AsyncMock()
+    quarantined = AsyncMock(return_value=False)
     invalidated = AsyncMock()
     dispatcher._routes.quarantine = quarantined  # type: ignore[method-assign]
     dispatcher._routes.invalidate = invalidated  # type: ignore[method-assign]
     endpoint = _endpoint("https://sandbox.test/allocation/")
     with pytest.raises(InvocationOutcomeUnconfirmed):
-        await dispatcher._invoke_runtime(
+        await dispatcher._invoker.post(
             dispatch,
             context=_context(dispatch),
             endpoint=endpoint,
@@ -458,7 +490,7 @@ async def test_a_runtime_answering_5xx_is_quarantined() -> None:
     """502 is what a dead runtime process answers. It used to be the one case
     that did *not* evict, while a healthy-but-routeless sandbox (404) did."""
 
-    class _Runtime:
+    class _Runtime(_DeadProbe):
         async def post(self, url, **kwargs):
             return httpx.Response(502, request=httpx.Request("POST", url))
 
@@ -470,10 +502,58 @@ async def test_a_runtime_answering_5xx_is_quarantined() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_5xx_from_a_runtime_that_passes_its_probe_keeps_the_sandbox() -> None:
+    """One bad request is not a dead runtime. Other runs hold leases on this
+    sandbox, and destroying it would end every one of them."""
+
+    class _Runtime(_LiveProbe):
+        async def post(self, url, **kwargs):
+            return httpx.Response(500, request=httpx.Request("POST", url))
+
+    _, _, quarantined, _ = await _invoke_and_capture_quarantine(_Runtime())
+
+    quarantined.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_broken_read_on_a_live_runtime_keeps_the_sandbox() -> None:
+    class _Runtime(_LiveProbe):
+        async def post(self, url, **kwargs):
+            raise httpx.ReadError("server hung up mid-response")
+
+    _, _, quarantined, _ = await _invoke_and_capture_quarantine(_Runtime())
+
+    quarantined.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_503_is_replayed_once_and_never_destroys_the_sandbox() -> None:
+    """Unavailable means refused before any work: safe to replay, and no
+    reason to take the sandbox away from the runs already on it."""
+    attempts = []
+
+    class _Runtime(_DeadProbe):
+        async def post(self, url, **kwargs):
+            attempts.append(url)
+            if len(attempts) == 1:
+                return httpx.Response(503, request=httpx.Request("POST", url))
+            return _terminal_response(url)
+
+    dispatcher, result = await _recover(
+        _Runtime(), endpoints=[_endpoint("https://fresh.test/allocation/")]
+    )
+
+    assert result.output_data == {"answer": 42}
+    assert len(attempts) == 2
+    dispatcher._routes.quarantine.assert_not_awaited()
+    dispatcher._routes.invalidate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_a_runtime_that_will_not_connect_is_quarantined() -> None:
     """Connection refused: nothing was served, so the run cannot have started."""
 
-    class _Runtime:
+    class _Runtime(_DeadProbe):
         async def post(self, url, **kwargs):
             raise httpx.ConnectError("connection refused")
 
@@ -515,7 +595,7 @@ async def test_our_own_deadline_does_not_quarantine_the_sandbox() -> None:
 async def _recover(runtime, *, endpoints):
     dispatch = _dispatch()
     dispatcher = _dispatcher(runtime)
-    dispatcher._routes.quarantine = AsyncMock()  # type: ignore[method-assign]
+    dispatcher._routes.quarantine = AsyncMock(return_value=False)  # type: ignore[method-assign]
     dispatcher._routes.invalidate = AsyncMock()  # type: ignore[method-assign]
     resolved = iter(endpoints)
     dispatcher._runtime_endpoint = AsyncMock(  # type: ignore[method-assign]
@@ -550,7 +630,7 @@ async def test_a_refused_connection_is_retried_on_a_fresh_endpoint() -> None:
     """The dead sandbox costs zero failed runs, not one."""
     attempts = []
 
-    class _Runtime:
+    class _Runtime(_DeadProbe):
         async def post(self, url, **kwargs):
             attempts.append(url)
             if len(attempts) == 1:
@@ -574,7 +654,7 @@ async def test_a_refused_connection_is_retried_on_a_fresh_endpoint() -> None:
 async def test_a_refused_connection_is_retried_once_and_not_forever() -> None:
     attempts = []
 
-    class _Runtime:
+    class _Runtime(_DeadProbe):
         async def post(self, url, **kwargs):
             attempts.append(url)
             raise httpx.ConnectError("connection refused")
@@ -600,7 +680,7 @@ async def test_a_broken_read_is_not_retried_even_though_it_is_a_transport_error(
     """
     attempts = []
 
-    class _Runtime:
+    class _Runtime(_DeadProbe):
         async def post(self, url, **kwargs):
             attempts.append(url)
             raise httpx.ReadError("server hung up mid-response")
@@ -628,3 +708,54 @@ async def test_our_own_deadline_is_not_retried() -> None:
         )
 
     assert len(attempts) == 1
+
+
+def test_lemmas_database_unreachable_before_the_start_is_not_a_failed_run() -> None:
+    """Nothing was sent to a sandbox: the run is retried, not failed. Once it
+    started, the outcome is the function's and failing records it."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.function.application.dispatch_failures import not_a_failure
+    from app.modules.function.events.run_work import dead_message
+
+    class _TooMany(Exception):
+        sqlstate = "53300"
+
+    down = OperationalError("SELECT", {}, _TooMany("too many clients"))
+    assert not_a_failure(down, queued=True, started=False)
+    assert not_a_failure(ConnectionRefusedError(), queued=False, started=False)
+    assert not not_a_failure(down, queued=True, started=True)
+    assert not not_a_failure(RuntimeError("boom"), queued=True, started=False)
+    assert "database" in dead_message(
+        "unavailable_exhausted", "Unavailable: database unavailable: OperationalError"
+    )
+    assert "sandbox" in dead_message("unavailable_exhausted", "Unavailable: sandbox")
+
+
+@pytest.mark.asyncio
+async def test_a_queued_run_hands_back_its_slot_when_the_sandbox_is_slow(
+    monkeypatch,
+) -> None:
+    """A queued run holds one of the pod's automation slots while it waits for
+    its sandbox -- shared with titles, schedule starts and filters. It waits a
+    minute, not its whole start deadline, then gives the slot back for its
+    item to retry; the endpoint keeps loading meanwhile."""
+    from app.modules.function.application.dispatch_failures import SandboxNotReady
+
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS).model_copy(
+        update={"deadline_at": datetime.now(timezone.utc) + timedelta(minutes=30)}
+    )
+    dispatcher = _dispatcher(AsyncMock())
+    asked: list[datetime | None] = []
+
+    async def slow_endpoint(_dispatch, *, execution_ends_at, wait_until=None):
+        asked.append(wait_until)
+        raise TimeoutError("function runtime endpoint was not ready")
+
+    monkeypatch.setattr(dispatcher, "_runtime_endpoint", slow_endpoint)
+
+    with pytest.raises(SandboxNotReady):
+        await dispatcher._execute_dispatch(dispatch.run_id, dispatch, queued=True)
+    [wait_until] = asked
+    assert wait_until is not None
+    assert wait_until <= datetime.now(timezone.utc) + timedelta(seconds=61)

@@ -7,6 +7,7 @@ a run there.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections.abc import Iterator
@@ -19,9 +20,16 @@ from httpx import AsyncClient
 from starlette import status
 
 from app.core.config import settings
+from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.organization_default import ORGANIZATION_DEFAULT_KEY
+from app.modules.agent.domain.errors import OrganizationDefaultConflictError
+from app.modules.agent.infrastructure.repositories import (
+    AgentRuntimeProfileRepository,
+)
+from app.modules.agent.services.organization_default_service import (
+    OrganizationDefaultService,
+)
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
@@ -111,11 +119,7 @@ async def _pod_runtime(pod_id: str):
 
 
 def _marked(listing: dict) -> set[str]:
-    return {
-        item["id"]
-        for item in listing["items"]
-        if ORGANIZATION_DEFAULT_KEY in (item.get("metadata") or {})
-    }
+    return {item["id"] for item in listing["items"] if item["organization_default"]}
 
 
 @pytest.mark.asyncio
@@ -218,6 +222,49 @@ async def test_an_owner_chooses_the_model_every_teammate_runs_on(
     listing = await _listing(authenticated_client, org_id)
     assert listing["organization_default_runtime"] is None
     assert _marked(listing) == set()
+
+
+@pytest.mark.asyncio
+async def test_two_owners_choosing_at_once_leave_one_default(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Both read "nothing is marked" before either commits, so neither clears
+    the other's mark; the database refuses the second, as a 409, instead of
+    leaving two profiles each claiming to be the default."""
+    org_id = await _fresh_organization(authenticated_client)
+    alpha = await _provider(authenticated_client, org_id, model_names=["alpha-1"])
+    beta = await _provider(authenticated_client, org_id, model_names=["beta-1"])
+
+    def service(uow) -> OrganizationDefaultService:
+        return OrganizationDefaultService(
+            AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
+        )
+
+    first_marked = asyncio.Event()
+
+    async def choose(profile_id: str) -> None:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            await service(uow).set_default(
+                organization_id=UUID(org_id), profile_id=profile_id, model_name=None
+            )
+
+    async def choose_and_hold(profile_id: str) -> None:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            await service(uow).set_default(
+                organization_id=UUID(org_id), profile_id=profile_id, model_name=None
+            )
+            first_marked.set()
+            # Hold the transaction open while the second owner's write arrives.
+            await asyncio.sleep(0.5)
+
+    holder = asyncio.create_task(choose_and_hold(alpha["id"]))
+    await first_marked.wait()
+    with pytest.raises(OrganizationDefaultConflictError) as refused:
+        await choose(beta["id"])
+    await holder
+
+    assert refused.value.status_code == status.HTTP_409_CONFLICT
+    assert _marked(await _listing(authenticated_client, org_id)) == {alpha["id"]}
 
 
 @pytest.mark.asyncio

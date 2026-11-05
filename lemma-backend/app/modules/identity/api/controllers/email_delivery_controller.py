@@ -19,7 +19,6 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import UoWDep
-from app.core.authorization.dependencies import reject_delegated_workload_anywhere
 from app.core.config import settings
 from app.core.email.email_sender import (
     EmailDeliveryError,
@@ -104,7 +103,6 @@ async def get_email_delivery() -> EmailDeliveryStatusResponse:
     "/test",
     status_code=status.HTTP_200_OK,
     operation_id="user.email_delivery.test",
-    dependencies=[reject_delegated_workload_anywhere("send a test email")],
     summary="Send A Test Email",
     description=(
         "Send a short test email to the signed-in user's own address with this "

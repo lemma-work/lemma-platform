@@ -7,6 +7,9 @@ uses what the Agent Host actually hands it:
 * ``mcp`` mode launches the ``mcpServers`` entry from ``session/new`` as a
   subprocess and speaks MCP JSON-RPC over its stdio, exactly as Codex or Claude
   Code would, so the Lemma MCP bridge is driven for real.
+* ``mcp-image`` mode calls the Lemma tool ``lemma_image`` the same way and
+  reports the size and SHA-256 of the image it got back, so a test can prove
+  an image larger than one link frame arrived whole.
 * ``permission`` mode refuses to finish its turn until a
   ``session/request_permission`` round trip comes back, so the host's parked
   responder and its `RESOLVE_PERMISSION` answer are on the critical path rather
@@ -21,6 +24,10 @@ uses what the Agent Host actually hands it:
 * a ``json:`` scenario with ``"steering": true`` advertises
   ``_session/steering`` the way the pinned Claude Code and Codex adapters do,
   and its ``await_steer`` steps answer it.
+* a ``json:`` scenario with ``"load_session": true`` advertises
+  ``loadSession`` and answers ``session/load`` for the session it opens, so a
+  turn can resume its provider session the way it does on Claude Code and
+  Codex, and Lemma sends only what that session has not seen.
 
 Usage: ``scripted_acp_agent.py <log-path> <mode>``. The log is JSONL; each line
 is ``{"direction": ..., "message": ...}`` so a test can assert on both the ACP
@@ -205,6 +212,47 @@ def run_mcp_turn(mcp_servers):
             block.get("text", "") for block in blocks if isinstance(block, dict)
         )
         chunk("agent_message_chunk", "LEMMA_MCP_RESULT:" + text)
+    finally:
+        client.close()
+
+
+def run_mcp_image_turn(mcp_servers):
+    """Call ``lemma_image`` and say exactly what image came back."""
+    import base64
+    import hashlib
+
+    server = stdio_server(mcp_servers)
+    if server is None:
+        chunk("agent_message_chunk", "LEMMA_MCP_MISSING_STDIO_SERVER")
+        return
+    client = StdioMcpClient(server)
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "scripted-acp-agent", "version": "1.0.0"},
+            },
+        )
+        client.notify("notifications/initialized")
+        called = client.request(
+            "tools/call", {"name": "lemma_image", "arguments": {}}
+        )
+        blocks = (called.get("result") or {}).get("content") or []
+        images = [
+            base64.b64decode(block["data"])
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "image"
+        ]
+        if not images:
+            chunk("agent_message_chunk", "LEMMA_MCP_IMAGE_MISSING:" + json.dumps(called)[:500])
+            return
+        image = images[0]
+        chunk(
+            "agent_message_chunk",
+            f"LEMMA_MCP_IMAGE:{len(image)}:{hashlib.sha256(image).hexdigest()}",
+        )
     finally:
         client.close()
 
@@ -425,16 +473,21 @@ def scenario_path():
     return None
 
 
+def scenario_says(key):
+    """Whether this run's scenario turns ``key`` on."""
+    path = scenario_path()
+    if path is None:
+        return False
+    return json.loads(path.read_text("utf-8")).get(key) is True
+
+
 def advertises_steering():
     """Whether this run's scenario says the agent accepts `_session/steering`.
 
     Advertised the way the pinned Claude Code and Codex adapters do it, in the
     top-level `_meta` of the `initialize` answer.
     """
-    path = scenario_path()
-    if path is None:
-        return False
-    return json.loads(path.read_text("utf-8")).get("steering") is True
+    return scenario_says("steering")
 
 
 def main():
@@ -449,7 +502,7 @@ def main():
             answer = {
                 "protocolVersion": 1,
                 "agentCapabilities": {
-                    "loadSession": False,
+                    "loadSession": scenario_says("load_session"),
                     "mcpCapabilities": {"http": False, "sse": False},
                     "promptCapabilities": {"image": False, "audio": False},
                 },
@@ -465,6 +518,21 @@ def main():
             mcp_servers = (message.get("params") or {}).get("mcpServers") or []
             record("environment", session_environment())
             result(request_id, {"sessionId": SESSION_ID, "configOptions": []})
+        elif method == "session/load" and scenario_says("load_session"):
+            # Only the session this agent opens is one it can load; anything
+            # else is a session id Lemma should never have sent.
+            params = message.get("params") or {}
+            if params.get("sessionId") != SESSION_ID:
+                emit(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32602, "message": "unknown session"},
+                    }
+                )
+                continue
+            mcp_servers = params.get("mcpServers") or []
+            result(request_id, {"configOptions": []})
         elif method == "session/prompt":
             stop_reason = "end_turn"
             if scenario_path() is not None:
@@ -486,6 +554,8 @@ def main():
                 run_mcp_turn(mcp_servers)
             elif MODE == "mcp-refresh":
                 run_mcp_refresh_turn(mcp_servers)
+            elif MODE == "mcp-image":
+                run_mcp_image_turn(mcp_servers)
             elif MODE == "parallel-permission":
                 run_parallel_permission_turn(("call-a", "call-b"))
             elif MODE == "parallel-permission-empty-id":

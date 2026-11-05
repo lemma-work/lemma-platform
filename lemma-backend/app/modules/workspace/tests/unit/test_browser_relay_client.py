@@ -65,7 +65,9 @@ class _Relay:
                 return
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        Thread(target=self._server.serve_forever, daemon=True).start()
+        # serve_forever polls for shutdown every 0.5s by default, which
+        # is most of what each test here costs.
+        Thread(target=self._server.serve_forever, args=(0.01,), daemon=True).start()
 
     @property
     def url(self) -> str:
@@ -110,9 +112,14 @@ def _key(monkeypatch):
 
 
 def _client(provider) -> BrowserRelayClient:
+    # The shipped wait is twenty seconds; the tests that exercise giving up
+    # would otherwise sit out all of it. A few polls close together still
+    # prove the loop gives up rather than hangs.
     return BrowserRelayClient(
         provider,
         ProviderInstance(provider_id=f"sbx-{uuid4().hex[:8]}", name="w", running=True),
+        start_polls=10,
+        start_poll_interval_seconds=0.001,
     )
 
 
@@ -192,7 +199,9 @@ class _ResizeRelay:
 
         self.answers = answers
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        Thread(target=self._server.serve_forever, daemon=True).start()
+        # serve_forever polls for shutdown every 0.5s by default, which
+        # is most of what each test here costs.
+        Thread(target=self._server.serve_forever, args=(0.01,), daemon=True).start()
 
     @property
     def url(self) -> str:

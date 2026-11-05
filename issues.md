@@ -37,6 +37,22 @@ the thing that is wrong — resolve it with a product decision before writing co
 
 ## Open
 
+### DEV-SCHED-001 — A schedule cannot fire at a surface
+**Violates:** PS-SCHED-030
+**Severity:** question
+**Where:** `lemma-backend/app/modules/schedule/api/schemas/schedule_schemas.py:90`
+**Required:** "When a schedule fires at a surface, the system shall deliver the
+message to that surface."
+**Actual:** a schedule names exactly one agent or one workflow
+(`require_one_target_name`); there is no surface target. The last tie between a
+surface and a schedule, `agent_surfaces.schedule_id`, was dropped in migration
+`0024_drop_surface_schedule_id` with the polled email surfaces it served.
+Found reading the schedule target validation while reviewing pull request #906.
+**Why it matters:** the specification promises a message-to-a-surface schedule
+nobody can create.
+**Fix:** a product decision first. Either withdraw the bullet (an agent on a
+schedule can already message a surface), or add a surface target.
+
 ### DEV-SURF-001 — A disabled surface drops every message to it, in silence
 **Violates:** nothing — and that is the finding. No statement defines what a
 *disabled* surface does with an inbound message.
@@ -118,9 +134,8 @@ their profile while the carrier gives it to somebody else, and there is no
 inbound signal that says so: Meta's Cloud API reports no reassignment.
 
 Telegram is not exposed the same way (the sender id is an account id, not a
-reassignable identifier), and neither is Slack or Teams. The
-`telegram_username` path is a different shape of the same problem and is
-already refused for binding by `_cache_is_attested`.
+reassignable identifier), and neither is Slack or Teams. A Telegram handle,
+which is reassignable, is not matched on at all.
 **Why it matters:** the new holder of the number reaches the previous holder's
 workspaces, conversations and pod content, having proved nothing. It needs no
 attacker — carriers reassign numbers routinely, and in several countries within
@@ -244,6 +259,22 @@ failing scenarios, having reasoned that the unique index left only one candidate
 a name could mean. CI's unit lane — wider than the local `-m unit` lane —
 failed on the bundle test, which is what made the bundle path visible at all.
 The widening was reverted; this is what it had walked into.
+
+### DEV-SURF-004 — A row from a page with no chat names no contact
+**Violates:** PS-SURF-049
+**Severity:** medium
+**Where:** `lemma-backend/app/modules/agent_surfaces/services/web_chat.py:353`
+**Required:** "The system shall make an anonymous visitor a contact of the pod
+the first time they write something -- a message, a row".
+**Actual:** the public rows endpoint accepts a request with no visitor session.
+`WebChat.add_visitor_row` then skips `_writer` and stores the row with
+`contact_id=None`, so the visitor is never made a contact. Found in review of
+pull request #992.
+**Why it matters:** a form embedded without the chat stores answers nobody can
+export, forget or follow up as the person who sent them.
+**Fix:** open an anonymous session -- and with it the contact -- on a row write
+that arrives without one, and hand its secret back to the page so a later
+message is the same visitor.
 
 ### DEV-DESK-001 — The viewer's VNC server polls the whole screen, by a flag nobody explained
 **Violates:** nothing written down. No statement bounds what a sandbox may spend

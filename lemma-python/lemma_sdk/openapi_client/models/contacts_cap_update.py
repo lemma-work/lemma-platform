@@ -15,14 +15,23 @@ T = TypeVar("T", bound="ContactsCapUpdate")
 class ContactsCapUpdate:
     """
     Attributes:
+        max_contacts (int | None | Unset): How many contacts the bots may answer. Leave it out to keep the current
+            number; null removes the limit.
         monthly_limit_usd (float | None | Unset): Null removes the cap: no limit, kept as the owner's choice. Zero stops
-            bots answering contacts.
+            bots answering contacts. Leave it out to keep the current cap.
     """
 
+    max_contacts: int | None | Unset = UNSET
     monthly_limit_usd: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        max_contacts: int | None | Unset
+        if isinstance(self.max_contacts, Unset):
+            max_contacts = UNSET
+        else:
+            max_contacts = self.max_contacts
+
         monthly_limit_usd: float | None | Unset
         if isinstance(self.monthly_limit_usd, Unset):
             monthly_limit_usd = UNSET
@@ -32,6 +41,8 @@ class ContactsCapUpdate:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if max_contacts is not UNSET:
+            field_dict["max_contacts"] = max_contacts
         if monthly_limit_usd is not UNSET:
             field_dict["monthly_limit_usd"] = monthly_limit_usd
 
@@ -40,6 +51,15 @@ class ContactsCapUpdate:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+
+        def _parse_max_contacts(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        max_contacts = _parse_max_contacts(d.pop("max_contacts", UNSET))
 
         def _parse_monthly_limit_usd(data: object) -> float | None | Unset:
             if data is None:
@@ -51,6 +71,7 @@ class ContactsCapUpdate:
         monthly_limit_usd = _parse_monthly_limit_usd(d.pop("monthly_limit_usd", UNSET))
 
         contacts_cap_update = cls(
+            max_contacts=max_contacts,
             monthly_limit_usd=monthly_limit_usd,
         )
 

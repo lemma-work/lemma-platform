@@ -279,7 +279,7 @@ def grant_function(
     specs: list[str] = typer.Argument(
         ...,
         metavar="GRANT...",
-        help="name:perms or type:name:perms, e.g. tickets:read,write /knowledge:read app:gmail:use",
+        help="name:perms or type:name:perms, e.g. tickets:read,write /knowledge:read connector:gmail:use",
     ),
     root: Path | None = typer.Option(
         None, "--root", help="Bundle root (default: enclosing pod.json or cwd)."

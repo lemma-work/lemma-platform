@@ -66,9 +66,9 @@ async def test_a_bad_verification_token_is_refused(unauthenticated):
         },
     )
 
-    assert answered.status_code >= 400, (
-        f"an unrecognised verify token was accepted ({answered.status_code}), so "
-        f"anyone can register a webhook against this deployment"
+    assert answered.status_code == 403, (
+        f"an unrecognised verify token was not refused ({answered.status_code}), "
+        f"so anyone can register a webhook against this deployment"
     )
     assert "lemma-scenarios-challenge" not in answered.text, (
         "the challenge was echoed back despite the token being wrong"

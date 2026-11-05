@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.channel_setup import ChannelSetupRequest
+
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import SurfaceLifecycleKind
@@ -185,14 +187,14 @@ async def test_setup_button_yields_the_trigger_needed_to_open_a_modal():
     """trigger_id expires in ~3s, so it must survive parsing intact."""
     parsed = SlackMessageParser().parse_channel_setup(_setup_button_payload())
 
-    assert parsed == {
-        "kind": "open",
-        "trigger_id": "trig-123",
-        "channel_id": "C_SALES",
-        "tenant_id": "T1",
-        "actor_external_user_id": "U_HUMAN",
-        "surface_id": None,
-    }
+    assert parsed == ChannelSetupRequest(
+        kind="open",
+        trigger_id="trig-123",
+        channel_id="C_SALES",
+        tenant_id="T1",
+        actor_external_user_id="U_HUMAN",
+        surface_id=None,
+    )
 
 
 async def test_submitting_the_modal_allows_the_channel():
@@ -203,9 +205,9 @@ async def test_submitting_the_modal_allows_the_channel():
     """
     parsed = SlackMessageParser().parse_channel_setup(_submit_payload("sales-agent"))
 
-    assert parsed["kind"] == "submit"
-    assert parsed["channel_id"] == "C_SALES"
-    assert "agent_name" not in parsed
+    assert parsed.kind == "submit"
+    assert parsed.channel_id == "C_SALES"
+    assert not hasattr(parsed, "agent_name")
 
 
 async def test_unrelated_interactions_are_not_channel_setup():
@@ -234,7 +236,7 @@ async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
     click = _setup_button_payload()
     click["actions"][0]["value"] = prompt[1]["elements"][0]["value"]
     opened = SlackMessageParser().parse_channel_setup(click)
-    assert opened["surface_id"] == "00000000-0000-0000-0000-000000000001"
+    assert opened.surface_id == "00000000-0000-0000-0000-000000000001"
 
     from app.modules.agent_surfaces.platforms.slack.blocks import channel_setup_modal
 
@@ -242,13 +244,13 @@ async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
         channel_id="C_SALES",
         channel_label="sales",
         agent_name="triage",
-        surface_id=opened["surface_id"],
+        surface_id=opened.surface_id,
     )
     submitted_payload = _submit_payload("sales-agent")
     submitted_payload["view"]["private_metadata"] = view["private_metadata"]
     submitted = SlackMessageParser().parse_channel_setup(submitted_payload)
-    assert submitted["channel_id"] == "C_SALES"
-    assert submitted["surface_id"] == opened["surface_id"]
+    assert submitted.channel_id == "C_SALES"
+    assert submitted.surface_id == opened.surface_id
 
 
 async def test_app_home_surface_selector_parses_an_explicit_choice():
@@ -269,12 +271,12 @@ async def test_app_home_surface_selector_parses_an_explicit_choice():
             "actions": [button],
         }
     )
-    assert parsed == {
-        "kind": "select_surface",
-        "surface_id": "00000000-0000-0000-0000-000000000001",
-        "tenant_id": "T1",
-        "actor_external_user_id": "U_HUMAN",
-    }
+    assert parsed == ChannelSetupRequest(
+        kind="select_surface",
+        surface_id="00000000-0000-0000-0000-000000000001",
+        tenant_id="T1",
+        actor_external_user_id="U_HUMAN",
+    )
 
 
 async def test_home_lists_agents_and_apps():

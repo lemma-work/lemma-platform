@@ -1,0 +1,6 @@
+{
+  "connector": "jira",
+  "mode": "PER_MEMBER",
+  "required": true,
+  "purpose": "New tickets are triaged as they arrive."
+}

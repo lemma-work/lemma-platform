@@ -38,6 +38,7 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
         headers (CreateOpenAICompatibleRuntimeProfileRequestHeaders | Unset):
         model_names (list[str] | Unset):
         model_settings (CreateOpenAICompatibleRuntimeProfileRequestModelSettings | Unset):
+        reasoning_model_names (list[str] | Unset):
         source (Literal['OPENAI_COMPATIBLE'] | Unset):  Default: 'OPENAI_COMPATIBLE'.
         vision_model_names (list[str] | Unset):
     """
@@ -52,6 +53,7 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
     model_settings: CreateOpenAICompatibleRuntimeProfileRequestModelSettings | Unset = (
         UNSET
     )
+    reasoning_model_names: list[str] | Unset = UNSET
     source: Literal["OPENAI_COMPATIBLE"] | Unset = "OPENAI_COMPATIBLE"
     vision_model_names: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -91,6 +93,10 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
         if not isinstance(self.model_settings, Unset):
             model_settings = self.model_settings.to_dict()
 
+        reasoning_model_names: list[str] | Unset = UNSET
+        if not isinstance(self.reasoning_model_names, Unset):
+            reasoning_model_names = self.reasoning_model_names
+
         source = self.source
 
         vision_model_names: list[str] | Unset = UNSET
@@ -117,6 +123,8 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
             field_dict["model_names"] = model_names
         if model_settings is not UNSET:
             field_dict["model_settings"] = model_settings
+        if reasoning_model_names is not UNSET:
+            field_dict["reasoning_model_names"] = reasoning_model_names
         if source is not UNSET:
             field_dict["source"] = source
         if vision_model_names is not UNSET:
@@ -189,6 +197,8 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
                 )
             )
 
+        reasoning_model_names = cast(list[str], d.pop("reasoning_model_names", UNSET))
+
         source = cast(Literal["OPENAI_COMPATIBLE"] | Unset, d.pop("source", UNSET))
         if source != "OPENAI_COMPATIBLE" and not isinstance(source, Unset):
             raise ValueError(
@@ -206,6 +216,7 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
             headers=headers,
             model_names=model_names,
             model_settings=model_settings,
+            reasoning_model_names=reasoning_model_names,
             source=source,
             vision_model_names=vision_model_names,
         )

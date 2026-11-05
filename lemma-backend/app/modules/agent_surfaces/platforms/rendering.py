@@ -15,9 +15,11 @@ parse mode), so it can never hard-fail a delivery.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from app.core.text.thinking_tags import (
     ThinkingStreamSplitter,
+    strip_context_echo,
     strip_thinking_tokens as core_strip_thinking_tokens,
 )
 
@@ -114,8 +116,23 @@ def _safe_cut(chunk: str) -> str:
 _FENCE_RESERVE = 16
 
 
-def chunk_text(text: str, *, limit: int) -> list[str]:
-    """Split ``text`` into chunks no longer than ``limit`` characters.
+def utf16_length(text: str) -> int:
+    """How long ``text`` is to a platform that counts UTF-16 code units.
+
+    Telegram does, and an emoji or an astral CJK character is two of them: a
+    reply chunked by code points at the limit could be half again over it, and
+    the platform refuses the whole message.
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
+def chunk_text(
+    text: str, *, limit: int, length: Callable[[str], int] = len
+) -> list[str]:
+    """Split ``text`` into chunks no longer than ``limit``, as ``length`` counts.
+
+    ``length`` is code points by default; pass :func:`utf16_length` for a
+    platform whose limit is in UTF-16 code units.
 
     Prefers paragraph (``\\n\\n``) then line (``\\n``) then word boundaries;
     hard-splits only a single run longer than ``limit``. Safe to call on
@@ -129,14 +146,14 @@ def chunk_text(text: str, *, limit: int) -> list[str]:
     """
     if limit <= 0:
         raise ValueError("limit must be positive")
-    if len(text) <= limit:
+    if length(text) <= limit:
         return [text] if text else []
     if "```" not in text or limit <= 4 * _FENCE_RESERVE:
-        return _split_text(text, limit)
+        return _split_text(text, limit, length)
 
     chunks: list[str] = []
     reopen = ""
-    for chunk in _split_text(text, limit - _FENCE_RESERVE):
+    for chunk in _split_text(text, limit - _FENCE_RESERVE, length):
         if reopen:
             first_line, _, rest = chunk.partition("\n")
             if first_line.strip() == "```":
@@ -175,15 +192,28 @@ def _fence_left_open(chunk: str) -> str | None:
     return language
 
 
-def _split_text(text: str, limit: int) -> list[str]:
+def _fitting_prefix(text: str, limit: int, length: Callable[[str], int]) -> int:
+    """How many code points of ``text`` fit in ``limit`` as ``length`` counts."""
+    if length is len:
+        return min(len(text), limit)
+    used = 0
+    for index, char in enumerate(text):
+        used += length(char)
+        if used > limit:
+            return index
+    return len(text)
+
+
+def _split_text(text: str, limit: int, length: Callable[[str], int] = len) -> list[str]:
     """The boundary-preferring split behind :func:`chunk_text`."""
-    if len(text) <= limit:
+    if length(text) <= limit:
         return [text] if text else []
 
     chunks: list[str] = []
     remaining = text
-    while len(remaining) > limit:
-        window = remaining[:limit]
+    while length(remaining) > limit:
+        cut = max(_fitting_prefix(remaining, limit, length), 1)
+        window = remaining[:cut]
         split_at = -1
         for separator in ("\n\n", "\n", " "):
             candidate = window.rfind(separator)
@@ -192,7 +222,7 @@ def _split_text(text: str, limit: int) -> list[str]:
                 break
         if split_at <= 0:
             head = _safe_cut(window)
-            split_at = len(head) if head else limit
+            split_at = len(head) if head else cut
         piece = remaining[:split_at].rstrip()
         if piece:
             chunks.append(piece)
@@ -225,7 +255,7 @@ def sanitize_user_visible_text(text: str | None) -> str:
     updates, questions, approvals, captions, final answers. Safe on
     ``None``/empty input.
     """
-    return core_strip_thinking_tokens(text or "")
+    return strip_context_echo(core_strip_thinking_tokens(text or ""))
 
 
 class ThinkingStreamFilter:

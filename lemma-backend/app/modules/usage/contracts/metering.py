@@ -13,7 +13,6 @@ from app.modules.usage.services.usage_context import UsageExecutionContext
 
 from pydantic_ai.models import Model
 from app.modules.usage.domain.errors import UsageLimitExceededError
-from app.modules.usage.services.contacts_cap import contacts_cap_status
 from app.modules.usage.services.usage_service_factory import build_usage_service
 
 if TYPE_CHECKING:
@@ -35,30 +34,24 @@ async def check_run_budget(
     it is the organization's spend and the personal limits of ``user_id`` -- the
     member who looks after the conversation -- do not apply to it. The
     organization's contacts cap does, default included.
+
+    Decided on the windows and running totals the run's first request will be
+    admitted on. The check commits whatever a recount learned, refused or not,
+    so that request does not count the ledger again.
     """
     if profile_scope.upper() != "SYSTEM":
         return
     async with factory() as uow:
-        limits = await build_usage_service(uow).get_usage_limits(
-            organization_id=organization_id, user_id=user_id
+        spent = await build_usage_service(uow).spent_windows(
+            organization_id=organization_id,
+            user_id=user_id,
+            outside_audience=outside_audience,
         )
-        if (
-            outside_audience
-            and organization_id is not None
-            and (await contacts_cap_status(uow, organization_id)).reached
-        ):
-            raise UsageLimitExceededError(
-                "The organization's monthly cap on answering contacts is reached"
-            )
-    scopes = (
-        (limits["org_monthly"],)
-        if outside_audience
-        else (limits["org_monthly"], limits["user_weekly"], limits["user_monthly"])
-    )
-    if any(
-        scope["limit_usd"] is not None and scope["used_usd"] >= scope["limit_usd"]
-        for scope in scopes
-    ):
+    if "contacts_month" in spent:
+        raise UsageLimitExceededError(
+            "The organization's monthly cap on answering contacts is reached"
+        )
+    if spent:
         raise UsageLimitExceededError()
 
 

@@ -49,18 +49,12 @@ export function DeleteTeammate({ pod, orgId, onDeleted }: {
     const [asking, setAsking] = useState(false);
     if (!may) return null;
     return (
-        <section className="aboutpage__section aboutpage__delete" data-about="delete" aria-label={"Delete " + pod.name}>
-            <header>
-                <div className="aboutpage__heading">
-                    <h2>Delete {pod.name}</h2>
-                </div>
+        <section className="aboutpage__delete" aria-label={"Delete " + pod.name}>
+            <div>
+                <h2>Delete {pod.name}</h2>
                 <p>Everything in {pod.name}’s space goes with it, for everyone here.</p>
-            </header>
-            <div className="aboutpage__content">
-                <div>
-                    <button className="btn btn--danger" onClick={() => setAsking(true)}>Delete {pod.name}</button>
-                </div>
             </div>
+            <button className="btn btn--danger" onClick={() => setAsking(true)}>Delete</button>
             {asking && <ConfirmDelete pod={pod} orgId={orgId} onClose={() => setAsking(false)} onDeleted={onDeleted} />}
         </section>
     );

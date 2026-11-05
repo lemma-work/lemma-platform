@@ -13,34 +13,22 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    ConversationRepository,
-)
 from app.modules.agent.services.agent_service import AgentService
 from app.modules.agent.services.conversation_service import ConversationService
-from app.core.authorization.factory import create_authorization_data_service
-from app.modules.usage.contracts.execution import build_usage_service
+from app.modules.agent.services.service_factories import (
+    build_agent_service,
+    build_conversation_service,
+)
 
 
 def get_conversation_service(
     uow: UoWDep,
 ) -> ConversationService:
-    return ConversationService(
-        uow=uow,
-        conversation_repository=ConversationRepository(uow),
-        agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_data_service(uow),
-        usage_service=build_usage_service(uow),
-    )
+    return build_conversation_service(uow)
 
 
 def get_agent_service(uow: UoWDep) -> AgentService:
-    return AgentService(
-        uow=uow,
-        agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_data_service(uow),
-    )
+    return build_agent_service(uow)
 
 
 ConversationServiceDep = Annotated[

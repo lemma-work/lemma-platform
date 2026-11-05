@@ -12,6 +12,7 @@ mod conversation_folders;
 /// Running an owner's agent commands on this computer, under Seatbelt.
 pub mod host_exec;
 pub mod journal;
+pub mod lemma_cli;
 pub mod link;
 pub mod mcp_bridge;
 /// The host's end of the MCP bridge. Public for the integration tests, which

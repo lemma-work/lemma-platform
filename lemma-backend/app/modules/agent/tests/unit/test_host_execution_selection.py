@@ -16,6 +16,8 @@ import pytest
 
 from sandbox_runtime.errors import SandboxRejected
 
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.prompt_directories import _directory_sections
@@ -122,10 +124,14 @@ def _conversation(user_id: UUID = PAIRED, **metadata) -> Conversation:
     )
 
 
+_SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID)
+
+
 def _run(conversation: Conversation, source: str | None = "user_message") -> AgentRun:
     return AgentRun(
         conversation_id=conversation.id,
         started_at=datetime.now(timezone.utc),
+        agent_runtime=_SYSTEM_RUNTIME,
         metadata={"source": source} if source else {},
     )
 
@@ -323,17 +329,45 @@ def test_a_conversation_without_a_dated_cwd_still_gets_a_folder():
     assert day == "2026-09-25" and slug == conversation.id.hex[:8]
 
 
+async def _native(
+    conversation: Conversation, facts: Facts, source: str | None = "user_message"
+) -> bool:
+    return await host_runs_native_commands(
+        conversation, _run(conversation, source), facts=facts.build()
+    )
+
+
 async def test_agent_host_runs_drop_lemmas_command_tools_only_with_a_paired_host():
-    assert await host_runs_native_commands(_conversation(), facts=Facts().build())
-    assert not await host_runs_native_commands(
-        _conversation(user_id=TEAMMATE), facts=Facts().build()
-    )
-    assert not await host_runs_native_commands(
-        _conversation(), facts=Facts(host=None).build()
-    )
-    assert not await host_runs_native_commands(
-        _conversation(), facts=Facts(desktop=False).build()
-    )
+    assert await _native(_conversation(), Facts())
+    assert not await _native(_conversation(user_id=TEAMMATE), Facts())
+    assert not await _native(_conversation(), Facts(host=None))
+    assert not await _native(_conversation(), Facts(desktop=False))
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"source": "workflow", "workflow_run_id": str(uuid4())},
+        {"source": "schedule"},
+        {"source": "surface", "surface_platform": "slack"},
+    ],
+)
+async def test_an_unattended_agent_host_run_keeps_lemmas_command_tools(metadata):
+    """The agent's own shell asks a person before every command, and nobody is
+    watching a workflow or a schedule: withholding Lemma's tools, which run
+    without asking, left such a run waiting out every approval."""
+    facts = Facts()
+
+    assert not await _native(_conversation(**metadata), facts)
+    assert not await _native(_conversation(), facts, source="workflow")
+
+
+async def test_a_wake_keeps_whichever_toolset_the_work_it_continues_had():
+    person, unattended = Facts(), Facts()
+    unattended.earlier = ["agent_wait", "workflow"]
+
+    assert await _native(_conversation(), person, source="agent_wait")
+    assert not await _native(_conversation(), unattended, source="agent_wait")
 
 
 @pytest.mark.parametrize(

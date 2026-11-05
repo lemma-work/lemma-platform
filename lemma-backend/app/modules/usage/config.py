@@ -38,6 +38,17 @@ class UsageSettings(BaseSettings):
         le=1,
         description="Confirmed fraction of a limit that emits its once-per-window warning",
     )
+    usage_counter_refresh_seconds: int = Field(
+        default=600,
+        ge=1,
+        description=(
+            "Longest a limit window's running total is trusted before it is "
+            "recounted from the ledger. Every writer the code knows about keeps "
+            "the total exact or marks it for recounting, and a lifted limit's "
+            "counter keeps counting, so this bounds only what nothing "
+            "announced: a ledger row written or edited in raw SQL."
+        ),
+    )
 
     # Deployment-wide system-spend limits. None means unlimited.
     usage_org_monthly_limit_usd: float | None = Field(
@@ -67,6 +78,19 @@ class UsageSettings(BaseSettings):
             "looked at the setting still has a ceiling. None means no default "
             "ceiling; an owner removing the cap is recorded as no limit and "
             "is not overridden by this."
+        ),
+    )
+    usage_contacts_max_default: int | None = Field(
+        default=500,
+        ge=0,
+        description=(
+            "How many contacts an organization's bots may answer, until an "
+            "owner sets a number of their own. Counts people an agent has "
+            "answered, not everybody the pod has seen -- a crowded group "
+            "where nobody spoke to the bot costs nothing. A ceiling by "
+            "default, like the spend cap above: anybody can write to a public "
+            "bot, and a script opening chats by the thousand should meet one. "
+            "None means no default ceiling; the spend cap still applies."
         ),
     )
     usage_unpriced_limit_policy: Literal["allow", "refuse"] = Field(

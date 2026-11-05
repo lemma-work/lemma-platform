@@ -4,6 +4,7 @@ tiebreak."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -19,6 +20,8 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
+from app.modules.channels.contracts import Source, SourceKind
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 pytestmark = pytest.mark.asyncio
 
@@ -46,6 +49,21 @@ def _event() -> ParsedInboundSurfaceEvent:
     )
 
 
+def _private_place(surface_id, *, ago: timedelta = timedelta()) -> Source:
+    """``tg-user-1``'s private chat on a surface, last written to ``ago``."""
+    return Source(
+        id=uuid4(),
+        channel_id=uuid4(),
+        pod_id=uuid4(),
+        account_id=uuid4(),
+        surface_id=surface_id,
+        platform="TELEGRAM",
+        kind=SourceKind.PERSON,
+        external_user_id="tg-user-1",
+        last_inbound_at=datetime.now(timezone.utc) - ago,
+    )
+
+
 def _service(
     *,
     continuity_id,
@@ -62,18 +80,13 @@ def _service(
     a pod id means it still stands in that pod. Deciding staleness from the
     candidate list instead is the bug these doubles exist to keep out.
     """
-    link_repo = SimpleNamespace(
-        find_surface_id_for_external_thread=AsyncMock(return_value=continuity_id),
-        # The same person's most recent private-chat link on a candidate
-        # surface, whatever address it was delivered to.
-        find_latest_dm_link_for_person=AsyncMock(
-            return_value=(
-                SimpleNamespace(surface_id=person_continuity_id)
-                if person_continuity_id is not None
-                else None
-            )
-        ),
-    )
+    # The person's private chats: the one ``continuity_id`` names, written to
+    # just now, and ``person_continuity_id``'s, written to a while ago.
+    seats = InMemoryChannelSeats()
+    if continuity_id is not None:
+        seats.add(_private_place(continuity_id))
+    if person_continuity_id is not None:
+        seats.add(_private_place(person_continuity_id, ago=timedelta(days=2)))
     membership = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=list(member_pod_ids)),
         get_user_default_surface_id=AsyncMock(return_value=default_surface_id),
@@ -96,7 +109,7 @@ def _service(
     service = SurfaceRouter(
         uow=SimpleNamespace(session=None),
         surface_repository=surfaces,
-        conversation_link_repository=link_repo,
+        seats=seats,
         pod_membership_port=membership,
         identity_service=SimpleNamespace(),
         credential_resolver=SimpleNamespace(),
@@ -319,55 +332,44 @@ async def test_a_default_another_bot_serves_is_not_treated_as_stale():
 
 
 async def test_continuity_is_the_freshest_thread_among_the_candidates():
-    """A link on a surface that is no longer a candidate must not mask one.
+    """A place on a surface that is no longer a candidate must not mask one.
 
-    The continuity lookup used to return the freshest link for this chat
-    *anywhere on the platform*, and the caller then kept it only if it was a
-    candidate. So a shared-bot sender whose most recent thread is on a surface
-    that has since gone -- switched off, or served by a bot that did not deliver
-    this event -- got an id the caller discarded, and their real ongoing
-    conversation, on a candidate surface, was never looked for. The message fell
-    through to the deterministic tiebreak and was answered by whichever pod
-    sorted first.
-
-    The narrowing is the fix, and this asserts the shape of it: the candidate
-    ids reach the repository, so the answer cannot be a surface outside them.
+    A shared-bot sender whose most recent chat is on a surface that has since
+    gone -- switched off, or served by a bot that did not deliver this event --
+    must still be answered where their real ongoing conversation is, on a
+    candidate, rather than by whichever pod the tiebreak sorts first. So the
+    lookup is narrowed to the candidates, not filtered after.
     """
-    member_pod = uuid4()
-    theirs = _surface(member_pod, uuid4())
-    stale_elsewhere = uuid4()
+    pod_a, pod_b = uuid4(), uuid4()
+    surf_a = _surface(pod_a, uuid4())
+    surf_b = _surface(pod_b, uuid4())
 
     service = _service(
-        # What the database would return unnarrowed: the freshest link, on a
-        # surface this delivery has no candidate for.
-        continuity_id=stale_elsewhere,
-        member_pod_ids=[member_pod],
+        # The freshest chat is on a surface this delivery has no candidate for.
+        continuity_id=uuid4(),
+        member_pod_ids={pod_a, pod_b},
         default_surface_id=None,
+        person_continuity_id=surf_b.id,
     )
     chosen = await service.select_surface(
-        candidates=[theirs],
-        resolved_user=ResolvedSurfaceUser(internal_user_id=uuid4()),
+        candidates=[surf_a, surf_b],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(), external_user_id="tg-user-1"
+        ),
         parsed=_event(),
         platform=SurfacePlatform.TELEGRAM.value,
     )
 
-    asked = service.conversation_link_repository.find_surface_id_for_external_thread
-    assert asked.await_args.kwargs["surface_ids"] == [theirs.id], (
-        "the candidates never reached the continuity lookup, so a link on a "
-        "surface outside them can still be returned and then discarded"
-    )
-    # The tiebreak still answers, and it is the member candidate — the point is
-    # that nothing outside the candidate set was consulted to get there.
-    assert chosen is not None and chosen.id == theirs.id
+    assert chosen is surf_b
 
 
 async def test_a_dm_whose_delivery_address_changed_stays_on_the_surface_it_was_on():
-    """The exact chat key names an address, and the address is a delivery detail.
+    """A private chat is the person's, not the address it came to.
 
-    On WhatsApp it embeds the number the message arrived on, so a reassigned
-    number misses the exact lookup; without a person-level fallback the tiebreak
-    answers from whichever pod sorts first -- not the one holding the
-    conversation the person is still looking at.
+    On WhatsApp the address embeds the number the message arrived on, so a
+    reassigned number is a new address; keyed by it, the tiebreak would answer
+    from whichever pod sorts first -- not the one holding the conversation the
+    person is still looking at.
     """
     pod_a, pod_b = uuid4(), uuid4()
     surf_a = _surface(pod_a, uuid4())
@@ -387,9 +389,6 @@ async def test_a_dm_whose_delivery_address_changed_stays_on_the_surface_it_was_o
         platform="TELEGRAM",
     )
     assert chosen is surf_b
-    asked = service.conversation_link_repository.find_latest_dm_link_for_person
-    assert asked.await_args.kwargs["surface_ids"] == [surf_a.id, surf_b.id]
-    assert asked.await_args.kwargs["external_user_id"] == "tg-user-1"
 
 
 async def test_the_saved_default_still_outranks_a_persons_dm_continuity():
@@ -434,8 +433,6 @@ async def test_a_group_message_has_no_person_level_continuity():
         platform="TELEGRAM",
     )
     assert chosen is surf_a
-    asked = service.conversation_link_repository.find_latest_dm_link_for_person
-    asked.assert_not_awaited()
 
 
 # --- the saved default, asked by the personal route ---------------------------

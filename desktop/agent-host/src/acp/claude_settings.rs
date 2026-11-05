@@ -1,11 +1,12 @@
-//! What Claude Code is started with of the person's own settings: only how
-//! it signs in.
+//! What Claude Code is started with of the person's own settings: how it
+//! signs in, and their permission rules.
 //!
 //! Claude Code keeps its config folder, because that is where its sign-in is
 //! (the keychain entry is named after the folder), and leaves the person's
 //! settings out with `settingSources`. What those settings say about signing
-//! in -- an `apiKeyHelper`, a Bedrock or Vertex environment -- is handed back
-//! as flag settings, read here. Codex and `OpenCode` run in the person's own
+//! in -- an `apiKeyHelper`, a Bedrock or Vertex environment -- and which calls
+//! it may make without asking (`permissions.allow`, with the `deny` and `ask`
+//! that override it) is handed back as flag settings, read here. Codex and `OpenCode` run in the person's own
 //! setup, with Lemma's MCP server and instructions added on top.
 
 use std::fs;
@@ -83,6 +84,66 @@ pub(crate) fn claude_sign_in(config: &Path) -> Option<Map<String, Value>> {
         }
     }
     (!kept.is_empty()).then_some(kept)
+}
+
+/// The permission rule lists of Claude Code's `settings.json` that are carried
+/// over. `deny` and `ask` travel with `allow` because they take precedence
+/// over it: `allow: ["Bash(git:*)"]` beside `deny: ["Bash(git push:*)"]` is
+/// "git, but never push", and carrying the allow alone would make it "all of
+/// git".
+const CLAUDE_PERMISSION_LISTS: &[&str] = &["allow", "deny", "ask"];
+
+/// The person's own permission rules from their Claude Code settings in
+/// `config`, as the `permissions` of flag settings, or `None` when they set
+/// none.
+///
+/// Leaving `~/.claude` out stripped these, so a command the person had told
+/// Claude Code never to ask about raised a permission request in every Lemma
+/// run, and an unattended one waited on it. They are carried over and nothing
+/// else of `permissions` is. Each rule only decides whether Claude Code asks
+/// before a call it can already make, and the person wrote it for this same
+/// agent, under this same account, on this same computer. The rest of the
+/// block changes what the agent can reach, or stops it asking at all:
+/// `defaultMode` (which can be `bypassPermissions`; `claude-agent-acp` reads it
+/// itself, as before), `additionalDirectories`, and the hooks and MCP servers
+/// beside it. Those stay out.
+///
+/// A rule whose path starts with a single `/` is relative to the settings file
+/// it was written in, `~/.claude`. Moved into flag settings it would be read
+/// against another folder, so it is left out rather than re-pointed.
+pub(crate) fn claude_permission_rules(config: &Path) -> Option<Map<String, Value>> {
+    let Some(Value::Object(settings)) = read_jsonc(&config.join("settings.json")) else {
+        return None;
+    };
+    let Some(Value::Object(permissions)) = settings.get("permissions") else {
+        return None;
+    };
+    let mut kept = Map::new();
+    for list in CLAUDE_PERMISSION_LISTS {
+        let rules: Vec<Value> = permissions
+            .get(*list)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|rule| !relative_to_settings_file(rule))
+            .map(|rule| Value::String(rule.to_owned()))
+            .collect();
+        if !rules.is_empty() {
+            kept.insert((*list).to_owned(), Value::Array(rules));
+        }
+    }
+    (!kept.is_empty()).then_some(kept)
+}
+
+/// Whether `rule` names a path relative to the settings file it is in:
+/// `Edit(/src/**)`, but not `Edit(//abs/**)`, `Read(~/x)` or a shell command
+/// such as `Bash(/usr/bin/make:*)`, which is not a path pattern at all.
+fn relative_to_settings_file(rule: &str) -> bool {
+    let Some((tool, rest)) = rule.split_once('(') else {
+        return false;
+    };
+    tool != "Bash" && rest.starts_with('/') && !rest.starts_with("//")
 }
 
 /// A JSON file that may carry comments and trailing commas, as Claude Code's

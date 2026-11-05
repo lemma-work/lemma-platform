@@ -1,13 +1,12 @@
-"""Counting the tokens a run burned, including the attempts it threw away.
+"""Saying so when a provider reports a token count that cannot be true.
 
-A mid-stream drop is retried by re-driving the run from a snapshot, and the
-provider still bills for the abandoned attempt. So usage carries forward across
-attempts rather than being read off the final run -- otherwise every retry would
-under-report, and the one case where cost matters most is the one where the run
-went wrong.
+The in-process harness does not bill. Every model request it makes goes through
+the metered model, which writes a receipt per request; that receipt is the bill.
+What is left here is a diagnostic: the run's own usage figures, read once per
+attempt, checked for counts no real request produces.
 
 Read defensively: the shape of `usage` is pydantic-ai's, and a field that is not
-there counts as zero rather than raising, because a billing read must never be
+there counts as zero rather than raising, because a diagnostic must never be
 what fails a run.
 """
 
@@ -33,50 +32,18 @@ def _usage_value(usage: object, field: str) -> int:
         return 0
 
 
-_USAGE_FIELDS = (
-    "input_tokens",
-    "output_tokens",
-    "requests",
-    "tool_calls",
-    "cache_write_tokens",
-    "cache_read_tokens",
-    "input_audio_tokens",
-    "output_audio_tokens",
-)
-
-
-def accumulate_usage(carried: dict[str, int], usage: object) -> None:
-    """Fold an abandoned attempt's usage into the running total."""
-    if usage is None:
-        return
-    for field in _USAGE_FIELDS:
-        carried[field] = carried.get(field, 0) + _usage_value(usage, field)
-
-
-def usage_totals(usage: object, carried: dict[str, int]) -> dict[str, int]:
-    """This attempt's usage plus everything earlier attempts already spent."""
-    totals = {
-        field: _usage_value(usage, field) + carried.get(field, 0)
-        for field in _USAGE_FIELDS
-    }
-    _warn_if_implausible(totals)
-    return totals
-
-
-def _warn_if_implausible(totals: dict[str, int]) -> None:
+def warn_if_implausible_usage(usage: object) -> None:
     """Say so when a reported count cannot be true, in either direction.
 
-    Observed in production: one Fireworks model reported 656 million prompt
-    tokens for a single request -- escalating request over request within one
-    trace, while its `cache_read` figure stayed sane. These numbers are recorded
-    verbatim and feed usage accounting, so a silent one is a billing figure
-    nobody can explain later.
-
-    Reported rather than clamped. Clamping would invent a number, and the honest
-    answer is that the provider's is unusable.
+    A provider has been seen reporting hundreds of millions of prompt tokens
+    for a single request, escalating request over request while its cache-read
+    figure stayed sane. Reported rather than clamped: clamping would invent a
+    number, and the honest answer is that the provider's is unusable.
     """
+    if usage is None:
+        return
     for field in ("input_tokens", "output_tokens"):
-        value = totals.get(field, 0)
+        value = _usage_value(usage, field)
         if value > _IMPLAUSIBLE_TOKEN_COUNT:
             logger.warning(
                 "agent.usage.implausible_provider_count.degraded",
@@ -85,15 +52,12 @@ def _warn_if_implausible(totals: dict[str, int]) -> None:
             )
     # The same failure wearing the other face. A request that reached a provider
     # carried a prompt, so no input tokens against a non-zero request count
-    # cannot be true either -- and it is the more dangerous of the two, because
-    # a total of zero is not recorded at all rather than recorded wrong: the run
-    # then looks exactly like one that never happened. Streaming makes it
-    # reachable. The accumulation this harness selects replaces the running
-    # total with each chunk's usage, and a chunk carrying none maps to zeros, so
-    # any chunk after the last usage-bearing one would erase the figure.
-    if totals.get("requests", 0) > 0 and totals.get("input_tokens", 0) <= 0:
+    # cannot be true either. Streaming makes it reachable: a chunk carrying no
+    # usage can map to zeros and erase the figure the provider sent earlier.
+    requests = _usage_value(usage, "requests")
+    if requests > 0 and _usage_value(usage, "input_tokens") <= 0:
         logger.warning(
             "agent.usage.missing_provider_count.degraded",
             usage_field="input_tokens",
-            request_count=totals["requests"],
+            request_count=requests,
         )

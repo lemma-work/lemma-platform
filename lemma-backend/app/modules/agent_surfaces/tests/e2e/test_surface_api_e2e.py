@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import share_account_as_connector
 from app.modules.agent_surfaces.config import surface_settings
 import json
 
@@ -18,8 +19,15 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _ensure_connector_account,
     _load_slack_dm_fixture,
 )
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 
 async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
@@ -56,7 +64,9 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
         json={
             "platform": "SLACK",
             "default_agent_name": agent["name"],
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
         },
     )
     assert created.status_code == 200, created.text
@@ -282,7 +292,9 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         f"/pods/{pod_id}/surfaces",
         json={
             "platform": "SLACK",
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
             "config": {
                 "identity": {"allowed_domains": ["Lemma.Test "]},
                 "channels": [{"channel_id": "C-ROUTED"}],
@@ -301,6 +313,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }
@@ -370,6 +383,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }
@@ -380,6 +394,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "whatsapp",
         "groups",
         "contacts",
     }
@@ -411,7 +426,12 @@ async def test_delete_surface_removes_row_provider_webhook_and_releases_account(
 
     created = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
-        json={"platform": "TELEGRAM", "account_id": str(account.id)},
+        json={
+            "platform": "TELEGRAM",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+        },
     )
     assert created.status_code == 200, created.text
     surface = created.json()
@@ -440,10 +460,131 @@ async def test_delete_surface_removes_row_provider_webhook_and_releases_account(
     # Deleting frees the account for a fresh surface (new id).
     recreated = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
-        json={"platform": "TELEGRAM", "account_id": str(account.id)},
+        json={
+            "platform": "TELEGRAM",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+        },
     )
     assert recreated.status_code == 200, recreated.text
     assert recreated.json()["id"] != surface["id"]
+
+
+async def test_a_bot_telegram_refuses_is_not_kept_and_can_be_tried_again(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    monkeypatch,
+):
+    """A new bot whose webhook Telegram refuses is not left behind as a
+    broken surface holding its name: the refusal is the answer, and creating
+    it again -- once the token is right -- works."""
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
+        f"{fake_telegram.api_base}/bot",
+    )
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="telegram",
+        credentials={"bot_token": "telegram-refused-token"},
+    )
+    fake_telegram.refuse_next["setWebhook"] = 1
+
+    refused = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "TELEGRAM",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+        },
+    )
+
+    assert refused.status_code == 400, refused.text
+    said = refused.json()["message"]
+    assert "Telegram refused to set up this bot: Forbidden" in said, said
+    assert "token" in said
+    # The surface is gone, so is its address: never told to set it by hand.
+    assert "/surfaces/" not in said and "manually" not in said
+    gone = await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram")
+    assert gone.status_code == 404, gone.text
+    again = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "TELEGRAM",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+        },
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "ACTIVE"
+    assert again.json()["problem"] is None
+    setup = await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram/setup")
+    assert setup.json()["ready"] is True
+
+
+async def test_a_surface_telegram_stopped_taking_says_why_and_is_not_ready(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    monkeypatch,
+):
+    """A save whose registration Telegram refuses leaves the surface ERROR --
+    the next save retries it -- and says why, on the surface and its setup."""
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
+        f"{fake_telegram.api_base}/bot",
+    )
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="telegram",
+        credentials={"bot_token": "telegram-later-refused-token"},
+    )
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "TELEGRAM",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+        },
+    )
+    assert created.status_code == 200, created.text
+    off = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/telegram", json={"is_enabled": False}
+    )
+    assert off.status_code == 200, off.text
+    fake_telegram.refuse_next["setWebhook"] = 1
+
+    on = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/telegram", json={"is_enabled": True}
+    )
+
+    assert on.status_code == 400, on.text
+    shown = (await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram")).json()
+    assert shown["status"] == "ERROR"
+    assert "Telegram" in shown["problem"]
+    setup = (
+        await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram/setup")
+    ).json()
+    assert setup["ready"] is False
+    assert setup["actions"][0]["key"] == "surface_problem"
 
 
 async def test_upsert_preserves_channel_routes_and_explicit_credential_mode(
@@ -477,7 +618,9 @@ async def test_upsert_preserves_channel_routes_and_explicit_credential_mode(
         f"/pods/{pod_id}/surfaces",
         json={
             "platform": "SLACK",
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
             "credential_mode": "SYSTEM",
             "config": {"identity": {"allowed_domains": ["lemma.test"]}},
         },
@@ -507,7 +650,9 @@ async def test_upsert_preserves_channel_routes_and_explicit_credential_mode(
     updated = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
         json={
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
             "credential_mode": "SYSTEM",
             "is_enabled": True,
         },
@@ -542,12 +687,30 @@ async def test_platform_webhook_verification_endpoints_and_signature_rejection(
     assert telegram.status_code == 200, telegram.text
     assert telegram.text == "ok"
 
+    from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+        build_slack_signature_headers,
+    )
+
+    handshake = json.dumps(
+        {"type": "url_verification", "challenge": "slack-challenge"}
+    ).encode()
     slack_verify = await authenticated_client.post(
+        "/surfaces/webhooks/slack",
+        content=handshake,
+        headers=build_slack_signature_headers(
+            raw_body=handshake, signing_secret="slack-secret"
+        ),
+    )
+    assert slack_verify.status_code == 200, slack_verify.text
+    assert slack_verify.json() == {"challenge": "slack-challenge"}
+
+    # Unsigned, it is not Slack's: the handshake is the one branch that answers
+    # before the signature check, and it no longer answers anybody.
+    unsigned_verify = await authenticated_client.post(
         "/surfaces/webhooks/slack",
         json={"type": "url_verification", "challenge": "slack-challenge"},
     )
-    assert slack_verify.status_code == 200, slack_verify.text
-    assert slack_verify.json()["challenge"] == "slack-challenge"
+    assert unsigned_verify.status_code == 401, unsigned_verify.text
 
     missing_signature = await authenticated_client.post(
         "/surfaces/webhooks/slack",
@@ -660,13 +823,23 @@ async def test_a_system_credential_is_claimed_once_per_organization(
     )
     account_created = await authenticated_client.post(
         f"/pods/{primary_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(account.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, primary_pod_id, account.id
+            ),
+        },
     )
     assert account_created.status_code == 200, account_created.text
 
     duplicate_account = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(account.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, sibling_pod_id, account.id
+            ),
+        },
     )
     # Customer-owned installations still have one credential owner.
     assert duplicate_account.status_code == 409, duplicate_account.text
@@ -679,7 +852,12 @@ async def test_a_system_credential_is_claimed_once_per_organization(
 
     reused_account = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(account.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, sibling_pod_id, account.id
+            ),
+        },
     )
     assert reused_account.status_code == 200, reused_account.text
 
@@ -721,7 +899,12 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
 
     created = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(account.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+        },
     )
     assert created.status_code == 200, created.text
 
@@ -809,7 +992,9 @@ async def test_surface_send_endpoint_and_send_policy_config(
         json={
             "platform": "SLACK",
             "default_agent_name": agent["name"],
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
             "config": {"send_policy": {"allow_send": True}},
         },
     )
@@ -938,7 +1123,12 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
     )
     slack = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(slack_account.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, slack_account.id
+            ),
+        },
     )
     assert slack.status_code == 200, slack.text
     channels = await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/channels")
@@ -962,7 +1152,12 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
     )
     teams = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
-        json={"platform": "TEAMS", "account_id": str(teams_account.id)},
+        json={
+            "platform": "TEAMS",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, teams_account.id
+            ),
+        },
     )
     assert teams.status_code == 200, teams.text
     teams_id = teams.json()["id"]
@@ -1207,7 +1402,12 @@ async def test_two_accounts_on_one_slack_bot_are_refused(
     )
     created = await authenticated_client.post(
         f"/pods/{primary_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(mine.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, primary_pod_id, mine.id
+            ),
+        },
     )
     assert created.status_code == 200, created.text
 
@@ -1218,7 +1418,12 @@ async def test_two_accounts_on_one_slack_bot_are_refused(
 
     refused = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(theirs.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, sibling_pod_id, theirs.id
+            ),
+        },
     )
     assert refused.status_code == 409, refused.text
     body = refused.json()
@@ -1236,7 +1441,12 @@ async def test_two_accounts_on_one_slack_bot_are_refused(
     assert released.status_code == 204, released.text
     reused = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(theirs.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, sibling_pod_id, theirs.id
+            ),
+        },
     )
     assert reused.status_code == 200, reused.text
 
@@ -1304,11 +1514,111 @@ async def test_a_second_slack_app_in_one_workspace_is_allowed(
     assert (
         await authenticated_client.post(
             f"/pods/{primary_pod_id}/surfaces",
-            json={"platform": "SLACK", "account_id": str(first.id)},
+            json={
+                "platform": "SLACK",
+                "pod_connector": await share_account_as_connector(
+                    authenticated_client, primary_pod_id, first.id
+                ),
+            },
         )
     ).status_code == 200
     allowed = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(second.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, sibling_pod_id, second.id
+            ),
+        },
     )
     assert allowed.status_code == 200, allowed.text
+
+
+async def test_a_whatsapp_number_messages_arrive_on_is_ready(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_whatsapp,
+):
+    """The webhook checklist is work until a message arrives through it; once
+    one has, it is reference, and the surface is ready."""
+    from sqlalchemy import update
+
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.channels.contracts import (
+        AccountKey,
+        ContactsHome,
+        Place,
+        SourceKind,
+        source_for,
+    )
+    from app.modules.channels.infrastructure.models import ChannelSourceModel
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="whatsapp",
+        credentials={
+            "access_token": "whatsapp-ready-token",
+            "phone_number_id": "5550001111",
+            "waba_id": "waba-ready",
+            "app_secret": "whatsapp-ready-secret",
+            "verify_token": "whatsapp-ready-verify",
+            "api_base_url": f"{fake_whatsapp.api_base}/v21.0",
+        },
+    )
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "WHATSAPP",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+            "credential_mode": "CUSTOM",
+        },
+    )
+    assert created.status_code == 200, created.text
+    setup = f"/pods/{pod_id}/surfaces/whatsapp/setup"
+    before = (await authenticated_client.get(setup)).json()
+    assert before["ready"] is False
+    assert [action["key"] for action in before["actions"]] == ["whatsapp_webhook"]
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    contact = await open_contact(
+        uow,
+        pod_id=pod_id,
+        kind=IdentityKind.PHONE,
+        value="+15550002222",
+        strength=IdentityStrength.CHANNEL,
+        display_name="Dana",
+    )
+    source = await source_for(
+        uow,
+        pod_id=pod_id,
+        place=Place(
+            surface_id=created.json()["id"],
+            platform="WHATSAPP",
+            account=AccountKey(workspace="5550001111"),
+            kind=SourceKind.PERSON,
+            external_channel_id=None,
+            external_user_id="15550002222",
+        ),
+        home=ContactsHome(contact.id),
+    )
+    await db_session.execute(
+        update(ChannelSourceModel)
+        .where(ChannelSourceModel.id == source.id)
+        .values(last_inbound_at=ChannelSourceModel.created_at)
+    )
+    await db_session.commit()
+
+    after = (await authenticated_client.get(setup)).json()
+    assert after["ready"] is True
+    assert after["actions"][0]["informational"] is True

@@ -45,7 +45,7 @@ from app.modules.agent.services.conversation_mcp_service import ConversationMCPS
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
 )
@@ -133,7 +133,12 @@ async def _vision_mode_for(db_session, scenario, profile):
     await db_session.flush()
     await db_session.commit()
 
-    _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
+    (
+        _agent,
+        _conversation,
+        ctx,
+        _grants,
+    ) = await ConversationMCPService()._load_agent_context(
         conversation_id=run.conversation_id, agent_run_id=run.id
     )
     return ctx.vision_mode, run
@@ -258,7 +263,12 @@ async def test_the_bridge_hands_tools_the_directory_the_prompt_names(
     )
     _mode, run = await _vision_mode_for(db_session, scenario, profile)
 
-    _agent, conversation, ctx = await ConversationMCPService()._load_agent_context(
+    (
+        _agent,
+        conversation,
+        ctx,
+        _grants,
+    ) = await ConversationMCPService()._load_agent_context(
         conversation_id=run.conversation_id, agent_run_id=run.id
     )
 
@@ -313,7 +323,12 @@ async def test_a_repo_backed_conversation_reaches_a_remote_harness(
     await db_session.flush()
     await db_session.commit()
 
-    _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
+    (
+        _agent,
+        _conversation,
+        ctx,
+        _grants,
+    ) = await ConversationMCPService()._load_agent_context(
         conversation_id=run.conversation_id, agent_run_id=run.id
     )
 
@@ -361,7 +376,12 @@ async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
     await db_session.flush()
     await db_session.commit()
 
-    _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
+    (
+        _agent,
+        _conversation,
+        ctx,
+        _grants,
+    ) = await ConversationMCPService()._load_agent_context(
         conversation_id=conversation_id, agent_run_id=run.id
     )
 

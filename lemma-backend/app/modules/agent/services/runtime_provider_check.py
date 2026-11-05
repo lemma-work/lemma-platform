@@ -17,7 +17,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 from pydantic_ai.direct import model_request
 from pydantic_ai.exceptions import (
     ModelAPIError,
@@ -29,6 +29,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
 from app.core.log.log import get_logger
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
@@ -39,6 +40,7 @@ from app.modules.agent.infrastructure.transport_errors import (
     local_model_server_name,
 )
 from app.modules.agent.services import runtime_model_factory
+from app.modules.agent.services.generation_settings import run_generation_settings
 from app.modules.agent.services import runtime_provider_discovery as discovery
 from app.modules.agent.services.runtime_profile_service import ResolvedAgentRuntime
 
@@ -109,7 +111,7 @@ async def check_saved_provider_connection(
     """
     profile = resolved.profile
     if profile.kind is not RuntimeProfileKind.MODEL_PROVIDER:
-        raise ValueError("Only a model provider can be tested")
+        raise RuntimeProfileValidationError("Only a model provider can be tested")
     seams = collaborators or ProviderCheckCollaborators()
     try:
         models = await _listed_models(resolved, seams)
@@ -174,7 +176,7 @@ async def _answer_one_message(
 ) -> None:
     profile = resolved.profile
     model = seams.model_builder()(
-        runtime_profile=resolved.public_snapshot(),
+        runtime_profile=resolved.runtime_snapshot().as_payload(),
         runtime_credentials=resolved.credentials,
     )
     if model is None:
@@ -184,19 +186,21 @@ async def _answer_one_message(
             await model_request(
                 model,
                 [ModelRequest.user_text_prompt("Reply with the word OK.")],
-                model_settings=ModelSettings(max_tokens=_COMPLETION_MAX_TOKENS),
+                model_settings=_check_model_settings(resolved),
             )
     except ModelHTTPError as exc:
         _log_failure(resolved, exc)
         if exc.status_code in _KEY_REJECTED_STATUSES:
             raise _CheckFailed(discovery.key_rejected_message(profile.name)) from exc
         raise _CheckFailed(_did_not_answer_message(resolved)) from exc
-    except (TimeoutError, httpx.TimeoutException) as exc:
+    except (TimeoutError, httpx2.TimeoutException) as exc:
         _log_failure(resolved, exc)
         raise _CheckFailed(_unreachable_message(profile.name, None)) from exc
-    except (ModelAPIError, UnexpectedModelBehavior, httpx.HTTPError) as exc:
+    except (ModelAPIError, UnexpectedModelBehavior, httpx2.HTTPError) as exc:
         # Anything else the provider or its SDK raises -- a refused connection
         # wrapped in the SDK's own error type, a response it could not parse.
+        # `httpx2`, not `httpx`: the completion goes through the provider SDK's
+        # client, and neither stack's errors subclass the other's.
         # Logged in full here; the person gets a fixed sentence, never the
         # provider's text.
         _log_failure(resolved, exc)
@@ -204,6 +208,25 @@ async def _answer_one_message(
         if server is not None:
             raise _CheckFailed(_unreachable_message(profile.name, server)) from exc
         raise _CheckFailed(_did_not_answer_message(resolved)) from exc
+
+
+def _check_model_settings(resolved: ResolvedAgentRuntime) -> ModelSettings | None:
+    """The saved settings a run would send, with the reply kept tiny.
+
+    Sending only an output cap reported a profile as working while every run
+    on it failed on a setting the provider refuses; the test has to ask with
+    what a run asks with.
+    """
+    saved = run_generation_settings(resolved, None).model_settings
+    reply_cap = _COMPLETION_MAX_TOKENS
+    thinking = saved.get("anthropic_thinking")
+    if isinstance(thinking, dict) and isinstance(thinking.get("budget_tokens"), int):
+        # A thinking budget must sit under the output cap, or the provider
+        # refuses the request for a reason no run would hit.
+        reply_cap += thinking["budget_tokens"]
+    return runtime_model_factory.provider_model_settings(
+        {**saved, "max_tokens": reply_cap}
+    )
 
 
 def _config_data(config: object) -> object:

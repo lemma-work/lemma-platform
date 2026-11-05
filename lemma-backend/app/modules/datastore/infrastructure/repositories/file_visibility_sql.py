@@ -8,10 +8,13 @@ once. The reasoning belongs somewhere it can be read on its own.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from uuid import UUID
 
 from sqlalchemy import case, func, literal, literal_column, select
 from sqlalchemy.orm import aliased
+from sqlalchemy.orm.util import AliasedClass
+from sqlalchemy.sql import ColumnElement
 
 from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.permissions import Permissions
@@ -76,16 +79,30 @@ def has_unreadable_ancestor(ctx: Context, pod_id: UUID):
     have descendants would be skipped, and its descendants would become
     visible.
     """
+
+    def unreadable(ancestor) -> ColumnElement[bool]:
+        ancestor_actions = allowed_actions_expr(
+            ctx=ctx,
+            resource_type=ResourceType.DOCUMENT,
+            resource_id_col=ancestor.id,
+            pod_id_col=ancestor.pod_id,
+            owner_user_id_col=ancestor.owner_user_id,
+            visibility_col=ancestor.visibility,
+            resource_path_col=ancestor.path,
+        )
+        return ~allowed_actions_contains(ancestor_actions, Permissions.FOLDER_READ)
+
+    return has_ancestor_where(pod_id, unreadable)
+
+
+def has_ancestor_where(
+    pod_id: UUID,
+    condition: Callable[[AliasedClass[DatastoreFile]], ColumnElement[bool]],
+):
+    """Whether some row above each row satisfies *condition*, as a correlated
+    EXISTS that probes each ancestor through the unique ``(pod_id, path)``
+    index. ``condition`` is given the ancestor alias to write itself over."""
     ancestor = aliased(DatastoreFile)
-    ancestor_actions = allowed_actions_expr(
-        ctx=ctx,
-        resource_type=ResourceType.DOCUMENT,
-        resource_id_col=ancestor.id,
-        pod_id_col=ancestor.pod_id,
-        owner_user_id_col=ancestor.owner_user_id,
-        visibility_col=ancestor.visibility,
-        resource_path_col=ancestor.path,
-    )
     return (
         select(ancestor.id)
         .where(
@@ -93,7 +110,7 @@ def has_unreadable_ancestor(ctx: Context, pod_id: UUID):
             ancestor.path
             == func.any(_ancestor_paths_of(DatastoreFile.path, DatastoreFile)),
             ancestor.id != DatastoreFile.id,
-            ~allowed_actions_contains(ancestor_actions, Permissions.FOLDER_READ),
+            condition(ancestor),
         )
         .exists()
     )

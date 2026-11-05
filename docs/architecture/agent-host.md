@@ -199,6 +199,14 @@ host re-probes and republishes now instead of on its own 15-minute cycle.
 Settings → This Mac → Coding agents lists what was found, with each agent's
 release and its update command.
 
+A run is refused before it is queued, with a sentence naming the agent, the
+computer and the fix (`domain/agent_host_readiness.py`), when the computer has
+not been heard from within 90 seconds, when the agent's last report is past
+its `stale_after`, or when that report is anything but READY -- for a
+signed-out agent, its own sign-in command and **Check again**. Each publish
+carries every agent the host's manifest knows, so an agent missing from one is
+gone from that computer and is marked DISABLED.
+
 locald merges the process and connection planes into `agent-host.status` and the
 `agent_host` key of `control.snapshot`, caching the journal read for two seconds
 so a polling page cannot fork the sidecar on every tick.
@@ -328,7 +336,10 @@ load that same session in the conversation's persistent working directory.
 Control checkpoints retain the binding for older hosts and recovery, but a late
 checkpoint from an older run cannot replace a newer run's session. Changing to
 a different provider session clears the old session's instruction-delivery
-digest; instructions are acknowledged only after a prompt has landed.
+digest; instructions are acknowledged only after a prompt has landed. On the
+same evidence the binding keeps the newest run whose prompt landed
+(`prompted_run_id`), which is where the session's copy of the conversation
+ends; see [what a resumed turn carries](#delivery).
 
 The session binding also records `host_id` and `host_cwd`, reported by the
 leased host at session establishment. `host_cwd` is the exact directory passed
@@ -402,8 +413,8 @@ either mode.
 
 | Agent | How | Left out | Still loaded |
 |---|---|---|---|
-| Claude Code | `session/new` and `session/load` `_meta`, read by `claude-agent-acp`: `claudeCode.options` `settingSources: ["project", "local"]`, `strictMcpConfig`, `plugins: []`, `env.CLAUDE_CODE_DISABLE_AUTO_MEMORY`, and `settings` (flag settings) carrying only the sign-in keys of `~/.claude/settings.json` | `~/.claude/CLAUDE.md`, skills, agents, commands, output styles, plugins, hooks and settings; the person's MCP servers (`~/.claude.json`) and claude.ai connectors; auto-memory | the sign-in (keychain or `~/.claude/.credentials.json`), and `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `forceLoginMethod`, `forceLoginOrgUUID` and the provider variables of `env` (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `AWS_*`, `GOOGLE_*`, proxies) from its settings; Claude Code's bundled skills; `claude-agent-acp` itself still reads `~/.claude/settings.json` for `permissions.defaultMode`, `availableModels` and `modelOverrides` |
-| Codex | nothing: the person's own `CODEX_HOME` and setup, unchanged. The only override is `web_search: "disabled"` in `CODEX_CONFIG` (merged into the pinned adapter's value) when the run has Lemma's own web search, so the agent does not hold two | -- (Codex's own web search, only when Lemma's is there) | everything: the sign-in, `~/.codex/AGENTS.md`, skills, hooks, `rules/`, the person's MCP servers and the rest of `config.toml`; Lemma's MCP server and instructions on top |
+| Claude Code | `session/new` and `session/load` `_meta`, read by `claude-agent-acp`: `claudeCode.options` `settingSources: ["project", "local"]`, `strictMcpConfig`, `plugins: []`, `env.CLAUDE_CODE_DISABLE_AUTO_MEMORY`, `mcpServers` holding Lemma's server marked `alwaysLoad: true` (in both modes, so Lemma's MCP tools are in the first prompt rather than found only by Claude Code's tool search, while every other tool it defers stays behind that search; the session's ACP `mcpServers` then leaves the server out, because `claude-agent-acp` lets that entry replace this one without the mark; a Claude Code older than 2.1.121, which has no `alwaysLoad`, gets `env.ENABLE_TOOL_SEARCH=false` instead, which lists every tool), `allowedTools` naming each tool the run publishes as `mcp__<server>__<tool>` (in both modes too, one rule per name in `tool_names` and none for the whole server, and none for a name that is not one plain word: Claude Code's "Don't Ask" permission mode never asks, it denies whatever no rule allows, so without them a run in it could call none of Lemma's tools; where Claude Code asks, the host already says yes to these itself. The SDK's warning that such rules bypass its permission callback is left out of a failed run's error), `disallowedTools` naming `Agent`/`Task` when the run serves `lemma_spawn_subagent` (Lemma's subagents are the ones Lemma can see and deliver), and `settings` (flag settings) carrying only the sign-in keys and the permission rules of `~/.claude/settings.json` | `~/.claude/CLAUDE.md`, skills, agents, commands, output styles, plugins, hooks and settings, including `permissions.additionalDirectories`; the person's MCP servers (`~/.claude.json`) and claude.ai connectors; auto-memory | the sign-in (keychain or `~/.claude/.credentials.json`), and `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `forceLoginMethod`, `forceLoginOrgUUID` and the provider variables of `env` (`ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `AWS_*`, `GOOGLE_*`, proxies) from its settings; `permissions.allow`, `deny` and `ask` (but not a rule with a path relative to `~/.claude`, which would be read against another folder); Claude Code's bundled skills; `claude-agent-acp` itself still reads `~/.claude/settings.json` for `permissions.defaultMode`, `availableModels` and `modelOverrides` |
+| Codex | nothing: the person's own `CODEX_HOME` and setup, unchanged. The overrides, in `CODEX_CONFIG` (merged into the pinned adapter's value): `web_search: "disabled"` when the run has Lemma's own web search, so the agent does not hold two; and Lemma's MCP server as `mcp_servers.<name>` with `tool_timeout_sec` equal to the bridge's call limit, rather than through ACP `mcpServers`, because Codex's default 60-second tool timeout cut off a subagent or named-agent call and ACP has no field for it | -- (Codex's own web search, only when Lemma's is there) | everything: the sign-in, `~/.codex/AGENTS.md`, skills, hooks, `rules/`, the person's MCP servers and the rest of `config.toml`; Lemma's MCP server and instructions on top |
 | OpenCode | nothing: the person's own setup, unchanged. The only override is `OPENCODE_CONFIG_CONTENT` `{"permission": {"webfetch": "deny"}}` when the run has Lemma's own page fetch | -- (OpenCode's own `webfetch`, only when Lemma's is there) | everything: `~/.config/opencode` (`AGENTS.md`, skills, `opencode.json`'s MCP servers), and the skills it borrows from `~/.claude` and `~/.agents`; Lemma's MCP server and instructions on top |
 | Cursor | nothing | -- | everything (`~/.cursor/cli-config.json`, `~/.cursor/mcp.json`, the account's user rules). `cursor-agent` documents one knob, `CURSOR_CONFIG_DIR`, which moves `cli-config.json` and reportedly the sign-in with it; it offers no switch for rules or MCP servers that spares the login, and until one is verified against a signed-in `cursor-agent` Cursor is left as it is |
 
@@ -417,17 +428,21 @@ changed by `lemma-agent-host own-settings enable|disable <agent>`, locald's
 reported as `own_settings` in `agent-host.status`, and read by each run as it
 starts.
 
-Lemma's own tools stay in reach in either mode: Lemma's MCP server is named in
-every session (and is the only one Claude Code loads), the run's `LEMMA_*`
-sign-in is in every agent's environment, and Lemma's `lemma` CLI goes first
-on its `PATH` (below). `desktop/agent-host/tests/acp_session_options_e2e.rs`
+Lemma's own tools stay in reach in either mode: Lemma's MCP server is given to
+every session (and is the only one Claude Code loads), Claude Code in its
+"Don't Ask" permission mode may call the tools Lemma publishes to the run
+(the `allowedTools` above), the run's `LEMMA_*` sign-in is in every agent's
+environment, and Lemma's `lemma` CLI goes first on its `PATH` (below). `desktop/agent-host/tests/acp_session_options_e2e.rs`
 holds the host to all of it for every agent;
 `desktop/scripts/check_agent_isolation.py` (local, not CI) runs the real
-`claude` in a fake home to check the upstream behaviour this relies on.
+`claude` in a fake home to check the upstream behaviour this relies on,
+including that "Don't Ask" runs a tool its `allowedTools` rule names and
+denies one no rule names.
 
 Answering what a person owes works the same as in-process: an Agent Host
-run is served `respond_to_notification` and `submit_workflow_form` over MCP
-(the in-process harness gets them from its open-notifications capability),
+run is served `answer_question` over MCP -- a question or a workflow form
+waiting on the person, a line in their own channel (the in-process harness
+gets it from its open-questions capability),
 and what is still open rides in the turn's prompt rather than the system
 prompt, which a provider session keeps from its first turn. With host
 execution on, the runtime prompt names the release's own `lemma` CLI, which
@@ -448,25 +463,167 @@ tells the agent to use Lemma's:
 - **The web.** When the run has `lemma_web_search`, Claude Code's `WebSearch`
   and Codex's web search (`web_search: "disabled"`) are off; when it has
   `lemma_web_fetch`, Claude Code's `WebFetch` and OpenCode's `webfetch`.
-- **`lemma`.** When the backend ships a CLI beside it (`lemma_cli` in the run's
-  MCP configuration, from `WORKSPACE_HOST_CLI_ROOT`; Desktop's host pack sets
-  it), its `bin/` goes first on the agent's `PATH`, so the `lemma` an agent's
-  shell runs is the release its server is, signed in as the run through the
-  `LEMMA_*` environment (with `LEMMA_CONVERSATION_ID`). The host accepts the
-  folder by the rule host execution uses
-  ([§6](desktop-host-execution.md#6-the-seatbelt-profile)).
+- **`lemma`.** A run gets a CLI whose `bin/` goes first on the agent's
+  `PATH`, signed in as the run through the `LEMMA_*` environment (with
+  `LEMMA_CONVERSATION_ID`). Which one depends on the pairing
+  (`src/lemma_cli.rs`). On the local install's pairing it is the one the
+  backend ships beside it (`lemma_cli` in the run's MCP configuration, from
+  `WORKSPACE_HOST_CLI_ROOT`, which Desktop's host pack sets): the same release
+  as its server. Every other pairing is a server elsewhere, and a path it names
+  is one on its own machine, so its runs get the CLI the Desktop app carries in
+  `Contents/Resources/lemma-cli` (staged by
+  `scripts/build_desktop_lemma_cli.py`; only the self-contained `make
+  desktop-dmg` build has one), else the one the host downloaded (below), else
+  none. Every folder is accepted only by the rule host execution uses
+  ([§6](desktop-host-execution.md#6-the-seatbelt-profile)). From source,
+  `LEMMA_AGENT_HOST_CLI_ROOT` names the bundled folder instead; debug builds
+  only. Claude Code is
+  also given `allowedTools` `Bash(<bin>/lemma:*)` and `Bash(lemma:*)`, so the
+  CLI never raises a permission request: it is signed in as the run and can
+  do only what the run's Lemma tools can, which the host already answers
+  without a person. Each rule names that one executable, never a prefix of
+  the command text, and Claude Code refuses a compound command unless every
+  part is allowed; the bare name is the same binary because its `bin/` is
+  first on the agent's `PATH`.
+
+  That holds for **every** harness, not only Claude Code, and in the shells
+  the agent runs commands in as well as its own process (`src/acp/shell_path.rs`).
+  Harnesses run each command through the person's shell, whose startup files
+  run first: a `~/.zshenv` or `~/.bashrc` that prepends `~/.local/bin` put a
+  globally installed `lemma` back in front, and Codex's shell snapshot dropped
+  the host's entry entirely (found in live QA). So a run with a CLI also gets
+  `ZDOTDIR` -- four zsh startup files that each source the person's own file
+  of that name and then move the CLI's `bin/` to the front -- and `BASH_ENV`,
+  which bash reads after its profile files in every non-interactive shell. The
+  variables they read are `LEMMAHOST_*`, which a server's `LEMMA_*` cannot set.
+  Other shells (fish, nu) get the process `PATH` only. A run with no CLI gets
+  none of this: its `PATH` is the adapter's own.
+
+  Only Claude Code also gets an allow rule. Codex's command approvals live in
+  `~/.codex/rules` (execpolicy), not in anything a session can pass; OpenCode's
+  `permission.bash` matches wildcards over the command text, so `lemma *`
+  would also allow `lemma x; rm -rf ~` -- the prefix-match hole the rules
+  above avoid. Those harnesses ask before `lemma` as before.
+- **The downloaded `lemma`.** The shipped online app does not carry the CLI
+  (about 90 MiB, over `check_online_payload.py`'s gate), so the host fetches
+  its own release's the first time a hosted run would otherwise have none
+  (`src/lemma_cli/download.rs`), and starts that download when a hosted
+  pairing's worker starts, so it is usually ready first.
+  - *The artifact.* `release-desktop.yml` builds the CLI with
+    `scripts/build_desktop_lemma_cli.py --archive`, signs every Mach-O with
+    the app's Developer ID (hardened runtime, timestamp), and attaches
+    `lemma-cli-aarch64-apple-darwin.tar.gz` and its manifest
+    `lemma-cli-aarch64-apple-darwin.json` (`{version, platform, url, sha256,
+    size}`) to the release. Not notarized: the pipeline notarizes the app
+    and the DMG, never loose binaries, and a file the host downloads itself
+    has no quarantine attribute for Gatekeeper to check. macOS arm64 only,
+    as the Desktop release is.
+  - *Trust.* The manifest URL is compiled into the host:
+    `https://github.com/lemma-work/lemma-platform/releases/download/v<host
+    version>/lemma-cli-<platform>.json` for a release build. The nightly
+    (`share-desktop-dmg` in `release-local-images.yml`) sets
+    `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` at compile time to its own
+    `desktop-nightly-*` prerelease and publishes the archive there, versioned
+    as the runtime version, which is the host's `CARGO_PKG_VERSION`. Nothing a
+    paired server sends changes it. The host refuses a manifest for another
+    version or platform and an archive outside the manifest's own release
+    folder, fetches with the system `curl` (`-q`, so no `~/.curlrc`;
+    HTTPS-only, redirects included), and checks the archive's size and
+    SHA-256 before unpacking. The digest proves the archive is the one the
+    release's manifest describes; the release itself (GitHub, over TLS) is
+    the root of trust. Debug builds download only from
+    `LEMMA_AGENT_HOST_CLI_MANIFEST_URL` read at run time, and from nowhere
+    without it.
+  - *Where.* `<data dir>/cli/<version>/`. The download and unpacking happen
+    in `cli/.partial-*`, and the unpacked tree is renamed into place in one
+    step, so a half-written CLI is never resolved. The folder is carved out
+    of Lemma's denied application data for `lemma_cli_root`
+    (`DOWNLOADED_CLI_EXCEPTION`), as the host packs are; nothing else of the
+    host's data is. Other versions and leftover partials are removed when
+    the host starts and after each install.
+  - *Concurrency and failure.* One lock per data directory: twenty runs
+    starting together download once. A run waits at most 15 seconds for a
+    download in flight and otherwise goes on without a CLI, with a warning in
+    the host log; the download carries on for later runs. A failure is
+    retried by a later run after a backoff that doubles from 30 seconds to an
+    hour.
+  - *Version skew.* The CLI is the host's release, not the server's, exactly
+    as the bundled one is; a hosted server may be newer or older.
+- **The person's own permission rules.** Leaving `~/.claude` out also left
+  out the person's `permissions.allow`, so a command they had told Claude
+  Code never to ask about asked in every Lemma run. `allow`, `deny` and `ask`
+  come back as flag settings (`claude_permission_rules`); `deny` and `ask`
+  travel with `allow` because they override it, and carrying the allow alone
+  would widen it. Nothing else of the block does: `defaultMode` could be
+  `bypassPermissions`, and `additionalDirectories`, hooks and MCP servers
+  change what the agent can reach rather than whether it asks.
 
 `desktop/agent-host/tests/acp_session_options_e2e.rs` holds the driver to
 delivering each of these, against a scripted agent that records what it is
 sent and the environment it starts in.
+
+## Resilience to agent updates
+
+The coding agents the host drives, and their ACP adapters, release on their
+own schedule -- some weekly. The rule that keeps an agent update from breaking
+Lemma:
+
+**Strict on our protocol, tolerant on agent-originated content.** The
+host↔backend envelope -- frame types, event types, run states, harness
+health, auth, lease epochs, the run spec -- is ours and is held exactly; an
+unknown value there is a bug on one side of the wire, and refusing it keeps
+the two in step. What an *agent* writes -- `session/update` kinds, tool-call
+kinds and statuses, content blocks, plan entries, permission option kinds,
+configuration options and their types, stop reasons, usage counts, `_meta`,
+version strings -- may grow at any time. Something new there is skipped,
+passed through or noted, and never the reason the parts Lemma knows stop
+working.
+
+In practice:
+
+- **The host settles agent output before typing it.**
+  `desktop/agent-host/src/acp/tolerance.rs` is the first handler on every
+  agent connection. An unknown update kind or content block is skipped; an
+  unknown tool status or tool content entry is removed; an unknown plan
+  priority or status is read as the plainest one; `session/prompt` is read
+  field by field, so a new stop reason ends the turn by name. Each unknown is
+  logged once per kind, by its name, never with the content around it.
+- **An unknown permission option is never consent.** It is removed from the
+  request, not mapped to a known kind, so it is neither shown nor selected; a
+  request offering nothing else is answered `cancelled`. An unknown tool kind
+  on a permission request is removed too, rather than read as ACP's `other`,
+  which the scoped-tool check trusts. The backend likewise never selects a
+  kind it does not know (`agent_host_permissions.option_for`).
+- **One option does not cost the harness.** An option of a type Lemma cannot
+  offer (only `select` and `boolean` are), or one it cannot read, is dropped
+  from the snapshot (`AgentHostHarnessSnapshot`) and logged by type; the rest
+  publish. A selection for an option that has disappeared is dropped when the
+  run is dispatched (`carry_agent_host_selections`).
+- **Display text is cut, not refused.** A version banner or label longer than
+  its column is shortened; identifiers a selection names (`id`, `category`)
+  are not, since shortening one names a different option.
+- **A floor, not a pin.** `minimum_upstream_version` refuses an agent older
+  than the one Lemma was certified against; a newer one runs. The adapter
+  itself stays pinned by version and integrity in
+  `agent-adapters.lock.json`, and the security checks -- credentials, the
+  seatbelt policy, the policy-bearing option filter -- do not loosen.
+
+`desktop/agent-host/tests/future_agent.rs` replays every recorded transcript
+with unknown fields injected at every level, unknown update kinds, tool
+content, content blocks, permission option kinds, configuration option types
+and `_meta`, and holds the known parts to the same reviewed events;
+`app/modules/agent/tests/unit/test_agent_host_agent_updates.py` does the same
+for the backend. A change that makes either stricter about agent content has to
+say why here.
 
 ## The link
 
 The host talks to Lemma over **one WebSocket per paired workspace**, opened by
 the host to `wss://<api>/agent-host/link`. It is still outbound only, so the
 machine needs no inbound port. Everything travels on it: commands down, events,
-checkpoints and harnesses up, and the Lemma MCP tool calls the agent makes.
-There is no HTTP API for the host any more.
+checkpoints and harnesses up, and the Lemma MCP tool calls the agent makes --
+everything but bulk bytes, which go over HTTP beside it
+([Bulk bytes](#bulk-bytes)).
 
 It replaced a 25-second HTTP long-poll plus one POST per streamed event. The
 poll was cheap: about 2.4 requests a minute, woken early by a Redis poke. The
@@ -496,7 +653,7 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 | Direction | `type` | Body | Answered by |
 |---|---|---|---|
 | host → Lemma | `pair` | `pairing_code`, `display_name`, `hello`, `reenable` (default false) | `paired` (`host_id`, `user_id`, `host_secret`), then close |
-| host → Lemma | `hello` | `hello`, `capacity`, `host_execution` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`, `idempotent_tool_calls`) |
+| host → Lemma | `hello` | `hello`, `capacity`, `host_execution`, `staged_bodies` | `welcome` (`host_id`, `user_id`, `protocol_version`, `heartbeat_ms`, `server_time`, `idempotent_tool_calls`) |
 | host → Lemma | `control` | `capacity`, `acknowledged_command_ids`, `checkpoints`, `rejections`, `host_execution` | `control_ok` (`commands`, `refused`) |
 | host → Lemma | `events` | one run's contiguous batch | `events_ok` (`ack`) or `error` |
 | host → Lemma | `harnesses` | `harnesses` | `harnesses_ok` (`items`) |
@@ -511,7 +668,7 @@ to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 `op` is the one request Lemma makes of the host: a host-execution operation,
 answered with `re` set to its `id`. Lemma's ids and the host's are separate
 namespaces; each side matches `re` only against requests it sent. The host
-runs each `op` in a task of its own, at most `MAX_CONCURRENT_OPS` (32) at once,
+runs each `op` in a task of its own, at most `MAX_CONCURRENT_OPS` (64) at once,
 so a `process.read` long-waiting for output never holds up the reader, the
 heartbeat, or another op. An op with no answer by its `deadline_ms` is answered
 `timeout` by the host itself. A link opened without host execution (pairing,
@@ -532,6 +689,25 @@ the switch is that local pairing's own (`host_execution` on the target in
 seconds without a reconnect. Lemma routes a run of the host's paired user to it only when
 both booleans are true.
 
+`capacity` is `{max_runs, active_runs, available_runs}`. One pool of run
+slots serves every pairing on the computer, sized when the host starts: 20 by
+default, or what the person chose, 1 to 128 (`MAX_SUPPORTED_RUNS`, Lemma's own
+ceiling), with `lemma-agent-host max-runs [N]`. That is `max_runs` in
+`config.json`, with `max_runs_chosen` recording that the person set it, and a
+new value applies when the host next starts. Older builds wrote their default
+of 2 into every config; a 2 nobody chose is lifted to the current default when
+the config is read. A draining or paused pairing reports `available_runs` 0.
+A start beyond the free slots waits in Lemma's queue.
+
+`harnesses` publishes each agent's probe, `config_options` among it. Those
+are what `session/new` reported, so the options beside the model are the
+machine's default model's. Each value of the model option may also carry
+`lemma_options`: that model's own options, read by choosing it on the probe's
+session, the model option itself left out. Absent means the same as the top
+level -- which is also what a model the probe could not read, or one past the
+first 32, is published as. The harness revision ignores `current_value` at
+both levels.
+
 The first frame on a connection is `pair` (no `Authorization` header) or
 `hello` (with `Authorization: Bearer <host secret>`). Anything else first is a
 protocol violation.
@@ -548,6 +724,90 @@ protocol violation.
 | 4408 | no frame from the host for `heartbeat_ms × 3` | reconnects |
 | 4409 | superseded by a newer connection for this host | stops this connection. A link that lasted a minute or more was a hand-over and is reopened at once; one superseded sooner is another host holding the same credential, so each consecutive one waits longer (0.5 s doubling to 5 minutes) instead of taking the link back for ever |
 | 4426 | the host's protocol is too old | reports `upgrade required` and stops; Desktop's updater takes over |
+
+### Bulk bytes
+
+The API reads no websocket message past 1 MiB (`WS_MAX_BYTES`,
+`app/core/server_limits.py`) and closes the socket with 1009 on a larger one
+-- every run's frames with it, and the next connection would be sent the same
+frame again. So bulk bytes never ride the link. They go over two HTTP routes
+beside it, authenticated exactly as the link is (`Authorization: Bearer <host
+secret>`), outside the OpenAPI schema like the link
+(`agent_host_transfer_controller.py`; `link/transfer.rs` on the host):
+
+| Route | What | Refused with |
+|---|---|---|
+| `GET /agent-host/transfers/{id}` | a `file.write` chunk Lemma staged for this host's op, or a part of a frame Lemma staged rather than sent (below) | 404 not this host's, unknown or expired; 409 an op's chunk already fetched |
+| `PUT /agent-host/transfers/{id}` | a `file.read` chunk, into the slot the op named; SHA-256 in `x-lemma-sha256` | 404; 409 already delivered; 413 past the slot's `max_bytes`; 422 digest |
+| `PUT /agent-host/runs/{run_id}/blobs/{sha256}` | an image a run's event names, before the event is sent | 404 a run this host does not hold; 413 past 5 MiB; 422 digest |
+
+Any route answers 401 to a missing, unknown or revoked secret. A transfer is
+one op's, used once, and lives until a minute past the op's deadline; the bytes
+wait in Redis, which already carried them inside the op messages before. A
+blob is kept as long as the run's event stream (24 hours), since the event
+naming it is read from there, and putting it again on a replay is harmless.
+
+The event names an uploaded image in place of its data: `{"type": "image",
+"mimeType": …, "lemma_blob": {"sha256", "size"}}` (or a resource's
+`resource.lemma_blob` in place of `blob`). Lemma saves it to pod files as it
+did the inline image. The host only changes the copy it sends: the journal
+keeps the agent's event, so a replay uploads again rather than naming a blob
+that may have expired.
+
+**The other direction.** Nothing Lemma sends a host passes 1 MiB either. The
+host would read a larger frame, but the link is the machine's only socket, and
+one frame of several megabytes holds up every answer queued behind it
+(`agent_host_link_outbound.py`):
+
+| Frame | Worst case before | Now |
+|---|---|---|
+| `mcp_ok` | a tool result with images: 5 MiB of image, about 6.7 MiB base64, plus its text | a result past 512 KiB is staged; the answer is `{"result": {"lemma_staged": {id, size, sha256}}}` |
+| `commands`, `control_ok` | every command due at once, a START_RUN's prompt and system prompt unbounded | a payload past 512 KiB is staged as `{"payload": {"lemma_staged": …}}`; commands are packed into as many frames as they need (960 KiB each), the rest of a `control_ok` following as `commands` pushes |
+| `op` | a `file.write` chunk inline (1 MiB, 1.33 MiB base64) | file data is a transfer; a host without transfers gets 512 KiB chunks inline |
+| `harnesses_ok`, `interaction_ok` | echoes of what the host sent; a person's answer | bounded by the guard |
+| `welcome`, `paired`, `events_ok`, `revoked`, `reconnect`, `error` | small and fixed | unchanged |
+
+A staged part is fetched from `GET /agent-host/transfers/{id}` and checked
+against the size and SHA-256 its reference names, then put back before anyone
+reads the frame (`LinkHandle::mcp`, `TargetWorker::resolve_staged_payloads`).
+Unlike an op's chunk it can be fetched again until it expires (ten minutes for
+a tool result, a minute past a command's own expiry), because the frame naming
+it may be sent again. A command whose payload cannot be fetched yet is left
+unacknowledged for Lemma to send again; one that cannot be fetched at all is
+refused like any payload the host cannot read. A host says it fetches staged
+parts with `staged_bodies: true` on `hello`.
+
+And one guard every outbound frame passes, `LinkWriter.send_frame`: a frame
+still past `WS_MAX_BYTES` is not sent, and logs
+`agent.agent_host_link.frame_too_large`. An answer becomes an `error` with code
+`FRAME_TOO_LARGE` for that one request, never retryable; a push or an `op` is
+failed back to the code that sent it (an op as `too_large`). The link stays
+open either way.
+
+What still rides the link from the host is bounded on the host:
+
+- an `events` frame by bytes as well as count: a batch closes before 512 KiB
+  (`EVENT_BATCH_MAX_BYTES`), and an event still past that once its
+  attachments are out has its longest strings cut, marked as cut, rather than
+  the run's transcript lost to a refused batch (`runtime/event_payloads.rs`);
+- an `op` answer and any request: a frame past 1 MiB is refused before it is
+  sent -- `FRAME_TOO_LARGE`, a rejection of that one request -- and an op
+  answer that large becomes a `too_large` failure.
+
+A Desktop released before staged bodies sends no `staged_bodies`. Lemma sends
+it no staged part: a tool result past 512 KiB loses its images, last first,
+until it fits, with a text block telling the agent how many were left out and
+that updating Desktop delivers them; a command too large for a frame is not
+sent to it at all (`agent.agent_host_link.command_too_large`), so its run waits
+until the dispatch deadline fails it. Everything smaller reaches it as before.
+
+A Desktop released before transfers also sends images inline.
+Its batches of 256 events can pass 1 MiB, and then its link closes with 1009
+and the same batch is sent again on every reconnect: event delivery from that
+computer stalls behind it until Desktop is updated. Its file reads and writes still work, because
+its link session moves the data for it, and its process output is bounded where
+the process starts ([Host execution on
+Desktop](desktop-host-execution.md#4-the-op-frames)).
 
 ### Heartbeat and liveness
 
@@ -577,6 +837,37 @@ guarantee:
   rewound a refused run for replay, is followed by another without waiting for
   a new event. Connecting kicks delivery once, so a run that finished while
   the host was offline is delivered in full, terminal event included.
+- **Worker restarts.** The worker reading a run's stream records on the run's
+  lease the last entry whose messages it has persisted
+  (`consumed_stream_id`), at a point where nothing it read is still waiting to
+  become a message. A worker that reclaims the run after a deploy resumes
+  there, with the tool calls already on the record restored, instead of
+  dispatching again and re-reading the stream from its start
+  (`harnesses/agent_host/stream_resume.py`). The stream is trimmed only below
+  that cursor, never by length, and each event's payload is capped at 8 MiB
+  at intake.
+- **Locks on the host row.** One host runs many runs at once, so a run start,
+  a credential refresh and the host's `control` frame all lock its
+  `agent_hosts` row together. Every command insert takes `FOR KEY SHARE` on it
+  through the foreign key, often while holding a run's lease, and the
+  `control` frame locks leases after its heartbeat write. So nothing that can
+  hold or wait for a lease locks the host row with `FOR UPDATE`: admission
+  takes `FOR SHARE`, which still holds a revoke off until the run is queued,
+  and the heartbeat and revoke take `FOR NO KEY UPDATE` (`HostRowLock`).
+  `test_agent_host_concurrent_admission_e2e.py` starts twenty runs on one host
+  alongside its traffic. A run start or a `control` frame that Postgres still
+  picks as a deadlock victim is retried once, and a failure that escapes is
+  reported as the database being busy, not as the teammate's model settings.
+- **A run is always ended.** A run task that stops without writing the
+  run's final state -- a journal write it could not make, a panic -- would
+  leave the run heartbeating as live for ever, and its turn in Lemma never
+  ending. Reaping the task ends it the way restart recovery does:
+  `DISPATCH_UNKNOWN` once the prompt may have reached the agent -- unless
+  the agent had taken it and the run was being stopped, which is `CANCELLED`
+  -- and `FAILED` before, with a terminal event and checkpoint like any other. Nor does a journal or `config.json` error in the
+  worker's bookkeeping end the worker, which would abort every run on the
+  pairing: it is logged and tried again, and an unreadable config leaves the
+  last settings read in force.
 - **Control updates** are idempotent and stale ones are ignored.
   `control_ok.refused` names any update Lemma could not parse, and it is the
   only way one is refused. Lemma applies each update separately, so one bad
@@ -594,9 +885,13 @@ guarantee:
   every retry of that call, on any link. Lemma claims `(run_id, request_id)` in
   Redis (`SET NX`); the first arrival executes the call in a task the link does
   not own, so a socket that drops mid-call does not cancel it, and its outcome
-  -- the MCP result, or the failure -- is kept for an hour. A duplicate that
+  -- the MCP result, or the failure -- is kept for ten minutes (a result over
+  256 KiB is not kept: a retry is told the call finished). A duplicate that
   arrives while it runs waits for that outcome; one that arrives after is
-  answered from it. Nothing is executed twice
+  answered from it. The executing replica keeps a heartbeat beside the claim,
+  so a duplicate of a call whose replica died is told at once that it may have
+  run, rather than waiting for an outcome nobody will record. Nothing is
+  executed twice
   (`agent_host_link_tool_calls.py`). `welcome` says so with
   `idempotent_tool_calls: true`, and a host resends a `tools/call` after a drop
   only to a server that said it. A call without a `request_id`, from an older
@@ -612,6 +907,20 @@ guarantee:
   never stalls the runs still working. A wait whose run has ended is answered
   `TERMINAL_RUN`, not held for its full half hour. The bridge no longer polls
   every 2 seconds.
+- **The parked window.** A parked question, approval or ACP permission request
+  holds a run that is still RUNNING, and the worker job reading it. Pauses
+  never expire, so past `AGENT_HOST_PARKED_WINDOW_SECONDS` (10 minutes) the
+  worker marks the run (`suspended_while_parked`) and sends the ordinary
+  `CANCEL_RUN`; the host ends the ACP turn as it does for Stop, and the
+  terminal it reports is read as WAITING (`harnesses/agent_host/parked_window.py`).
+  Nothing on the wire changed: the bridge's wait ends with its run and hands
+  the agent the unchanged "waiting" result, never a denial, and the host
+  resolves a held permission request as the cancelled turn's. The pause stays
+  listed, and deciding it resumes a new run that carries the decision. A
+  permission request cannot be answered in the turn that asked, so its
+  decision tells the resumed agent that nothing ran and to do it again if it
+  is still needed -- the host asks once more. An answer inside the window is
+  delivered into the turn, as before.
 - **Steering.** A message the person sends while a run is working reaches a
   harness that published the `steering` capability as a `STEER_RUN` command,
   fenced on the run's lease epoch like every run command. The run's turn sends
@@ -620,11 +929,27 @@ guarantee:
   [Steering](agent-host-events.md#steering). Nothing about it is required for
   correctness: a lost command or result leaves the message queued in Lemma, and
   the follow-up turn delivers it when the current one ends.
+- **What a resumed turn carries.** A turn that loads its provider session is
+  sent only what that session has not seen (`harnesses/turn_messages.py`): its
+  own messages -- the one that started it, any steered into it, the tool
+  return a resume answers -- and what was written into the conversation in no
+  run since the start of the session's last landed prompt: a reminder or a
+  report delivered to the chat, another chat a contact merge folded in. No turn
+  holds those, so nothing else would send them. They are taken from the history
+  the in-process harness reads (`services/runtime_history.py`), so they keep
+  its bounds (`MAX_UNATTACHED_MESSAGES`, `MAX_FOLDED_MESSAGES`), the notices
+  that frame a folded chat, and nothing a stranger's run may not read. A
+  session with no landed prompt on record, or one older than the history, is
+  sent all of it. A message held for a person never reaches a host: it is
+  written only where somebody outside the pod is answered, and those runs stay
+  in process. `test_agent_host_between_turns.py` holds the selection, and
+  `test_agent_host_process_e2e.py` resumes a scripted agent's session through
+  the real host.
 - **The host's MCP relay** (`mcp_relay.rs`) is a loopback port every account
   on the Mac can reach, so a connection must present the relay token on its
   first line within 5 seconds and in at most 64 KiB, later lines are bounded
-  at 8 MiB without being read whole first, and at most 64 connections are
-  held. It serves only runs the journal says are still going, and ends a
+  at 8 MiB without being read whole first, and at most 128 connections are
+  held -- one per run, at the most runs a host may take. It serves only runs the journal says are still going, and ends a
   parked wait itself when its run does. An answer too large for the bridge
   goes as an error saying so, not as a line the bridge would hang up on. The
   bridge (`mcp_bridge`) sends the token first on each connection, marks a
@@ -698,6 +1023,25 @@ the worker loop had to do sooner than 25 seconds needed its own arm in the
 `select!`, because the loop spent nearly all of its time waiting on a held
 request. The link's reader, writer and worker are separate tasks joined by
 channels, so work happens when it is due.
+
+### Starting several runs at once
+
+Every run spawns its own adapter process. Conversations started together would
+otherwise cold-start that many copies of one agent at the same moment, and the
+burst itself made them miss their setup deadlines. So a run waits for a
+start-up slot for its agent before its process is spawned and gives it back
+once its session is configured, before the prompt goes out
+(`acp/start_gate.rs`). Codex gets one slot, because concurrent Codex sessions
+opening side by side time out inside Codex; every other agent gets a few. A
+queued run stays `ACCEPTED`, Stop reaches it in the queue, and the setup
+deadlines (`SETUP_REQUEST_TIMEOUT`, per request) start counting only once it has
+a slot. The run's own deadline bounds the whole wait.
+
+A start that fails before the prompt with a timeout — the host's setup deadline
+or a timeout the agent reports itself — is tried once more in a fresh process.
+Sign-in and configuration failures are not retried. A start that times out
+twice ends the run as `FAILED` with a message saying the agent did not start in
+time, not that it is broken.
 
 ### Retired HTTP routes
 

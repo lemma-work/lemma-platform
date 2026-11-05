@@ -115,14 +115,15 @@ class UserSurfacesService:
         surface = await self._surfaces.get(surface_id)
         if surface is None:
             raise AgentSurfaceNotFoundError(str(surface_id))
+        # Membership before anything else about the surface: a platform
+        # mismatch answered first says a foreign id exists and what it is.
+        pod_ids = set(await self._membership.get_user_pod_ids(user_id))
+        if surface.pod_id not in pod_ids:
+            raise AgentSurfaceNotFoundError(str(surface_id))
         if surface.surface_type is not platform:
             raise AgentSurfaceValidationError(
                 "Surface platform does not match the requested default platform."
             )
-        pod_ids = set(await self._membership.get_user_pod_ids(user_id))
-        if surface.pod_id not in pod_ids:
-            # Don't leak existence of surfaces in pods the user can't see.
-            raise AgentSurfaceNotFoundError(str(surface_id))
 
         preferences = await self._load_preferences(user_id)
         updated = preferences.with_default_surface(platform.value, surface_id)

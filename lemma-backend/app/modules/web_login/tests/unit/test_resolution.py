@@ -12,6 +12,15 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.authorization.context import (
+    Actor,
+    Assistant,
+    AuthorizationDecision,
+    Context,
+    Person,
+    Workload,
+    WorkloadKind,
+)
 from app.core.domain.errors import DomainError
 from app.modules.web_login.services.resolution import (
     WebLoginAccessDenied,
@@ -19,47 +28,58 @@ from app.modules.web_login.services.resolution import (
 )
 
 
-class _Ctx:
-    """Just the fields resolution reads, plus a `require` that records."""
+class _RecordingAuthorizer:
+    """Answers every check one way and records which permissions were asked."""
 
-    def __init__(
-        self,
-        *,
-        user_id=None,
-        delegated_by_user_id=None,
-        is_user_equivalent=False,
-        allow=True,
-    ) -> None:
-        self.user_id = user_id
-        self.delegated_by_user_id = delegated_by_user_id
-        self.is_user_equivalent = is_user_equivalent
-        self.pod_id = uuid4()
+    def __init__(self, *, allow: bool) -> None:
         self.required: list[str] = []
         self._allow = allow
 
-    async def require(self, permission_id, resource=None):
+    async def authorize(self, ctx, permission_id, resource=None):
         self.required.append(permission_id)
-        if not self._allow:
-            raise DomainError("denied", status_code=403)
+        return AuthorizationDecision(self._allow, "TEST", permission_id, resource)
+
+    async def accessible_resource_ids(self, *args, **kwargs):
+        return frozenset()
+
+
+def _ctx(actor: Actor, *, user_id=None, allow=True) -> Context:
+    return Context(
+        actor=actor,
+        actor_id="actor",
+        user_id=user_id,
+        pod_id=uuid4(),
+        authorizer=_RecordingAuthorizer(allow=allow),
+    )
+
+
+def _person(user_id) -> Context:
+    return _ctx(Person(user_id=user_id), user_id=user_id)
+
+
+def _agent_for(owner, *, user_id=None, allow=True) -> Context:
+    """A named agent acting for ``owner``."""
+    agent = Workload(kind=WorkloadKind.AGENT, workload_id=uuid4(), for_user_id=owner)
+    return _ctx(agent, user_id=user_id, allow=allow)
 
 
 async def test_a_person_acting_for_themselves_needs_no_grant() -> None:
     me = uuid4()
-    ctx = _Ctx(user_id=me)
+    ctx = _person(me)
     assert await resolve_owner(auth_ctx=ctx) == me
-    assert ctx.required == []
+    assert ctx.authorizer.required == []
 
 
 async def test_a_workload_must_hold_the_permission() -> None:
     """The check that did not exist before."""
     owner = uuid4()
-    ctx = _Ctx(user_id=None, delegated_by_user_id=owner)
+    ctx = _agent_for(owner, user_id=None)
     assert await resolve_owner(auth_ctx=ctx) == owner
-    assert ctx.required == ["web_login.use"]
+    assert ctx.authorizer.required == ["web_login.use"]
 
 
 async def test_a_workload_without_the_permission_is_refused() -> None:
-    ctx = _Ctx(delegated_by_user_id=uuid4(), allow=False)
+    ctx = _agent_for(uuid4(), allow=False)
     with pytest.raises(DomainError):
         await resolve_owner(auth_ctx=ctx)
 
@@ -68,16 +88,16 @@ async def test_the_pod_default_agent_mirrors_its_person() -> None:
     """It carries the person's own authority, so it needs no separate grant --
     the same early return `account_resolution_service` makes."""
     owner = uuid4()
-    ctx = _Ctx(delegated_by_user_id=owner, is_user_equivalent=True)
+    ctx = _ctx(Assistant(user_id=owner))
     assert await resolve_owner(auth_ctx=ctx) == owner
-    assert ctx.required == []
+    assert ctx.authorizer.required == []
 
 
 async def test_naming_somebody_else_is_refused_rather_than_ignored() -> None:
     """A saved session is one human's identity at a site. Lending it would mean
     that site seeing actions it attributes to the owner, with nothing at its end
     able to tell the difference."""
-    ctx = _Ctx(user_id=uuid4())
+    ctx = _person(uuid4())
     with pytest.raises(WebLoginAccessDenied):
         await resolve_owner(auth_ctx=ctx, requested_user_id=uuid4())
 
@@ -89,4 +109,6 @@ async def test_no_context_means_no_login() -> None:
 
 async def test_a_context_with_nobody_behind_it_is_refused() -> None:
     with pytest.raises(WebLoginAccessDenied):
-        await resolve_owner(auth_ctx=_Ctx())
+        await resolve_owner(
+            auth_ctx=_ctx(Workload(kind=WorkloadKind.FUNCTION, workload_id=uuid4()))
+        )

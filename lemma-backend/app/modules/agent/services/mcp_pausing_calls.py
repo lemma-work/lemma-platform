@@ -33,7 +33,11 @@ from uuid import UUID, uuid4
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pausing_tools import (
+    PARKED_IN_RUN_KEY,
+    PAUSING_TOOL_NAMES,
+    USER_PAUSING_TOOL_NAMES,
+)
 from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
@@ -86,6 +90,15 @@ async def record_pausing_tool_call(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 tool_args=dict(arguments or {}),
+                # A person's answer is delivered into this same run, which is
+                # still going while the host's bridge waits for it; a resume
+                # would put a second run on the turn (`PauseResume`). A wait
+                # is not parked: it ends the remote run (`suspend_remote_run`).
+                metadata=(
+                    {PARKED_IN_RUN_KEY: True}
+                    if tool_name in USER_PAUSING_TOOL_NAMES
+                    else None
+                ),
             ),
         )
         await uow.commit()

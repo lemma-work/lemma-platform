@@ -442,6 +442,41 @@ async def test_a_paired_host_publishes_the_harnesses_the_workspace_can_use(
     assert "opencode" in {item["harness_key"] for item in harnesses.json()["items"]}
 
 
+def _ready(harness_key: str, display_name: str) -> dict:
+    return {
+        "harness_key": harness_key,
+        "display_name": display_name,
+        "adapter_version": "1.0.0",
+        "health": "READY",
+        "config_revision": "rev-1",
+        "config_options": [],
+        "stale_after": stale_after(),
+    }
+
+
+async def test_an_agent_a_host_stops_reporting_is_no_longer_ready(
+    authenticated_client, async_client
+):
+    """A host reports every agent it knows on each publish, so one left out is
+    gone from that computer. It used to keep its last READY, and runs were
+    queued to an agent the host no longer has."""
+    paired = await pair(authenticated_client, async_client, display_name="e2e agents")
+    both = [_ready("codex", "Codex"), _ready("claude-code", "Claude Code")]
+    assert (await publish_harnesses(async_client, paired, both))["type"] == (
+        "harnesses_ok"
+    )
+
+    again = await publish_harnesses(async_client, paired, [_ready("codex", "Codex")])
+    assert again["type"] == "harnesses_ok", again
+
+    listed = await authenticated_client.get(
+        f"/me/runtime/agent-hosts/{paired['host_id']}/harnesses"
+    )
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+    health = {item["harness_key"]: item["health"] for item in listed.json()["items"]}
+    assert health == {"codex": "READY", "claude-code": "DISABLED"}
+
+
 @pytest.mark.asyncio
 async def test_the_session_a_host_reports_comes_back_on_the_next_turn(
     db_session, scenario

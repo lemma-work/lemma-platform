@@ -78,11 +78,11 @@ async def test_a_teams_bot_that_cannot_create_the_conversation_is_the_same_refus
     connection stays what it is, because the Bot Framework may well be there on
     the next attempt and a retry is the right answer to that.
     """
-    request = httpx.Request("POST", "https://smba.example/v3/conversations")
+    request = httpx.Request("POST", "https://smba.trafficmanager.net/v3/conversations")
     response = httpx.Response(403, request=request, json={"error": "Forbidden"})
     event = _channel_event(
         SurfacePlatform.TEAMS,
-        reply_target={"service_url": "https://smba.example"},
+        reply_target={"service_url": "https://smba.trafficmanager.net"},
         raw_payload={"from": {"id": "29:sender"}, "recipient": {"id": "28:bot"}},
     )
     with pytest.raises(PrivateDeliveryUnavailable):
@@ -103,7 +103,7 @@ async def test_a_transport_failure_is_still_a_transport_failure() -> None:
     """
     event = _channel_event(
         SurfacePlatform.TEAMS,
-        reply_target={"service_url": "https://smba.example"},
+        reply_target={"service_url": "https://smba.trafficmanager.net"},
         raw_payload={"from": {"id": "29:sender"}, "recipient": {"id": "28:bot"}},
     )
     with pytest.raises(httpx.ConnectError):

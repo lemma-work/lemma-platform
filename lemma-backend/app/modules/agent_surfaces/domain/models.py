@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -65,11 +66,39 @@ class SurfaceContextMessage(BaseModel):
     """
 
     author: str | None = None
+    #: The platform id its author was sent under, where the platform gives one
+    #: beside the name it shows. A fetched history can say who spoke; only the
+    #: pod can say whether they hold access, and it knows a person on a platform
+    #: by this id (``services/live_group_roster.pod_members_in_lines``). Left unset where
+    #: the line carries no id to check, and then its author is nobody the pod
+    #: vouches for.
+    author_external_id: str | None = None
     text: str
     ts: str | None = None
-    #: Written by somebody outside the pod. Known only where the line came from
-    #: the pod's own group log, which can tell; a platform's history API cannot.
+    #: Written by somebody outside the pod. Known where the line came from the
+    #: pod's own group log, and where the platform marks the workspace it came
+    #: from (Slack) -- which is another company's, not merely another person.
     outside_pod: bool = False
+    #: Posted by an app rather than a person -- the bot's own earlier answers
+    #: among them. Background still, but nobody to name on a group's roster.
+    from_bot: bool = False
+
+
+class SurfaceGroupParticipant(BaseModel):
+    """Somebody the pod knows is in a group, and whether they are in the pod.
+
+    A member's turn in a group runs with the member's own access and posts where
+    everybody in the group reads it, so who else is there -- and which of them
+    hold no access to the pod at all -- is what decides how it answers. The
+    pod's own log is the only thing that knows: it names everyone who has spoken
+    in the group, and pod membership tells the two kinds apart.
+    """
+
+    name: str
+    #: A member of this pod, so the run may speak from the access they hold.
+    #: False for somebody the pod does not know, who reads only what the pod has
+    #: made Public.
+    in_pod: bool = False
 
 
 class SurfaceDisplayAction(BaseModel):
@@ -280,7 +309,40 @@ class ColdEmailSendResult(BaseModel):
     reply_target: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProgressHandleKind(StrEnum):
+    """What kind of thing a live progress line is, which decides how it ends."""
+
+    #: An ordinary message, edited in place and deleted at the end (Telegram,
+    #: Teams).
+    MESSAGE = "message"
+    #: Telegram's rich draft: shown while the run works, replaced by the answer,
+    #: so there is nothing to delete.
+    DRAFT = "draft"
+    #: A Slack chat stream, closed *with* the answer as one message.
+    STREAM = "stream"
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressHandle:
+    """Where a live progress message is, so the next update edits it.
+
+    Each platform used to hand back a mapping of its own -- ``message_id``,
+    ``activity_id``, ``ts`` with a ``channel`` and a ``stream`` flag -- that only
+    it could read, and nothing said which keys a caller might find there.
+    """
+
+    kind: ProgressHandleKind
+    #: The platform's id for it: a Telegram message or draft id, a Teams
+    #: activity id, a Slack message ``ts``.
+    message_id: str
+    #: Where it lives, where the platform needs telling (a Slack channel).
+    channel_id: str | None = None
+    #: A stream that already carries answer text: closing it with an empty
+    #: answer still delivers.
+    streamed_text: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class StreamAppendResult:
-    handle: dict[str, Any] | None
+    handle: ProgressHandle | None
     appended: bool

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.session_uow import active_uow
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.core.helpers.identifiers import normalize_mobile_digits, normalize_telegram
+from app.core.helpers.identifiers import normalize_mobile_digits
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
 from app.modules.identity.domain.ports import (
@@ -28,7 +28,11 @@ class UserService:
         self.user_cache = user_cache
 
     async def create_user(
-        self, entity: UserEntity, *, send_welcome: bool = True
+        self,
+        entity: UserEntity,
+        *,
+        send_welcome: bool = True,
+        signup_method: str | None = None,
     ) -> UserEntity:
         entity.email = normalize_identity_email(entity.email)
         existing = await self.user_repository.get_by_email(entity.email)
@@ -36,7 +40,7 @@ class UserService:
             raise UserConflictError("User with this email already exists")
 
         if send_welcome:
-            entity.mark_signed_up()
+            entity.mark_signed_up(method=signup_method)
         user = await self.user_repository.create(entity)
         await self._cache_after_commit(user)
         return user
@@ -107,22 +111,16 @@ class UserService:
         return await self.user_repository.get_by_email(normalize_identity_email(email))
 
     async def _ensure_identifiers_unique(self, entity: UserEntity) -> None:
-        """Reject mobile/telegram values already held by another user.
+        """Reject a mobile number already held by another user.
 
-        These power identity resolution, so duplicates must be blocked with a
-        clean 409 before the database unique indexes raise an IntegrityError.
+        It powers identity resolution, so a duplicate must be blocked with a
+        clean 409 before the database unique index raises an IntegrityError.
         """
         digits = normalize_mobile_digits(entity.mobile_number)
         if digits:
             owner_id = await self.user_repository.get_id_by_mobile_digits(digits)
             if owner_id is not None and owner_id != entity.id:
                 raise UserConflictError("This mobile number is already in use")
-
-        telegram = normalize_telegram(entity.telegram_username)
-        if telegram:
-            owner_id = await self.user_repository.get_id_by_telegram_lower(telegram)
-            if owner_id is not None and owner_id != entity.id:
-                raise UserConflictError("This telegram username is already in use")
 
     async def update_user(self, entity: UserEntity) -> UserEntity:
         await self._ensure_identifiers_unique(entity)

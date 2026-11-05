@@ -92,7 +92,7 @@ test("header channels belong only to the pod responder, while profiles use exact
 });
 
 test("a bot's contacts setting is sent only when it changed, and only where contacts can write", () => {
-    const whatsapp = { ...surface, platform: "WHATSAPP", account_id: "account-1", config: { ...surface.config, contacts: { answer: "off" } } } as AgentSurfaceResponse;
+    const whatsapp = { ...surface, platform: "WHATSAPP", pod_connector: "whatsapp-support", config: { ...surface.config, contacts: { answer: "off" } } } as AgentSurfaceResponse;
     const draft = surfaceDraft(whatsapp);
     assert.equal(draft.contactsAnswer, "off");
     assert.equal(Object.hasOwn(surfacePatch("WHATSAPP", draft).config!, "contacts"), false, "unchanged is left to the API");
@@ -103,6 +103,8 @@ test("a bot's contacts setting is sent only when it changed, and only where cont
 
 test("only the space's own bot answers contacts", () => {
     assert.equal(isOwnBot({ ...surface, platform: "RESEND" } as AgentSurfaceResponse), true, "an address is always the space's own");
-    assert.equal(isOwnBot({ ...surface, platform: "WHATSAPP", account_id: null, credential_mode: "SYSTEM" } as AgentSurfaceResponse), false);
+    assert.equal(isOwnBot({ ...surface, platform: "WHATSAPP", pod_connector: null, credential_mode: "SYSTEM" } as AgentSurfaceResponse), false);
+    assert.equal(isOwnBot({ ...surface, platform: "WHATSAPP", pod_connector: "whatsapp-support" } as AgentSurfaceResponse), true,
+        "a surface on one of the pod's shared connectors answers as the space's own account");
     assert.equal(isOwnBot({ ...surface, platform: "TELEGRAM", credential_mode: "CUSTOM" } as AgentSurfaceResponse), true);
 });

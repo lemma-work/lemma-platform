@@ -29,12 +29,54 @@ _NEXT_STEP: dict[int, str] = {
         "A pod grant or an org role is missing."
     ),
     404: "Check the pod and the server you are pointed at — `lemma config show`.",
-    409: "Something with that name already exists — pick another, or update it.",
+}
+
+# A 409 is any "not in this state": a name taken, but also a question already
+# closed, a channel of the wrong kind, a run already finished. Told "something
+# with that name already exists" after answering a closed question, a user went
+# looking for a name. Only a 409 that says it is a duplicate gets that advice;
+# the rest stand on the server's own message, which the error line already shows.
+_DUPLICATE_STEP = (
+    "Something with that name already exists — pick another, or update it."
+)
+_DUPLICATE_CODES = ("ALREADY_EXISTS", "NAME_TAKEN", "NAME_CONFLICT", "DUPLICATE")
+_DUPLICATE_WORDS = ("already exists", "already in use", "already taken")
+
+
+def _is_duplicate(exc: object) -> bool:
+    code = str(getattr(exc, "code", None) or "").upper()
+    message = str(getattr(exc, "message", None) or "").lower()
+    return any(part in code for part in _DUPLICATE_CODES) or any(
+        words in message for words in _DUPLICATE_WORDS
+    )
+
+
+# What to try, by the server's code, where it says more than the status does.
+# An agent deleting a table gets a 403 that no grant or role fixes: a person has
+# to approve it. Told "a pod grant or an org role is missing", the agent and the
+# person it worked for both went looking for a setting that does not exist.
+_NEXT_STEP_BY_CODE: dict[str, str] = {
+    "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL": (
+        "An agent may not do this on its own. Ask the person to approve it "
+        "(request_approval), then try again, or ask them to do it themselves."
+    ),
+    "OUTSIDE_TEXT_REQUIRES_APPROVAL": (
+        "This run is reading what people outside the pod wrote, so it asks "
+        "before acting. Ask the person you are working for to approve it "
+        "(request_approval), then try again."
+    ),
+    "WORKLOAD_NOT_ALLOWED": (
+        "An agent may never do this, approved or not. Ask the person to do it "
+        "themselves."
+    ),
 }
 
 
 def next_step_for(exc: object) -> str | None:
     """The one-line "now do this" for an API error, or None if there isn't one."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code in _NEXT_STEP_BY_CODE:
+        return _NEXT_STEP_BY_CODE[code]
     status = getattr(exc, "status_code", None)
     if status == 429:
         # 429 carries its own wait, when the server advised one. Kept out of the
@@ -46,6 +88,8 @@ def next_step_for(exc: object) -> str | None:
             else "Wait and try again"
         )
         return f"Rate limited. {wait}, or ask an admin to raise the limit."
+    if status == 409:
+        return _DUPLICATE_STEP if _is_duplicate(exc) else None
     return _NEXT_STEP.get(status) if isinstance(status, int) else None
 
 

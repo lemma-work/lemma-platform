@@ -35,6 +35,7 @@ impl HostProcess {
         .unwrap();
         lemma_agent_host::config::HostConfig {
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::default(),
             installation_id,
             targets: vec![target],
@@ -141,6 +142,7 @@ impl InProcessHost {
         .unwrap();
         let config = lemma_agent_host::config::HostConfig {
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::default(),
             installation_id,
             targets: vec![target],

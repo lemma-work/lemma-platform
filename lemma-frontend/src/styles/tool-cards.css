@@ -21,7 +21,13 @@
        different lengths read as three unrelated objects rather than as the
        run's own working. */
     width: 100%;
-    max-width: 640px;
+    /* And never wider than the reply they belong to. A card is part of the
+       sentence it explains; one that ran out past the text it was explaining
+       read as a panel from somewhere else, and on a narrow pane it took the
+       page with it. Whatever is longer than the card — a path, an argument, a
+       line of log — is bounded inside the card (see `__clip` and `__out`). */
+    max-width: 100%;
+    min-width: 0;
     overflow: hidden;
 }
 /* Consecutive commands stack as one block rather than drifting apart into
@@ -132,6 +138,44 @@
     color: var(--ink-3);
     overflow-wrap: anywhere;
 }
+
+/* A path or an argument value, on one line.
+ *
+ *  These are the two strings in a card with no length bound: an absolute path
+ *  in a working directory nobody chose, and a connector's argument, which is
+ *  often a whole JSON body. Wrapped, one of them made a card twenty lines tall
+ *  with the thing that mattered buried in the middle; unbounded, it pushed the
+ *  card past the reply it belongs to. So it is cut with an ellipsis and the
+ *  whole of it is one click away. */
+.toolcard__clip {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.toolcard__clip:hover {
+    color: var(--ink);
+}
+.toolcard__clip[data-open] {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    cursor: default;
+}
+/* An argument's value is the call's own content rather than a detail about it,
+   so it keeps the card's ink and its size when it is cut. */
+.toolcard__argvalue {
+    margin-bottom: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink);
+}
 .toolcard__fine {
     margin: 8px 0 0;
     font-size: 11.5px;
@@ -152,8 +196,12 @@
     font-size: 11.5px;
     line-height: 1.6;
     color: var(--ink-2);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    /* Logs and JSON are read as they were printed: a wrapped line of JSON is
+       not the JSON anybody can match against, and wrapping is what let one
+       long line decide how wide the card — and with it the page — became.
+       Long lines scroll sideways inside this block instead, which is bounded
+       by the card and scrolls only itself. */
+    white-space: pre;
     max-height: 340px;
     overflow: auto;
 }

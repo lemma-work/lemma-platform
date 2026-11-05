@@ -12,6 +12,10 @@ export type WebWidgetCreatedResponse = {
      * The script tag that puts the chat on a page.
      */
     embed: string;
+    /**
+     * The product whose users this widget's host tokens name: a host contact is known as that product's user. Widgets of one product share it.
+     */
+    host_issuer: string;
     id: string;
     looked_after_by: (string | null);
     name: string;

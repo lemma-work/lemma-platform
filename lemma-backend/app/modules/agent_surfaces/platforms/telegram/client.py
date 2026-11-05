@@ -20,13 +20,23 @@ functional gain, so the raw client is retained intentionally.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+
 import json
 from typing import Any
 
 import httpx
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    TelegramCredentials,
+)
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
-from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.modules.agent_surfaces.platforms.delivery import (
+    DeliveryClassification,
+    classify_transport_failure,
+)
 
 # The one canonical Telegram API base. ``api_base_url`` in the bot credentials
 # overrides it (used by tests to point at a fake server, and by self-hosted Bot
@@ -44,13 +54,9 @@ TELEGRAM_MESSAGE_LIMIT = 4096
 ALLOWED_UPDATES = ["message", "edited_message", "callback_query", "my_chat_member"]
 
 
-def resolve_api_base(credentials: dict[str, Any] | None) -> str:
+def resolve_api_base(credentials: CredentialsLike | None) -> str:
     """Resolve the Telegram API base, honoring a credential override."""
-    if credentials:
-        candidate = str(credentials.get("api_base_url") or "").strip()
-        if candidate:
-            return candidate
-    return _TELEGRAM_API_BASE
+    return TelegramCredentials.of(credentials).api_base_url or _TELEGRAM_API_BASE
 
 
 def normalize_bot_base_url(api_base: str | None, bot_token: str) -> str:
@@ -117,6 +123,15 @@ class TelegramApiError(Exception):
         return "can't parse entities" in text or "can't find end" in text
 
     @property
+    def is_message_too_long(self) -> bool:
+        """True when Telegram refused the text for its length.
+
+        Permanent as sent, but not as a reply: the same words split smaller
+        are accepted, which is what the sender does with it.
+        """
+        return "too long" in (self.description or "").lower()
+
+    @property
     def is_not_modified(self) -> bool:
         """True for editMessageText "message is not modified" — a benign no-op
         when the streamed progress text hasn't changed."""
@@ -140,11 +155,17 @@ class TelegramClient:
 
     @classmethod
     def from_credentials(
-        cls, credentials: dict[str, Any], *, timeout: float = 10.0
+        cls,
+        credentials: CredentialsLike,
+        *,
+        timeout: float = 10.0,
     ) -> "TelegramClient":
+        """A client for this bot. The token is revealed here, into a client
+        built for the call at hand."""
+        telegram = TelegramCredentials.of(credentials)
         return cls(
-            bot_token=str(credentials.get("bot_token") or ""),
-            api_base=resolve_api_base(credentials),
+            bot_token=reveal_secret(telegram.bot_token) or "",
+            api_base=telegram.api_base_url or _TELEGRAM_API_BASE,
             timeout=timeout,
         )
 
@@ -173,7 +194,7 @@ class TelegramClient:
         if client is not None:
             response = await client.post(url, json=payload)
         else:
-            async with httpx.AsyncClient(timeout=self._timeout) as own_client:
+            async with outbound_http(self._timeout) as own_client:
                 response = await own_client.post(url, json=payload)
         return self._parse(method, response)
 
@@ -198,7 +219,7 @@ class TelegramClient:
             for key, value in fields.items()
         }
         await assert_safe_api_base(self.base_url, platform="Telegram")
-        async with httpx.AsyncClient(timeout=timeout or self._timeout) as client:
+        async with outbound_http(timeout or self._timeout) as client:
             response = await client.post(
                 f"{self.base_url}/{method}",
                 data=data,
@@ -242,6 +263,18 @@ def classify_telegram_error(exc: Exception) -> DeliveryClassification:
     if isinstance(exc, httpx.RequestError):
         return DeliveryClassification.TRANSIENT
     return DeliveryClassification.PERMANENT
+
+
+def classify_telegram_send_error(exc: Exception) -> DeliveryClassification:
+    """``classify_telegram_error`` for a call that posts a message.
+
+    The general classifier retries any transport failure, which is right for a
+    read and wrong for a send: a read timeout after ``sendMessage`` went out may
+    have posted it, and a retry posts it twice.
+    """
+    if isinstance(exc, TelegramApiError):
+        return classify_telegram_error(exc)
+    return classify_transport_failure(exc)
 
 
 def telegram_retry_after(exc: Exception) -> float | None:

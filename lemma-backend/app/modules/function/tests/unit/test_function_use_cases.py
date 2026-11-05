@@ -27,7 +27,6 @@ from app.modules.function.domain.entities import (
     FunctionType,
 )
 from app.modules.function.domain.errors import (
-    FunctionRunQueueUnavailable,
     FunctionValidationError,
 )
 from app.modules.function.services.execution_preflight import (
@@ -132,7 +131,6 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
         lambda uow: service,
         compiler,
         dispatcher,
-        AsyncMock(),
     )
     result = await use_cases.create_function(
         pod_id=created.pod_id,
@@ -187,7 +185,6 @@ async def test_execute_api_touches_sandbox_with_no_connection_held(monkeypatch):
         lambda uow: service,
         SimpleNamespace(),
         dispatcher,
-        AsyncMock(),
     )
     result = await use_cases.execute_function(
         pod_id=function.pod_id,
@@ -258,7 +255,6 @@ async def test_execute_backfills_legacy_revision_before_creating_run():
         lambda uow: service,
         compiler,
         dispatcher,
-        AsyncMock(),
     )
 
     result = await use_cases.execute_function(
@@ -341,7 +337,6 @@ async def test_execute_raises_when_a_second_backfill_attempt_is_still_legacy():
         lambda uow: service,
         compiler,
         dispatcher,
-        AsyncMock(),
     )
 
     with pytest.raises(
@@ -364,41 +359,6 @@ async def test_execute_raises_when_a_second_backfill_attempt_is_still_legacy():
 
 
 @pytest.mark.asyncio
-async def test_execute_run_by_id_worker_path_needs_no_ctx():
-    factory = _TrackingUowFactory()
-    function = _function(type=FunctionType.JOB)
-    run = FunctionRunEntity(
-        id=uuid4(),
-        function_id=function.id,
-        user_id=function.user_id,
-        user_email="u@example.com",
-        status=FunctionRunStatus.PENDING,
-    )
-    completed = run.model_copy()
-    completed.status = FunctionRunStatus.COMPLETED
-    dispatcher = SimpleNamespace(
-        execute=AsyncMock(return_value=completed),
-        cancel=AsyncMock(),
-    )
-
-    use_cases = FunctionUseCases(
-        factory,
-        lambda uow: SimpleNamespace(),
-        SimpleNamespace(),
-        dispatcher,
-        AsyncMock(),
-    )
-    # No request / no ctx is supplied — the worker trusts the persisted run.
-    result = await use_cases.execute_run_by_id(run.id)
-
-    dispatcher.execute.assert_awaited_once_with(
-        run.id,
-        mode=FunctionDispatchMode.ASYNCHRONOUS,
-    )
-    assert result.status == FunctionRunStatus.COMPLETED
-
-
-@pytest.mark.asyncio
 async def test_execute_job_returns_pending_without_running_sandbox():
     factory = _TrackingUowFactory()
     function = _function(type=FunctionType.JOB)
@@ -415,14 +375,12 @@ async def test_execute_job_returns_pending_without_running_sandbox():
         ),
     )
     dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
-    queue = SimpleNamespace(enqueue=AsyncMock(return_value=f"function:{run.id}"))
 
     use_cases = FunctionUseCases(
         factory,
         lambda uow: service,
         SimpleNamespace(),
         dispatcher,
-        queue,
     )
     result = await use_cases.execute_function(
         pod_id=function.pod_id,
@@ -433,53 +391,9 @@ async def test_execute_job_returns_pending_without_running_sandbox():
         request=SimpleNamespace(),
     )
 
-    # The run transaction, including its deterministic async dispatch identity,
-    # closes before the one queue round-trip.
-    assert result.status == FunctionRunStatus.PENDING
-    assert result.job_id == f"function:{run.id}"
-    queue.enqueue.assert_awaited_once_with(run.id)
-    assert factory.state["opens"] == 1
-    dispatcher.execute.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_execute_job_queue_failure_leaves_recoverable_pending_run():
-    factory = _TrackingUowFactory()
-    function = _function(type=FunctionType.JOB)
-    run = FunctionRunEntity(
-        id=uuid4(),
-        function_id=function.id,
-        user_id=function.user_id,
-        status=FunctionRunStatus.PENDING,
-        job_id=None,
-    )
-    run.job_id = f"function:{run.id}"
-    service = SimpleNamespace(
-        resolve_execute=AsyncMock(
-            return_value=ResolvedExecution(function=function, run=run)
-        ),
-    )
-    dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
-    queue = SimpleNamespace(
-        enqueue=AsyncMock(side_effect=FunctionRunQueueUnavailable("down"))
-    )
-    use_cases = FunctionUseCases(
-        factory,
-        lambda uow: service,
-        SimpleNamespace(),
-        dispatcher,
-        queue,
-    )
-
-    result = await use_cases.execute_function(
-        pod_id=function.pod_id,
-        name="job-fn",
-        input_data={},
-        user_id=function.user_id,
-        user_email=None,
-        request=SimpleNamespace(),
-    )
-
+    # The run and the `function.run` item that starts it are written in one
+    # transaction; nothing is published afterwards, and the sandbox is not
+    # touched on the request path.
     assert result.status == FunctionRunStatus.PENDING
     assert result.job_id == f"function:{run.id}"
     assert factory.state["opens"] == 1

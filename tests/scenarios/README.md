@@ -436,7 +436,7 @@ to, no Docker, ~20ms.
 Use `make scenarios-all` to run the complete local suite and write one report.
 It defaults to one worker process, matching the CI journey lanes. Increase
 `SCENARIOS_WORKERS` if you specifically want to exercise multiple worker
-replicas; `schedule_poller` is designed for that deployment shape.
+replicas; the work runtime's claims are designed for that deployment shape.
 
 It is **refused above 1 when a polling receiver is on** — Telegram answers a
 second `getUpdates` for the same bot with 409 Conflict and the two pollers take

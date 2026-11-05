@@ -8,10 +8,16 @@ own -- the grant is the whole permission, and the row is added as the member
 who opened the table, through the same validation and permission check as their
 own hand. Its insert event is not theirs, though: it names the outsider, so a
 schedule watching the table can tell a stranger's words from a member's.
+
+A file attached to a row is stored the same way: as the member who opened the
+table, in a folder of the table's own (``/forms/{table}``), in the transaction
+that adds the row -- so a row refused leaves no file behind, and a file is
+never stored for a row that was not added.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -27,15 +33,18 @@ from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
     DatastoreConflictError,
+    DatastoreInfrastructureError,
     DatastoreValidationError,
 )
 from app.modules.datastore.domain.public_rows import (
     UNSAVED,
+    Attachment,
     OpenTable,
     PublicAudience,
     PublicColumn,
     PublicRowRefused,
     PublicRowsClosed,
+    attachment_name,
     is_fillable,
     opening_problem,
     public_column,
@@ -54,8 +63,10 @@ from app.modules.datastore.services.record_validator import (
     RecordValidator,
     convert_record,
 )
+from app.modules.datastore.services.files.write_plans import CreateFilePlan
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.wiring import (
+    build_file_service,
     build_record_service,
     build_table_service,
     get_schema_manager,
@@ -65,6 +76,14 @@ logger = get_logger(__name__)
 
 #: The most open tables one pod lists.
 MAX_OPEN_TABLES = 100
+#: Where files attached to a table's rows are stored, a folder per table.
+#: Outside any member's own folder, so the pod reads them like its other files.
+FORM_FILES_ROOT = "/forms"
+
+
+def attachments_folder(table_name: str) -> str:
+    """The folder a table's attached files are stored in."""
+    return f"{FORM_FILES_ROOT}/{table_name}"
 
 
 class OpeningRefused(ValueError):
@@ -108,7 +127,7 @@ async def table_opening(
         offered=tuple(
             public_column(column)
             for column in table.columns
-            if is_fillable(column, table.primary_key_column)
+            if is_fillable(column, table.primary_key_column, attachments=True)
         ),
         audience=PublicAudience(grant.audience) if grant else None,
         columns=tuple(grant.columns) if grant else (),
@@ -145,6 +164,7 @@ async def open_table(
         columns,
         audience=audience,
         contact_owned=table.contact_owned,
+        attachments=True,
     )
     if problem:
         raise OpeningRefused(problem)
@@ -265,7 +285,8 @@ def _visitor_view(
         columns=tuple(
             public_column(by_name[name])
             for name in grant.columns
-            if name in by_name and is_fillable(by_name[name], table.primary_key_column)
+            if name in by_name
+            and is_fillable(by_name[name], table.primary_key_column, attachments=True)
         ),
     )
 
@@ -277,12 +298,21 @@ async def add_visitor_row(
     table_name: str,
     answers: dict[str, object],
     contact_id: UUID | None,
+    vouched: bool,
     actor: str | None = None,
+    attachments: Mapping[str, Attachment] | None = None,
 ) -> None:
-    """Add one row from outside, as the member who opened the table.
+    """Add one row from outside, for the contact writing it.
 
-    ``actor`` names the outsider for the row's insert event --
-    ``visitor:{session}`` or ``contact:{id}``; a contact is named by default.
+    Written under the grant of the member who opened the table, so a member
+    who can no longer write it stops its rows; named, on a contact-owned
+    table and in the row's insert event, for the contact who wrote it.
+    ``vouched`` says whether anything proved who that contact is -- a table
+    open to contacts only takes rows from no one else.
+
+    ``attachments`` are files for the row's open file columns, by column; one
+    for any other column is ignored, like any other answer the table did not
+    ask for. Each is stored in ``/forms/{table}`` and its column holds the path.
 
     Raises :class:`PublicRowRefused` for answers that do not fit -- before
     anything is written -- and for any row the database refuses, in one
@@ -296,13 +326,29 @@ async def add_visitor_row(
         opened = _visitor_view(pod_id, *found) if found else None
         if found is None or opened is None:
             raise PublicRowsClosed(table_name)
-        if opened.audience is PublicAudience.CONTACTS and contact_id is None:
+        if opened.audience is PublicAudience.CONTACTS and not vouched:
             raise PublicRowsClosed(table_name)
-        row = public_values(opened.columns, answers)
+        files = {
+            column.name: attachments[column.name]
+            for column in opened.columns
+            if column.attached and attachments and column.name in attachments
+        }
+        row = public_values(opened.columns, answers, attached=files)
         if opened.contact_owned and contact_id is not None:
             row[CONTACT_COLUMN] = str(contact_id)
-        await _insert_as(uow, found[1].opened_by, opened, row, outside_actor)
-        await uow.commit()
+        stored: list[CreateFilePlan] = []
+        committed = False
+        try:
+            await _insert_as(
+                uow, found[1].opened_by, opened, row, outside_actor, files, stored
+            )
+            await uow.commit()
+            committed = True
+        finally:
+            if not committed:
+                # The rollback takes the files' rows with it; their bytes are
+                # already in storage, and nothing would ever point at them.
+                await _discard(uow, stored)
 
 
 async def _insert_as(
@@ -311,7 +357,14 @@ async def _insert_as(
     opened: OpenTable,
     row: dict[str, object],
     outside_actor: str,
+    files: Mapping[str, Attachment] | None = None,
+    stored: list[CreateFilePlan] | None = None,
 ) -> None:
+    """Add ``row`` as ``user_id``, storing ``files`` first as them.
+
+    Each file's plan is appended to ``stored`` once its bytes have been sent to
+    storage, so a caller whose transaction then fails knows what to remove.
+    """
     try:
         ctx = await create_authorization_data_service(uow).build_user_context(
             user_id=user_id, pod_id=opened.pod_id
@@ -329,7 +382,22 @@ async def _insert_as(
             events_enabled=True,
             outside_actor=outside_actor,
         )
-        _check(table_ctx, opened, row)
+        folder = attachments_folder(opened.name)
+        # Checked with the paths the files would be stored at, before any is:
+        # an answer that does not fit costs no upload.
+        _check(
+            table_ctx,
+            opened,
+            {
+                **row,
+                **{
+                    name: f"{folder}/{attachment_name(file.name)}"
+                    for name, file in (files or {}).items()
+                },
+            },
+        )
+        for name, file in (files or {}).items():
+            row[name] = await _store(uow, ctx, opened, folder, file, stored)
         await build_record_service(uow).create_record(table_ctx, row, user_id)
     except DatastoreAccessDeniedError as exc:
         raise PublicRowsClosed(opened.name) from exc
@@ -337,10 +405,63 @@ async def _insert_as(
         # Past ``_check``, only the database refuses: a duplicate, a missing
         # reference. Saying which would tell a stranger what the table holds.
         raise PublicRowRefused(UNSAVED) from exc
+    except DatastoreInfrastructureError:
+        # Storage would not take an attached file: the form is open, and
+        # trying again may work, so it is not said to be closed.
+        raise
     except DomainError as exc:
         raise PublicRowsClosed(opened.name) from exc
     finally:
         reset_current_context(token)
+
+
+async def _store(
+    uow,
+    ctx: Context,
+    opened: OpenTable,
+    folder: str,
+    file: Attachment,
+    stored: list[CreateFilePlan] | None,
+) -> str:
+    """Store one attached file as the member, and say the path it is at.
+
+    A name the folder already holds becomes ``name (1).ext``: two people
+    attaching ``cv.pdf`` is ordinary, and neither should be refused for it.
+    """
+    files = build_file_service(uow)
+    plan = await files.prepare_create_file(
+        opened.pod_id,
+        attachment_name(file.name),
+        file.content,
+        ctx,
+        description=f"Attached to a response to {opened.name}",
+        directory_path=folder,
+        rename_on_conflict=True,
+    )
+    try:
+        await files.write_create_file(plan, file.content)
+    finally:
+        # Written or not, the storage key is the caller's to clear if the row
+        # never lands: a write that failed part-way may have left bytes.
+        if stored is not None:
+            stored.append(plan)
+    entity = await files.finalize_create_file(plan)
+    return entity.path
+
+
+async def _discard(uow, stored: list[CreateFilePlan]) -> None:
+    files = build_file_service(uow)
+    for plan in stored:
+        try:
+            await files.cleanup_create_storage(plan)
+        except DatastoreInfrastructureError as exc:
+            # One object storage would not delete must not hide why the row
+            # was refused; it is left for the operator, named in the log.
+            logger.warning(
+                "datastore.public_rows.attachment_cleanup_failed.degraded",
+                pod_id=str(plan.entity.pod_id),
+                error_type=type(exc).__name__,
+            )
 
 
 def _check(table_ctx: TableContext, opened: OpenTable, row: dict[str, object]) -> None:

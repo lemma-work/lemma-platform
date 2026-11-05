@@ -26,6 +26,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleType,
     ScheduleUpdateEntity,
+    authored_config,
     normalize_datastore_schedule_config,
 )
 from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
@@ -33,6 +34,7 @@ from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
 )
 from app.modules.schedule.services.time_schedule_policy import (
+    refuse_time_schedule_filter,
     validated_time_schedule_config,
 )
 from app.modules.schedule.services.schedule_run_service import ScheduleRunService
@@ -43,12 +45,22 @@ from app.modules.schedule.services.schedule_target_policy import (
     derive_webhook_target_from_workflow_start,
     named_agent_target_fields,
     validate_global_workflow_is_unclaimed,
+    validate_global_workflow_unclaimed_after_update,
     validate_instruction_survives_update,
     validate_target_instruction,
     validate_single_target,
     workflow_target_fields,
 )
 from app.modules.schedule.services.schedule_naming import schedule_name_for
+from app.modules.schedule.services.schedule_ownership import (
+    require_target_edit_for_row_owner_runs,
+    take_ownership_if_behaviour_changes,
+)
+from app.modules.schedule.services.schedule_connector_policy import (
+    ConnectorResolve,
+    require_connector_use,
+)
+from app.modules.schedule.services import trigger_resubscription as resub
 from app.modules.schedule.services.schedule_update_policy import (
     is_explicit_reactivation,
     validate_schedule_update_policies,
@@ -71,8 +83,12 @@ class ScheduleService:
         datastore_policy: DatastoreSchedulePolicy | None = None,
         authorization_service: object | None = None,
         webhook_sources: WebhookSourceRegistry | None = None,
+        connector_access: ConnectorResolve | None = None,
     ):
         self.uow = uow
+        # The pod connector check, injectable so a unit test can watch who is
+        # asked about which connector without a database behind it.
+        self._connector_access = connector_access
         self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(
             uow=uow
         )
@@ -107,18 +123,6 @@ class ScheduleService:
             target_resolver = SqlAlchemyScheduleTargetResolver(uow)
         self.target_resolver = target_resolver
 
-    async def list_schedule_runs(
-        self,
-        *,
-        pod_id: UUID,
-        schedule_id: UUID,
-        ctx: Context,
-        limit: int,
-    ):
-        return await self.run_service.list_schedule_runs(
-            pod_id=pod_id, schedule_id=schedule_id, ctx=ctx, limit=limit
-        )
-
     async def retry_schedule_run(
         self,
         *,
@@ -139,57 +143,37 @@ class ScheduleService:
         """Create a new schedule and schedule/provider-create side effects."""
 
         schedule_create = schedule_create.model_copy(
-            update={
-                "name": schedule_name_for(schedule_create),
-            }
+            update={"name": schedule_name_for(schedule_create)}
         )
         schedule_create = await self._resolve_create_target(schedule_create)
+        # After the target: a workflow's start merges its own trigger config
+        # in, and that is no more a provisioned routing key than what the
+        # author sent.
         schedule_create = schedule_create.model_copy(
             update={
-                "visibility": await self._resolve_create_visibility(schedule_create)
+                "visibility": await self._resolve_create_visibility(schedule_create),
+                "config": authored_config(schedule_create.config),
             }
         )
         await self._validate_name_available(schedule_create)
         await self._validate_target(schedule_create)
         await self._require_target_execute(schedule_create, ctx=ctx)
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
+        schedule_create = await self._require_connector_use(schedule_create, ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
+            refuse_time_schedule_filter(
+                schedule_create.filter_instruction,
+                schedule_create.filter_output_schema,
+            )
             await validated_time_schedule_config(
                 schedule_create.config, session=self.uow.session
             )
         elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
             validate_webhook_source(schedule_create, self.webhook_sources)
         schedule = ScheduleEntity(**schedule_create.model_dump())
-        created = await self.schedule_repository.create(schedule)
-
-        if (
-            created.schedule_type == ScheduleType.WEBHOOK
-            and created.connector_trigger_id
-            and created.account_id
-        ):
-            try:
-                provisioned = (
-                    await self.external_schedule_writer.create_provider_trigger(created)
-                )
-                # A source needing no subscription still supplies a routing key.
-                if provisioned.apply_to(created.config):
-                    updated = await self.schedule_repository.update(
-                        created.id,
-                        config=created.config,
-                    )
-                    if updated:
-                        created = updated
-            except Exception as exc:
-                logger.debug(
-                    "schedule.schedule_service.create_external_schedule_s.propagated",
-                    exc_info=True,
-                )
-                await self.schedule_repository.delete(created.id)
-                raise ScheduleValidationError(
-                    f"Failed to create external schedule: {exc}"
-                ) from exc
-
-        return created
+        if not schedule.listens_through_connector:
+            return await self.schedule_repository.create(schedule)
+        return await resub.create_listening(schedule, self)
 
     async def _resolve_create_target(
         self, schedule_create: ScheduleCreateEntity
@@ -347,19 +331,14 @@ class ScheduleService:
         return workflow is not None and workflow.is_global_workflow
 
     async def _get_workflow_by_name(self, *, pod_id: UUID, workflow_name: str):
-        workflow = await self.target_resolver.get_workflow_by_name(
-            pod_id,
-            normalize_resource_name(workflow_name),
-        )
+        name = normalize_resource_name(workflow_name)
+        workflow = await self.target_resolver.get_workflow_by_name(pod_id, name)
         if workflow is None:
             raise ScheduleValidationError("Workflow target not found in pod")
         return workflow
 
     async def _get_agent_by_name(self, *, pod_id: UUID, agent_name: str):
-        agent = await self.target_resolver.get_agent_by_name(
-            pod_id,
-            agent_name.strip(),
-        )
+        agent = await self.target_resolver.get_agent_by_name(pod_id, agent_name.strip())
         if agent is None:
             raise ScheduleValidationError("Agent target not found in pod")
         return agent
@@ -430,25 +409,22 @@ class ScheduleService:
                 existing.model_copy(update={"name": update_data["name"]}),
                 existing_schedule_id=schedule_id,
             )
-        if "workflow_id" in update_data or "agent_id" in update_data:
-            candidate = existing.model_copy(update=update_data)
-            await self._require_target_execute(candidate, ctx=ctx)
-        if "workflow_id" in update_data and update_data["workflow_id"] is not None:
-            workflow = await self.target_resolver.get_workflow(
-                update_data["workflow_id"]
-            )
-            if workflow and workflow.is_global_workflow:
-                existing_for_workflow = (
-                    await self.schedule_repository.find_active_by_workflow(
-                        pod_id=existing.pod_id,
-                        workflow_id=update_data["workflow_id"],
-                        user_id=existing.user_id,
-                    )
-                )
-                validate_global_workflow_is_unclaimed(
-                    [item for item in existing_for_workflow if item.id != schedule_id]
-                )
-        updated = await self.schedule_repository.update(schedule_id, **update_data)
+        await take_ownership_if_behaviour_changes(
+            existing,
+            update_data,
+            ctx=ctx,
+            require_target_execute=self._require_target_execute,
+            require_connector_use=self._require_connector_use,
+        )
+        await validate_global_workflow_unclaimed_after_update(
+            existing, update_data, self.target_resolver, self.schedule_repository
+        )
+        updated = await resub.update_schedule_resubscribing(
+            existing,
+            update_data,
+            self,
+            caller_id=ctx.user_id if ctx is not None else None,
+        )
 
         if is_explicit_reactivation(existing, updated, update_data):
             # Reactivating a schedule clears its circuit-breaker failure streak so
@@ -464,11 +440,20 @@ class ScheduleService:
         if not existing:
             return False
 
-        if (
-            existing.schedule_type == ScheduleType.WEBHOOK
-            and existing.connector_trigger_id
-            and existing.account_id
-            and existing.config.get("provider_trigger_id")
+        if existing.listens_to_mcp and existing.config.get("provider_trigger_id"):
+            # Unsubscribed once the row is gone for certain. Unsubscribing
+            # first and then failing to commit left a schedule pointing at a
+            # subscription whose secret was deleted, refusing every delivery
+            # without a word. If this after-commit step fails, the subscription
+            # is an orphan the reconciler finds and drops.
+            deleted = await self.schedule_repository.delete(schedule_id)
+            if deleted:
+                writer = self.external_schedule_writer
+                self.uow.after_commit(lambda: resub.drop_subscription(existing, writer))
+            return deleted
+
+        if existing.listens_through_connector and existing.config.get(
+            "provider_trigger_id"
         ):
             try:
                 await self.external_schedule_writer.delete_provider_trigger(existing)
@@ -588,12 +573,11 @@ class ScheduleService:
             return
         if ctx is None:
             raise RuntimeError("Context is required for schedule target authorization")
+        # Row-owner runs are authored like the target (H16): create and take-over.
+        await require_target_edit_for_row_owner_runs(schedule, ctx)
         if schedule.agent_id is not None:
-            # The assistant is asked about pod-scoped, the same as everywhere
-            # else it is asked about. Its row's id *is* the pod's, so both arms
-            # would name the same thing -- but the resource type is not
-            # cosmetic, and an AGENT-typed check would newly hit the
-            # resource-owner shortcut for whoever created the pod.
+            # The assistant is asked about pod-scoped: an AGENT-typed check
+            # would hit the resource-owner shortcut for the pod's creator.
             await ctx.require(
                 Permissions.AGENT_EXECUTE,
                 agent_execute_ref(schedule.agent_id, pod_id=schedule.pod_id),
@@ -607,6 +591,16 @@ class ScheduleService:
                     pod_id=schedule.pod_id,
                 ),
             )
+
+    async def _require_connector_use(
+        self,
+        schedule: ScheduleCreateEntity | ScheduleEntity,
+        ctx: Context | None,
+    ) -> ScheduleCreateEntity | ScheduleEntity:
+        """Refused, or ``schedule`` pinned to the account it resolved to."""
+        return await require_connector_use(
+            schedule, ctx, self.uow, resolve=self._connector_access
+        )
 
     async def _require_datastore_table_update(
         self,

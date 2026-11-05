@@ -12,10 +12,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
+from sqlalchemy.orm import aliased
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.observability.product_metrics import record_sandbox_session
 from app.modules.workspace.domain.sandbox import (
     DEFAULT_SLUG,
     Sandbox,
@@ -29,6 +31,10 @@ from app.modules.workspace.infrastructure.models import (
     SandboxInstanceModel,
     SandboxModel,
 )
+
+
+#: ``SandboxInstanceModel.provider`` for E2B (``E2BProvider.name``).
+E2B_PROVIDER = "e2b"
 
 
 def utcnow() -> datetime:
@@ -203,18 +209,117 @@ class SandboxRepository:
         )
 
     async def mark_instance_released(self, instance_id: UUID) -> None:
-        await self.session.execute(
-            update(SandboxInstanceModel)
-            .where(SandboxInstanceModel.id == instance_id)
-            .values(state=SandboxInstanceState.RELEASED.value, released_at=utcnow())
+        now = utcnow()
+        ended = await self._end_running_session(
+            instance_id, state=SandboxInstanceState.RELEASED, now=now
         )
+        if not ended:
+            await self.session.execute(
+                update(SandboxInstanceModel)
+                .where(SandboxInstanceModel.id == instance_id)
+                .values(state=SandboxInstanceState.RELEASED.value, released_at=now)
+            )
 
     async def mark_instance_destroyed(self, instance_id: UUID) -> None:
-        await self.session.execute(
-            update(SandboxInstanceModel)
-            .where(SandboxInstanceModel.id == instance_id)
-            .values(state=SandboxInstanceState.DESTROYED.value)
+        ended = await self._end_running_session(
+            instance_id, state=SandboxInstanceState.DESTROYED, now=utcnow()
         )
+        if not ended:
+            await self.session.execute(
+                update(SandboxInstanceModel)
+                .where(SandboxInstanceModel.id == instance_id)
+                .values(state=SandboxInstanceState.DESTROYED.value)
+            )
+
+    async def _end_running_session(
+        self, instance_id: UUID, *, state: SandboxInstanceState, now: datetime
+    ) -> bool:
+        """Move a READY instance to ``state`` and time the session it ends.
+
+        Conditional on READY so a session is timed once: releasing a row that
+        is already released (or destroying one that was) ends nothing. Only
+        E2B is timed -- it is the provider whose running time is billed.
+        """
+        values: dict[str, object] = {"state": state.value}
+        if state is SandboxInstanceState.RELEASED:
+            values["released_at"] = now
+        row = (
+            await self.session.execute(
+                update(SandboxInstanceModel)
+                .where(
+                    SandboxInstanceModel.id == instance_id,
+                    SandboxInstanceModel.state == SandboxInstanceState.READY.value,
+                )
+                .values(**values)
+                .returning(SandboxInstanceModel.provider, SandboxInstanceModel.ready_at)
+            )
+        ).one_or_none()
+        if row is None:
+            return False
+        provider, ready_at = row
+        if provider == E2B_PROVIDER and ready_at is not None:
+            record_sandbox_session((now - ready_at).total_seconds())
+        return True
+
+    async def claim_for_destroy(
+        self, sandbox_id: UUID, *, expected_epoch: int | None
+    ) -> SandboxInstance | None:
+        """The instance a destroy may act on; with an epoch, claimed atomically.
+
+        Without ``expected_epoch`` this is the current instance, unchanged.
+
+        With one, it is a compare-and-set: the instance is marked DESTROYED
+        only if it is still the sandbox's current one, at that epoch, and not
+        already destroyed -- in one statement, so two callers holding the same
+        stale handle cannot both win, and a caller whose handle predates a
+        replacement claims nothing. Returns None when the claim fails.
+
+        Marked before the provider call rather than after, unlike the
+        unconditional path, because the mark *is* the claim. A provider call
+        that then fails leaves a container behind a DESTROYED row; the next
+        ensure inspects the name and adopts it if it is still there.
+        """
+        if expected_epoch is None:
+            return await self.current_instance(sandbox_id)
+        current_epoch = (
+            select(SandboxModel.epoch)
+            .where(SandboxModel.id == sandbox_id)
+            .scalar_subquery()
+        )
+        # The state the claim replaced. A subquery in RETURNING reads the
+        # statement's snapshot, so this is the row as it was before the update
+        # -- which is what says whether the claim ended a running session.
+        before = aliased(SandboxInstanceModel)
+        prior_state = (
+            select(before.state)
+            .where(before.id == SandboxInstanceModel.id)
+            .scalar_subquery()
+        )
+        result = await self.session.execute(
+            update(SandboxInstanceModel)
+            .where(
+                SandboxInstanceModel.sandbox_id == sandbox_id,
+                SandboxInstanceModel.epoch == expected_epoch,
+                SandboxInstanceModel.epoch == current_epoch,
+                SandboxInstanceModel.state != SandboxInstanceState.DESTROYED.value,
+            )
+            .values(state=SandboxInstanceState.DESTROYED.value)
+            .returning(SandboxInstanceModel, prior_state)
+        )
+        claimed = result.one_or_none()
+        if claimed is None:
+            return None
+        row, was = claimed
+        # The claim is what ends a READY E2B session on this path, so it is
+        # where the session is timed; the later mark finds it DESTROYED and
+        # times nothing, so the session is counted once.
+        if (
+            was == SandboxInstanceState.READY.value
+            and row.provider == E2B_PROVIDER
+            and row.ready_at is not None
+        ):
+            record_sandbox_session((utcnow() - row.ready_at).total_seconds())
+        return row.to_entity()
 
     async def current_instance(self, sandbox_id: UUID) -> SandboxInstance | None:
         """The instance at the sandbox's current epoch, whatever its state."""
@@ -346,7 +451,19 @@ class SandboxRepository:
                 SandboxInstanceModel.id == instance_id,
                 SandboxInstanceModel.state != SandboxInstanceState.DESTROYED.value,
             )
-            .values(state=SandboxInstanceState.READY.value, last_error=None)
+            .values(
+                state=SandboxInstanceState.READY.value,
+                last_error=None,
+                # A resume starts a new running session: restart its clock,
+                # or the next release would time the paused hours as well.
+                ready_at=case(
+                    (
+                        SandboxInstanceModel.state != SandboxInstanceState.READY.value,
+                        utcnow(),
+                    ),
+                    else_=SandboxInstanceModel.ready_at,
+                ),
+            )
         )
 
     async def list_idle(

@@ -1412,6 +1412,17 @@ button svg, a svg { flex-shrink:0; }
     font-size:11.5px;line-height:1.5;color:var(--wait);
 }
 .pick__note > svg { flex:none;margin-top:2px; }
+/* A coding agent's options under the model it runs — effort first. Small and
+   inline, because they adjust the pick above them rather than being one. */
+.agentopts { display:flex;flex-wrap:wrap;gap:8px 16px;margin:10px 0 0; }
+.agentopts label { display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-3); }
+.agentopts select {
+    font:inherit;font-size:12.5px;color:var(--ink);cursor:pointer;
+    background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 8px;
+}
+.agentopts select:hover:not(:disabled) { border-color:var(--ink-3); }
+.agentopts select:disabled { cursor:default;color:var(--ink-3); }
+.agentopts--group { margin:0;padding:10px 16px;border-top:1px solid var(--line); }
 
 .pick__menu {
     position:absolute;top:calc(100% + 6px);left:0;z-index:60;
@@ -1774,6 +1785,15 @@ button svg, a svg { flex-shrink:0; }
 .arrival__note code { font-size:12px; }
 
 .arrival__problem { color:var(--bad);font-size:13px;margin:14px 0 0; }
+/* The opt-out of domain auto-join: the note's sentence, with its box. */
+.arrival__open { cursor:pointer; }
+.arrival__open input { flex:none;margin:3px 0 0;accent-color:var(--accent); }
+/* A domain another organization holds: what happened, and the ways on. */
+.arrival__taken { width:100%;text-align:left;margin:16px 0 0;font-size:13px;color:var(--ink-2);line-height:1.5; }
+.arrival__taken p { display:flex;align-items:flex-start;gap:8px;margin:0 0 12px; }
+.arrival__taken p svg { flex:none;margin-top:2px;color:var(--bad); }
+.arrival__taken code { font-size:12px; }
+.arrival__taken-acts { display:flex;flex-wrap:wrap;gap:8px; }
 /* The lists could not be read: said above the rungs, with the way to ask again. */
 .arrival__unread { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 16px; }
 .arrival__unread svg { flex:none; }
@@ -1905,6 +1925,8 @@ button svg, a svg { flex-shrink:0; }
 
 @media(max-width:560px) {
     .firstprofile__send { grid-template-columns:minmax(0,1fr); }
+    .firstprofile__number { white-space:normal; overflow-wrap:anywhere; }
+    .firstprofile .modal__acts { flex-wrap:wrap; }
 }
 
 @media (max-width: 767px) {
@@ -1953,6 +1975,10 @@ button svg, a svg { flex-shrink:0; }
     .history__archive { opacity: 1; width: 44px; height: 44px; right: 2px }
     .history__rename-input { font-size: 16px }
 }
+/* A row waiting on you keeps saying so under the pointer and on touch, where
+   the time is hidden behind Rename and Archive. The item's padding already
+   clears them, so nothing overlaps. `--warn`, measured for AA. */
+.history__entry .history__at[data-waiting] { visibility: visible; color: var(--warn) }
 .all__entry .all__row { width: 100%; padding-right: 48px }
 .all__entry .history__rename-button { right: 2px; top: 50%; transform: translateY(-50%) }
 .all__entry:has(.history__rename--editing) > .all__row { display: none }
@@ -2006,3 +2032,10 @@ button svg, a svg { flex-shrink:0; }
     .body--dual .convo-host .composer { padding-inline: 0; }
     .body--dual .convo-host .composer__row { padding-inline: 16px; }
 }
+
+/* The way back to an install a sign-in or a new organization lost. */
+.resume-install { display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 18px;padding:12px 14px;border:1px solid var(--accent-line);border-radius:12px;background:var(--accent-soft);font-size:14px;color:var(--ink); }
+.resume-install > span { flex:1 1 200px;min-width:0; }
+.resume-install .btn { min-height:44px;text-decoration:none; }
+.resume-install__dismiss { display:grid;place-items:center;width:44px;height:44px;border:0;border-radius:10px;background:none;color:var(--ink-2);cursor:pointer; }
+.resume-install__dismiss:hover { background:var(--line-2); }

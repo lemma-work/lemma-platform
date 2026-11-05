@@ -27,10 +27,10 @@ export function useSchedules(podId: string) {
 /** The firings of one schedule, fetched only once its row is opened. A pod
  *  with twelve schedules would otherwise cost twelve run listings to draw a
  *  list nobody has asked a question of yet. */
-export function useScheduleRuns(podId: string, scheduleId: string | null) {
+export function useScheduleRuns(podId: string, scheduleId: string | null, skipped = false) {
     return useQuery({
-        queryKey: [SCHEDULES, podId, scheduleId, "runs"],
-        queryFn: () => source.listScheduleRuns(podId, scheduleId as string),
+        queryKey: [SCHEDULES, podId, scheduleId, "runs", skipped ? "skipped" : "fired"],
+        queryFn: () => source.listScheduleRuns(podId, scheduleId as string, { skipped }),
         enabled: Boolean(scheduleId),
         staleTime: 15_000,
     });
@@ -84,6 +84,16 @@ export function useCreateSchedule(podId: string) {
             void cache.invalidateQueries({ queryKey: [SCHEDULES, podId] });
             void cache.invalidateQueries({ queryKey: ["profile", podId] });
         },
+    });
+}
+
+/** Events on servers the caller connected, for the form's "When". */
+export function useServerEvents(podId: string, enabled: boolean) {
+    return useQuery({
+        queryKey: [SCHEDULES, podId, "server-events"],
+        queryFn: () => source.serverEvents(podId),
+        enabled,
+        staleTime: 60_000,
     });
 }
 

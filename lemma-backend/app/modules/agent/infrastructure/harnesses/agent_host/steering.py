@@ -23,6 +23,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import AgentHostHarnessCapabilities
@@ -103,9 +104,12 @@ async def forward_queued_messages(
                 )
                 if command is None:
                     # The run is over, or the host has not accepted it yet.
-                    # Nothing is committed, so the messages are exactly as
-                    # queued as they were: the next check, or the follow-up
-                    # turn, takes them.
+                    # Rolled back explicitly: the factory commits on a clean
+                    # exit, and committing here would stamp the messages as
+                    # sent with no command behind them, so no later check would
+                    # ever send them. Undone, they are exactly as queued as they
+                    # were: the next check, or the follow-up turn, takes them.
+                    await uow.rollback()
                     return 0
                 host_id = command.host_id
             await uow.commit()
@@ -161,7 +165,8 @@ async def record_steer_result(
                 detail=reason,
             )
             await uow.commit()
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        raise_if_database_unavailable(exc)
         # Not worth the run. Unrecorded, a delivered steer is answered a second
         # time by the follow-up turn, which is the failure it had before
         # steering existed; an undelivered one is answered exactly as intended.

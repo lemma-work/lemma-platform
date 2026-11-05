@@ -30,6 +30,7 @@ from harness import consent, tenant
 from harness.drivers.api import ApiDriver, items_of
 from harness.steps.agent import AgentSteps
 from harness.steps.building import BuildingSteps
+from harness.steps.connectors import ConnectorSteps
 from harness.steps.datastore import DatastoreSteps
 from harness.steps.identity import IdentitySteps
 from harness.steps.pod import PodSteps
@@ -50,7 +51,13 @@ REQUEST_TIMEOUT = 150.0
 
 @dataclass(eq=False)
 class Person(
-    IdentitySteps, PodSteps, DatastoreSteps, AgentSteps, BuildingSteps, SurfaceSteps
+    IdentitySteps,
+    PodSteps,
+    DatastoreSteps,
+    AgentSteps,
+    BuildingSteps,
+    ConnectorSteps,
+    SurfaceSteps,
 ):
     """Someone using Lemma, and everything they can do.
 

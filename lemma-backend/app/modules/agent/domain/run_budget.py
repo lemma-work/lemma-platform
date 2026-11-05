@@ -18,7 +18,7 @@ into a trap -- the run is interrupted mid-thought with no chance to land what it
 has -- so each dimension warns first, once, and the run gets to choose what to
 do with the room that is left.
 
-Three dimensions, because they catch different runaways and no one of them
+Four dimensions, because they catch different runaways and no one of them
 catches the others:
 
 * **Model requests** — the loop that will not converge. The cap that existed.
@@ -27,6 +27,11 @@ catches the others:
 * **Consecutive tool failures** — the loop that is failing rather than working.
   A run retrying the same broken write is spending exactly as much as one making
   progress, and only the outcome tells them apart.
+* **Repeated identical calls** — the loop that succeeds at nothing. The same
+  tool, the same arguments, the same result, over and over: no failure to
+  count, and far below the request ceiling. A run that wanted a tool it was not
+  offered called the next one in the list 1,399 times, noticing the loop in
+  its own reasoning and calling it again.
 
 Deliberately not a token or spend limit here: usage already has one, applied per
 organization, and a second ceiling in a second place is two answers to "why did
@@ -46,6 +51,7 @@ class BudgetDimension(str, Enum):
     MODEL_REQUESTS = "MODEL_REQUESTS"
     WALL_CLOCK = "WALL_CLOCK"
     TOOL_FAILURES = "TOOL_FAILURES"
+    REPEATED_CALLS = "REPEATED_CALLS"
 
 
 #: What the person is told, per dimension. Written for somebody who did not
@@ -62,6 +68,10 @@ _EXHAUSTED_REASONS = {
     BudgetDimension.TOOL_FAILURES: (
         "The last {spent} actions in a row failed, so it is repeating something "
         "that is not working."
+    ),
+    BudgetDimension.REPEATED_CALLS: (
+        "It made the same call {spent} times in a row and got the same result "
+        "each time, so it is going round in circles."
     ),
 }
 
@@ -88,6 +98,13 @@ _APPROACHING_NOTICES = {
         "{limit}. Whatever is being retried is not working: change approach, or "
         "report what is blocking you, rather than repeating it."
     ),
+    BudgetDimension.REPEATED_CALLS: (
+        "You have made the same call {spent} times in a row, with the same "
+        "arguments, and got the same result every time; the run stops to ask at "
+        "{limit}. Calling it again will not change the answer. If you meant a "
+        "different tool, it may need finding first with search_tools; otherwise "
+        "do something else, or answer with what you have."
+    ),
 }
 
 
@@ -113,6 +130,7 @@ class RunBudget:
     model_requests: int
     wall_clock_seconds: float
     consecutive_tool_failures: int
+    repeated_identical_calls: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +158,9 @@ class RunSpend:
     budget: RunBudget
     model_requests: int = 0
     consecutive_tool_failures: int = 0
+    #: How many times in a row the latest call repeated, itself included.
+    repeated_calls: int = 0
+    _last_call: tuple[str, str, str] | None = None
     #: Dimensions already warned about. A warning repeated every step would be
     #: nagging rather than news, and the run cannot act on it twice.
     warned: set[BudgetDimension] = field(default_factory=set)
@@ -158,6 +179,18 @@ class RunSpend:
             self.consecutive_tool_failures += 1
         else:
             self.consecutive_tool_failures = 0
+
+    def record_tool_call(self, *, tool: str, args: str, result: str) -> None:
+        """Lengthen the streak when this call repeats the last exactly.
+
+        All three must match, each as its canonical JSON. A run polling work
+        that is still going repeats the call but sooner or later sees a new
+        result; one that waits on purpose has `wait_for`. Anything different
+        starts the streak again.
+        """
+        call = (tool, args, result)
+        self.repeated_calls = self.repeated_calls + 1 if call == self._last_call else 1
+        self._last_call = call
 
     def approaching(self, *, elapsed_seconds: float, at: float) -> BudgetWarning | None:
         """The first ceiling this run is within `at` of, warned about once.
@@ -193,6 +226,13 @@ class RunSpend:
                 self.consecutive_tool_failures,
                 budget.consecutive_tool_failures,
             ),
+            (
+                BudgetDimension.REPEATED_CALLS,
+                float(self.repeated_calls),
+                float(budget.repeated_identical_calls),
+                self.repeated_calls,
+                budget.repeated_identical_calls,
+            ),
         )
         for dimension, spent, limit, shown_spent, shown_limit in dimensions:
             if limit <= 0 or dimension in self.warned:
@@ -222,4 +262,9 @@ class RunSpend:
             return BudgetExhausted(
                 BudgetDimension.TOOL_FAILURES, self.consecutive_tool_failures
             )
+        if (
+            budget.repeated_identical_calls > 0
+            and self.repeated_calls >= budget.repeated_identical_calls
+        ):
+            return BudgetExhausted(BudgetDimension.REPEATED_CALLS, self.repeated_calls)
         return None

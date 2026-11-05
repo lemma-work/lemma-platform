@@ -7,17 +7,25 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
 
 
 class ApprovedExecution(BaseModel):
-    """One tool call a person approved, running with that person's authority.
+    """One tool call a person approved, and exactly what the approval lends it.
 
     Approval is how an agent does what its own grants do not allow: a missing
     grant, a destructive action, an auth-required step all come back as
-    ``needs_approval``, and the person the agent works for lends their authority
-    to exactly one described call. It is never standing access -- the agent's
-    next call is judged on its own grants again.
+    ``needs_approval``, and the person the agent works for approves exactly one
+    described call. It is never standing access -- the agent's next call is
+    judged on its own grants again.
+
+    The call still runs as the agent: the same delegated context it would have
+    had, plus ``permission_ids`` -- the permissions the server refused this
+    exact call for -- answered as approved. It used to run as the approver's
+    whole user context, so approving "delete this row" handed the agent
+    everything the person could do for the length of the call: an approved
+    subagent spawn, connector call or sign-in ran with all of it (H7). The
+    person's ceiling applies either way; an approver lends only what they hold.
 
     Carried on the tool context of the approved call only, so every tool builds
     its authorization context from it explicitly (``tool_authorization_context``)
@@ -37,6 +45,13 @@ class ApprovedExecution(BaseModel):
     #: The ``request_approval`` call id, or ``None`` when an earlier session
     #: approval covered this exact call.
     approval_id: str | None = None
+    #: What the approval lends: what its card showed -- the refusals the
+    #: server had recorded when the card went up (``tools/approval_denials``).
+    #: Never the ``permission_ids`` the model put in its ``request_approval``
+    #: -- those are whatever it wrote -- nor a refusal recorded since. Empty
+    #: when nothing was pending: the call then runs with exactly the agent's
+    #: own authority.
+    permission_ids: frozenset[str] = frozenset()
 
 
 class AgentContext(BaseModel):
@@ -71,18 +86,36 @@ class AgentContext(BaseModel):
     # `memory_is_active`, which the run-context builder resolves once here so
     # the capability assembler and the brief builder cannot disagree about it.
     memory_enabled: bool = False
+    # Whether this run is told to write memory only when asked, its memory
+    # being kept by a pass after it ends (`memory_kept_after_turn`). Resolved
+    # with `memory_enabled`; the prompt reads it, and the run's terminal write
+    # queues the pass from the same value, so the two cannot disagree.
+    memory_after_turn: bool = False
     # This agent's grant summary, loaded once for the run. Toolset selection
     # derives POD and CONNECTORS from it, and the tool assembler reuses it
     # rather than reading the same rows a second time. Typed loosely here to
     # keep this domain model free of a tools-layer import.
     grant_summary: object | None = None
-    # Rendered runtime brief (pod/user/granted resources) appended to the system
-    # prompt. Built once per run by the runner; harness-neutral so it just rides
-    # along on the context.
+    # The toolsets this run actually has -- declared, always-on and
+    # grant-derived -- resolved once by the run-context builder. The prompt
+    # reads its toolset guidance from this, so it describes the tools the run
+    # was given rather than the ones the agent row lists.
+    run_toolsets: list[AgentToolset] | None = None
+    # The part of the runtime brief that holds for the whole conversation (pod,
+    # user, this agent, what it can reach), appended to the system prompt.
+    # Built once per run by the runner; harness-neutral so it just rides along.
     context_brief: str | None = None
     # The text of the doc this conversation is attached to, rendered as a prompt
     # section; read fresh each run because the doc changes between turns.
     attached_document: str | None = None
+    # What this person still owes somebody an answer to, rendered; None when
+    # nothing is open. Its tools are offered only when it is set.
+    open_questions: str | None = None
+    # Everything that changes from one run of the conversation to the next,
+    # rendered once per run (`domain/run_context_prompt`). Sent next to the
+    # current turn and never stored, so the system prompt and the replayed
+    # history stay byte-identical between runs.
+    run_context: str | None = None
     # Whom this run answers (see `domain/outsiders`). On a run answering
     # somebody outside the pod, tools authorize as nobody -- Public reads only,
     # plus a contact's own rows -- rather than as `user_id`, which on such a run
@@ -97,7 +130,7 @@ class AgentContext(BaseModel):
     # On a run answering outsiders: the member who looks after the conversation
     # started it, typing in Lemma (`domain/private_notes.keeper_started`). Still
     # a stranger's run in what it may reach, but nobody outside is asking, so
-    # `message_user` -- which only reaches that member -- has nothing to do.
+    # `channel_post` -- which only reaches that member -- has nothing to do.
     keeper_asking: bool = False
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -34,14 +34,8 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
     SurfaceInstallationRepositoryPort,
 )
-from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-    get_surface_event_dedup_store,
-)
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.credential_resolver import (
@@ -51,6 +45,7 @@ from app.modules.agent_surfaces.services.surface_inbound import SurfaceInboundMi
 from app.modules.agent_surfaces.services.surface_interactions import (
     SurfaceInteractionMixin,
 )
+from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedupStore
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
 logger = get_logger(__name__)
@@ -66,22 +61,23 @@ class AgentSurfaceIngressService(SurfaceInboundMixin, SurfaceInteractionMixin):
         router: SurfaceRouter,
         binder: ConversationBinder,
         surface_repository: SurfaceInstallationRepositoryPort,
-        conversation_link_repository: SurfaceConversationLinkRepository,
         credential_resolver: SurfaceCredentialResolver,
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
     ):
         self.uow = uow
         self.router = router
+        #: Where things sit in channels: routing's own view of them.
+        self.seats = router.seats
         self.binder = binder
         self.surface_repository = surface_repository
-        self.conversation_link_repository = conversation_link_repository
         self.credential_resolver = credential_resolver
-        # The two process-wide ones keep their defaults: an adapter registry is
-        # five stateless objects and the dedup store is a Redis client, so a
-        # caller that has no opinion should not have to build either.
+        # Defaults a caller with no opinion should not have to build: an
+        # adapter registry is five stateless objects, and the dedup store takes
+        # its message claims on this same session, so they commit (or roll
+        # back) with the work they guard.
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
-        self.event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
+        self.event_dedup_store = event_dedup_store or SurfaceEventDedupStore(uow=uow)
 
     def split_webhook_deliveries(
         self, request: SurfaceIngressRequest

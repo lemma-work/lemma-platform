@@ -9,7 +9,6 @@ repository that the approval reconciliation path uses on its own.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import Select, func, select, update
@@ -23,10 +22,15 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageKind,
 )
+from app.modules.agent.domain.pending_interactions import (
+    PendingInteraction,
+    PendingInteractionCursor,
+)
 from app.modules.agent.infrastructure.models import (
     AgentApprovalDecisionModel,
     MessageModel,
 )
+from app.modules.agent.infrastructure.repositories import pending_interaction_queries
 
 
 class ConversationApprovalQueriesMixin:
@@ -108,27 +112,18 @@ class ConversationApprovalQueriesMixin:
         )
         return result.scalar_one_or_none() is not None
 
-    async def approval_execution_claim_expired(
+    async def approval_execution_claimed(
         self,
         *,
         conversation_id: UUID,
         approval_id: str,
-        stale_after_seconds: int,
     ) -> bool:
-        """Whether this approval's execution claim is old enough to be dead.
-
-        Read against the database's clock for the same reason the claim is
-        written with it: a claim compared against a server whose clock has
-        drifted is not a claim. ``False`` for an unclaimed approval -- there is
-        nothing abandoned about a claim nobody took.
-        """
+        """Whether an executor ever took this approval's one-shot claim."""
         result = await self.session.execute(
             select(AgentApprovalDecisionModel.id).where(
                 AgentApprovalDecisionModel.conversation_id == conversation_id,
                 AgentApprovalDecisionModel.approval_id == approval_id,
                 AgentApprovalDecisionModel.execution_claimed_at.is_not(None),
-                AgentApprovalDecisionModel.execution_claimed_at
-                < func.now() - timedelta(seconds=stale_after_seconds),
             )
         )
         return result.scalar_one_or_none() is not None
@@ -150,6 +145,23 @@ class ConversationApprovalQueriesMixin:
             return None
         response = row.response if isinstance(row.response, dict) else {}
         return AgentRunApprovalDecision(row.decision), response
+
+    async def tool_call_id_of_message(
+        self, *, conversation_id: UUID, message_id: UUID
+    ) -> str | None:
+        """The tool_call_id of a TOOL_CALL message, by the message's own id.
+
+        The approvals list returns messages, whose ``id`` is the message's; a
+        decision is addressed by the call's ``tool_call_id``. This lets a
+        client that sent the one it was given still reach the call.
+        """
+        return await self.session.scalar(
+            select(MessageModel.tool_call_id).where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.id == message_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+            )
+        )
 
     async def get_tool_call(
         self,
@@ -310,6 +322,48 @@ class ConversationApprovalQueriesMixin:
         )
         return [row.to_entity() for row in result.scalars()]
 
+    async def pausing_calls_decided_awaiting_a_return(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[MessageEntity]:
+        """Pausing calls somebody decided whose return has not landed yet.
+
+        The window an approved tool spends running in a worker. A message sent
+        in it must not start a run of its own: that run's history would show
+        the call unanswered, and the approved result would land behind it.
+        """
+        stmt = self._pausing_calls_stmt(
+            conversation_id=conversation_id,
+            pausing_tool_names=pausing_tool_names,
+            answered=self._returned_call_ids(conversation_id),
+            limit=None,
+        ).where(MessageModel.tool_call_id.in_(self._decided_call_ids(conversation_id)))
+        result = await self.session.execute(stmt)
+        return [row.to_entity() for row in result.scalars()]
+
+    async def pausing_call_ids_of_run(
+        self,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[str]:
+        """Every pausing call one run made, answered or not, oldest first."""
+        result = await self.session.execute(
+            select(MessageModel.tool_call_id)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.agent_run_id == agent_run_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+                MessageModel.tool_name.in_(list(pausing_tool_names)),
+                MessageModel.tool_call_id.is_not(None),
+            )
+            .order_by(MessageModel.sequence)
+        )
+        return [call_id for call_id in result.scalars() if call_id is not None]
+
     async def pausing_calls_awaiting_a_decision(
         self,
         *,
@@ -335,6 +389,27 @@ class ConversationApprovalQueriesMixin:
             )
         )
         return [row.to_entity() for row in result.scalars()]
+
+    async def list_pending_interactions(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        cursor: PendingInteractionCursor | None = None,
+        limit: int = 50,
+    ) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]:
+        """Every pause waiting on this person in this pod; see the module."""
+        return await pending_interaction_queries.list_pending_interactions(
+            self.session, user_id=user_id, pod_id=pod_id, cursor=cursor, limit=limit
+        )
+
+    async def conversations_with_pending_interaction(
+        self, conversation_ids: Sequence[UUID]
+    ) -> set[UUID]:
+        """Which of these conversations hold a pause waiting on a person."""
+        return await pending_interaction_queries.conversations_with_pending_interaction(
+            self.session, conversation_ids
+        )
 
     async def list_resolved_approval_ids(
         self,

@@ -188,6 +188,56 @@ def _media_mime(key: str, data: dict[str, Any]) -> str | None:
     return _UNDECLARED_MIME_TYPES.get(key)
 
 
+def _shared_place_text(message: dict[str, Any]) -> str:
+    """A shared location or venue, in words the agent can read.
+
+    These arrive with no text at all, so they used to parse to an empty message
+    and go unanswered.
+    """
+    venue = payload_section(message, "venue")
+    location = payload_section(venue, "location") or payload_section(
+        message, "location"
+    )
+    if not location and not venue:
+        return ""
+    latitude, longitude = location.get("latitude"), location.get("longitude")
+    coordinates = f"{latitude},{longitude}" if latitude is not None else ""
+    place = ", ".join(
+        part
+        for part in (payload_text(venue, "title"), payload_text(venue, "address"))
+        if part
+    )
+    described = " ".join(
+        part for part in (coordinates, f"({place})" if place else "") if part
+    )
+    return f"Shared a location: {described}" if described else "Shared a location"
+
+
+def _someone_elses_contact_text(message: dict[str, Any]) -> str:
+    """A contact card the sender passed on, in words.
+
+    Their *own* contact is the phone-linking step and stays wordless, so it is
+    confirmed rather than answered as a prompt.
+    """
+    contact = payload_section(message, "contact")
+    if not contact:
+        return ""
+    sender_id = payload_text(payload_section(message, "from"), "id")
+    if sender_id and payload_text(contact, "user_id") == sender_id:
+        return ""
+    name = " ".join(
+        part
+        for part in (
+            payload_text(contact, "first_name"),
+            payload_text(contact, "last_name"),
+        )
+        if part
+    )
+    phone = payload_text(contact, "phone_number")
+    described = " ".join(part for part in (name, f"({phone})" if phone else "") if part)
+    return f"Shared a contact: {described}" if described else "Shared a contact"
+
+
 class TelegramMessageParser:
     platform = "TELEGRAM"
 
@@ -195,11 +245,16 @@ class TelegramMessageParser:
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None:
         del headers
-        message = payload_any(payload, "message", "edited_message")
+        message = payload_any(payload, "message")
         if not message:
             # Inline-keyboard taps arrive as ``callback_query`` and are owned by
             # the interaction path (``parse_inbound_interaction``); they are not
             # chat messages, so the message parser ignores them.
+            #
+            # So is ``edited_message``. It carries the original's
+            # ``message_id``, so inside the dedupe window an edit was dropped
+            # silently and after it the edit started a second run that answered
+            # the same message again. An edit is not a new turn.
             return None
 
         batch = _batch(payload, message)
@@ -214,12 +269,20 @@ class TelegramMessageParser:
         contact = self._extract_contact_details(
             message=message, sender_id=sender.user_id
         )
+        attachments = self._batch_attachments(batch)
+        if not message_text and not attachments and not contact["contact_shared"]:
+            # A pin, a member joining, a title change: Telegram sends these as
+            # messages with nothing in them. Parsed, they ran identity, the
+            # claim and the binder only to be dropped as empty, unanswered.
+            return None
         # A reply to one of the bot's own messages continues the conversation in
-        # a group without re-@mentioning. Telegram privacy mode only delivers
-        # replies to THIS bot's messages, so reply_to_message.from.is_bot is a
-        # safe signal here.
+        # a group without re-@mentioning. Which bot it replied to is settled in
+        # ingress against our own id (`telegram_addressing`): privacy mode
+        # delivers only replies to *this* bot, but a bot that is an admin or
+        # has privacy off sees replies to every bot in the group.
         reply_to_message = payload_section(message, "reply_to_message")
-        is_reply_to_bot = bool(payload_section(reply_to_message, "from").get("is_bot"))
+        replied_to = payload_section(reply_to_message, "from")
+        is_reply_to_bot = bool(replied_to.get("is_bot"))
         message_id = _batch_message_id(message, batch)
 
         return ParsedInboundSurfaceEvent(
@@ -260,12 +323,16 @@ class TelegramMessageParser:
                 "is_topic_message": bool(message.get("is_topic_message")),
                 "message_thread_id": payload_text(message, "message_thread_id"),
                 "is_thread_reply": is_reply_to_bot,
+                "reply_to_user_id": (
+                    payload_text(replied_to, "id") or None if is_reply_to_bot else None
+                ),
+                "has_bot_command": mentions.has_bot_command,
                 "quoted_message": _quoted_message(message),
                 "sender_username": sender.username,
                 "contact_shared": contact["contact_shared"],
                 "contact_shared_by_sender": contact["contact_shared_by_sender"],
                 "shared_contact_phone": contact["shared_contact_phone"],
-                "attachments": self._batch_attachments(batch),
+                "attachments": attachments,
                 "batched_message_count": len(batch),
                 "media_group_ids": _media_group_ids(batch),
                 # Carried for the ingress enrichment step to verify against the
@@ -327,7 +394,12 @@ class TelegramMessageParser:
         )
 
     def _extract_text(self, message: dict[str, Any]) -> str:
-        return message.get("text") or message.get("caption") or ""
+        return (
+            message.get("text")
+            or message.get("caption")
+            or _shared_place_text(message)
+            or _someone_elses_contact_text(message)
+        )
 
     @staticmethod
     def _extract_mention_username(entity: dict[str, Any], text: str) -> str | None:

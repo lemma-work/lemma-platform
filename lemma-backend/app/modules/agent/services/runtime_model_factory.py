@@ -6,16 +6,19 @@ no keep-alive reuse across a conversation's many model requests, a new TLS
 handshake per turn, and a pool that was never closed. Half-open sockets left
 behind by that churn are a plausible source of the mid-stream ``ReadError``s the
 harness now has to recover from, so this is the other half of that fix.
+
+The pool is an ``httpx2`` client, not an ``httpx`` one: both provider SDKs are
+built on ``httpx2``, and the anthropic SDK refuses an ``httpx`` client outright.
 """
 
 from __future__ import annotations
 
 import asyncio
-import itertools
 from collections.abc import Mapping
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from dataclasses import replace
 
-import httpx
+import httpx2
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionStreamOptionsParam
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -23,30 +26,42 @@ from pydantic_ai import UsageLimits
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.services.model_stream_budget import (
     ModelStreamBudgetTransport,
 )
 from app.modules.agent.services.openai_schema_compat import (
     openai_compatible_model_profile,
 )
+from app.modules.agent.services.openai_tool_call_extras import (
+    ToolCallExtrasChatModel,
+)
 
 logger = get_logger(__name__)
 
-# Both caches below are bounded. They are keyed by tenant credential, so on a
-# multi-tenant deployment their key space grows with the customer list and
-# nothing ever removed an entry -- and each provider-client entry pins an
-# httpx.AsyncClient with its own connection pool. The cap is generous because
-# eviction costs a reconnect, not a correctness problem; it exists so the
-# ceiling is a number somebody chose.
+# Bounded. Keyed per runtime profile, so on a multi-tenant deployment the key
+# space grows with the customer list and nothing ever removed an entry -- and
+# each entry pins an httpx2.AsyncClient with its own connection pool. The cap is
+# generous because eviction costs a reconnect, not a correctness problem; it
+# exists so the ceiling is a number somebody chose.
 _MAX_PROVIDER_CLIENTS = 256
 
-_provider_clients: BoundedDict[str, httpx.AsyncClient] = BoundedDict(
+# The output cap an Anthropic-compatible request carries when its caller set
+# none. pydantic-ai used to default to this; later 2.x releases send the model's
+# maximum output instead (16384 for a name it does not recognise), which for a
+# model behind an operator's gateway can be far more than the call was written
+# for. Agent runs and the connection check always set their own cap, so this
+# holds only for the one-shot calls that do not -- vision descriptions and
+# titles -- and keeps them where they were. Request settings override it.
+ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
+
+_provider_clients: BoundedDict[str, httpx2.AsyncClient] = BoundedDict(
     _MAX_PROVIDER_CLIENTS,
     name="agent.provider_clients",
     touch_on_get=True,
@@ -57,23 +72,6 @@ _provider_clients: BoundedDict[str, httpx.AsyncClient] = BoundedDict(
 # the close is handed to the loop. The set keeps a strong reference until it
 # finishes; without one the task can be collected mid-close.
 _closing_clients: set[asyncio.Task[None]] = set()
-
-
-# Opaque per-process labels standing in for credentials in cache keys. The
-# first version hashed the key instead, which is the wrong shape twice over: a
-# digest of a secret is still derived from the secret (and offline-comparable),
-# and the cache only ever needs to know whether two credentials are the *same*,
-# never anything about them. A counter answers that exactly, and leaves nothing
-# to leak if a key ever reaches a log line or a traceback.
-_credential_labels: BoundedDict[str, str] = BoundedDict(
-    _MAX_PROVIDER_CLIENTS, name="agent.credential_labels", touch_on_get=True
-)
-
-# Monotonic, deliberately not `len(_credential_labels)`. Once the map evicts,
-# its length repeats, so a length-derived label would eventually be handed to a
-# second, different credential -- and two tenants whose labels collide share a
-# client, and therefore an Authorization header. The counter never rewinds.
-_credential_sequence = itertools.count(1)
 
 
 @with_config(ConfigDict(arbitrary_types_allowed=True, extra="allow"))
@@ -94,17 +92,7 @@ def provider_model_settings(
     )
 
 
-def _credential_label(api_key: str | None) -> str:
-    if not api_key:
-        return "anonymous"
-    label = _credential_labels.get(api_key)
-    if label is None:
-        label = f"credential-{next(_credential_sequence)}"
-        _credential_labels[api_key] = label
-    return label
-
-
-def _close_later(client: httpx.AsyncClient) -> None:
+def _close_later(client: httpx2.AsyncClient) -> None:
     """Close an evicted client on the loop, if there is one to close it on."""
     try:
         loop = asyncio.get_running_loop()
@@ -115,7 +103,7 @@ def _close_later(client: httpx.AsyncClient) -> None:
     task.add_done_callback(_closing_clients.discard)
 
 
-async def _aclose_quietly(client: httpx.AsyncClient) -> None:
+async def _aclose_quietly(client: httpx2.AsyncClient) -> None:
     try:
         await client.aclose()
     except Exception:  # pragma: no cover - eviction is best-effort
@@ -125,47 +113,58 @@ async def _aclose_quietly(client: httpx.AsyncClient) -> None:
         )
 
 
-def _client_cache_key(
-    protocol: str, base_url: str, api_key: str | None, headers: Mapping[str, object]
-) -> str:
-    """Identify an endpoint+credential pair without putting the key in the key.
+def _client_cache_key(protocol: str, base_url: str, profile_id: str | None) -> str:
+    """One pool per endpoint per runtime profile, named by nothing secret.
 
-    Two profiles pointing at the same base URL with different credentials must
-    not share a client — same endpoint, different tenant.
+    The pooled client carries no credential: the API key and the profile's
+    headers ride on the SDK client built over it, request by request, and the
+    pool keeps no cookies. So a key needs no credential in it, nor anything
+    derived from one -- a digest of a secret is still the secret's, to anyone
+    who can guess candidates. The profile keeps one tenant's traffic in its own
+    pool, so a busy tenant cannot take every connection to a shared endpoint.
     """
-    header_sig = ",".join(f"{k}={v}" for k, v in sorted(headers.items()))
-    return f"{protocol}|{base_url}|{_credential_label(api_key)}|{header_sig}"
+    return f"{protocol}|{base_url}|{profile_id or 'unprofiled'}"
 
 
-def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
+def _no_cookies() -> CookieJar:
+    """A jar that stores nothing, so a pool shared across runs shares no state.
+
+    A provider or the gateway in front of it may set cookies, and httpx2 keeps
+    them for the client's life and sends them on every later request -- from
+    whichever run uses the pool next.
+    """
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=[]))
+
+
+def _build_provider_client() -> httpx2.AsyncClient:
     # Limits belong to the transport, not to the client. `AsyncClient._init_transport`
     # returns a transport passed to it *before* it ever looks at `limits`, so a
     # `limits=` beside a custom `transport=` is accepted and silently discarded:
-    # this pool ran on httpx's defaults (20 keepalive, 5s expiry) while the
+    # this pool ran on the library's defaults (20 keepalive, 5s expiry) while the
     # settings said 100 and 30, and `agent_model_http_max_connections` did
     # nothing at all. Building the base transport here is what makes the setting
     # real. Retries belong to the metered model boundary so each dispatch
     # receives spending authority before reaching this transport.
-    pooled = httpx.AsyncHTTPTransport(
-        limits=httpx.Limits(
+    pooled = httpx2.AsyncHTTPTransport(
+        limits=httpx2.Limits(
             max_connections=agent_settings.agent_model_http_max_connections,
             max_keepalive_connections=agent_settings.agent_model_http_max_connections,
             keepalive_expiry=30.0,
         ),
     )
-    return httpx.AsyncClient(
+    return httpx2.AsyncClient(
         # Split timeouts: the read timeout is per-chunk, so it is the "provider
         # has gone away" threshold rather than a budget for the whole turn — a
         # long tool-using answer streams for minutes without tripping it. What
         # it therefore cannot see is a provider that keeps sending *something*
         # forever, which is what the stream budget outside it is for.
-        timeout=httpx.Timeout(
+        timeout=httpx2.Timeout(
             connect=agent_settings.agent_model_http_connect_timeout_seconds,
             read=agent_settings.agent_model_http_read_timeout_seconds,
             write=30.0,
             pool=10.0,
         ),
-        headers={str(key): str(value) for key, value in headers.items()},
+        cookies=_no_cookies(),
         transport=ModelStreamBudgetTransport(
             pooled,
             first_chunk_seconds=(
@@ -177,13 +176,17 @@ def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
 
 
 def get_provider_http_client(
-    *, protocol: str, base_url: str, api_key: str | None, headers: Mapping[str, object]
-) -> httpx.AsyncClient:
-    """The shared client for one provider endpoint, created on first use."""
-    key = _client_cache_key(protocol, base_url, api_key, headers)
+    *, protocol: str, base_url: str, profile_id: str | None
+) -> httpx2.AsyncClient:
+    """The shared client for one provider endpoint, created on first use.
+
+    It holds no credential and no header: pass those to the SDK client built
+    over it, which sends them with each request.
+    """
+    key = _client_cache_key(protocol, base_url, profile_id)
     client = _provider_clients.get(key)
     if client is None or client.is_closed:
-        client = _build_provider_client(headers)
+        client = _build_provider_client()
         _provider_clients[key] = client
     return client
 
@@ -202,7 +205,7 @@ async def close_agent_provider_clients() -> None:
             )
 
 
-class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
+class _UsageOnlyStreamOptionsChatModel(ToolCallExtrasChatModel):
     """An OpenAI-compatible chat model that keeps `stream_options` to the spec.
 
     pydantic-ai's ``openai_continuous_usage_stats`` does two unrelated things:
@@ -229,6 +232,32 @@ class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
         self, model_settings: OpenAIChatModelSettings
     ) -> ChatCompletionStreamOptionsParam:
         return {"include_usage": True}
+
+
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _provider_access(
+    runtime_profile: Mapping[str, object],
+    config: Mapping[str, object],
+    runtime_credentials: Mapping[str, object] | None,
+) -> tuple[str | None, dict[str, str] | None, str | None]:
+    """The key and headers the SDK client sends, and the profile it pools under."""
+    credentials = (
+        runtime_credentials if isinstance(runtime_credentials, Mapping) else {}
+    )
+    headers = config.get("headers")
+    default_headers = (
+        {str(key): str(value) for key, value in headers.items()}
+        if isinstance(headers, Mapping)
+        else None
+    )
+    return (
+        _nonempty_str(credentials.get("api_key")),
+        default_headers or None,
+        _nonempty_str(runtime_profile.get("profile_id")),
+    )
 
 
 def _unmetered_model_from_runtime_profile(
@@ -267,30 +296,21 @@ def _unmetered_model_from_runtime_profile(
     if not isinstance(config, Mapping):
         return None
 
-    credentials = (
-        runtime_credentials if isinstance(runtime_credentials, Mapping) else {}
+    api_key, default_headers, profile_id = _provider_access(
+        runtime_profile, config, runtime_credentials
     )
-    api_key = credentials.get("api_key")
-    api_key = api_key if isinstance(api_key, str) and api_key else None
 
-    headers = config.get("headers")
-    headers = headers if isinstance(headers, Mapping) else {}
-
-    if protocol == "OPENAI_COMPATIBLE":
+    if protocol == RuntimeProfileProtocol.OPENAI_COMPATIBLE:
         base_url = config.get("base_url")
         if not isinstance(base_url, str) or not base_url:
             return None
         client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "EMPTY",
+            default_headers=default_headers,
             # Disable SDK retries: each attempt must pass through metering.
-            # OpenAI 3.x types its client as httpx2; our shared httpx client is
-            # also used by Anthropic and implements the same client interface.
-            http_client=get_provider_http_client(  # type: ignore[arg-type]
-                protocol="openai",
-                base_url=base_url,
-                api_key=api_key,
-                headers=headers,
+            http_client=get_provider_http_client(
+                protocol="openai", base_url=base_url, profile_id=profile_id
             ),
             max_retries=0,
         )
@@ -302,10 +322,13 @@ def _unmetered_model_from_runtime_profile(
             profile=openai_compatible_model_profile,
         )
 
-    if protocol == "ANTHROPIC_COMPATIBLE":
-        from pydantic_ai.models.anthropic import AnthropicModel
+    if protocol == RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE:
         from pydantic_ai.providers.anthropic import AnthropicProvider
         from anthropic import AsyncAnthropic
+
+        from app.modules.agent.services.anthropic_thinking import (
+            AdaptiveThinkingAnthropicModel,
+        )
 
         base_url = config.get("base_url")
         resolved_base_url = base_url if isinstance(base_url, str) and base_url else None
@@ -314,15 +337,19 @@ def _unmetered_model_from_runtime_profile(
                 max_retries=0,
                 api_key=api_key,
                 base_url=resolved_base_url,
+                default_headers=default_headers,
                 http_client=get_provider_http_client(
                     protocol="anthropic",
                     base_url=resolved_base_url or "https://api.anthropic.com",
-                    api_key=api_key,
-                    headers=headers,
+                    profile_id=profile_id,
                 ),
             )
         )
-        return AnthropicModel(model_name_value, provider=provider)
+        return AdaptiveThinkingAnthropicModel(
+            model_name_value,
+            provider=provider,
+            settings=ModelSettings(max_tokens=ANTHROPIC_DEFAULT_MAX_TOKENS),
+        )
 
     return None
 

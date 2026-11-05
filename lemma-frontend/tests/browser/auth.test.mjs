@@ -39,7 +39,10 @@ after(async () => { await browser?.close(); stop(); });
 
 async function fixture(t, { signedIn = false, verified = false } = {}) {
     const context = await browser.newContext();
-    context.setDefaultTimeout(15_000);
+    // The app is `next dev`, which compiles client chunks the first time a
+    // step needs them; on a loaded CI runner one of those can take longer
+    // than 15s (the first test alone runs ~35s there). A hang still fails.
+    context.setDefaultTimeout(30_000);
     t.after(() => context.close());
     const state = { signedIn, verified, sends: 0, signups: 0, verifies: 0, blockedAccess: false, failAfterSignup: false, callbacks: 0, codeSends: 0, codeVerifies: 0, nonceRequests: 0, method: "code", provider: "google", abandoned: null, verifyError: null, challengeId: "first-challenge", failAfterCode: false };
     const headers = () => ({

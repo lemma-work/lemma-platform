@@ -6,6 +6,10 @@ the pod made Public. Only a channel Slack marks as shared with another company
 (Slack Connect), and only a sender from that other company, is an outsider.
 Getting either half wrong answers a colleague as a stranger, or a stranger with
 somebody's access.
+
+The exception is a workspace the pod's organization holds through Lemma's own
+app: there its colleagues are its people, and a group that welcomes outsiders
+answers them as contacts (``slack_workspace_people``).
 """
 
 from __future__ import annotations
@@ -25,9 +29,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
-from app.modules.agent_surfaces.services.slack_groups import (
+from app.modules.agent_surfaces.services.workspace_channels import (
     answers_slack_outsider,
-    slack_group_title,
+    workspace_channel_title,
 )
 
 pytestmark = pytest.mark.unit
@@ -110,6 +114,21 @@ def test_only_the_other_company_in_a_shared_channel_is_answered_as_outsiders(
 # ------------------------------------------------------- at the door
 
 
+@pytest.fixture(autouse=True)
+def held(monkeypatch):
+    """Which workspaces Lemma's app holds for the pod's organization."""
+    teams: set[str] = set()
+
+    async def held_for_pods(uow, team_id, pod_ids):
+        return team_id in teams and set(pod_ids) == {POD}
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.slack_workspace_people.held_for_pods",
+        held_for_pods,
+    )
+    return teams
+
+
 def _door(group: SurfaceGroup) -> OutsiderDoor:
     async def _get(*, surface_id, external_channel_id):
         return group
@@ -132,6 +151,7 @@ def _door(group: SurfaceGroup) -> OutsiderDoor:
 
 def _slack_group(*, shared: bool) -> SurfaceGroup:
     return SurfaceGroup(
+        channel_id=uuid4(),
         pod_id=POD,
         surface_id=uuid4(),
         platform="SLACK",
@@ -147,6 +167,7 @@ def _slack_surface():
         pod_id=POD,
         surface_type=SurfacePlatform.SLACK,
         config=SurfaceConfig(),
+        matches_tenant=lambda tenant: tenant == HOME,
     )
 
 
@@ -176,6 +197,35 @@ async def test_a_colleague_outside_the_pod_is_not_answered_as_a_stranger():
     assert found is None
 
 
+@pytest.mark.parametrize("guest", [False, True, None])
+async def test_a_colleague_in_a_workspace_the_organization_holds_is_answered(
+    held, guest
+):
+    """A guest too: the group let them in. Only a private chat asks."""
+    held.add(HOME)
+    group = _slack_group(shared=False)
+
+    found = await _door(group).group_welcoming(
+        surface=_slack_surface(),
+        parsed=_said(shared=False, sender_team=HOME),
+        sender=ResolvedSurfaceUser(external_user_id="U0SENDER", is_guest=guest),
+    )
+
+    assert found == group
+
+
+async def test_a_visitor_named_by_another_team_is_not_the_holding_workspaces(held):
+    """Their own team decides, never the installing one."""
+    held.update({HOME, THEIRS})
+    found = await _door(_slack_group(shared=False)).group_welcoming(
+        surface=_slack_surface(),
+        parsed=_said(shared=False, sender_team=THEIRS),
+        sender=_unknown(),
+    )
+
+    assert found is None
+
+
 async def test_nobody_is_an_outsider_in_the_workspaces_own_channels():
     found = await _door(_slack_group(shared=False)).group_welcoming(
         surface=_slack_surface(),
@@ -196,10 +246,12 @@ async def test_nobody_is_an_outsider_in_the_workspaces_own_channels():
 def test_a_channel_is_listed_under_its_slack_name(channel_name, title):
     route = SurfaceChannelRoute(channel_id=CHANNEL, channel_name=channel_name)
 
-    assert slack_group_title(route, _said(shared=False, sender_team=None)) == title
+    assert (
+        workspace_channel_title(route, _said(shared=False, sender_team=None)) == title
+    )
 
 
 def test_a_group_dm_has_no_name_of_its_own():
     parsed = _said(shared=False, sender_team=None, channel_type="mpim")
 
-    assert slack_group_title(None, parsed) == "Group DM"
+    assert workspace_channel_title(None, parsed) == "Group DM"

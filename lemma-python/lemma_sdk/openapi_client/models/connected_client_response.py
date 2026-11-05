@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -10,6 +10,11 @@ from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
 from ..models.scope import Scope
+from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.event_subscription_response import EventSubscriptionResponse
+
 
 T = TypeVar("T", bound="ConnectedClientResponse")
 
@@ -27,6 +32,7 @@ class ConnectedClientResponse:
         pod_id (UUID):
         scopes (list[Scope]):
         user_id (UUID): The person who connected it.
+        listens_to (list[EventSubscriptionResponse] | Unset):
     """
 
     client_id: str
@@ -38,6 +44,7 @@ class ConnectedClientResponse:
     pod_id: UUID
     scopes: list[Scope]
     user_id: UUID
+    listens_to: list[EventSubscriptionResponse] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,6 +74,13 @@ class ConnectedClientResponse:
 
         user_id = str(self.user_id)
 
+        listens_to: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.listens_to, Unset):
+            listens_to = []
+            for listens_to_item_data in self.listens_to:
+                listens_to_item = listens_to_item_data.to_dict()
+                listens_to.append(listens_to_item)
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -82,11 +96,15 @@ class ConnectedClientResponse:
                 "user_id": user_id,
             }
         )
+        if listens_to is not UNSET:
+            field_dict["listens_to"] = listens_to
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.event_subscription_response import EventSubscriptionResponse
+
         d = dict(src_dict)
         client_id = d.pop("client_id")
 
@@ -129,6 +147,17 @@ class ConnectedClientResponse:
 
         user_id = UUID(d.pop("user_id"))
 
+        _listens_to = d.pop("listens_to", UNSET)
+        listens_to: list[EventSubscriptionResponse] | Unset = UNSET
+        if _listens_to is not UNSET:
+            listens_to = []
+            for listens_to_item_data in _listens_to:
+                listens_to_item = EventSubscriptionResponse.from_dict(
+                    listens_to_item_data
+                )
+
+                listens_to.append(listens_to_item)
+
         connected_client_response = cls(
             client_id=client_id,
             client_name=client_name,
@@ -139,6 +168,7 @@ class ConnectedClientResponse:
             pod_id=pod_id,
             scopes=scopes,
             user_id=user_id,
+            listens_to=listens_to,
         )
 
         connected_client_response.additional_properties = d

@@ -1,7 +1,9 @@
 """Contract tests for the per-run Agent Host event stream.
 
-These run against a real Redis so the ordering and watermark guarantees the
-consumer depends on are exercised against the actual server, not a fake.
+The stream's ordering and watermark guarantees live in a Lua script and in
+Redis's stream commands, so these run that script for real -- in fakeredis,
+which executes it rather than reimplementing it, and keeps the unit lane off
+any Redis the machine happens to be running.
 """
 
 from __future__ import annotations
@@ -9,25 +11,12 @@ from __future__ import annotations
 from uuid import uuid7
 
 import pytest
-from redis.asyncio import Redis
-from redis.exceptions import RedisError
+from fakeredis.aioredis import FakeRedis
 
-from app.core.config import settings
-from app.core.infrastructure.redis.client import close_redis_clients
 from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
     run_events_stream_key,
 )
-
-
-async def _redis_available() -> bool:
-    try:
-        client = Redis.from_url(settings.redis_url, decode_responses=True)
-        await client.ping()
-        await client.aclose()
-        return True
-    except RedisError, OSError:
-        return False
 
 
 pytestmark = pytest.mark.asyncio
@@ -35,13 +24,12 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 async def stream():
-    if not await _redis_available():
-        pytest.skip("redis is not reachable")
-    yield AgentHostEventStream()
-    # These tests open real connections; close them so the suite does not
-    # accumulate orphaned sockets (the conftest guard only clears the
-    # registry, which is the right trade-off for tests that never connect).
-    await close_redis_clients()
+    # fakeredis runs the stream's own Lua append script in-process (with
+    # `lupa`), so the watermark rules are exercised as written without writing
+    # into whatever Redis answers on the developer's default port.
+    redis = FakeRedis(decode_responses=True)
+    yield AgentHostEventStream(client=redis)
+    await redis.aclose()
 
 
 def _event(
@@ -144,6 +132,8 @@ class TestLifecycle:
         run_id = uuid7()
         await stream.delete(run_id=run_id)
         await stream.delete(run_id=run_id)
+
+        assert await stream.read(run_id=run_id, block_ms=50) == []
 
     async def test_append_sets_a_ttl_so_an_abandoned_run_cannot_leak(
         self, stream

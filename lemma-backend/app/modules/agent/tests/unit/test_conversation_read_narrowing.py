@@ -143,12 +143,13 @@ async def test_retryability_is_one_aggregate_over_a_single_run() -> None:
     run_id = uuid4()
 
     class _CountRow:
-        total = 2
-        non_user = 0
+        user = 2
+        is_retry = False
+        with_effect = 0
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_has_only_user_messages(run_id) is True
+    assert await ConversationRepository(uow).run_is_replay_safe(run_id) is True
 
     sql = _sql(uow.session.statements[0])
     assert "count(" in sql
@@ -162,14 +163,13 @@ async def test_retryability_is_one_aggregate_over_a_single_run() -> None:
 @pytest.mark.asyncio
 async def test_a_run_with_a_reply_is_not_replay_safe() -> None:
     class _CountRow:
-        total = 3
-        non_user = 1
+        user = 2
+        is_retry = False
+        with_effect = 1
 
     uow = _Uow([_CountRow()])
 
-    assert (
-        await ConversationRepository(uow).run_has_only_user_messages(uuid4()) is False
-    )
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
 
 
 @pytest.mark.asyncio
@@ -177,14 +177,40 @@ async def test_a_run_with_no_messages_is_not_replay_safe() -> None:
     """Nothing to replay is a different thing from safe to replay."""
 
     class _CountRow:
-        total = 0
-        non_user = 0
+        user = 0
+        is_retry = False
+        with_effect = 0
 
     uow = _Uow([_CountRow()])
 
-    assert (
-        await ConversationRepository(uow).run_has_only_user_messages(uuid4()) is False
-    )
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_retry_with_no_messages_of_its_own_is_replay_safe() -> None:
+    """The turn a retry replays stays on the run it retried, so a retry that
+    failed too owns nothing -- and is still the same turn, safe to run again."""
+
+    class _CountRow:
+        user = 0
+        is_retry = True
+        with_effect = 0
+
+    uow = _Uow([_CountRow()])
+
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is True
+
+
+@pytest.mark.asyncio
+async def test_a_retry_that_replied_is_not_replay_safe() -> None:
+    class _CountRow:
+        user = 0
+        is_retry = True
+        with_effect = 1
+
+    uow = _Uow([_CountRow()])
+
+    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
 
 
 @pytest.mark.asyncio

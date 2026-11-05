@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, create_autospec, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, create_autospec, patch
 from uuid import uuid4
 
 import httpx
@@ -117,13 +117,22 @@ def _auth_config_repo(auth_config: AuthConfigEntity | None = None) -> AsyncMock:
     )
 
 
+def _uow_reading_nothing() -> AsyncMock:
+    """A unit of work whose reads find nothing -- an account in no pod."""
+    uow = AsyncMock()
+    uow.session.execute.return_value = MagicMock()
+    return uow
+
+
 def _service(**overrides) -> ConnectorService:
     deps = {
-        "uow": AsyncMock(),
+        "uow": _uow_reading_nothing(),
         "connector_repository": AsyncMock(get=AsyncMock(return_value=_connector())),
         "auth_config_repository": _auth_config_repo(),
         "account_repository": AsyncMock(),
-        "connect_request_repository": AsyncMock(),
+        "connect_request_repository": AsyncMock(
+            get_reusable_pending=AsyncMock(return_value=None)
+        ),
         "auth_provider_registry": Mock(get=Mock(return_value=_auth_provider())),
         "redirect_uri_builder": Mock(),
         "organization_access": _org_access(),
@@ -240,6 +249,7 @@ async def test_initiate_connect_request_allowed_when_account_exists():
     uow = AsyncMock()
     connect_repo = AsyncMock()
     connect_repo.create.side_effect = lambda req: req
+    connect_repo.get_reusable_pending.return_value = None
     redirect_builder = Mock()
     redirect_builder.build.return_value = "https://callback"
 
@@ -274,6 +284,7 @@ async def test_initiate_connect_request_success():
     uow = AsyncMock()
     connect_repo = AsyncMock()
     connect_repo.create.side_effect = lambda req: req
+    connect_repo.get_reusable_pending.return_value = None
     redirect_builder = Mock()
     redirect_builder.build.return_value = "https://callback"
 
@@ -435,6 +446,7 @@ async def test_initiate_connect_request_allows_reauth_for_unusable_account():
     registry.get.return_value = auth_provider
     connect_repo = AsyncMock()
     connect_repo.create.side_effect = lambda req: req
+    connect_repo.get_reusable_pending.return_value = None
     redirect_builder = Mock()
     redirect_builder.build.return_value = "https://callback"
 
@@ -631,54 +643,6 @@ async def test_create_account_rejects_oauth2_scheme():
         )
 
 
-async def test_get_account_credentials_marks_reauth_required_on_refresh_failure():
-    user_id = uuid4()
-    expired = OAuthCredentials(
-        access_token="old",
-        refresh_token="refresh",
-        expires_at=datetime.now() - timedelta(minutes=5),
-    )
-    account = AccountEntity(
-        id=uuid4(),
-        user_id=user_id,
-        organization_id=ORG_ID,
-        auth_config_id=uuid4(),
-        connector_id="slack",
-        credentials=expired,
-    )
-    account_repo = AsyncMock()
-    account_repo.get.return_value = account
-    account_repo.update.side_effect = lambda entity: entity
-    auth_provider = _auth_provider()
-    auth_provider.refresh_credentials.side_effect = RuntimeError("token revoked")
-    registry = Mock()
-    registry.get.return_value = auth_provider
-    uow = AsyncMock()
-
-    service = _service(
-        uow=uow,
-        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector())),
-        auth_config_repository=_auth_config_repo(
-            AuthConfigEntity(
-                id=account.auth_config_id,
-                organization_id=ORG_ID,
-                connector_id="slack",
-                kind=ConnectorKind.HTTP,
-                config_source=AuthConfigSource.SYSTEM_DEFAULT,
-                name="slack",
-            )
-        ),
-        account_repository=account_repo,
-        auth_provider_registry=registry,
-    )
-
-    with pytest.raises(OAuthWorkflowError):
-        await service.get_account_credentials(account.id, user_id)
-
-    assert account.status == AccountStatus.REAUTH_REQUIRED
-    account_repo.update.assert_awaited()
-
-
 def _refreshing_service(
     credentials: OAuthCredentials, *, refresh_error: Exception | None = None
 ):
@@ -784,6 +748,72 @@ async def test_an_unreachable_provider_is_still_a_502():
     assert raised.value.status_code == 502
 
 
+def _status_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+    return httpx.HTTPStatusError(
+        "refresh failed",
+        request=request,
+        response=httpx.Response(status, request=request),
+    )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _status_error(503),
+        _status_error(429),
+        httpx.ConnectTimeout("token endpoint timed out"),
+        httpx.ConnectError("connection refused"),
+        RuntimeError("anything the provider SDK raises"),
+    ],
+    ids=["5xx", "429", "timeout", "network", "unclassified"],
+)
+async def test_a_transient_refresh_failure_never_marks_the_account(failure):
+    """An expired token whose refresh fails for a passing reason stays usable.
+
+    It used to be marked ``REAUTH_REQUIRED`` -- a single slow token endpoint
+    disabled the account, resolution then refused it before every call, and
+    nothing ever unmarked it. This call still cannot proceed, and says so as
+    the provider's failure; the next one tries the refresh again.
+    """
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="refresh",
+            expires_at=datetime.now() - timedelta(minutes=5),
+        ),
+        refresh_error=failure,
+    )
+
+    with pytest.raises(OAuthWorkflowError) as raised:
+        await service.get_account_credentials(account.id, account.user_id)
+
+    assert raised.value.status_code == 502
+    assert account.status == AccountStatus.CONNECTED
+
+
+async def test_a_successful_refresh_clears_a_reauth_mark():
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="refresh",
+            expires_at=datetime.now() + timedelta(hours=1),
+        )
+    )
+    account.status = AccountStatus.REAUTH_REQUIRED
+    provider = service.auth_provider_registry.get()
+    provider.refresh_credentials.return_value = OAuthCredentials(
+        access_token="new", refresh_token="refresh"
+    )
+
+    credentials = await service.get_account_credentials(
+        account.id, account.user_id, force_refresh=True
+    )
+
+    assert credentials.access_token == "new"
+    assert account.status == AccountStatus.CONNECTED
+
+
 async def test_handle_oauth_callback_resets_status_to_connected():
     user_id = uuid4()
     auth_config = _auth_config("slack")
@@ -812,11 +842,15 @@ async def test_handle_oauth_callback_resets_status_to_connected():
     registry = Mock()
     registry.get.return_value = auth_provider
 
+    # Granted again: the provider's id finds the account, which needs it.
+    existing.status = AccountStatus.REAUTH_REQUIRED
     account_repo = AsyncMock()
     account_repo.get_by_user_and_auth_config.return_value = existing
+    account_repo.get_by_user_auth_config_and_provider_account.return_value = existing
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -828,6 +862,7 @@ async def test_handle_oauth_callback_resets_status_to_connected():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-reauth&code=abc",
         state="state-reauth",
     )
@@ -1038,6 +1073,7 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1049,6 +1085,7 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-1&code=abc",
         state="state-1",
     )
@@ -1124,6 +1161,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1138,6 +1176,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
 
     with patch.object(service, "_profile_dispatcher", return_value=dispatcher):
         account = await service.handle_oauth_callback(
+            browser_user_id=connect_request.user_id,
             redirect_uri="https://cb?state=state-profile&code=abc",
             state="state-profile",
         )
@@ -1182,11 +1221,15 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
     registry = Mock()
     registry.get.return_value = auth_provider
 
+    # Granted again: the provider's id finds the account, which needs it.
+    existing.status = AccountStatus.REAUTH_REQUIRED
     account_repo = AsyncMock()
     account_repo.get_by_user_and_auth_config.return_value = existing
+    account_repo.get_by_user_auth_config_and_provider_account.return_value = existing
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1198,12 +1241,14 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-2&code=abc",
         state="state-2",
     )
 
     assert account.provider_account_id == "U0999999999"
     account_repo.update.assert_awaited_once()
+    account_repo.create.assert_not_awaited()
 
 
 def _composio_auth_config(connector_id: str) -> AuthConfigEntity:
@@ -1275,6 +1320,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     outlook_app = ConnectorEntity(
@@ -1297,6 +1343,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-outlook&code=abc",
         state="state-outlook",
     )
@@ -1451,6 +1498,7 @@ async def test_handle_oauth_callback_surfaces_upstream_error_details():
     registry.get.return_value = auth_provider
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
 
     service = _service(
         connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("slack"))),
@@ -1462,6 +1510,7 @@ async def test_handle_oauth_callback_surfaces_upstream_error_details():
 
     with pytest.raises(OAuthWorkflowError) as exc_info:
         await service.handle_oauth_callback(
+            browser_user_id=connect_request.user_id,
             redirect_uri="https://cb?state=state-3&code=abc",
             state="state-3",
         )
@@ -1514,6 +1563,7 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1525,6 +1575,7 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-clobber&code=abc",
         state="state-clobber",
     )
@@ -1689,6 +1740,7 @@ async def test_the_catalog_profile_supplies_the_provider_identity():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1709,6 +1761,7 @@ async def test_the_catalog_profile_supplies_the_provider_identity():
         ),
     ):
         account = await service.handle_oauth_callback(
+            browser_user_id=connect_request.user_id,
             redirect_uri="https://cb?state=state-gh&code=abc",
             state="state-gh",
         )

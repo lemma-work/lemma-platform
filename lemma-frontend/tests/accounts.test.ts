@@ -4,7 +4,6 @@ import {
     accountName,
     accountTrouble,
     accountUsable,
-    bestAccount,
     isCredentialConflict,
     readAccount,
     readConnector,
@@ -84,32 +83,17 @@ test("each unfinished state says the thing that can actually be done", () => {
     assert.equal(at("CONNECTED", "PENDING_APPROVAL"), "Waiting on an organization owner");
 });
 
-test("the best account is a working one, and the default wins", () => {
-    const accounts = [
-        readAccount({ id: "old", connector_id: "slack", status: "CONNECTED", install_state: "READY", created_at: "2026-01-01" }),
-        readAccount({ id: "broken", connector_id: "slack", status: "REAUTH_REQUIRED", created_at: "2026-09-01" }),
-        readAccount({ id: "chosen", connector_id: "slack", status: "CONNECTED", install_state: "READY", is_default: true, created_at: "2026-02-01" }),
-    ].filter((account): account is ConnectorAccount => account !== null);
+test("a GitHub account with no installation says its triggers are dead", () => {
+    // 0063 unbinds an installation several organizations claimed; its accounts
+    // still read as connected, and every webhook for them is dropped.
+    const github = readAccount({
+        id: "g", connector_id: "github", status: "CONNECTED", install_state: "INSTALL_REQUIRED",
+    }) as ConnectorAccount;
 
-    assert.equal(bestAccount(accounts, "slack")?.id, "chosen");
-    assert.equal(bestAccount(accounts, "notion"), null);
-});
-
-test("with no default, the newest working account wins", () => {
-    const accounts = [
-        readAccount({ id: "old", connector_id: "slack", status: "CONNECTED", install_state: "READY", created_at: "2026-01-01" }),
-        readAccount({ id: "new", connector_id: "slack", status: "CONNECTED", install_state: "READY", created_at: "2026-09-01" }),
-    ].filter((account): account is ConnectorAccount => account !== null);
-
-    assert.equal(bestAccount(accounts, "slack")?.id, "new");
-});
-
-test("an account that cannot reach anything is never chosen", () => {
-    const accounts = [
-        readAccount({ id: "half", connector_id: "github", status: "CONNECTED", install_state: "INSTALL_REQUIRED" }),
-    ].filter((account): account is ConnectorAccount => account !== null);
-
-    assert.equal(bestAccount(accounts, "github"), null);
+    assert.equal(
+        accountTrouble(github),
+        "GitHub needs reconnecting: its triggers and actions reach nothing until it is installed",
+    );
 });
 
 test("a taken credential is a signal, not a failure to report", () => {

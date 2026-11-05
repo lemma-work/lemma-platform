@@ -486,3 +486,106 @@ class PodSteps:
             f"/pods/{in_pod['id']}/resources/{resource_type}/preview",
             params={"name": named},
         )
+
+    # --- other pods it can ask -------------------------------------------
+
+    async def pods_it_can_ask(self, pod: JSON) -> list[JSON]:
+        """The other pods this pod's assistant can ask, as this person sees it.
+
+        One answer is the whole list: it is not paged, because it can only
+        name pods in one organization.
+        """
+        return _listed(
+            await self.api.get(
+                f"/pods/{pod['id']}/askable-pods",
+                what=f"{self.label} listing the pods {pod.get('name')!r} can ask",
+            ),
+            what="the pods a pod can ask",
+        )
+
+    async def pods_that_can_ask(self, pod: JSON) -> list[JSON]:
+        """The other pods connected to this one, with what each reads here."""
+        return _listed(
+            await self.api.get(
+                f"/pods/{pod['id']}/pod-links",
+                what=f"{self.label} listing the pods that can ask {pod.get('name')!r}",
+            ),
+            what="the pods connected to a pod",
+        )
+
+    async def connects(
+        self, asking: JSON, *, to_pod: JSON, sharing: list[JSON] | None = None
+    ) -> None:
+        """Let ``asking`` ask ``to_pod`` with nobody present, reading ``sharing``."""
+        await self.api.put(
+            f"/pods/{to_pod['id']}/pod-links/{asking['id']}",
+            what=(
+                f"{self.label} connecting {asking.get('name')!r} to "
+                f"{to_pod.get('name')!r}"
+            ),
+            json={"shares": sharing or []},
+        )
+
+    async def is_refused_connecting(
+        self, asking: JSON, *, to_pod: JSON, sharing: list[JSON] | None = None
+    ) -> tuple[int, str]:
+        """The status and error code of a refused connection.
+
+        The code comes back too because every refusal here is a 4xx, and a test
+        of one rule passing on another's refusal proves nothing.
+        """
+        response = await self.api.call(
+            "PUT",
+            f"/pods/{to_pod['id']}/pod-links/{asking['id']}",
+            json={"shares": sharing or []},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused connecting "
+                f"{asking.get('name')!r} to {to_pod.get('name')!r}, but it "
+                f"succeeded ({response.status_code})"
+            )
+        body = response.json() if response.content else {}
+        return response.status_code, str(body.get("code") or "")
+
+    async def disconnects(self, asking: JSON, *, from_pod: JSON) -> None:
+        await self.api.delete(
+            f"/pods/{from_pod['id']}/pod-links/{asking['id']}",
+            what=(
+                f"{self.label} disconnecting {asking.get('name')!r} from "
+                f"{from_pod.get('name')!r}"
+            ),
+        )
+
+    async def is_refused_disconnecting(self, asking: JSON, *, from_pod: JSON) -> int:
+        response = await self.api.call(
+            "DELETE", f"/pods/{from_pod['id']}/pod-links/{asking['id']}"
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused disconnecting "
+                f"{asking.get('name')!r} from {from_pod.get('name')!r}, but it "
+                f"succeeded ({response.status_code})"
+            )
+        return response.status_code
+
+
+def shared_table(name: str) -> JSON:
+    """A table shared with a connected pod, for reading: the only way it can be."""
+    return {
+        "resource_type": "datastore_table",
+        "resource_name": name,
+        "permission_ids": ["datastore.table.read", "datastore.record.read"],
+    }
+
+
+def _listed(payload: Any, *, what: str) -> list[JSON]:
+    """The ``items`` of a list answer, failing loudly when there are none.
+
+    ``items_of`` returns an empty list for a shape it does not know, and an
+    empty list is exactly what a "this pod is not listed" assertion wants to
+    see -- so a renamed field would pass every one of them.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise AssertionError(f"{what} came back without an 'items' list: {payload!r}")
+    return items_of(payload)

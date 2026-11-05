@@ -16,19 +16,27 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
+    q: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
     params["limit"] = limit
 
-    json_before: None | str | Unset
-    if isinstance(before, Unset):
-        json_before = UNSET
+    json_cursor: None | str | Unset
+    if isinstance(cursor, Unset):
+        json_cursor = UNSET
     else:
-        json_before = before
-    params["before"] = json_before
+        json_cursor = cursor
+    params["cursor"] = json_cursor
+
+    json_q: None | str | Unset
+    if isinstance(q, Unset):
+        json_q = UNSET
+    else:
+        json_q = q
+    params["q"] = json_q
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -78,16 +86,19 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
+    q: None | str | Unset = UNSET,
 ) -> Response[ContactListResponse | ErrorResponse]:
     """List Contacts
 
-     The pod's contacts, newest first.
+     The pod's contacts, newest first. Follow `next_cursor` until it is
+    absent.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
+        cursor (None | str | Unset):
+        q (None | str | Unset): Only contacts whose name, email address or number holds this.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -100,7 +111,8 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         limit=limit,
-        before=before,
+        cursor=cursor,
+        q=q,
     )
 
     response = client.get_httpx_client().request(
@@ -115,16 +127,19 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
+    q: None | str | Unset = UNSET,
 ) -> ContactListResponse | ErrorResponse | None:
     """List Contacts
 
-     The pod's contacts, newest first.
+     The pod's contacts, newest first. Follow `next_cursor` until it is
+    absent.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
+        cursor (None | str | Unset):
+        q (None | str | Unset): Only contacts whose name, email address or number holds this.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -138,7 +153,8 @@ def sync(
         pod_id=pod_id,
         client=client,
         limit=limit,
-        before=before,
+        cursor=cursor,
+        q=q,
     ).parsed
 
 
@@ -147,16 +163,19 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
+    q: None | str | Unset = UNSET,
 ) -> Response[ContactListResponse | ErrorResponse]:
     """List Contacts
 
-     The pod's contacts, newest first.
+     The pod's contacts, newest first. Follow `next_cursor` until it is
+    absent.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
+        cursor (None | str | Unset):
+        q (None | str | Unset): Only contacts whose name, email address or number holds this.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -169,7 +188,8 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         limit=limit,
-        before=before,
+        cursor=cursor,
+        q=q,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -182,16 +202,19 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: None | str | Unset = UNSET,
+    cursor: None | str | Unset = UNSET,
+    q: None | str | Unset = UNSET,
 ) -> ContactListResponse | ErrorResponse | None:
     """List Contacts
 
-     The pod's contacts, newest first.
+     The pod's contacts, newest first. Follow `next_cursor` until it is
+    absent.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (None | str | Unset):
+        cursor (None | str | Unset):
+        q (None | str | Unset): Only contacts whose name, email address or number holds this.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -206,6 +229,7 @@ async def asyncio(
             pod_id=pod_id,
             client=client,
             limit=limit,
-            before=before,
+            cursor=cursor,
+            q=q,
         )
     ).parsed

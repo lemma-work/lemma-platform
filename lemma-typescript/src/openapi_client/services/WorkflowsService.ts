@@ -157,6 +157,30 @@ export class WorkflowsService {
         });
     }
     /**
+     * Retry Workflow Run
+     * Resume a failed run from the node that failed, keeping every earlier node's output -- an agent step's answer is not produced again. Allowed when the failed node is a function, decision, loop or wait-until node; any other run, or one that has not failed, returns 409.
+     * @param podId
+     * @param runId
+     * @returns WorkflowRunResponse Successful Response
+     * @throws ApiError
+     */
+    public static workflowRunRetry(
+        podId: string,
+        runId: string,
+    ): CancelablePromise<WorkflowRunResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/workflow-runs/{run_id}/retry',
+            path: {
+                'pod_id': podId,
+                'run_id': runId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Stream Workflow Run
      * Server-sent events carrying the run's state as it advances. The first frame is the current run, so a client needs no separate GET; each later frame is the whole run again rather than a diff, which makes reconnecting a matter of replacing state. A `completed` frame is sent when the run reaches a terminal status, after which the stream closes. Polling remains a valid fallback.
      * @param podId
@@ -396,15 +420,17 @@ export class WorkflowsService {
     }
     /**
      * Create Workflow Run
-     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
      * @param podId
      * @param workflowName
+     * @param idempotencyKey
      * @returns WorkflowRunResponse Successful Response
      * @throws ApiError
      */
     public static workflowRunCreate(
         podId: string,
         workflowName: string,
+        idempotencyKey?: (string | null),
     ): CancelablePromise<WorkflowRunResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -412,6 +438,9 @@ export class WorkflowsService {
             path: {
                 'pod_id': podId,
                 'workflow_name': workflowName,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             errors: {
                 422: `Validation Error`,

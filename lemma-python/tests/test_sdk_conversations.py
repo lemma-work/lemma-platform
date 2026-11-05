@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID
@@ -77,6 +78,19 @@ def test_create_for_agent_omits_parent_id_when_not_a_subagent():
 
     # compact() drops the unset parent_id so top-level conversations stay clean.
     assert "parent_id" not in transport.calls[0]["body"]
+
+
+def test_pending_interactions_asks_the_pod_and_pages_by_token():
+    pod, transport = _pod()
+
+    pod.conversations.pending_interactions(page_token="next-page", limit=10)
+    pod.conversations.pending_interactions()
+
+    first, second = transport.calls
+    assert first["endpoint"].endswith(".agent_conversation_pending_interaction_list")
+    assert first["path_args"] == (UUID("22222222-2222-4222-8222-222222222222"),)
+    assert first["kwargs"] == {"page_token": "next-page", "limit": 10}
+    assert second["kwargs"] == {"page_token": UNSET, "limit": 50}
 
 
 def test_list_without_agent_name_lists_across_the_pod():
@@ -232,3 +246,30 @@ def test_create_for_agent_without_a_name_leaves_it_to_the_pod_assistant(agent_na
     pod.conversations.create_for_agent(agent_name, title="hello")
 
     assert "agent_name" not in transport.calls[0]["body"]
+
+
+def test_every_send_carries_a_client_message_id_and_a_retry_can_reuse_it():
+    """The server stores one message per id per conversation, so a send the
+    caller retries with the same id is not stored, or answered, twice."""
+    pod, seen = _streaming_pod(
+        lambda _: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=b""
+        )
+    )
+
+    pod.conversations.send(CONVERSATION_ID, "Classify ticket rec-1")
+    pod.conversations.send(
+        CONVERSATION_ID, "Classify ticket rec-1", client_message_id="retry-me"
+    )
+
+    generated, chosen = (json.loads(request.content) for request in seen)
+    assert generated["client_message_id"]
+    assert chosen["client_message_id"] == "retry-me"
+
+
+def test_append_carries_a_client_message_id():
+    pod, transport = _pod()
+
+    pod.conversations.append(CONVERSATION_ID, "and the totals", client_message_id="m1")
+
+    assert transport.calls[-1]["body"]["client_message_id"] == "m1"

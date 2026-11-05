@@ -33,6 +33,7 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
 from app.modules.agent.services.agent_host_link_registry import (
     AgentHostLinkRegistry,
 )
+from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
 from app.modules.agent.services.realtime import conversation_channel
 from app.modules.agent.tests.unit.agent_host_link_fakes import (
     PAIRING_CODE,
@@ -585,6 +586,24 @@ async def test_waiting_is_authorized_like_a_tool_call():
     await link.close()
 
 
+async def test_a_relayed_call_names_the_host_and_person_the_link_authenticated():
+    """A run's token is minted for one person's run and sent only to the host
+    leasing it, so the link hands authorization the machine it authenticated:
+    a token relayed from anywhere else is refused there."""
+    link = Link()
+    await link.open()
+    link.mcp_service.answers["call-5"] = {"approved": True}
+    expected = RelayingHost(host_id=link.store.host_id, user_id=link.store.user_id)
+
+    listed = link.socket.send("mcp", _mcp_body(link, "tools/list"))
+    await link.socket.answer_to(listed)
+    waited = link.socket.send("interaction_wait", _wait_body(link, "call-5"))
+    await link.socket.answer_to(waited)
+
+    assert link.mcp_service.authorized_hosts == [expected, expected]
+    await link.close()
+
+
 # ---------------------------------------------------------------- pushing
 
 
@@ -747,6 +766,30 @@ async def test_a_newer_hello_announced_before_this_link_subscribed_still_wins():
         isinstance(message, dict) and message.get("type") == "superseded"
         for _, message in channels.published
     )
+
+
+class _DeafChannels(FakeChannels):
+    """A channel service whose subscriptions fail: the link runs on its timer."""
+
+    def subscribe(self, channels):
+        raise RuntimeError("redis is unavailable")
+
+
+async def test_a_link_that_cannot_hear_notices_still_learns_it_was_superseded():
+    """With the subscription down, a newer link's announcement never arrives.
+
+    The generation it claimed is in the database all the same, and the floor
+    tick reads it, so the older socket stops pushing for a host it no longer
+    owns instead of carrying on beside the newer one indefinitely.
+    """
+    link = Link(channels=_DeafChannels(), push_floor_seconds=0.02)
+    await link.open()
+    await asyncio.sleep(0.05)
+    assert link.task is not None and not link.task.done()
+
+    link.store.generation += 1  # a newer hello, on some other replica
+
+    assert (await link.ended(timeout=1.0))[0] == LinkCloseCode.SUPERSEDED
 
 
 async def test_a_notice_without_a_generation_supersedes_nothing():

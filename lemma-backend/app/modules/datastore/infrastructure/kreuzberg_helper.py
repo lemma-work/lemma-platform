@@ -12,7 +12,23 @@ import aiohttp
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.config import datastore_settings
-from app.modules.datastore.domain.errors import DocumentExtractionUnavailableError
+from app.modules.datastore.infrastructure.kreuzberg_errors import (
+    KreuzbergCompatibilityError,
+    KreuzbergRateLimited,
+    KreuzbergUnhealthy,
+    KreuzbergUnreachable,
+    _DocumentLevelFailure,
+    judge_document_failure,
+    raise_for_status,
+)
+
+__all__ = [
+    "KreuzbergCompatibilityError",
+    "KreuzbergHelper",
+    "KreuzbergRateLimited",
+    "KreuzbergUnhealthy",
+    "KreuzbergUnreachable",
+]
 from app.modules.datastore.infrastructure.extraction_result import (
     KreuzbergExtractionResult,
 )
@@ -32,18 +48,6 @@ logger = get_logger(__name__)
 # Retry connection failures; defer timeouts; only schema errors try a legacy config.
 _TRANSIENT_RETRY_ATTEMPTS = 3
 _TRANSIENT_RETRY_BASE_DELAY_SECONDS = 1.0
-
-
-class KreuzbergTransientError(DocumentExtractionUnavailableError):
-    """The extractor was unreachable or timed out; retry as a later job.
-
-    Subclasses the engine-neutral unavailability error so processing refunds the
-    attempt instead of spending it — see DocumentExtractionUnavailableError.
-    """
-
-
-class KreuzbergCompatibilityError(RuntimeError):
-    """The extractor rejected the request schema and a legacy config may work."""
 
 
 class KreuzbergHelper:
@@ -490,19 +494,18 @@ class KreuzbergHelper:
                     body = await spool_response(response)
                     return await parse_spooled(body, self._parse_extract_file)
             except (asyncio.TimeoutError, TimeoutError) as exc:
-                # A timeout may happen after Kreuzberg accepted the upload and
-                # started CPU-heavy work. Retrying immediately can duplicate that
-                # work because disconnecting the HTTP client does not guarantee
-                # server-side cancellation. Re-drive later through datastore
-                # recovery instead of multiplying full-document extractions.
-                circuit.record_failure()
-                raise KreuzbergTransientError(
-                    "Kreuzberg extract request timed out"
+                # A timeout may come after Kreuzberg accepted the upload and
+                # started CPU-heavy work, and disconnecting does not cancel it
+                # server-side, so it is never retried in-request. Whether it is
+                # this document's fault is the health check's call.
+                raise await self._judge_document_failure(
+                    session, "Kreuzberg extract request timed out"
                 ) from exc
+            except _DocumentLevelFailure as exc:
+                raise await self._judge_document_failure(session, str(exc)) from exc
             except aiohttp.ClientConnectionError as exc:
                 # Connection establishment/transport failure: a bounded retry is
                 # useful here because no successful response was received.
-                circuit.record_failure()
                 if attempt < max_attempts - 1:
                     delay = base_delay * (2**attempt)
                     logger.debug(
@@ -511,11 +514,11 @@ class KreuzbergHelper:
                     )
                     await self._sleep(delay)
                     continue
-                raise KreuzbergTransientError(
+                circuit.record_failure(document_key=None)
+                raise KreuzbergUnreachable(
                     "Kreuzberg extract connection failed"
                 ) from exc
-            except KreuzbergTransientError:
-                circuit.record_failure()
+            except KreuzbergRateLimited:
                 raise
             except aiohttp.ClientError as exc:
                 # Non-connection client error — not worth a same-request retry.
@@ -524,7 +527,12 @@ class KreuzbergHelper:
                 if file_obj is not None:
                     file_obj.close()
         # Unreachable: the loop either returns or raises on the final attempt.
-        raise KreuzbergTransientError("Kreuzberg extract request failed")
+        raise KreuzbergUnreachable("Kreuzberg extract request failed")
+
+    async def _judge_document_failure(
+        self, session: aiohttp.ClientSession, message: str
+    ) -> Exception:
+        return await judge_document_failure(session, self.base_url, message)
 
     @staticmethod
     def _parse_extract_response(data: Any) -> KreuzbergExtractionResult:
@@ -633,25 +641,4 @@ class KreuzbergHelper:
         return formatted
 
     async def _raise_for_status(self, response: aiohttp.ClientResponse) -> None:
-        if response.status < 400:
-            return
-        body = await response.text()
-        message = f"Extractor request failed with status {response.status}: {body}"
-        if response.status in {400, 422}:
-            # 400 = bad request/config (the compat-config ladder may recover it);
-            # 422 = the document itself could not be parsed or OCR'd.
-            raise KreuzbergCompatibilityError(message)
-        if response.status in {408, 429}:
-            raise KreuzbergTransientError(message)
-        if response.status == 502:
-            # Model download from HuggingFace failed — exactly what a cold
-            # container produces. Infrastructure, not a bad document.
-            raise KreuzbergTransientError(message)
-        if response.status >= 500:
-            # A per-file extraction timeout surfaces as a 500 carrying
-            # error_type=TimeoutError rather than a 408, so the body is the only
-            # way to tell "the extractor is struggling" (retry later) from a
-            # genuine internal error. Both are treated as transient; the
-            # distinction is kept for the log.
-            raise KreuzbergTransientError(message)
-        raise RuntimeError(message)
+        await raise_for_status(response)

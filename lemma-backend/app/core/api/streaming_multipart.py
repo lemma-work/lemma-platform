@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import os
 import tempfile
@@ -38,7 +37,14 @@ class MultipartFileLimit:
 
 
 class UploadStagingCoordinator:
-    """Fail-fast process budget for concurrent streaming request bodies."""
+    """Fail-fast process budget for concurrent streaming request bodies.
+
+    Synchronous on purpose: nothing awaits between the check and the update,
+    so the event loop alone makes them atomic. A lock awaited in ``leave``'s
+    ``finally`` could be interrupted by a client disconnect's cancellation
+    while another request held it, skipping the release and losing a slot for
+    the life of the process.
+    """
 
     def __init__(
         self,
@@ -50,24 +56,20 @@ class UploadStagingCoordinator:
         self.max_active_bytes = max_active_bytes
         self._active_requests = 0
         self._active_bytes = 0
-        self._lock = asyncio.Lock()
 
-    async def enter(self) -> None:
-        async with self._lock:
-            if self._active_requests >= self.max_requests:
-                raise UploadCapacityExceededError()
-            self._active_requests += 1
+    def enter(self) -> None:
+        if self._active_requests >= self.max_requests:
+            raise UploadCapacityExceededError()
+        self._active_requests += 1
 
-    async def reserve(self, size: int) -> None:
-        async with self._lock:
-            if self._active_bytes + size > self.max_active_bytes:
-                raise UploadCapacityExceededError()
-            self._active_bytes += size
+    def reserve(self, size: int) -> None:
+        if self._active_bytes + size > self.max_active_bytes:
+            raise UploadCapacityExceededError()
+        self._active_bytes += size
 
-    async def leave(self, reserved_bytes: int) -> None:
-        async with self._lock:
-            self._active_requests = max(0, self._active_requests - 1)
-            self._active_bytes = max(0, self._active_bytes - reserved_bytes)
+    def leave(self, reserved_bytes: int) -> None:
+        self._active_requests = max(0, self._active_requests - 1)
+        self._active_bytes = max(0, self._active_bytes - reserved_bytes)
 
     @property
     def active_requests(self) -> int:
@@ -381,10 +383,10 @@ async def stream_multipart_form(
     reserved = 0
     entered = False
     try:
-        await coordinator.enter()
+        coordinator.enter()
         entered = True
         async for chunk in request.stream():
-            await coordinator.reserve(len(chunk))
+            coordinator.reserve(len(chunk))
             reserved += len(chunk)
             await run_blocking(parser.write, chunk)
         await run_blocking(parser.finalize)
@@ -393,7 +395,7 @@ async def stream_multipart_form(
     finally:
         collector.cleanup()
         if entered:
-            await coordinator.leave(reserved)
+            coordinator.leave(reserved)
 
 
 def streaming_multipart_openapi(

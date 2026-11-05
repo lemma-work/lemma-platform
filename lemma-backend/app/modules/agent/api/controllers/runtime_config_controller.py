@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import assert_never
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -25,14 +26,12 @@ from app.modules.agent.api.schemas import (
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
-from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeProfileRepository,
-)
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import effective_agent_host_status
 from app.modules.agent.domain.organization_default import organization_default_of
 from app.modules.agent.domain.runtime_profiles import (
+    DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
+    AgentRuntimeProfile,
     RuntimeProfileScope,
     RuntimeProfileStatus,
 )
@@ -45,8 +44,8 @@ from app.modules.agent.services.runtime_profile_editor import (
 )
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
+    runtime_profile_service_for,
 )
-from app.core.crypto import get_secret_cipher
 
 logger = get_logger(__name__)
 
@@ -115,13 +114,52 @@ async def _require_profile_editor(
     """Who may change or read the full detail of one profile.
 
     A workspace profile is shared configuration, so it takes the same
-    ORG_UPDATE the create route requires. A personal one is usable only by its
-    owner, so the owner qualifies on their own - an org editor still does too,
-    because they can already see it in the listing.
+    ORG_UPDATE the create route requires. A personal one is its owner's alone:
+    the repository loads another member's personal profile for nobody, an org
+    editor included, so only its owner ever reaches this check for it.
     """
     if profile.scope is RuntimeProfileScope.PERSONAL and profile.user_id == user.id:
         return
     await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(organization_id))
+
+
+async def _require_profile_archiver(
+    *,
+    service: AgentRuntimeProfileService,
+    profile: AgentRuntimeProfile,
+    organization_id: UUID,
+    user: CurrentUser,
+    ctx: OrgContextDep,
+) -> None:
+    """Who may archive one profile: an editor, or the computer's own owner.
+
+    A workspace profile bound to a computer is that person's machine opened to
+    everyone. Its owner must be able to stop sharing it even after losing
+    ORG_UPDATE -- otherwise their laptop keeps taking the organization's runs
+    until an admin notices. Only archiving: sharing it again, or changing what
+    it runs, stays an editor's decision.
+    """
+    if await _owns_the_machine(service, profile, user_id=user.id):
+        return
+    await _require_profile_editor(
+        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    )
+
+
+async def _owns_the_machine(
+    service: AgentRuntimeProfileService,
+    profile: AgentRuntimeProfile,
+    *,
+    user_id: UUID,
+) -> bool:
+    hosts = service.host_repository
+    if profile.harness_id is None or hosts is None:
+        return False
+    harness = await hosts.get_harness(harness_id=profile.harness_id)
+    if harness is None:
+        return False
+    host = await hosts.get_for_user(host_id=harness.host_id, user_id=user_id)
+    return host is not None and host.revoked_at is None
 
 
 async def _load_profile_or_404(
@@ -153,13 +191,7 @@ async def _load_profile_or_404(
 
 
 def _runtime_profile_service(uow: UoWDep) -> AgentRuntimeProfileService:
-    return AgentRuntimeProfileService(
-        repository=AgentRuntimeProfileRepository(
-            uow,
-            encryption=get_secret_cipher(),
-        ),
-        host_repository=AgentHostRepository(uow),
-    )
+    return runtime_profile_service_for(uow)
 
 
 @router.get(
@@ -238,55 +270,49 @@ async def create_runtime_profile(
             Permissions.ORG_UPDATE, ResourceRef.organization(organization_id)
         )
     service = _runtime_profile_service(uow)
-    try:
-        if isinstance(data, CreateAgentHostRuntimeProfileRequest):
-            profile = await service.create_agent_host_profile(
-                organization_id=organization_id,
-                user_id=user.id,
-                harness_id=data.harness_id,
-                name=data.name,
-                scope=data.scope,
-                description=data.description,
-                default_model_name=data.default_model_name,
-                config_selections=data.config_selections,
-            )
-        elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
-            profile = await service.create_openai_compatible_profile(
-                organization_id=organization_id,
-                name=data.name,
-                base_url=data.base_url,
-                api_key=data.api_key,
-                description=data.description,
-                default_model_name=data.default_model_name,
-                model_names=data.model_names,
-                vision_model_names=data.vision_model_names,
-                headers=data.headers,
-                model_settings=data.model_settings,
-            )
-        elif isinstance(data, CreateAnthropicCompatibleRuntimeProfileRequest):
-            profile = await service.create_anthropic_compatible_profile(
-                organization_id=organization_id,
-                name=data.name,
-                api_key=data.api_key,
-                base_url=data.base_url,
-                description=data.description,
-                default_model_name=data.default_model_name,
-                model_names=data.model_names,
-                headers=data.headers,
-                model_settings=data.model_settings,
-            )
-        else:
-            raise ValueError("Unsupported runtime profile source")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+    if isinstance(data, CreateAgentHostRuntimeProfileRequest):
+        profile = await service.create_agent_host_profile(
+            organization_id=organization_id,
+            user_id=user.id,
+            harness_id=data.harness_id,
+            name=data.name,
+            scope=data.scope,
+            description=data.description,
+            default_model_name=data.default_model_name,
+            config_selections=data.config_selections,
+            host_wait_timeout_seconds=(
+                data.host_wait_timeout_seconds or DEFAULT_HOST_WAIT_TIMEOUT_SECONDS
+            ),
+        )
+    elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
+        profile = await service.create_openai_compatible_profile(
+            organization_id=organization_id,
+            name=data.name,
+            base_url=data.base_url,
+            api_key=data.api_key,
+            description=data.description,
+            default_model_name=data.default_model_name,
+            model_names=data.model_names,
+            vision_model_names=data.vision_model_names,
+            reasoning_model_names=data.reasoning_model_names,
+            headers=data.headers,
+            model_settings=data.model_settings,
+        )
+    elif isinstance(data, CreateAnthropicCompatibleRuntimeProfileRequest):
+        profile = await service.create_anthropic_compatible_profile(
+            organization_id=organization_id,
+            name=data.name,
+            api_key=data.api_key,
+            base_url=data.base_url,
+            description=data.description,
+            default_model_name=data.default_model_name,
+            model_names=data.model_names,
+            reasoning_model_names=data.reasoning_model_names,
+            headers=data.headers,
+            model_settings=data.model_settings,
+        )
+    else:
+        assert_never(data)
     return AgentRuntimeProfileResponse.model_validate(profile.public_dict())
 
 
@@ -335,6 +361,22 @@ async def get_runtime_profile(
     )
 
 
+#: Edit fields with nothing to clear to. Every field of the edit is nullable on
+#: the wire, so a client can send null for any of them; for these it means the
+#: same as leaving the field out. Before, it reached code that only takes a
+#: value and answered 500. A null description, key, address or settings object
+#: still clears it, where the profile allows that.
+_NULL_LEAVES_UNCHANGED = frozenset(
+    {
+        "name",
+        "model_names",
+        "reasoning_model_names",
+        "config_selections",
+        "host_wait_timeout_seconds",
+    }
+)
+
+
 @router.patch(
     "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
     response_model=AgentRuntimeProfileResponse,
@@ -363,35 +405,28 @@ async def update_runtime_profile(
     # "set this to null" - the distinction that keeps a rename from wiping a
     # stored API key.
     supplied = data.model_fields_set - {"source", "refresh_models"}
-    changes = {field: getattr(data, field) for field in supplied}
+    changes = {
+        field: getattr(data, field)
+        for field in supplied
+        if not (field in _NULL_LEAVES_UNCHANGED and getattr(data, field) is None)
+    }
     common = {
         "profile_id": profile_id,
         "organization_id": organization_id,
         "user_id": user.id,
     }
-    try:
-        if isinstance(data, UpdateAgentHostRuntimeProfileRequest):
-            updated = await editor.update_agent_host_profile(**common, **changes)
-        elif isinstance(data, UpdateOpenAICompatibleRuntimeProfileRequest):
-            updated = await editor.update_openai_compatible_profile(
-                **common, refresh_models=data.refresh_models, **changes
-            )
-        elif isinstance(data, UpdateAnthropicCompatibleRuntimeProfileRequest):
-            updated = await editor.update_anthropic_compatible_profile(
-                **common, refresh_models=data.refresh_models, **changes
-            )
-        else:
-            raise ValueError("Unsupported runtime profile source")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+    if isinstance(data, UpdateAgentHostRuntimeProfileRequest):
+        updated = await editor.update_agent_host_profile(**common, **changes)
+    elif isinstance(data, UpdateOpenAICompatibleRuntimeProfileRequest):
+        updated = await editor.update_openai_compatible_profile(
+            **common, refresh_models=data.refresh_models, **changes
+        )
+    elif isinstance(data, UpdateAnthropicCompatibleRuntimeProfileRequest):
+        updated = await editor.update_anthropic_compatible_profile(
+            **common, refresh_models=data.refresh_models, **changes
+        )
+    else:
+        assert_never(data)
     return _profile_response(updated)
 
 
@@ -415,20 +450,18 @@ async def archive_runtime_profile(
     profile = await _load_profile_or_404(
         service, profile_id=profile_id, organization_id=organization_id, user=user
     )
-    await _require_profile_editor(
-        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    await _require_profile_archiver(
+        service=service,
+        profile=profile,
+        organization_id=organization_id,
+        user=user,
+        ctx=ctx,
     )
-    try:
-        await AgentRuntimeProfileEditor(service).archive_profile(
-            profile_id=profile_id,
-            organization_id=organization_id,
-            user_id=user.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+    await AgentRuntimeProfileEditor(service).archive_profile(
+        profile_id=profile_id,
+        organization_id=organization_id,
+        user_id=user.id,
+    )
     return
 
 
@@ -452,21 +485,9 @@ async def restore_runtime_profile(
     await _require_profile_editor(
         profile=profile, organization_id=organization_id, user=user, ctx=ctx
     )
-    try:
-        restored = await AgentRuntimeProfileEditor(service).restore_profile(
-            profile_id=profile_id,
-            organization_id=organization_id,
-            user_id=user.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        # Another profile took this name while it sat archived.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+    restored = await AgentRuntimeProfileEditor(service).restore_profile(
+        profile_id=profile_id,
+        organization_id=organization_id,
+        user_id=user.id,
+    )
     return _profile_response(restored)

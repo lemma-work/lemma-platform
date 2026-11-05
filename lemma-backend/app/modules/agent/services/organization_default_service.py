@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.domain.errors import RuntimeProfileNotFoundError
 from app.modules.agent.domain.organization_default import (
     ORGANIZATION_WIDE_VIEWER,
     is_marked_default,
@@ -24,8 +25,16 @@ from app.modules.agent.infrastructure.repositories import (
 )
 
 
-class OrganizationDefaultNotFoundError(LookupError):
-    """The profile named is not one of this organization's."""
+class OrganizationDefaultNotFoundError(RuntimeProfileNotFoundError):
+    """The profile named is not one of this organization's.
+
+    A 404 whatever the reason, a personal key included: saying "that is
+    somebody's own key" would confirm a profile id to someone who cannot see it.
+    """
+
+    def __init__(self, profile_id: str) -> None:
+        del profile_id
+        super().__init__()
 
 
 class OrganizationDefaultService:
@@ -45,19 +54,23 @@ class OrganizationDefaultService:
 
         Raises `OrganizationDefaultNotFoundError` when the profile is not an
         organization-wide one here (a personal key is not visible to the
-        organization-wide read, so it lands here too), and ``ValueError`` when
-        it is visible but cannot be the default.
+        organization-wide read, so it lands here too), `RuntimeProfileValidationError` when it
+        is visible but cannot be the default, and
+        `OrganizationDefaultConflictError` (a 409) when another default was set
+        at the same moment.
         """
         profiles = await self._organization_profiles(organization_id)
         target = next((item for item in profiles if item.id == profile_id), None)
         if target is None:
             raise OrganizationDefaultNotFoundError(profile_id)
-        marked = await self._repository.update(
-            with_default_mark(target, model_name=model_name)
-        )
+        # The old mark goes first: at most one profile may carry it, and the
+        # database refuses a second for the length of this transaction.
         for profile in profiles:
             if profile.id != profile_id and is_marked_default(profile):
                 await self._repository.update(without_default_mark(profile))
+        marked = await self._repository.update(
+            with_default_mark(target, model_name=model_name)
+        )
         chosen = organization_default_of([marked])
         if chosen is None:
             # with_default_mark refuses anything organization_default_of would

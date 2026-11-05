@@ -141,10 +141,12 @@ serving.
   30 per-call constructions remain in shapes the I/O gate cannot see.
 - **An in-process lock is not a lock.** `asyncio.Lock` coordinates one process.
   Anything that must hold across replicas needs Redis or a database constraint.
-- **At-least-once means idempotent.** Redis Streams and streaq both redeliver.
-  Every consumer goes through the inbox, and every side effect is keyed so the
-  second delivery is a no-op. See
-  [design.md DES-15](../../docs/engineering/design.md#des-15--every-cross-module-consumer-is-inbox-backed-and-idempotent).
+- **A job can run again, so it must be idempotent.** A work item whose lease
+  expires (a crash, a deploy past its grace) is claimed again. Write the item in
+  the transaction that causes it, put its database effects in the completing
+  transaction, and key every side effect outside the database so a second run
+  is a no-op. See
+  [design.md DES-15](../../docs/engineering/design.md#des-15--every-cross-module-reaction-is-a-work-item-written-with-its-cause).
 
 ## Authorization model (summary)
 
@@ -175,7 +177,8 @@ user session approval (`APPROVE_FOR_SESSION` → Redis store in
 
 **Approval is how an agent goes beyond its grants.** A refused tool call
 (`MISSING_WORKLOAD_RESOURCE_GRANT`, `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL`,
-`AUTH_REQUIRED`) comes back as `needs_approval`; the agent calls
+`OUTSIDE_TEXT_REQUIRES_APPROVAL`, `AUTH_REQUIRED`) comes back as
+`needs_approval`; the agent calls
 `request_approval`, and when the person approves, exactly that call runs **as
 the person** — their own permissions, nothing more, and nothing standing
 afterwards. Only the conversation's owner can approve (`ApprovalNotOwnedError`
@@ -191,6 +194,8 @@ Frequent deny codes: `MISSING_WORKLOAD_RESOURCE_GRANT` (grant the workload),
 `DELEGATION_EXCEEDS_INVOKER` (the workload is granted it, the person who ran
 it is not — raise the person's role, not the grant),
 `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` (approve or grant),
+`OUTSIDE_TEXT_REQUIRES_APPROVAL` (the run is reading what people outside the
+pod wrote; approve -- no grant lifts it),
 `INSUFFICIENT_PERMISSION` (human role problem), `DELEGATION_SCOPE_VIOLATION`
 (minimal-scope token used outside its operation), `PERSONAL_RESOURCE_DENIED`
 (privacy trumps grants). The full model, with payload examples, is documented

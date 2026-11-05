@@ -26,6 +26,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from app.modules.agent_surfaces.platforms.resend.inbound import all_addresses
 
 #: Most people a reply will copy. Past this it is a broadcast, not a thread.
@@ -84,15 +86,13 @@ def other_people(
     return people[:MAX_REPLY_CC]
 
 
-def reply_all_recipients(event: object) -> list[str]:
+def reply_all_recipients(event: ParsedInboundSurfaceEvent) -> list[str]:
     """Everybody a reply on this email reaches besides the sender and the pod.
 
     What ``other_people`` recorded on the event's ``reply_target`` when it was
     parsed: the reply goes to the sender and is copied to these.
     """
-    reply_target = getattr(event, "reply_target", None) or {}
-    copied = reply_target.get("cc") if isinstance(reply_target, dict) else None
-    return [str(address) for address in copied or [] if str(address).strip()]
+    return [address for address in copied_on_reply(event) if address.strip()]
 
 
 def pod_was_addressed(

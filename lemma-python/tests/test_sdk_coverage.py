@@ -30,7 +30,6 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "scheduler.job",  # internal scheduler ops
     "usage.",
     "workspace.",  # workspace runtime is driven by the backend
-    "channel.",
     "app.public",
     "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client
@@ -50,6 +49,10 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # the space's Settings › AI tools page. The clients themselves speak OAuth
     # and MCP, not this API. A Python facade is a deliberate follow-up.
     "mcp_access.",
+    # A member proving which Telegram account is theirs: minted, watched and
+    # confirmed in their own signed-in Lemma session, which is half the proof.
+    # Driven by the app's people and profile screens, not by software.
+    "telegram_identity_link.",
     # Membership/governance surface not yet exposed in CLI/SDK facades
     "org.invitation.",
     "org.member.",
@@ -77,6 +80,11 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # Widget/app unification endpoints pending facade adoption
     "app.create_from_widget",
     "widget.embed_token",
+    # Which pods use one of your accounts, and what removing an installation
+    # would stop: views the frontend's connections pages read. A Python facade
+    # is a deliberate follow-up.
+    "connector.account.pods",
+    "connector.installation.impact",
 )
 
 
@@ -128,6 +136,7 @@ def test_schedule_run_contract_includes_retry_without_fire_aliases() -> None:
     assert "ScheduleRunListResponse" in schemas
     assert schemas["ScheduleRunStatus"]["enum"] == [
         "RECEIVED",
+        "FILTERING",
         "PROCESSING",
         "DISPATCHED",
         "COMPLETED",

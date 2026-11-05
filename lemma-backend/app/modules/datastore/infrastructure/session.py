@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.core.infrastructure.db.connect_errors import translate_connect_errors
 from app.modules.datastore.config import datastore_settings
 from app.core.config import settings
 from app.core.observability.connection_scope import attach_connection_scope_monitor
@@ -148,6 +149,7 @@ def get_datastore_engine():
         )
         # The datastore pool has no telemetry of its own; one line gives the
         # monitor both engines.
+        translate_connect_errors(_engine)
         attach_connection_scope_monitor(_engine)
         watch_compiled_cache("datastore", _engine)
     return _engine
@@ -171,8 +173,3 @@ async def close_datastore_engine() -> None:
     _session_maker = None
     if engine is not None:
         await engine.dispose()
-    from app.modules.datastore.infrastructure.transactional_events import (
-        reset_datastore_event_outbox_state,
-    )
-
-    reset_datastore_event_outbox_state()

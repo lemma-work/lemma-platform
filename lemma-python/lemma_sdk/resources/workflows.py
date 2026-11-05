@@ -14,6 +14,7 @@ from ..openapi_client.api.workflows import (
     workflow_run_get,
     workflow_run_list,
     workflow_run_list_for_pod,
+    workflow_run_retry,
     workflow_run_stream,
     workflow_run_waiting_assigned_to_me,
     workflow_update,
@@ -136,6 +137,12 @@ class PodWorkflows(BoundResource):
 
     def cancel_run(self, run_id: str) -> WorkflowRunResponse:
         return self._call(workflow_run_cancel, self._pod_uuid(), as_uuid(run_id))
+
+    def retry_run(self, run_id: str) -> WorkflowRunResponse:
+        """Resume a failed run from the node that failed, keeping the output
+        of every node before it. Refused (409) unless the failed node is a
+        function, decision, loop or wait-until node."""
+        return self._call(workflow_run_retry, self._pod_uuid(), as_uuid(run_id))
 
     def list_my_waits(
         self, *, limit: int = 100

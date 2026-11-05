@@ -40,6 +40,7 @@ class FileTransactionFacade:
         directory_path: str = "/",
         search_enabled: bool = True,
         visibility: str | None = None,
+        rename_on_conflict: bool = False,
     ) -> CreateFilePlan:
         return await self._writer.prepare_create_file(
             pod_id,
@@ -51,6 +52,7 @@ class FileTransactionFacade:
             directory_path=directory_path,
             search_enabled=search_enabled,
             visibility=visibility,
+            rename_on_conflict=rename_on_conflict,
         )
 
     async def write_create_file(

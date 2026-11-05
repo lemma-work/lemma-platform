@@ -33,7 +33,7 @@ one operating loop, one coherent data model.
 | **Agents** | LLM workers with instructions, toolsets, and granted resources | Judgment: classification, drafting, extraction, research, conversation |
 | **Workflows** | Node graphs of FORM / AGENT / FUNCTION / DECISION / LOOP / WAIT_UNTIL steps with durable runs | The process layer — orchestrates functions, agents, **and humans** (form nodes are assigned to pod members) |
 | **Schedules** | Time-based (TIME cron) or event-based — DATASTORE (table row events) and WEBHOOK (connector events) | Starting agents or workflows automatically |
-| **Connectors** | Third-party apps (Gmail, Slack, …) via org auth configs, accounts, and executable operations | Acting on external systems |
+| **Connectors** | Third-party apps (Gmail, Slack, …) declared in the pod by slug; each call runs as the member's own account or one shared account, never a credential the workload holds | Acting on external systems |
 | **Surfaces** | One pod agent exposed on Slack/Teams/Telegram/WhatsApp/email | Meeting users where they already chat |
 | **People outside** | Contacts (known by their channel), web chat visitors, and tables opened to outside rows — none of them sign in | Customer support, sign-ups, intake, "where is my order" — see `references/people-outside.md` and the `lemma-form` skill |
 | **Apps** | Custom browser apps deployed into the pod — single-file HTML (no build) for one page, or Vite + lemma-sdk for multi-page apps | The product UI: dashboards, queues, detail views, workflow inboxes |
@@ -65,7 +65,7 @@ lemma surfaces init slack              # surfaces/slack/slack.json
 
 lemma agents grant triage tickets:read,write /knowledge:read connector:gmail:use agent:helper:execute function:score_ticket:execute
 #   ^ merges into permissions.grants in place (keeps your JSONC comments): name:perms (table) | /path:perms (folder) | type:name:perms
-#     types: table folder document connector account app function agent workflow schedule — see references/authorization-model.md §4b
+#     types: table folder document connector app function agent workflow schedule — see references/authorization-model.md §4b
 lemma agents permissions add triage tickets:read     # the same grammar against a LIVE pod (read -> merge -> replace)
 lemma agents schema                    # or `lemma schema agent` — print the example/shape for a resource type
 
@@ -76,8 +76,9 @@ By hand, or after scaffolding — the bundle is always the source of truth:
 
 ```bash
 lemma pods create my-pod --org <org> --description "..."   # import never creates the pod shell
+export LEMMA_POD_ID=<id it printed>                        # a new pod is NOT made active; or pass --pod on each command
 
-mkdir my-pod && cd my-pod                                  # author the bundle locally
+mkdir my-pod                                               # author the bundle locally
 # pod.json + one folder per resource (see layout below)
 
 lemma pods import ./my-pod --dry-run                       # validate, fix errors
@@ -104,6 +105,7 @@ my-pod/
   workflows/intake/intake.json
   schedules/nightly/nightly.json
   surfaces/slack/slack.json
+  connectors/gmail/gmail.json                  # a pod connector: catalog id, mode, purpose (no credentials)
   apps/ops-app/ops-app.json                + source/
   files/knowledge/.folder.json
   seed/seed.sh                                 # sample data so the pod demos itself (not imported — run after)
@@ -111,15 +113,15 @@ my-pod/
   README.md                                    # operator setup + verification runbook
 ```
 
-Build order follows dependencies: **tables → files → functions → agents → workflows → schedules → connectors/surfaces → app → seed**. Verify each layer with realistic data before adding the next.
+Build order follows dependencies: **connectors → tables → files → functions → agents → workflows → schedules → surfaces → app → seed** (grants, schedules and surfaces name a pod connector by slug, so it is declared first). Verify each layer with realistic data before adding the next.
 
 **Build for the hero moment, not just for correctness.** A pod that imports cleanly and passes its tests can still be plumbing nobody wants to open. Before building, name the one screenshottable "oh" — the agent doing real work on its own, behind an interface someone adopts (see `references/pod-design.md`). The **app (or surface) is usually the product** — design it like the thing people live in, not an afterthought tacked on last. And **seed the pod so it demos itself**: a `seed/seed.sh` of sample rows, files, and one completed run, so opening the app shows the hero moment immediately instead of an empty state. (Rows and file bytes *can* travel — `pods export --data-table <t> --folder <path>` names them one at a time on the way out, and `pods import --with-data --with-files` applies them on the way in — but a `seed/seed.sh` is still the better demo path: it is re-runnable and readable. Record it in the README.)
 
 Three rules that bite everyone:
 
 1. **Zero access by default, capped by whoever invoked it, and no destructive power without a grant or approval.** Agents and functions are created with NO access to anything — not tables, not files/folders, not connectors. Every resource they touch must be granted explicitly, either via `permissions.grants` in their bundle JSON (exported automatically, replaced on import) or, against a live pod, `lemma functions|agents permissions add <name> <resource>:<perms>`. Import and `lemma pods doctor` both flag a workload that ends up with **no grants at all** — the usual reason a fresh pod 403s. A grant is a **ceiling on the workload, not a promotion for the person**: a run does the *intersection* of the workload's grants and the invoking member's own access, so a `VIEWER` running a write-granted agent still cannot write. `MISSING_WORKLOAD_RESOURCE_GRANT` means the workload half is missing (grant it); `DELEGATION_EXCEEDS_INVOKER` means the person half is (fix their role — more grants change nothing); `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` means a delete/manage action needs an explicit destructive grant or a user's session approval, which opens the gate without conferring authority. Full 403 decoder + the complete model in `references/authorization-model.md`.
-2. **Not everything bundles.** Connectors (auth configs, accounts) are org/pod runtime state and never round-trip — set those up with CLI commands and record the steps in the pod's README. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask, and the two ends spell it differently: **export** names each one (`--data-table <table>`, `--folder <path>`, repeatable — there is deliberately no "everything" flag), while **import** takes `--with-data` / `--with-files`.
-3. **Leave a runbook.** Every production-quality bundle should include a README with: purpose, required CLI context, non-bundled setup steps, required uploaded files, connector auth configs/accounts, verification payloads, and the final end-to-end smoke test.
+2. **Not everything bundles.** Pod connectors (`connectors/<slug>/<slug>.json`) round-trip, but the org's installations and each member's connected accounts never do — record in the pod's README who has to connect what. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask, and the two ends spell it differently: **export** names each one (`--data-table <table>`, `--folder <path>`, repeatable — there is deliberately no "everything" flag), while **import** takes `--with-data` / `--with-files`.
+3. **Leave a runbook.** Every production-quality bundle should include a README with: purpose, required CLI context, non-bundled setup steps, required uploaded files, which connectors each member must connect (or which account is shared), verification payloads, and the final end-to-end smoke test.
 
 **Last step: report what got in your way.** When the pod is built — or when you gave up — send one `lemma feedback`. Report anything that cost you a detour: a command whose error didn't say what to fix, a flag that didn't behave as documented, missing information you had to discover by trial and error, or a place where *these skills* were wrong, stale, or silent. This is the only channel by which the build experience improves, so file it even if you worked around the problem, and be specific — the exact command, what you expected, what happened.
 
@@ -144,7 +146,7 @@ Read what the task needs:
 - `references/functions.md` — code contract, in-function SDK (`Pod.from_env()`), grants, testing.
 - `references/agents.md` — agent JSON, toolsets, instructions, agents/functions as tools (sub-agents), runtime profiles, testing.
 - `references/workflows.md` — every node type, expressions, human-in-the-loop patterns, run debugging.
-- `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; connector kinds (`composio`/`http`/`sql`/`mcp`); custom connectors from an OpenAPI spec, MCP server or database; delegated execution.
+- `references/connectors.md` — pod connectors (PER_MEMBER / SHARED), `lemma connectors run`, installations → accounts → operations/triggers; connector kinds (`composio`/`http`/`sql`/`mcp`); custom connectors from an OpenAPI spec, MCP server or database; delegated execution.
 - `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, LLM event filtering.
 - `references/surfaces.md` — exposing one pod agent on Slack/Teams/Telegram/WhatsApp/email (Gmail/Outlook are connectors, not surfaces).
 - `references/people-outside.md` — contacts, contact-owned tables, functions opened to contacts, web chat, and forms as tables opened to outside rows. Build forms with the `lemma-form` skill.

@@ -26,6 +26,9 @@ class WorkflowUpdateRequest:
     Attributes:
         description (None | str | Unset): Updated workflow description.
         icon_url (None | str | Unset): Updated public icon URL for the workflow.
+        max_concurrent_runs (int | None | Unset): How many runs of this workflow may be in progress at once. A run
+            started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run
+            finishes. Null means no limit. Send null to remove it.
         mode (None | Unset | WorkflowMode): Updated workflow schedule ownership mode.
         run_title (list[str] | None | Unset): What each run is about, as up to four JMESPath expressions over the run
             context, joined with ' · '. Example: `["collect.candidate_name", "collect.role"]`. Evaluated whenever a run is
@@ -38,6 +41,7 @@ class WorkflowUpdateRequest:
 
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
+    max_concurrent_runs: int | None | Unset = UNSET
     mode: None | Unset | WorkflowMode = UNSET
     run_title: list[str] | None | Unset = UNSET
     start: (
@@ -68,6 +72,12 @@ class WorkflowUpdateRequest:
             icon_url = UNSET
         else:
             icon_url = self.icon_url
+
+        max_concurrent_runs: int | None | Unset
+        if isinstance(self.max_concurrent_runs, Unset):
+            max_concurrent_runs = UNSET
+        else:
+            max_concurrent_runs = self.max_concurrent_runs
 
         mode: None | str | Unset
         if isinstance(self.mode, Unset):
@@ -115,6 +125,8 @@ class WorkflowUpdateRequest:
             field_dict["description"] = description
         if icon_url is not UNSET:
             field_dict["icon_url"] = icon_url
+        if max_concurrent_runs is not UNSET:
+            field_dict["max_concurrent_runs"] = max_concurrent_runs
         if mode is not UNSET:
             field_dict["mode"] = mode
         if run_title is not UNSET:
@@ -152,6 +164,17 @@ class WorkflowUpdateRequest:
             return cast(None | str | Unset, data)
 
         icon_url = _parse_icon_url(d.pop("icon_url", UNSET))
+
+        def _parse_max_concurrent_runs(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        max_concurrent_runs = _parse_max_concurrent_runs(
+            d.pop("max_concurrent_runs", UNSET)
+        )
 
         def _parse_mode(data: object) -> None | Unset | WorkflowMode:
             if data is None:
@@ -265,6 +288,7 @@ class WorkflowUpdateRequest:
         workflow_update_request = cls(
             description=description,
             icon_url=icon_url,
+            max_concurrent_runs=max_concurrent_runs,
             mode=mode,
             run_title=run_title,
             start=start,

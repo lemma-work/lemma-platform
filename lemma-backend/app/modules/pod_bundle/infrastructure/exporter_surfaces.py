@@ -37,9 +37,6 @@ async def export_surfaces(
         list_surfaces,
         surface_response,
     )
-    from app.modules.connectors.contracts.provisioning import (
-        resolve_account_connector,
-    )
     from app.modules.pod_bundle.infrastructure.exporter import _dump_response
 
     try:
@@ -59,16 +56,9 @@ async def export_surfaces(
     for surface in surfaces:
         surface_label = str(getattr(surface, "name", None) or "unnamed")
         try:
+            # The pod connector travels by slug; the account behind it never
+            # leaves the organization.
             raw_surface = _dump_response(surface_response(surface))
-            account_id = raw_surface.get("account_id")
-            if account_id:
-                info = await resolve_account_connector(uow, UUID(str(account_id)))
-                if info is None:
-                    raise ValueError(
-                        f"Surface references account {account_id}, which no "
-                        "longer exists."
-                    )
-                raw_surface["connector_id"], raw_surface["connector_kind"] = info
             payload = _normalize_surface_payload(raw_surface)
             platform = str(payload.get("platform") or "")
             # De-dup by the surface's pod-unique name (not platform), so a pod

@@ -171,7 +171,10 @@ def build_specs(
                 "POSTGRES_PASSWORD": "postgres",
                 "POSTGRES_DB": "lemma",
             },
-            volumes=((POSTGRES_VOLUME, "/var/lib/postgresql/data"),),
+            # PostgreSQL 18 moved PGDATA below /var/lib/postgresql/<major>/docker
+            # and declares the parent as its persistent VOLUME. Mounting the
+            # old /data path makes the image reject the volume on first start.
+            volumes=((POSTGRES_VOLUME, "/var/lib/postgresql"),),
             ports=((store.port(doc, "postgres"), 5432),) if host_apps else (),
             binds=((str(paths.postgres_init_dir), "/docker-entrypoint-initdb.d", "ro"),),
             health=HealthCheck(cmd="pg_isready -U postgres -h localhost"),
@@ -224,6 +227,8 @@ def build_specs(
                 "8000",
                 "--ws",
                 "websockets-sansio",
+                "--ws-max-size",
+                "1048576",
             ),
             ports=((store.port(doc, "backend"), 8000),),
             binds=(

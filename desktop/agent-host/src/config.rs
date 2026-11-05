@@ -161,6 +161,12 @@ pub struct HostConfig {
     pub targets: Vec<TargetConfig>,
     #[serde(default = "default_max_runs")]
     pub max_runs: u16,
+    /// Whether a person chose `max_runs` (`lemma-agent-host max-runs`),
+    /// rather than it being whatever default the build that wrote the file
+    /// had. Only an unchosen value is lifted when the default rises
+    /// (`migrate_max_runs`); a chosen one is the person's and stays.
+    #[serde(default)]
+    pub max_runs_chosen: bool,
     /// The host-wide switch older builds wrote. It applied to every pairing
     /// -- a hosted workspace's and a teammate's shared install's included --
     /// so it is read once, moved onto the local pairing (`TargetConfig::
@@ -278,9 +284,19 @@ impl TargetConfig {
     }
 }
 
+/// How many runs one computer takes at once unless its person chose otherwise.
+///
+/// Each run is one coding-agent process waiting on a model most of the time,
+/// so a Mac holds many; two made the third conversation of a busy afternoon
+/// queue behind the first two.
 const fn default_max_runs() -> u16 {
-    2
+    20
 }
+
+/// The default older builds wrote into every config they created. A file
+/// still holding it, with no choice recorded, holds it only because nobody
+/// changed it.
+const RETIRED_DEFAULT_MAX_RUNS: u16 = 2;
 
 const fn default_enabled() -> bool {
     true
@@ -288,6 +304,20 @@ const fn default_enabled() -> bool {
 
 impl HostConfig {
     pub fn load_or_create(paths: &HostPaths) -> anyhow::Result<Self> {
+        let config = Self::load_or_create_unlocked(paths)?;
+        if config.max_runs_needs_lifting() {
+            // Saved, not only lifted in memory, and under the write lock: a
+            // save from here without it could write back a config loaded
+            // before another process's pairing landed, and lose the pairing.
+            // `mutate` reloads inside the lock and lifts what it finds.
+            return Self::mutate(paths, |_| Ok(false));
+        }
+        Ok(config)
+    }
+
+    /// `load_or_create` for a caller already holding the write lock, or one
+    /// that only reads. Fixups that need no save happen here, in memory.
+    fn load_or_create_unlocked(paths: &HostPaths) -> anyhow::Result<Self> {
         paths.ensure()?;
         if paths.config.exists() {
             let mut value: Self = serde_json::from_slice(&std::fs::read(&paths.config)?)?;
@@ -300,10 +330,42 @@ impl HostConfig {
             targets: Vec::new(),
             max_runs: default_max_runs(),
             legacy_host_execution: false,
+            max_runs_chosen: false,
             own_settings: std::collections::BTreeSet::new(),
         };
         config.save(paths)?;
         Ok(config)
+    }
+
+    fn max_runs_needs_lifting(&self) -> bool {
+        !self.max_runs_chosen && self.max_runs == RETIRED_DEFAULT_MAX_RUNS
+    }
+
+    /// Lift a concurrency limit nobody chose to the current default. Returns
+    /// whether it changed anything.
+    ///
+    /// Every config an older build created was written with that build's
+    /// default of two, so on disk it reads exactly like a choice. A file
+    /// holding two with no choice recorded is the old default; one holding
+    /// any other number, or holding two by choice, is left alone.
+    pub(crate) fn migrate_max_runs(&mut self) -> bool {
+        if !self.max_runs_needs_lifting() {
+            return false;
+        }
+        self.max_runs = default_max_runs();
+        true
+    }
+
+    /// Set the concurrency limit as the person's own choice, which no later
+    /// change of default overrides.
+    pub fn choose_max_runs(&mut self, max_runs: u16) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=MAX_SUPPORTED_RUNS).contains(&max_runs),
+            "max_runs must be between 1 and {MAX_SUPPORTED_RUNS}"
+        );
+        self.max_runs = max_runs;
+        self.max_runs_chosen = true;
+        Ok(())
     }
 
     /// Move the host-wide switch an older build wrote onto the local pairing.
@@ -392,8 +454,9 @@ impl HostConfig {
         change: impl FnOnce(&mut Self) -> anyhow::Result<bool>,
     ) -> anyhow::Result<Self> {
         let _guard = paths.lock_config()?;
-        let mut config = Self::load_or_create(paths)?;
-        if change(&mut config)? {
+        let mut config = Self::load_or_create_unlocked(paths)?;
+        let migrated = config.migrate_max_runs();
+        if change(&mut config)? || migrated {
             config.save(paths)?;
         }
         Ok(config)
@@ -459,386 +522,4 @@ impl HostConfig {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn concurrent_changes_do_not_lose_each_other() {
-        // The bug: every mutation is load -> change -> save, and the writers are
-        // in different processes -- the daemon's worker and supervisor, and the
-        // `connect`/`disconnect`/`drain` subcommands the desktop app runs while
-        // the daemon is up. Unsynchronised, the second saver writes a config it
-        // loaded before the first one's change existed, so the first change is
-        // silently gone. What that looked like was a pairing that reported
-        // success and then was not there.
-        let home = TempDir::new().unwrap();
-        let paths = HostPaths::under(home.path());
-        HostConfig::load_or_create(&paths).unwrap();
-
-        let writers = 8;
-        std::thread::scope(|scope| {
-            for index in 0..writers {
-                let paths = paths.clone();
-                scope.spawn(move || {
-                    HostConfig::mutate(&paths, |config| {
-                        config.targets.push(TargetConfig {
-                            target_id: Uuid::new_v4(),
-                            name: format!("target-{index}"),
-                            base_url: url::Url::parse(&format!("https://{index}.example/"))
-                                .unwrap(),
-                            host_id: Uuid::new_v4(),
-                            user_id: Uuid::new_v4(),
-                            host_secret: "secret".into(),
-                            enabled: true,
-                            allow_insecure_http: false,
-                            draining: false,
-                            refresh_generation: 0,
-                            session_paused: false,
-                            host_execution: false,
-                        });
-                        Ok(true)
-                    })
-                    .unwrap();
-                });
-            }
-        });
-
-        let config = HostConfig::load_or_create(&paths).unwrap();
-        assert_eq!(
-            config.targets.len(),
-            writers,
-            "every change must survive: {:?}",
-            config
-                .targets
-                .iter()
-                .map(|target| &target.name)
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn a_local_pairing_moves_off_the_retired_loopback_wildcard() {
-        let target = |url: &str, insecure: bool| TargetConfig {
-            target_id: Uuid::new_v4(),
-            name: url.into(),
-            base_url: url::Url::parse(url).unwrap(),
-            host_id: Uuid::new_v4(),
-            user_id: Uuid::new_v4(),
-            host_secret: "secret".into(),
-            enabled: true,
-            allow_insecure_http: insecure,
-            draining: false,
-            refresh_generation: 0,
-            session_paused: false,
-            host_execution: false,
-        };
-        let mut config = HostConfig {
-            installation_id: Uuid::new_v4().to_string(),
-            targets: vec![
-                target("http://app.127.0.0.1.sslip.io:61000/", true),
-                target("http://api.127.0.0.1.sslip.io:61001/x", true),
-                // Not a local pairing: plain http was never opted into.
-                target("http://app.127.0.0.1.sslip.io:61002/", false),
-                target("https://api.lemma.work/", false),
-                target("http://app.10.0.0.7.sslip.io:61003/", true),
-            ],
-            max_runs: default_max_runs(),
-            legacy_host_execution: false,
-            own_settings: std::collections::BTreeSet::new(),
-        };
-        config.migrate_retired_local_hosts();
-        let urls: Vec<&str> = config
-            .targets
-            .iter()
-            .map(|target| target.base_url.as_str())
-            .collect();
-        assert_eq!(
-            urls,
-            [
-                "http://app.lemma.localhost:61000/",
-                "http://app.lemma.localhost:61001/x",
-                "http://app.127.0.0.1.sslip.io:61002/",
-                "https://api.lemma.work/",
-                "http://app.10.0.0.7.sslip.io:61003/",
-            ]
-        );
-    }
-
-    #[test]
-    fn a_change_that_declines_to_change_anything_leaves_the_file_alone() {
-        let home = TempDir::new().unwrap();
-        let paths = HostPaths::under(home.path());
-        HostConfig::load_or_create(&paths).unwrap();
-        let before = std::fs::read(&paths.config).unwrap();
-
-        HostConfig::mutate(&paths, |config| {
-            config.max_runs = 99;
-            Ok(false)
-        })
-        .unwrap();
-
-        assert_eq!(std::fs::read(&paths.config).unwrap(), before);
-    }
-
-    #[test]
-    fn saving_leaves_no_temporary_behind_for_another_writer_to_collide_with() {
-        // A fixed `config.json.tmp` is a second race stacked on the first: two
-        // savers interleave bytes into one file and both rename it, so the
-        // survivor can be neither of the configs that were written.
-        let home = TempDir::new().unwrap();
-        let paths = HostPaths::under(home.path());
-        HostConfig::load_or_create(&paths).unwrap();
-
-        let leftovers: Vec<_> = std::fs::read_dir(home.path())
-            .unwrap()
-            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
-            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "temporaries left behind: {leftovers:?}"
-        );
-    }
-
-    #[test]
-    fn a_second_agent_host_cannot_serve_the_same_data_directory() {
-        // Two hosts share one pairing: commands split between them at random,
-        // and whichever exits first reports available_runs=0 and marks the
-        // machine draining. The workspace then flaps and dispatch latency looks
-        // random, which is exactly what it did.
-        let directory = TempDir::new().unwrap();
-        let paths = HostPaths::under(directory.path());
-
-        let first = paths
-            .lock_single_instance()
-            .expect("first host takes the lock");
-
-        let second = paths.lock_single_instance();
-        assert!(second.is_err(), "a second host was allowed to serve");
-        let message = second.unwrap_err().to_string();
-        assert!(
-            message.contains("already serving"),
-            "unhelpful message: {message}"
-        );
-
-        // Releasing it lets the next process in, so a restart is not blocked by
-        // its predecessor.
-        //
-        // Not necessarily at once: other tests in this binary spawn processes,
-        // and a child forked while `first` was open holds a copy of its
-        // descriptor -- and so the lock -- until it execs and the copy closes.
-        // A new process has no such children, so the wait is only a test's.
-        drop(first);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while paths.lock_single_instance().is_err() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the lock was not released"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-
-    /// Claiming more capacity than the backend accepts is not ambitious, it is
-    /// fatal: the backend closes every link whose `hello` carries it, and the
-    /// host stays offline for ever, with nothing on screen naming the config
-    /// value that caused it. Refusing at load says which field, once.
-    #[test]
-    fn rejects_a_capacity_the_backend_would_refuse_on_every_poll() {
-        let config = |max_runs| HostConfig {
-            legacy_host_execution: false,
-            own_settings: std::collections::BTreeSet::default(),
-            installation_id: "installation".into(),
-            max_runs,
-            targets: Vec::new(),
-        };
-
-        assert!(config(MAX_SUPPORTED_RUNS).validate().is_ok());
-        let error = config(MAX_SUPPORTED_RUNS + 1)
-            .validate()
-            .expect_err("a claim the backend rejects must not reach it");
-        assert!(
-            error.to_string().contains("max_runs"),
-            "the message has to name the field: {error}"
-        );
-    }
-
-    #[test]
-    fn rejects_remote_plain_http() {
-        let config = HostConfig {
-            legacy_host_execution: false,
-            own_settings: std::collections::BTreeSet::default(),
-            installation_id: "installation".into(),
-            max_runs: 1,
-            targets: vec![TargetConfig {
-                target_id: Uuid::new_v4(),
-                name: "unsafe".into(),
-                base_url: Url::parse("http://example.com").unwrap(),
-                host_id: Uuid::new_v4(),
-                user_id: Uuid::new_v4(),
-                host_secret: "test-secret".into(),
-                enabled: true,
-                allow_insecure_http: true,
-                draining: false,
-                refresh_generation: 0,
-                session_paused: false,
-                host_execution: false,
-            }],
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn the_old_host_wide_switch_moves_onto_the_local_pairing_only() {
-        let directory = tempfile::tempdir().unwrap();
-        let paths = HostPaths::under(directory.path());
-        paths.ensure().unwrap();
-        let target = |name: &str, url: &str, insecure: bool| {
-            serde_json::json!({
-                "target_id": Uuid::new_v4(),
-                "name": name,
-                "base_url": url,
-                "host_id": Uuid::new_v4(),
-                "user_id": Uuid::new_v4(),
-                "host_secret": "secret",
-                "allow_insecure_http": insecure,
-            })
-        };
-        let written = serde_json::json!({
-            "installation_id": "installation",
-            "host_execution": true,
-            "targets": [
-                target("this Mac", "http://127.0.0.1:8710/", true),
-                target("hosted", "https://api.lemma.work/", false),
-            ],
-        });
-        std::fs::write(&paths.config, serde_json::to_vec(&written).unwrap()).unwrap();
-
-        let config = HostConfig::load_or_create(&paths).unwrap();
-        assert!(config.targets[0].runs_host_commands());
-        assert!(!config.targets[1].host_execution);
-        assert!(!config.targets[1].is_local_install());
-        assert!(config.host_execution());
-
-        config.save(&paths).unwrap();
-        let saved: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&paths.config).unwrap()).unwrap();
-        assert!(saved.get("host_execution").is_none(), "{saved}");
-        assert_eq!(saved["targets"][0]["host_execution"], true);
-    }
-
-    #[test]
-    fn only_the_signed_in_persons_pairing_takes_work() {
-        let url = Url::parse("http://127.0.0.1:8710/").unwrap();
-        let pairing = |user: Uuid| TargetConfig {
-            target_id: Uuid::new_v4(),
-            name: "this Mac".into(),
-            base_url: url.clone(),
-            host_id: Uuid::new_v4(),
-            user_id: user,
-            host_secret: "secret".into(),
-            enabled: true,
-            allow_insecure_http: true,
-            draining: false,
-            refresh_generation: 0,
-            session_paused: false,
-            host_execution: true,
-        };
-        let (me, them) = (Uuid::new_v4(), Uuid::new_v4());
-        let mut config = HostConfig {
-            installation_id: "installation".into(),
-            targets: vec![pairing(me), pairing(them)],
-            max_runs: 1,
-            legacy_host_execution: false,
-            own_settings: std::collections::BTreeSet::default(),
-        };
-        assert_eq!(config.apply_session(&url, Some(me)), 1);
-        assert!(config.targets[0].takes_work() && config.targets[0].runs_host_commands());
-        assert!(!config.targets[1].takes_work() && !config.targets[1].runs_host_commands());
-        // Signing out pauses the rest; another server's pairings are untouched.
-        let elsewhere = Url::parse("https://lemma.example/").unwrap();
-        assert_eq!(config.apply_session(&elsewhere, None), 0);
-        assert_eq!(config.apply_session(&url, None), 1);
-        assert!(!config.targets[0].takes_work());
-    }
-
-    #[test]
-    fn a_remote_pairing_never_runs_host_commands_whatever_it_says() {
-        let mut target: TargetConfig = serde_json::from_value(serde_json::json!({
-            "target_id": Uuid::new_v4(),
-            "name": "shared",
-            "base_url": "https://teammate.example/",
-            "host_id": Uuid::new_v4(),
-            "user_id": Uuid::new_v4(),
-            "host_secret": "secret",
-            "host_execution": true,
-        }))
-        .unwrap();
-        assert!(!target.runs_host_commands());
-        target.allow_insecure_http = true;
-        assert!(
-            !target.runs_host_commands(),
-            "https is never the local install"
-        );
-    }
-
-    #[test]
-    fn a_target_from_before_host_secrets_is_skipped_not_fatal() {
-        // Exactly the shape written by the keypair-era host. Failing the whole
-        // load on it bricked every command, `connect` included, so the only
-        // recovery was hand-editing the file.
-        let legacy = serde_json::json!({
-            "installation_id": "installation",
-            "max_runs": 2,
-            "targets": [
-                {
-                    "target_id": Uuid::new_v4(),
-                    "name": "paired before the upgrade",
-                    "base_url": "http://localhost:8710/",
-                    "host_id": Uuid::new_v4(),
-                    "user_id": Uuid::new_v4(),
-                    "public_key_fingerprint": "0d009517e46ab181",
-                    "enabled": true,
-                    "allow_insecure_http": true,
-                    "draining": false,
-                    "refresh_generation": 0
-                }
-            ]
-        });
-
-        let config: HostConfig = serde_json::from_value(legacy).unwrap();
-
-        assert!(config.targets.is_empty());
-        assert_eq!(config.installation_id, "installation");
-        assert_eq!(config.max_runs, 2);
-    }
-
-    #[test]
-    fn a_readable_target_survives_beside_an_unreadable_one() {
-        let good = Uuid::new_v4();
-        let mixed = serde_json::json!({
-            "installation_id": "installation",
-            "targets": [
-                { "name": "unreadable", "target_id": Uuid::new_v4() },
-                {
-                    "target_id": good,
-                    "name": "current",
-                    "base_url": "https://api.lemma.work/",
-                    "host_id": Uuid::new_v4(),
-                    "user_id": Uuid::new_v4(),
-                    "host_secret": "secret",
-                    "enabled": true,
-                    "allow_insecure_http": false,
-                    "draining": false,
-                    "refresh_generation": 0
-                }
-            ]
-        });
-
-        let config: HostConfig = serde_json::from_value(mixed).unwrap();
-
-        assert_eq!(config.targets.len(), 1);
-        assert_eq!(config.targets[0].target_id, good);
-    }
-}
+mod tests;

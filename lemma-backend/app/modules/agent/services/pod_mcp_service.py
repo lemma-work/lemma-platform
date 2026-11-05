@@ -14,8 +14,8 @@ connected it, and sees only the tools its scopes cover.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Mapping
-from typing import Any, Literal
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
@@ -25,17 +25,38 @@ from supertokens_python.recipe.session.asyncio import (
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from app.core.authorization.delegation import (
+    DelegationClaims,
     WorkloadPrincipalType,
-    is_pod_default_agent,
-    parse_delegation_claims,
+    is_default_pod_agent_claims,
 )
-from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.security import (
+    PrincipalLookups,
+    PrincipalRefused,
+    resolve_delegated_principal,
+)
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
     tool_call_result,
+)
+from app.modules.agent.services.pod_mcp_agent_tools import (
+    agent_tools,
+    is_agent_tool,
+    offers_agents,
+)
+from app.modules.agent.services.pod_mcp_agents import PodAgentAsks
+from app.modules.agent.services.pod_mcp_functions import (
+    PodFunctions,
+    function_tools,
+    is_function_tool,
+    offers_functions,
+)
+from app.modules.agent.services.pod_mcp_workflows import (
+    WRITING_TOOLS as WORKFLOW_WRITING_TOOLS,
+    PodWorkflows,
+    is_workflow_tool,
 )
 from app.modules.agent.services.pod_mcp_apps import (
     app_tools,
@@ -72,6 +93,14 @@ logger = get_logger(__name__)
 _NIL_CONVERSATION_ID = UUID(int=0)
 
 
+class OutsideToolCall(Protocol):
+    """How each of the outside-only tool families answers a call."""
+
+    def __call__(
+        self, name: str, arguments: dict[str, object], *, principal: McpPrincipal
+    ) -> Awaitable[CallToolResult]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _Caller:
     ctx: BaseAgentContext
@@ -90,14 +119,70 @@ class _Caller:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedSession:
+    """A Lemma session whose signature checked out: whose it is, and its claims."""
+
+    user_id: UUID
+    payload: Mapping[str, object]
+
+
+SessionVerifier = Callable[[str], Awaitable[VerifiedSession | None]]
+
+
+async def verify_supertokens_session(token: str) -> VerifiedSession | None:
+    """The session ``token`` names, or ``None`` when it names none."""
+    try:
+        session = await get_session_without_request_response(
+            token,
+            anti_csrf_check=False,
+            session_required=True,
+        )
+    except SuperTokensSessionError:
+        # The token is not valid: expected traffic, and the denial is the whole
+        # answer.
+        return None
+    except Exception:
+        # The auth backend could not answer. Same denial — a caller holding a
+        # good token must not be let through because SuperTokens is down — but
+        # this is an outage, not a bad token, and catching both as one made the
+        # two indistinguishable from outside.
+        logger.error(
+            "agent.pod_mcp_service.session_lookup.failed",
+            exc_info=True,
+        )
+        return None
+    if session is None:
+        return None
+    return VerifiedSession(
+        user_id=UUID(session.get_user_id()),
+        payload=session.get_access_token_payload() or {},
+    )
+
+
 class PodMCPService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        verify_session: SessionVerifier = verify_supertokens_session,
+        principal_lookups: PrincipalLookups | None = None,
+    ) -> None:
         self.uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         self.dispatcher = AgentToolDispatcher(self.uow_factory)
+        self.agent_asks = PodAgentAsks(self.uow_factory)
+        self.functions = PodFunctions(self.uow_factory)
+        self.workflows = PodWorkflows(self.uow_factory)
+        self._verify_session = verify_session
+        self._principal_lookups = principal_lookups
 
     async def authorize(self, *, pod_id: UUID, token: str) -> bool:
         caller = await self._caller_from_token(pod_id=pod_id, token=token)
         return caller is not None
+
+    async def context_for(self, *, pod_id: UUID, token: str) -> BaseAgentContext | None:
+        """The tool context a Lemma session token gets on this pod, if any."""
+        caller = await self._caller_from_token(pod_id=pod_id, token=token)
+        return caller.ctx if caller is not None else None
 
     async def list_tools(
         self, *, pod_id: UUID, token: str, principal: McpPrincipal | None = None
@@ -112,6 +197,18 @@ class PodMCPService:
                 self.uow_factory, pod_id=pod_id, user_id=caller.principal.user_id
             )
             listed += app_tools(apps)
+        principal = caller.principal
+        if principal is None:
+            return listed
+        if offers_agents(principal):
+            listed += agent_tools(
+                await self.agent_asks.agents(pod_id=pod_id, user_id=principal.user_id)
+            )
+        if offers_functions(principal):
+            listed += function_tools(
+                await self.functions.functions(pod_id=pod_id, user_id=principal.user_id)
+            )
+        listed += await self.workflows.tools(principal)
         return listed
 
     async def call_tool(
@@ -128,6 +225,46 @@ class PodMCPService:
         )
         if is_app_tool(name):
             return await self._call_app_tool(caller, name, arguments, pod_id=pod_id)
+        if is_agent_tool(name):
+            return await self._call_outside_tool(
+                caller,
+                name,
+                arguments,
+                allowed=offers_agents(caller.principal),
+                call=self.agent_asks.call,
+                refusal=(
+                    "Asking the pod's agents needs a connection allowed to change "
+                    "things: they act as you. Reconnect it and allow that."
+                ),
+            )
+        if is_function_tool(name):
+            return await self._call_outside_tool(
+                caller,
+                name,
+                arguments,
+                allowed=offers_functions(caller.principal),
+                call=self.functions.call,
+                refusal=(
+                    "Running the pod's functions needs a connection allowed to "
+                    "change things. Reconnect it and allow that."
+                ),
+            )
+        if is_workflow_tool(name):
+            # Each tool needs its own scope, as every pod tool does
+            # (`caller.may_call`): reading a run or a waiting form is reading.
+            needed = Scope.WRITE if name in WORKFLOW_WRITING_TOOLS else Scope.READ
+            return await self._call_outside_tool(
+                caller,
+                name,
+                arguments,
+                allowed=caller.principal is not None
+                and needed in caller.principal.scopes,
+                call=self.workflows.call,
+                refusal=(
+                    f"This connection was not granted {needed.value}. Reconnect "
+                    "it and allow that access to use this."
+                ),
+            )
         tool_name = normalize_local_mcp_tool_name(name)
         if not caller.may_call(tool_name, arguments):
             _audit(caller, tool_name, outcome="refused")
@@ -188,6 +325,32 @@ class PodMCPService:
         _audit(caller, name, outcome="failed" if result.is_error else "ok")
         return result
 
+    async def _call_outside_tool(
+        self,
+        caller: _Caller,
+        name: str,
+        arguments: Mapping[str, object] | None,
+        *,
+        allowed: bool,
+        call: OutsideToolCall,
+        refusal: str,
+    ) -> CallToolResult:
+        """One of the tools only an outside client's connection is offered:
+        refused, audited, or answered."""
+        if caller.principal is None or not allowed:
+            _audit(caller, name, outcome="refused")
+            return tool_call_error(name, PermissionError(refusal))
+        # A `finally` rather than a catch-all: a call that raises is audited as
+        # failed like any other, and still reaches the client as an error.
+        outcome: Literal["ok", "failed"] = "failed"
+        try:
+            result = await call(name, dict(arguments or {}), principal=caller.principal)
+            if not result.is_error:
+                outcome = "ok"
+            return result
+        finally:
+            _audit(caller, name, outcome=outcome)
+
     async def _require_caller(
         self, *, pod_id: UUID, token: str, principal: McpPrincipal | None = None
     ) -> _Caller:
@@ -218,51 +381,26 @@ class PodMCPService:
         pod_id: UUID,
         token: str,
     ) -> BaseAgentContext | None:
-        try:
-            session = await get_session_without_request_response(
-                token,
-                anti_csrf_check=False,
-                session_required=True,
-            )
-        except SuperTokensSessionError:
-            # The token is not valid: expected traffic, and the denial below is
-            # the whole answer.
-            return None
-        except Exception:
-            # The auth backend could not answer. Same denial — a caller holding
-            # a good token must not be let through because SuperTokens is down —
-            # but this is an outage, not a bad token, and catching both as one
-            # made the two indistinguishable from outside.
-            logger.error(
-                "agent.pod_mcp_service.session_lookup.failed",
-                exc_info=True,
-            )
-            return None
+        session = await self._verify_session(token)
         if session is None:
             return None
-        user_id = UUID(session.get_user_id())
-
-        workload_id: UUID | None = None
-        agent_name: str | None = None
-        if settings.authz_delegated_tokens_enabled:
-            try:
-                claims = parse_delegation_claims(
-                    session.get_access_token_payload() or {}
-                )
-            except Exception:
-                claims = None
-            if claims is not None and claims.actor_type == WorkloadPrincipalType.AGENT:
-                if claims.pod_id != pod_id:
-                    return None
-                workload_id = claims.actor_id
-                agent_name = claims.actor_name
-
-        return _pod_context(
-            user_id=user_id,
-            pod_id=pod_id,
-            workload_id=workload_id,
-            agent_name=agent_name,
-        )
+        try:
+            # The same resolver the HTTP dependency runs: these mounts are ASGI
+            # apps it never sees, so this is the only gate a token passes here.
+            claims = await resolve_delegated_principal(
+                session.payload,
+                user_id=session.user_id,
+                pod_id=pod_id,
+                lookups=self._principal_lookups,
+            )
+        except PrincipalRefused as refused:
+            logger.warning(
+                "agent.pod_mcp_service.token.refused",
+                code=refused.code,
+                pod_id=str(pod_id),
+            )
+            return None
+        return _pod_context_for(session.user_id, pod_id=pod_id, claims=claims)
 
 
 def as_mcp_tool(tool: ToolInfo) -> Tool:
@@ -322,21 +460,56 @@ def _audit(
     )
 
 
+def _pod_context_for(
+    user_id: UUID, *, pod_id: UUID, claims: DelegationClaims | None
+) -> BaseAgentContext:
+    """Every delegated token is held to its own workload's authority.
+
+    Only the pod's own assistant acts with the person's roles. A named agent
+    gets its grants; a function gets the function's, never the person's.
+    """
+    if claims is None:
+        return _pod_context(user_id=user_id, pod_id=pod_id)
+    scope = frozenset(claims.scope)
+    if claims.actor_type is WorkloadPrincipalType.FUNCTION:
+        return _pod_context(
+            user_id=user_id,
+            pod_id=pod_id,
+            workload_type="function",
+            workload_id=claims.actor_id,
+            is_pod_default_agent=False,
+            delegation_scope=scope,
+        )
+    return _pod_context(
+        user_id=user_id,
+        pod_id=pod_id,
+        workload_type="agent",
+        workload_id=claims.actor_id,
+        agent_name=claims.actor_name,
+        is_pod_default_agent=is_default_pod_agent_claims(claims),
+        delegation_scope=scope,
+    )
+
+
 def _pod_context(
     *,
     user_id: UUID,
     pod_id: UUID,
+    workload_type: str | None = None,
     workload_id: UUID | None = None,
     agent_name: str | None = None,
+    is_pod_default_agent: bool = True,
+    delegation_scope: frozenset[str] = frozenset(),
 ) -> BaseAgentContext:
     return BaseAgentContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=_NIL_CONVERSATION_ID,
-        workload_type="agent" if workload_id is not None else None,
+        workload_type=workload_type,
         workload_id=workload_id,
         agent_name=agent_name,
-        is_pod_default_agent=is_pod_default_agent(workload_id, pod_id=pod_id),
+        is_pod_default_agent=is_pod_default_agent,
+        delegation_scope=delegation_scope,
         # There is no run here, and so no runtime profile to ask -- this
         # bridge serves an MCP client holding a pod token, not a Lemma agent
         # run. DIRECT rather than the UNAVAILABLE default, because MCP has a

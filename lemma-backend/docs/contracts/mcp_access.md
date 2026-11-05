@@ -13,6 +13,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `mcp_access.endpoint.get` | GET | `/oauth/mcp-endpoint/{pod_id}` | The MCP URL for a pod |
 | `mcp_access.grants.list` | GET | `/oauth/grants` | MCP clients you have connected |
 | `mcp_access.grants.revoke` | DELETE | `/oauth/grants/{grant_id}` | Disconnect an MCP client |
+| `mcp_access.grants.subscription.delete` | DELETE | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}` | Stop telling a connected app about an event |
+| `mcp_access.grants.subscription.resume` | POST | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume` | Let a connected app be told about an event again |
 
 <!-- /generated:operations -->
 
@@ -41,3 +43,11 @@ issued, in one transaction; the client's next MCP request is a 401 and it must
 ask the person again. `404` for a grant that does not exist, is already
 revoked, or is not the caller's to end — one answer for all three. Logs
 `mcp_access.grant.revoked`; emits no event.
+
+## `mcp_access.grants.subscription.delete`
+
+Whoever may end the connection: the person who made it, or an admin of its
+pod. Stops one event subscription; the connection and its other subscriptions
+stay, and the client may subscribe again. `404` for no such subscription,
+already stopped, or not yours to stop. `mcp_access.grants.list` lists each
+connection's subscriptions under `listens_to`.

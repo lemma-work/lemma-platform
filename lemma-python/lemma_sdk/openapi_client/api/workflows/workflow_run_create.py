@@ -9,13 +9,18 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.workflow_run_response import WorkflowRunResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     pod_id: UUID,
     workflow_name: str,
+    *,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
+    headers: dict[str, Any] = {}
+    if not isinstance(idempotency_key, Unset):
+        headers["Idempotency-Key"] = idempotency_key
 
     _kwargs: dict[str, Any] = {
         "method": "post",
@@ -25,6 +30,7 @@ def _get_kwargs(
         ),
     }
 
+    _kwargs["headers"] = headers
     return _kwargs
 
 
@@ -63,17 +69,21 @@ def sync_detailed(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkflowRunResponse]:
     """Create Workflow Run
 
      Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM
     node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via
     `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for
-    scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+    scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an
+    `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same
+    workflow, returns the run it already created.
 
     Args:
         pod_id (UUID):
         workflow_name (str):
+        idempotency_key (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -86,6 +96,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         workflow_name=workflow_name,
+        idempotency_key=idempotency_key,
     )
 
     response = client.get_httpx_client().request(
@@ -100,17 +111,21 @@ def sync(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkflowRunResponse | None:
     """Create Workflow Run
 
      Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM
     node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via
     `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for
-    scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+    scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an
+    `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same
+    workflow, returns the run it already created.
 
     Args:
         pod_id (UUID):
         workflow_name (str):
+        idempotency_key (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -124,6 +139,7 @@ def sync(
         pod_id=pod_id,
         workflow_name=workflow_name,
         client=client,
+        idempotency_key=idempotency_key,
     ).parsed
 
 
@@ -132,17 +148,21 @@ async def asyncio_detailed(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkflowRunResponse]:
     """Create Workflow Run
 
      Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM
     node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via
     `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for
-    scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+    scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an
+    `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same
+    workflow, returns the run it already created.
 
     Args:
         pod_id (UUID):
         workflow_name (str):
+        idempotency_key (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -155,6 +175,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         workflow_name=workflow_name,
+        idempotency_key=idempotency_key,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -167,17 +188,21 @@ async def asyncio(
     workflow_name: str,
     *,
     client: AuthenticatedClient | Client,
+    idempotency_key: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkflowRunResponse | None:
     """Create Workflow Run
 
      Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM
     node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via
     `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for
-    scheduled/event/datastore starts are supplied by the platform, not through this endpoint.
+    scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an
+    `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same
+    workflow, returns the run it already created.
 
     Args:
         pod_id (UUID):
         workflow_name (str):
+        idempotency_key (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -192,5 +217,6 @@ async def asyncio(
             pod_id=pod_id,
             workflow_name=workflow_name,
             client=client,
+            idempotency_key=idempotency_key,
         )
     ).parsed

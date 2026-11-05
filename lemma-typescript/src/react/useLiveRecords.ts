@@ -36,7 +36,8 @@ export interface UseLiveRecordsResult<
 
 /**
  * A record list that stays live without polling: an initial fetch (via `useRecords`,
- * with the same filters/sort/pagination) plus a WebSocket subscription that merges
+ * with the same filters/sort/pagination) plus a subscription on the pod's shared live
+ * socket that merges
  * insert/update/delete deltas **in place**, keyed by id. Rows update without a
  * full-list refetch, so the UI doesn't flicker and the API isn't hammered.
  *
@@ -82,17 +83,24 @@ export function useLiveRecords<TRecord extends Record<string, unknown> = Record<
     [],
   );
 
+  const scheduleRefresh = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      void refreshRef.current();
+    }, 150);
+  };
+
   const { status } = useWatchChanges({
     client: recordsOptions.client,
     podId: recordsOptions.podId,
     table: recordsOptions.tableName,
     enabled: live && (recordsOptions.enabled ?? true),
+    // The server could not send what was missed (a bulk import, a long
+    // disconnect): the authoritative query is the only way back in step.
+    onResync: scheduleRefresh,
     onChange: (frame) => {
       if (reconcile === "refetch") {
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-          void refreshRef.current();
-        }, 150);
+        scheduleRefresh();
         return;
       }
       setRows((current) => applyDatastoreChange<TRecord>(current, frame, { idKey, accept, compare }));

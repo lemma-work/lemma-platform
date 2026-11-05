@@ -38,6 +38,7 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
         headers (CreateAnthropicCompatibleRuntimeProfileRequestHeaders | Unset):
         model_names (list[str] | Unset):
         model_settings (CreateAnthropicCompatibleRuntimeProfileRequestModelSettings | Unset):
+        reasoning_model_names (list[str] | Unset):
         source (Literal['ANTHROPIC_COMPATIBLE'] | Unset):  Default: 'ANTHROPIC_COMPATIBLE'.
     """
 
@@ -51,6 +52,7 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
     model_settings: (
         CreateAnthropicCompatibleRuntimeProfileRequestModelSettings | Unset
     ) = UNSET
+    reasoning_model_names: list[str] | Unset = UNSET
     source: Literal["ANTHROPIC_COMPATIBLE"] | Unset = "ANTHROPIC_COMPATIBLE"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -89,6 +91,10 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
         if not isinstance(self.model_settings, Unset):
             model_settings = self.model_settings.to_dict()
 
+        reasoning_model_names: list[str] | Unset = UNSET
+        if not isinstance(self.reasoning_model_names, Unset):
+            reasoning_model_names = self.reasoning_model_names
+
         source = self.source
 
         field_dict: dict[str, Any] = {}
@@ -111,6 +117,8 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
             field_dict["model_names"] = model_names
         if model_settings is not UNSET:
             field_dict["model_settings"] = model_settings
+        if reasoning_model_names is not UNSET:
+            field_dict["reasoning_model_names"] = reasoning_model_names
         if source is not UNSET:
             field_dict["source"] = source
 
@@ -183,6 +191,8 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
                 )
             )
 
+        reasoning_model_names = cast(list[str], d.pop("reasoning_model_names", UNSET))
+
         source = cast(Literal["ANTHROPIC_COMPATIBLE"] | Unset, d.pop("source", UNSET))
         if source != "ANTHROPIC_COMPATIBLE" and not isinstance(source, Unset):
             raise ValueError(
@@ -198,6 +208,7 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
             headers=headers,
             model_names=model_names,
             model_settings=model_settings,
+            reasoning_model_names=reasoning_model_names,
             source=source,
         )
 

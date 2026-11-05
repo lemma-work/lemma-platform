@@ -74,6 +74,9 @@ def sync_detailed(
 
      Start a session, or come back to one: either way, a new access token.
 
+    On a page Lemma hosts, a visitor nobody signed in comes back to their chat
+    from its cookie when the page has no secret to send.
+
     Args:
         public_key (str):
         body (SessionRequest):
@@ -108,6 +111,9 @@ def sync(
 
      Start a session, or come back to one: either way, a new access token.
 
+    On a page Lemma hosts, a visitor nobody signed in comes back to their chat
+    from its cookie when the page has no secret to send.
+
     Args:
         public_key (str):
         body (SessionRequest):
@@ -136,6 +142,9 @@ async def asyncio_detailed(
     """Web Start Session
 
      Start a session, or come back to one: either way, a new access token.
+
+    On a page Lemma hosts, a visitor nobody signed in comes back to their chat
+    from its cookie when the page has no secret to send.
 
     Args:
         public_key (str):
@@ -168,6 +177,9 @@ async def asyncio(
     """Web Start Session
 
      Start a session, or come back to one: either way, a new access token.
+
+    On a page Lemma hosts, a visitor nobody signed in comes back to their chat
+    from its cookie when the page has no secret to send.
 
     Args:
         public_key (str):

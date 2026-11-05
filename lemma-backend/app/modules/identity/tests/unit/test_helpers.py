@@ -1,7 +1,7 @@
 import pytest
 
 from app.core.helpers.humanize import humanize_name
-from app.core.helpers.identifiers import normalize_mobile_digits, normalize_telegram
+from app.core.helpers.identifiers import normalize_mobile_digits
 
 pytestmark = pytest.mark.unit
 
@@ -37,16 +37,3 @@ def test_humanize_name(raw, expected):
 )
 def test_normalize_mobile_digits(raw, expected):
     assert normalize_mobile_digits(raw) == expected
-
-
-@pytest.mark.parametrize(
-    "raw,expected",
-    [
-        ("AnukulT", "anukult"),
-        ("  Foo  ", "foo"),
-        ("", None),
-        (None, None),
-    ],
-)
-def test_normalize_telegram(raw, expected):
-    assert normalize_telegram(raw) == expected

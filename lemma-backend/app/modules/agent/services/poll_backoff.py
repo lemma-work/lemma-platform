@@ -14,6 +14,9 @@ check every few seconds.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
+
 #: Longest pause between two checks.
 POLL_BACKOFF_CAP_SECONDS = 5.0
 
@@ -41,3 +44,31 @@ def poll_delay(
             base_seconds * 2 ** (attempt - _EAGER_ATTEMPTS),
         )
     return max(0.0, min(delay, remaining_seconds))
+
+
+async def poll_until[T](
+    read: Callable[[], Awaitable[T | None]],
+    *,
+    wait_seconds: float,
+    base_seconds: float = 1.0,
+    sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+) -> T | None:
+    """``read`` until it answers, or ``None`` once ``wait_seconds`` are up.
+
+    Reads once even with no time to wait, so a caller asking "is it done yet"
+    with nothing to spare still gets the answer if there is one.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(wait_seconds, 0.0)
+    attempt = 0
+    while True:
+        answer = await read()
+        if answer is not None:
+            return answer
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return None
+        attempt += 1
+        await sleep(
+            poll_delay(attempt, base_seconds=base_seconds, remaining_seconds=remaining)
+        )

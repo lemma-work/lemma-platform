@@ -37,6 +37,7 @@ from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
 )
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 # `usefixtures` is deliberately NOT here. At module scope it made every test
 # boot a uvicorn backend server and a local sandbox server, including the ones
@@ -53,6 +54,12 @@ pytestmark = [
     pytest.mark.e2e,
     pytest.mark.workspace,
 ]
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 
 @pytest.mark.asyncio
@@ -626,6 +633,8 @@ async def test_a_function_writes_many_rows_through_the_table_facade(
                     "datastore.table.read",
                     "datastore.record.read",
                     "datastore.record.write",
+                    # It deletes two rows too; writing no longer carries that.
+                    "datastore.record.delete",
                 ],
             },
         ],
@@ -756,6 +765,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
     assert output["read_title"] == "granted", output
 
 
+@pytest.mark.slow  # prints latencies and asserts no budget: nightly, not a PR gate
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_datastore_read_write_latency_sequence(

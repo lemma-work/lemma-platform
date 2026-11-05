@@ -12,8 +12,8 @@ integrity of asynchronous work.
 | Boundary | Untrusted input | Required controls |
 | --- | --- | --- |
 | Public API and webhooks | Headers, bodies, multipart files, provider events | Authentication/authorization, request and module size limits, validation, stable provider IDs, redaction |
-| PostgreSQL | Concurrent state changes, migrations, tenant schemas | Parameterized SQL, RLS, transactional outbox/inbox, uniqueness, ordered locks |
-| Redis Streams and job queue | Duplicate, delayed, abandoned, or legacy messages | At-least-once delivery, deterministic IDs, 60-second reclaim, bounded retries, durable terminal outcome |
+| PostgreSQL | Concurrent state changes, migrations, tenant schemas | Parameterized SQL, RLS, work items written with their cause, uniqueness, ordered locks |
+| Work runtime (`work_items`) | Duplicate, delayed, abandoned, or poison work | Leases with heartbeat and reclaim, dedup keys, per-pod caps, bounded retries, `dead` with the domain state terminal |
 | Object storage and archives | Traversal, bombs, polyglots, partial uploads | Streaming limits, metadata inspection, type verification, cleanup |
 | Provider and model APIs | Errors containing secrets, timeouts, hostile payloads | Server-side credentials, allowlisted error fields, retry classification, time/cost budgets |
 | Sandboxes and workspaces | User code and delegated tokens | Isolation, least privilege, encrypted session-bound cache, short expiry, cleanup |
@@ -27,9 +27,10 @@ integrity of asynchronous work.
 - **Credential disclosure:** credentials stay server-side, secret-bearing
   fields are centrally redacted, workspace cache payloads are encrypted and
   session-bound, and canary-secret tests cover observable boundaries.
-- **Lost or duplicate work:** domain state and outbox rows commit together;
-  consumers use a durable per-consumer inbox, deterministic downstream job IDs,
-  bounded retry, and a replayable dead-letter state.
+- **Lost or duplicate work:** domain state and the work it causes commit
+  together; a handler's database effects commit with the item's completion,
+  under its lease, so a reclaimed item cannot apply them twice; retries are
+  bounded and a dead item is kept for an operator to retry.
 - **Resource exhaustion:** request, upload, archive-entry, decompressed-size,
   image-dimension, queue-batch, retry, and execution limits are explicit.
 - **Arbitrary code execution:** connector schema snippets use a restricted AST
@@ -42,9 +43,9 @@ integrity of asynchronous work.
 
 ## Residual risks
 
-At-least-once transports can repeat external I/O after a process dies between
-the provider side effect and the inbox completion write. Provider idempotency
-keys and deterministic job IDs are required where available. Already committed
+A work item can repeat external I/O when its process dies between the provider
+side effect and the transaction that completes the item. Provider idempotency
+keys and deterministic dedup keys are required where available. Already committed
 pod-bundle steps are not compensated automatically; cancellation exposes
 `PARTIALLY_CANCELLED` and its committed steps.
 

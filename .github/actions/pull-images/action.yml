@@ -1,0 +1,94 @@
+name: Pull third-party images through our GHCR mirror
+description: >-
+  Pulls each image from ghcr.io/lemma-work/ci-mirror first and falls back to
+  its upstream registry, with retries, then tags it under the upstream name so
+  fixtures that `docker run` the upstream ref find it locally.
+
+# Why a mirror: an upstream registry can stop serving an image at any time.
+# quay.io/minio/minio stopped allowing anonymous pulls in Sep 2026 and every
+# backend e2e shard failed on it until the tests stopped needing MinIO. With a
+# copy under our own namespace, an upstream deletion or rate limit costs
+# nothing -- and GHCR pulls from Actions runners are fast and unmetered.
+#
+# Why a fallback: the mirror is filled lazily, by a run on main that pulled an
+# image the mirror did not have yet (`push-missing`). A pull request that adds
+# or bumps an image therefore still works, from upstream, and a fork pull
+# request whose token cannot read the mirror degrades to exactly what CI did
+# before. The caller's job needs `packages: write` for `push-missing` and
+# `packages: read` otherwise.
+
+inputs:
+  images:
+    description: Space- or newline-separated upstream image refs.
+    required: true
+  push-missing:
+    description: Copy any image pulled from upstream into the mirror. Pass 'true' only from main.
+    default: 'false'
+  mirror:
+    description: The mirror namespace.
+    default: ghcr.io/lemma-work/ci-mirror
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to GHCR
+      shell: bash
+      env:
+        TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      # Best effort: a fork's token may not be able to log in, and then every
+      # image comes from upstream.
+      run: |
+        echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null 2>&1 \
+          || echo "::notice::GHCR login failed; pulling from upstream registries only."
+    - name: Pull images
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        PUSH_MISSING: ${{ inputs.push-missing }}
+        MIRROR: ${{ inputs.mirror }}
+      run: |
+        # docker.io/pgvector/pgvector:0.8.3-pg18 -> $MIRROR/pgvector/pgvector:0.8.3-pg18
+        # redis:7.4-alpine                        -> $MIRROR/library/redis:7.4-alpine
+        # ghcr.io/kreuzberg-dev/kreuzberg-core:x  -> $MIRROR/kreuzberg-dev/kreuzberg-core:x
+        mirror_ref() {
+          local ref="$1" first="${1%%/*}"
+          if [ "$first" != "$ref" ] && { [[ "$first" == *.* ]] || [[ "$first" == *:* ]]; }; then
+            ref="${ref#*/}"
+          fi
+          [[ "$ref" == */* ]] || ref="library/$ref"
+          echo "$MIRROR/$ref"
+        }
+        retry() {
+          for attempt in 1 2 3; do
+            "$@" && return 0
+            sleep $((attempt * 10))
+          done
+          return 1
+        }
+        fetch() {
+          local upstream="$1" mirrored; mirrored="$(mirror_ref "$1")"
+          if docker pull --quiet "$mirrored" >/dev/null 2>&1; then
+            docker tag "$mirrored" "$upstream"
+            echo "$upstream <- mirror"
+            return 0
+          fi
+          if ! retry docker pull --quiet "$upstream" >/dev/null; then
+            echo "::error::could not pull $upstream from the mirror or upstream"
+            return 1
+          fi
+          echo "$upstream <- upstream"
+          if [ "$PUSH_MISSING" = "true" ]; then
+            docker tag "$upstream" "$mirrored"
+            docker push --quiet "$mirrored" >/dev/null \
+              && echo "$upstream -> mirrored as $mirrored" \
+              || echo "::warning::could not push $mirrored"
+          fi
+        }
+        pids=()
+        for image in $IMAGES; do
+          fetch "$image" & pids+=($!)
+        done
+        status=0
+        for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+        exit "$status"

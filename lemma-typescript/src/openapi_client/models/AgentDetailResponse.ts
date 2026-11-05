@@ -6,6 +6,7 @@ import type { AgentKind } from './AgentKind.js';
 import type { AgentPermissionsResponse } from './AgentPermissionsResponse.js';
 import type { AgentRuntimeConfig } from './AgentRuntimeConfig.js';
 import type { AgentToolset } from './AgentToolset.js';
+import type { ResourceVisibility } from './ResourceVisibility.js';
 export type AgentDetailResponse = {
     agent_runtime?: (AgentRuntimeConfig | null);
     allowed_actions?: Array<string>;
@@ -24,5 +25,5 @@ export type AgentDetailResponse = {
     toolsets?: Array<AgentToolset>;
     updated_at: string;
     user_id: string;
-    visibility?: string;
+    visibility?: ResourceVisibility;
 };

@@ -2,7 +2,6 @@ from typing import Optional, Sequence, Tuple
 
 from sqlalchemy import select
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.connector import ConnectorEntity
@@ -19,11 +18,8 @@ class ConnectorRepository(
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         super().__init__(uow, Connector, ConnectorEntity)
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     def _entity_data(self, entity: ConnectorEntity) -> dict:
         return entity.model_dump(

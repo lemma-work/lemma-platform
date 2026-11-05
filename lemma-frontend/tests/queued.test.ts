@@ -56,6 +56,19 @@ test("with nothing running there is nothing to wait for", () => {
     assert.equal(transcript.length, 3);
 });
 
+test("held behind a question, it still waits -- for the answer", () => {
+    /* The run stopped to ask something; the run that answers it carries what
+       was said meanwhile. Drawn as a plain sent message, nothing said a reply
+       was coming, or what it was waiting on. */
+    const held = { ...aside, metadata: { during_active_run: true, waiting_on_answer: RUN } };
+    const { transcript, queued } = splitQueued([asked, working, held], false);
+
+    assert.deepEqual(queued, [
+        { id: "m3", text: "Keep the old API.", withdrawable: true, waitingOnAnswer: true },
+    ]);
+    assert.equal(transcript.length, 2);
+});
+
 test("a message on its way to a local agent's turn cannot be taken back", () => {
     const going = { ...aside, metadata: { during_active_run: true, steer_dispatched_at: at(3) } };
     assert.ok(isQueued(going));

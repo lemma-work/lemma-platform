@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { REDACTED, blank, fields, isSecretName, payload, problems, unchangedSecret } from "../src/connect/schema.ts";
 import {
-    canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName,
+    canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName, heldInstall,
     connectorProblem, installSchema, installTarget, isBringYourOwn, isStaleDefault, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing,
     ownAppKinds, ownKinds, primaryKind, registersLemmaRedirect, urlRefusal,
     type CatalogEntry, type ConnectorKind,
@@ -291,6 +291,34 @@ test("a second install of a connector is not given the first one's name", () => 
     assert.equal(freshInstallName("gmail", ["gmail", "gmail-2"]), "gmail-3");
 });
 
+test("an account is authorised against the default install, else the first active one", () => {
+    const installs = [
+        { id: "off", connector_id: "slack", kind: "http", name: "slack-old", status: "DISABLED", is_default: true },
+        { id: "first", connector_id: "slack", kind: "http", name: "slack", status: "ACTIVE" },
+        { id: "default", connector_id: "slack", kind: "http", name: "slack-2", status: "ACTIVE", is_default: true },
+        { id: "gh", connector_id: "github", kind: "http", name: "github", status: "ACTIVE", is_default: true },
+    ];
+    assert.equal(heldInstall(installs, "slack")?.id, "default");
+    assert.equal(heldInstall(installs.slice(0, 2), "slack")?.id, "first");
+    assert.equal(heldInstall(installs, "gmail"), null);
+});
+
+test("Lemma's own Slack app is never authorised on a teammate's own app install", () => {
+    // A teammate's own Slack app is an ORG_CUSTOM install of the same
+    // connector. Picked for the manager, it made an account the manager refused.
+    const teammates = [
+        { id: "mate", connector_id: "slack", kind: "http", name: "Ada (1.2)", status: "ACTIVE", config_source: "ORG_CUSTOM" },
+    ];
+    assert.equal(heldInstall(teammates, "slack", "SYSTEM_DEFAULT"), null);
+    const both = [
+        ...teammates,
+        { id: "lemma", connector_id: "slack", kind: "http", name: "slack", status: "ACTIVE", config_source: "SYSTEM_DEFAULT" },
+    ];
+    assert.equal(heldInstall(both, "slack", "SYSTEM_DEFAULT")?.id, "lemma");
+    // Unasked, the order is what it always was.
+    assert.equal(heldInstall(teammates, "slack")?.id, "mate");
+});
+
 test("a kind is only chosen when the choice is unambiguous", () => {
     const one: CatalogEntry = { id: "mcp", title: "MCP", kinds: [mcpKind] };
     const two: CatalogEntry = { id: "both", title: "Both", kinds: [mcpKind, composioManaged] };
@@ -334,6 +362,107 @@ test("the provider's tab comes back to the completion page, carrying where it st
     const failed = outcomeNote({ connect: "error", connector: "gmail", account: null, reason: "access_denied" });
     assert.equal(failed.bad, true);
     assert.equal(failed.text, "access_denied");
+});
+
+test("a round trip the phone app started goes back to the app, and no other does", async () => {
+    const { phoneAppReturn } = await import("../src/connect/round-trip.ts");
+    // What the backend lands on for the phone's `return_to` of
+    // `/oauth/complete?client=mobile`: the outcome added to its query.
+    const landed = new URLSearchParams("client=mobile&connect=error&connector=gmail&code=OAUTH_PROVIDER_ERROR&reason=The+provider+ended+it%3F+Yes");
+    const back = phoneAppReturn(landed);
+    assert.equal(back, "lemma://connect/done?connect=error&connector=gmail&code=OAUTH_PROVIDER_ERROR&reason=The+provider+ended+it%3F+Yes");
+    // Read the way the app reads it: everything after the first `?`.
+    const read = new URLSearchParams(back!.split("?")[1]);
+    assert.equal(read.get("reason"), "The provider ended it? Yes");
+    assert.equal(read.get("client"), null);
+    assert.equal(phoneAppReturn(new URLSearchParams("client=mobile&connect=connected&connector=gmail&account=a1")),
+        "lemma://connect/done?connect=connected&connector=gmail&account=a1");
+
+    // The web's own and the desktop app's round trips are left as they were.
+    assert.equal(phoneAppReturn(new URLSearchParams("from=%2Ft&connect=connected&connector=gmail&account=a1")), null);
+    assert.equal(phoneAppReturn(new URLSearchParams("client=desktop&connect=connected")), null);
+});
+
+test("the provider's tab is given a face before it is pointed anywhere", async () => {
+    const { openAuthorization } = await import("../src/connect/round-trip.ts");
+    const body = { children: [] as { tag: string; textContent: string }[] };
+    const tab = {
+        closed: false,
+        opener: {} as unknown,
+        document: {
+            title: "",
+            createElement(tag: string) { return { tag, textContent: "" }; },
+            body: {
+                replaceChildren(...nodes: { tag: string; textContent: string }[]) { body.children = nodes; },
+            },
+        },
+        location: { replaced: "", replace(url: string) { this.replaced = url; } },
+    };
+    (globalThis as { window?: unknown }).window = { open: () => tab };
+    try {
+        assert.equal(openAuthorization("https://slack.example/authorize", "Slack"), true);
+        /* Written before the provider is pointed at: an authorize URL is often
+           a redirect to the consent screen, and the tab used to read
+           `about:blank` for the whole of it. */
+        assert.equal(tab.document.title, "Taking you to Slack\u2026");
+        assert.ok(body.children.some((one) => one.textContent === "Taking you to Slack\u2026"));
+        assert.equal(tab.location.replaced, "https://slack.example/authorize");
+        /* Deliberately not `noopener`: the outcome comes home through it. */
+        assert.notEqual(tab.opener, null);
+        /* A refused tab is reported rather than assumed, so the caller offers
+           the link the person can open by hand. */
+        (globalThis as { window?: unknown }).window = { open: () => null };
+        assert.equal(openAuthorization("https://slack.example/authorize", "Slack"), false);
+    } finally {
+        delete (globalThis as { window?: unknown }).window;
+    }
+});
+
+test("an outcome reaches the tab that started the flow, however it can be reached", async () => {
+    const { deliverOutcome } = await import("../src/connect/round-trip.ts");
+    const outcome = { connect: "connected", connector: "gmail", account: "a1", reason: null };
+    const posted: { message: unknown; origin: string }[] = [];
+    const broadcast: unknown[] = [];
+    const toChannel = (sent: unknown) => { broadcast.push(sent); };
+    const opener = { closed: false, postMessage: (message: unknown, origin: string) => { posted.push({ message, origin }); } };
+
+    // An opener is direct, and is preferred over the channel even when both
+    // are available — one outcome, delivered once.
+    assert.equal(
+        deliverOutcome(outcome, { opener, origin: "https://app.test", waiting: true, broadcast: toChannel }),
+        "opener",
+    );
+    assert.deepEqual(posted, [{ message: { source: "lemma-connect", ...outcome }, origin: "https://app.test" }]);
+    assert.deepEqual(broadcast, []);
+
+    // A popup whose opener the consent chain cut: the channel is the only way
+    // left, and it is used while a tab is still waiting.
+    assert.equal(
+        deliverOutcome(outcome, { opener: null, origin: "https://app.test", waiting: true, broadcast: toChannel }),
+        "channel",
+    );
+    assert.deepEqual(broadcast, [outcome]);
+
+    // A closed opener is no opener, and a tab nobody is waiting in is not one
+    // to close on: the caller takes the person back itself instead.
+    assert.equal(
+        deliverOutcome(outcome, { opener: { ...opener, closed: true }, origin: "https://app.test", waiting: false, broadcast: toChannel }),
+        "nowhere",
+    );
+    assert.equal(broadcast.length, 1);
+});
+
+test("a round trip is only still out for as long as one could be", async () => {
+    const { isWaiting } = await import("../src/connect/round-trip.ts");
+    const now = 1_700_000_000_000;
+    assert.equal(isWaiting(String(now - 60_000), now), true);
+    assert.equal(isWaiting(String(now), now), true);
+    // The window is minutes, not hours: past it a person who wandered off has
+    // the panel's own "Done?", and a focus is just a focus.
+    assert.equal(isWaiting(String(now - 16 * 60_000), now), false);
+    assert.equal(isWaiting(null, now), false);
+    assert.equal(isWaiting("not a time", now), false);
+    assert.equal(isWaiting("0", now), false);
 });
 
 test("the role refusal is said as the role it is", () => {

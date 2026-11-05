@@ -160,7 +160,13 @@ async def _the_promise_about_an_unreachable_extractor(alice, pod, report):
     assert settled["processing_attempts"] == 0, (
         f"an unavailable converter must not count as an attempt: {settled}"
     )
-    assert settled["last_processing_error"] is None, settled
+    # The file still says why it is waiting -- a note a person can act on, not
+    # an error. The status above is what says it has not failed; the note only
+    # has to read as waiting rather than as a failure reason.
+    note = settled["last_processing_error"]
+    assert isinstance(note, str) and note.startswith("Waiting for the"), (
+        f"a document waiting on its extractor does not say it is waiting: {settled}"
+    )
 
 
 async def never_becomes_failed(alice, pod, path: str, *, within: float = 12.0):

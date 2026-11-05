@@ -22,7 +22,8 @@ sweep exists to reclaim.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -34,12 +35,15 @@ from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.process_output import has_stopped
 from app.modules.workspace.providers.base import (
+    ProcessDescriptor,
     ProviderFailed,
     ProviderGone,
+    ProviderInstance,
     ProviderNotReady,
     ProviderRejected,
 )
 from sandbox_runtime.errors import SandboxError
+from sandbox_runtime.protocol import ProcessState
 
 logger = get_logger(__name__)
 
@@ -51,7 +55,24 @@ class SandboxRepositoryPort(Protocol):
         self, *, kind: SandboxKind, owner_kind: SandboxOwnerKind, owner_id: UUID
     ) -> tuple[object, ...]: ...
 
-    async def current_instance(self, sandbox_id: UUID) -> object | None: ...
+    async def current_instance(self, sandbox_id: UUID) -> SandboxInstanceRow | None: ...
+
+
+class SandboxInstanceRow(Protocol):
+    @property
+    def provider_id(self) -> str | None: ...
+
+
+class ProcessListingProvider(Protocol):
+    """The two provider reads a probe makes."""
+
+    async def inspect(
+        self, provider_id: str, *, deadline_at: datetime
+    ) -> ProviderInstance | None: ...
+
+    async def list_processes(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> Sequence[ProcessDescriptor]: ...
 
 
 # One probe's whole budget. Short because a caller is holding a worker slot for
@@ -87,8 +108,8 @@ async def probe_process(
     *,
     user_id: UUID,
     process_id: str,
-    service=None,
-    uow_factory=None,
+    provider: ProcessListingProvider | None = None,
+    uow_factory: Callable[[], AbstractAsyncContextManager[object]] | None = None,
     repository: Callable[[object], SandboxRepositoryPort] = SandboxRepository,
 ) -> ProcessProbe:
     """Read one process in one of ``user_id``'s workspace sandboxes.
@@ -130,55 +151,96 @@ async def probe_process(
     # good answer available from the database alone -- there is no sandbox, so
     # the process is gone -- and the exception reached the resolver rather than
     # the agent.
-    if service is None:
-        from app.modules.workspace.services.sandbox_composition import (
-            get_sandbox_service,
-        )
-
-        service = get_sandbox_service()
-    provider = service._provider
+    listing = provider if provider is not None else _default_provider()
     deadline_at = datetime.now(timezone.utc) + timedelta(
         seconds=_PROBE_DEADLINE_SECONDS
     )
 
+    # Every sandbox is asked, and the answer is the one that lists the process.
+    # Stopping at the first unreadable one meant a user with an offline desktop
+    # sandbox and a cloud one read every process in the cloud one as
+    # unreadable, however long ago it had finished.
+    unreadable = False
     for instance in live:
-        try:
-            resolved = await provider.inspect(
-                instance.provider_id, deadline_at=deadline_at
-            )
-            if resolved is None:
-                # The sweeper learned this one by releasing a sandbox mid-command:
-                # a transient empty result from the provider's metadata listing is
-                # not evidence that anything stopped.
-                return ProcessProbe(status=ProcessProbeStatus.UNREADABLE)
-            processes = await provider.list_processes(resolved, deadline_at=deadline_at)
-        except (
-            SandboxError,
-            ProviderFailed,
-            ProviderGone,
-            ProviderNotReady,
-            ProviderRejected,
-        ) as exc:
-            logger.debug(
-                "workspace.process_probe.unreadable",
-                process_id=process_id,
-                error_type=type(exc).__name__,
-            )
-            return ProcessProbe(status=ProcessProbeStatus.UNREADABLE)
+        found = await _probe_instance(
+            listing, instance, process_id=process_id, deadline_at=deadline_at
+        )
+        if found is _UNREADABLE:
+            unreadable = True
+        elif found is not None:
+            return found
 
-        for descriptor in processes:
-            if str(descriptor.process_id) != process_id:
-                continue
-            status = (
-                ProcessProbeStatus.FINISHED
-                if has_stopped(descriptor)
-                else ProcessProbeStatus.RUNNING
-            )
-            return ProcessProbe(
-                status=status,
-                exit_code=descriptor.exit_code,
-                started_at=descriptor.started_at,
-                command=descriptor.command,
-            )
-
+    if unreadable:
+        # Not GONE: a sandbox that did not answer may be the one running it.
+        return ProcessProbe(status=ProcessProbeStatus.UNREADABLE)
     return ProcessProbe(status=ProcessProbeStatus.GONE)
+
+
+def _default_provider() -> ProcessListingProvider:
+    from app.modules.workspace.services.sandbox_composition import get_sandbox_service
+
+    return get_sandbox_service()._provider
+
+
+#: One sandbox could not be read. A sentinel rather than a probe, because the
+#: caller has to keep asking the others before it can say anything.
+_UNREADABLE = ProcessProbe(status=ProcessProbeStatus.UNREADABLE)
+
+
+async def _probe_instance(
+    provider: ProcessListingProvider,
+    instance: SandboxInstanceRow,
+    *,
+    process_id: str,
+    deadline_at: datetime,
+) -> ProcessProbe | None:
+    """The process as one sandbox reports it, None if it does not list it."""
+    try:
+        resolved = await provider.inspect(
+            str(instance.provider_id), deadline_at=deadline_at
+        )
+        if resolved is None:
+            # The sweeper learned this one by releasing a sandbox mid-command:
+            # a transient empty result from the provider's metadata listing is
+            # not evidence that anything stopped.
+            return _UNREADABLE
+        processes = await provider.list_processes(resolved, deadline_at=deadline_at)
+    except (
+        SandboxError,
+        ProviderFailed,
+        ProviderGone,
+        ProviderNotReady,
+        ProviderRejected,
+    ) as exc:
+        logger.warning(
+            "workspace.process_probe.unreadable.degraded",
+            process_id=process_id,
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        return _UNREADABLE
+
+    for descriptor in processes:
+        if str(descriptor.process_id) != process_id:
+            continue
+        if has_stopped(descriptor):
+            status = ProcessProbeStatus.FINISHED
+        elif _watch_lost(descriptor):
+            # The provider lost the watch and could not settle it either way,
+            # so whether it is still running is exactly what is not known.
+            status = ProcessProbeStatus.UNREADABLE
+        else:
+            status = ProcessProbeStatus.RUNNING
+        return ProcessProbe(
+            status=status,
+            exit_code=descriptor.exit_code,
+            started_at=descriptor.started_at,
+            command=descriptor.command,
+        )
+    return None
+
+
+def _watch_lost(descriptor: ProcessDescriptor) -> bool:
+    return str(getattr(descriptor.state, "value", descriptor.state)) == (
+        ProcessState.UNKNOWN.value
+    )

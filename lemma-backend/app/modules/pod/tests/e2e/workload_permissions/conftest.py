@@ -13,7 +13,9 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.test_utils import shared_kreuzberg
+from app.core.test_shared_containers import (
+    shared_kreuzberg,
+)
 
 
 @pytest_asyncio.fixture(scope="session")

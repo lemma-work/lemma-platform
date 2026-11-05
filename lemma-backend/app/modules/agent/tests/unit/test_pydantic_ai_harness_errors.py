@@ -43,7 +43,7 @@ async def test_model_http_error_emits_sanitized_ui_message(monkeypatch) -> None:
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None),
             agent_run_id=agent_run_id,
         )
     ]
@@ -82,7 +82,7 @@ async def test_unexpected_model_behavior_emits_sanitized_ui_message(
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None),
             agent_run_id=agent_run_id,
         )
     ]
@@ -115,7 +115,7 @@ async def test_usage_limit_exceeded_emits_sanitized_ui_message(monkeypatch) -> N
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None),
             agent_run_id=agent_run_id,
         )
     ]
@@ -151,7 +151,7 @@ async def test_generic_exception_emits_sanitized_ui_message(monkeypatch) -> None
             ),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None),
+            options=SimpleNamespace(should_stop=None, runtime_profile=None),
             agent_run_id=agent_run_id,
         )
     ]
@@ -218,7 +218,7 @@ def test_provider_error_identifiers_refuse_prose_and_secrets() -> None:
 def test_quota_exhaustion_reads_as_a_limit_not_a_misconfiguration() -> None:
     """154 runs a week hit this; "check the configuration" sent people hunting
     a bug in a system that was working exactly as designed."""
-    import httpx
+    import httpx2
 
     from app.modules.agent.services.run_finalizer import run_failure_message
     from app.modules.usage.domain.errors import UsageLimitExceededError
@@ -227,7 +227,7 @@ def test_quota_exhaustion_reads_as_a_limit_not_a_misconfiguration() -> None:
     assert "usage allowance" in quota
     assert "runtime configuration" not in quota
 
-    dropped = run_failure_message(httpx.ReadError("connection reset"))
+    dropped = run_failure_message(httpx2.ReadError("connection reset"))
     assert "Nothing you sent was lost" in dropped
 
     generic = run_failure_message(ValueError("something else"))
@@ -320,9 +320,9 @@ class TestAFailureMessageNamesOnlyControlsThatWork:
         return user_facing_error_message(exc)
 
     def test_a_dropped_stream_does_not_advertise_retry(self) -> None:
-        import httpx
+        import httpx2
 
-        message = self._message(httpx.ReadError("connection reset"))
+        message = self._message(httpx2.ReadError("connection reset"))
 
         assert "Retry" not in message
         assert "send another message" in message
@@ -340,11 +340,11 @@ class TestAFailureMessageNamesOnlyControlsThatWork:
     def test_the_finalizer_says_the_same_thing(self) -> None:
         """Two modules write this sentence for the same failure; only one of
         them having been softened is how they drift back apart."""
-        import httpx
+        import httpx2
 
         from app.modules.agent.services.run_finalizer import run_failure_message
 
-        message = run_failure_message(httpx.ReadError("connection reset"))
+        message = run_failure_message(httpx2.ReadError("connection reset"))
 
         assert "Retry" not in message
         assert "send another message" in message

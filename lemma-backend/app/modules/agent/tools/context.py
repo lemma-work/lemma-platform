@@ -20,7 +20,7 @@ from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
-from app.modules.agent.services.workspace_location import (
+from app.modules.agent.domain.workspace_location import (
     ProjectRepo,
     pod_cwd_from_workspace_cwd,
 )
@@ -36,6 +36,10 @@ class BaseAgentContext(AgentContext):
 
     workload_type: str | None = "agent"
     workload_id: UUID | None = None
+    # The scope a delegated token carried (e.g. a function's
+    # `{function.execute}`), applied on top of the workload's grants. Empty
+    # means unscoped, as for every context Lemma builds for its own runs.
+    delegation_scope: frozenset[str] = frozenset()
     configured_accounts: dict[str, UUID] = Field(default_factory=dict)
     surface_id: UUID | None = None
     surface_platform: str | None = None
@@ -47,7 +51,8 @@ class BaseAgentContext(AgentContext):
     agent_display_name: str | None = None
     surface_conversation_kind: str | None = None
     runtime_profile: dict[str, object] | None = None
-    runtime_credentials: dict[str, object] = Field(default_factory=dict)
+    # No provider credentials here: this object reaches every tool, and no tool
+    # needs the model provider's key. The harness gets it through its options.
     workspace_id: str = "default"
     workspace_cwd: str | None = None
     # The GitHub repository this conversation works in, when it was started
@@ -67,6 +72,11 @@ class BaseAgentContext(AgentContext):
     # agent already runs on the Mac with its own shell and file tools, so
     # Lemma's duplicates are withheld (§7).
     host_runs_native_commands: bool = False
+    # Whether this run has a tool that reads a file saved in the workspace
+    # (`exec_command`). `web_fetch` saves pages there, and hands their text
+    # back inline when nothing could read the file. True unless a builder
+    # knows otherwise, which keeps every other caller's behaviour.
+    workspace_readable: bool = True
 
     # How image-returning tools should answer on this run. Transient (derived
     # from the resolved model each run), never persisted. UNAVAILABLE is the

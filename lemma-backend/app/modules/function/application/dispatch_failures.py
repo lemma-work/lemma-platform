@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import httpx
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.work import Released
 from app.core.redaction import redact_text
 from app.modules.function.contracts.runtime import RuntimeTerminalRequest
 from sandbox_runtime.errors import (
@@ -46,12 +48,45 @@ class RuntimeNeverReached(InvocationOutcomeUnconfirmed):
     """
 
 
+class PodAtCapacity(Exception):
+    """The pod already runs as many functions as it may; this run has not started.
+
+    Not a domain error: nobody sees it. A queued run waits its turn and a
+    synchronous caller waits up to its start deadline. The slot is the RUNNING
+    row, counted at the start under the pod's lock, so it is held until the run
+    is terminal however that end arrives -- inline, by callback, or by the
+    deadline.
+    """
+
+
+class SandboxNotReady(Exception):
+    """The pod's sandbox could not be reached or is still starting, and the run
+    has not started. Nothing ran, so a queued run waits and tries again."""
+
+
+#: The runtime's name for a run that waited for a free worker until its deadline.
+RUNTIME_NEVER_STARTED_ERROR = "RuntimeOverloaded"
+
+
 def runtime_failure_message(request: RuntimeTerminalRequest) -> str:
     """The message for a run the runtime itself reported as failed."""
     assert request.error is not None
-    if request.error.name == "TimeoutError":
+    return runtime_error_message(request.error.name, request.error.message)
+
+
+def runtime_error_message(name: str, message: str) -> str:
+    # asyncio.wait_for raises the built-in TimeoutError without a message, so
+    # the type is the whole signal.
+    if name == "TimeoutError":
         return "Function execution timed out (deadline exceeded)"
-    return redact_text(f"{request.error.name}: {request.error.message}")[:16_384]
+    if name == RUNTIME_NEVER_STARTED_ERROR:
+        # Distinct from a timeout on purpose: nothing ran, so the reader may
+        # retry, and the remedy is capacity rather than a faster function.
+        return (
+            "Function never started: no function worker was free before the "
+            "deadline. Nothing ran, so it is safe to retry."
+        )
+    return redact_text(f"{name}: {message}")[:16_384]
 
 
 def execution_error(exc: BaseException) -> str:
@@ -79,3 +114,16 @@ def execution_error(exc: BaseException) -> str:
     if isinstance(exc, ValueError) and "token expires" in str(exc):
         return "Function execution exceeds delegated token lifetime"
     return "Function execution failed"
+
+
+def not_a_failure(exc: Exception, *, queued: bool, started: bool) -> bool:
+    """Signals for the caller, not outcomes of the run: a full pod, a sandbox
+    not up yet, or a queued run stopped before its start."""
+    if isinstance(exc, (PodAtCapacity, SandboxNotReady)):
+        return True
+    if not started and is_database_unavailable(exc):
+        # Lemma's database could not be reached before the function was sent
+        # anywhere: nothing ran, so the run is retried, not failed. Once it
+        # started, the result is the sandbox's and failing is what records it.
+        return True
+    return queued and not started and isinstance(exc, Released)

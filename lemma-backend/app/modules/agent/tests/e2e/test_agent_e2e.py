@@ -8,19 +8,17 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
-from streaq.task import TaskStatus
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import create_streaq_client
 from app.modules.agent.api.controllers.shared import (
     conversation_channel,
 )
 from app.modules.agent.domain.entities import Agent
-from app.modules.agent.domain.events import AgentRunStartedEvent
+from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -66,8 +64,15 @@ from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
 )
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 DEFAULT_AGENT_RUNTIME = {"profile_id": "system:lemma"}
 
@@ -423,16 +428,14 @@ async def _start_real_agent_run(
             agent_run_id=run.id,
             draft=MessageDraft.of_text(content, role=MessageRole.USER),
         )
-        repo.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation_id,
-                    agent_run_id=run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=None,
-                ),
-            ]
+        await stage_agent_turn(
+            uow,
+            AgentTurnStart(
+                conversation_id=conversation_id,
+                run_id=run.id,
+                pod_id=pod_id,
+                user_id=user_id,
+            ),
         )
         await uow.commit()
         return run.id
@@ -491,15 +494,24 @@ async def _wait_for_run_status(
     )
 
 
-async def _wait_for_streaq_job_status(job_id: str, status: TaskStatus) -> None:
-    async with create_streaq_client() as worker:
-        await eventually(
-            label=f"streaq job {job_id} to reach {status}",
-            probe=lambda: worker.status_by_id(job_id),
-            done=lambda current: current == status,
-            timeout_seconds=10.0,
-            interval_seconds=0.1,
-        )
+async def _wait_for_turn_state(dedup_key: str, state: str) -> None:
+    """Until the run's ``agent.turn`` item is in ``state`` (a worker holds it)."""
+    from sqlalchemy import text
+
+    async def probe() -> str | None:
+        async with async_session_maker() as session:
+            return await session.scalar(
+                text("SELECT state FROM work_items WHERE dedup_key = :k"),
+                {"k": dedup_key},
+            )
+
+    await eventually(
+        label=f"turn {dedup_key} to reach {state}",
+        probe=probe,
+        done=lambda current: current == state,
+        timeout_seconds=10.0,
+        interval_seconds=0.1,
+    )
 
 
 class TestPodAgentLifecycle:
@@ -953,6 +965,49 @@ class TestPodAgentLifecycle:
         assert duplicate.json()["status"] == "reconciled"
         assert duplicate.json()["decision"] == "APPROVE_ONCE"
 
+    async def test_a_decision_may_name_the_approval_by_its_listed_id(
+        self,
+        authenticated_client,
+        fixed_test_org,
+    ):
+        """The approvals list returns messages, whose `id` is the message's,
+        while the decision route is keyed by the call's `tool_call_id`. A
+        client deciding with the id it was handed reaches the call, not 404."""
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="request_approval",
+            tool_args={
+                "tool_name": "exec_command",
+                "args": {"cmd": "echo hi"},
+                "title": "Say hi?",
+                "reason": "Testing the listed id.",
+            },
+        )
+        listed = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
+        )
+        [item] = listed.json()["items"]
+        assert item["id"] != approval_id
+
+        decision = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations/{conversation_id}"
+            f"/approvals/{item['id']}/decision",
+            json={"decision": "DENY", "response": {"confirmed": False}},
+        )
+        assert decision.status_code == 200, decision.text
+        _resume_run, tool_return = await _resume_run_and_tool_return(
+            conversation_id, paused_run.id, approval_id
+        )
+        assert tool_return is not None
+        assert tool_return.tool_result["success"] is False
+
     async def test_request_approval_denial_resumes_without_executing(
         self,
         authenticated_client,
@@ -1176,6 +1231,9 @@ class TestPodAgentLifecycle:
         )
         assert missing.status_code == status.HTTP_404_NOT_FOUND, missing.text
 
+    # The approved tool runs in this process (patched below); the session
+    # worker must not take the queued resume first.
+    @pytest.mark.drives_work
     async def test_request_approval_approval_runs_tool_as_user_on_resume(
         self,
         authenticated_client,
@@ -1550,6 +1608,9 @@ class TestPodAgentLifecycle:
         )
         assert approvals_after.json()["items"] == []
 
+    # The approved tool runs in this process (patched below); the session
+    # worker must not take the queued resume first.
+    @pytest.mark.drives_work
     async def test_request_approval_exact_repeat_auto_executes_without_repausing(
         self,
         authenticated_client,
@@ -1825,10 +1886,7 @@ class TestPodAgentLifecycle:
                 "sentence per line."
             ),
         )
-        await _wait_for_streaq_job_status(
-            f"agent-run:{stopped_run_id}",
-            TaskStatus.RUNNING,
-        )
+        await _wait_for_turn_state(f"agent-run:{stopped_run_id}", "running")
 
         stopped = await authenticated_client.post(stop_url)
         assert stopped.status_code == 200, stopped.text
@@ -1902,6 +1960,8 @@ class TestPodAgentLifecycle:
             waiting_events[-1]["data"]["conversation_status"]
             == ConversationStatus.WAITING.value
         )
+        # Waiting on the person, not on its own work: nothing to follow.
+        assert waiting_events[-1]["data"]["waiting_on_work"] is False
 
         waiting_conversation = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}"
@@ -2635,6 +2695,10 @@ class TestAgentRuntimeConfigApis:
             item["name"] for item in system_profile["model_catalog"]
         ] == system_lemma_model_names()
         assert system_profile["derived_harness_kind"] == "LEMMA"
+        # Models the system catalog really lists: a pin it does not list is
+        # refused when saved.
+        agent_model = system_lemma_model_names()[0]
+        conversation_model = system_lemma_model_names()[-1]
 
         pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
         patched_pod = await authenticated_client.put(
@@ -2662,14 +2726,14 @@ class TestAgentRuntimeConfigApis:
             json={
                 "agent_runtime": {
                     "profile_id": "system:lemma",
-                    "model_name": "deepseek-v4-pro",
+                    "model_name": agent_model,
                 }
             },
         )
         assert patched_agent.status_code == 200, patched_agent.text
         assert patched_agent.json()["agent_runtime"] == {
             "profile_id": "system:lemma",
-            "model_name": "deepseek-v4-pro",
+            "model_name": agent_model,
         }
 
         create_conversation = await authenticated_client.post(
@@ -2685,14 +2749,14 @@ class TestAgentRuntimeConfigApis:
             json={
                 "agent_runtime": {
                     "profile_id": "system:lemma",
-                    "model_name": "deepseek-v4-flash",
+                    "model_name": conversation_model,
                 }
             },
         )
         assert patched_conversation.status_code == 200, patched_conversation.text
         assert patched_conversation.json()["agent_runtime"] == {
             "profile_id": "system:lemma",
-            "model_name": "deepseek-v4-flash",
+            "model_name": conversation_model,
         }
 
     async def test_create_provider_profiles_and_resolve_them(
@@ -2743,10 +2807,10 @@ class TestAgentRuntimeConfigApis:
             "openai/gpt-5.1",
             "deepseek/deepseek-chat-v3.2",
         }
-        assert openrouter_payload["metadata"] == {
-            "source": "openai_compatible",
-            "catalog_discovered": True,
-        }
+        # Internal bookkeeping stays internal; the typed fields replace it.
+        assert "metadata" not in openrouter_payload
+        assert openrouter_payload["harness_key"] is None
+        assert openrouter_payload["organization_default"] is False
 
         vendor = await authenticated_client.post(
             f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
@@ -2764,10 +2828,10 @@ class TestAgentRuntimeConfigApis:
         )
         assert vendor.status_code == 201, vendor.text
         vendor_payload = vendor.json()
-        assert vendor_payload["metadata"] == {
-            "source": "openai_compatible",
-            "catalog_discovered": False,
-        }
+        # Internal bookkeeping stays internal; the typed fields replace it.
+        assert "metadata" not in vendor_payload
+        assert vendor_payload["harness_key"] is None
+        assert vendor_payload["organization_default"] is False
         assert vendor_payload["default_model_name"] == "vendor/model-pro"
         assert {
             item["name"]: "VISION" in item["capabilities"]
@@ -3151,9 +3215,10 @@ class TestFinalAnswerToolset:
             )
         )
 
-        # A fresh toolset per phase: the rejection counter lives on the
-        # toolset closure, and each phase's assertions depend on starting at
-        # zero rejections.
+        # A fresh toolset for every call, because that is what the MCP bridge
+        # does: it assembles the toolsets per `tools/call`. The rejection count
+        # used to live on the toolset, so under the bridge it was always one
+        # and the cap never tripped; it belongs to the run.
         def _build_tool():
             toolset = build_final_answer_toolset(
                 agent=domain_agent, uow_factory=uow_factory
@@ -3165,9 +3230,8 @@ class TestFinalAnswerToolset:
         # Phase 1: within the rejection budget. Rejected, and nothing is
         # persisted yet -- an agent mid-argument with its own schema must not
         # have a bad answer recorded as authoritative.
-        final_answer = _build_tool()
         for _ in range(3):
-            rejected = await final_answer(
+            rejected = await _build_tool()(
                 ctx, status="COMPLETED", output=invalid_output
             )
             assert rejected["success"] is False
@@ -3177,7 +3241,7 @@ class TestFinalAnswerToolset:
 
         # Phase 2: past the budget. The tool takes the bad answer rather than
         # spend the rest of the run arguing with the validator, and flags it.
-        accepted = await final_answer(ctx, status="COMPLETED", output=invalid_output)
+        accepted = await _build_tool()(ctx, status="COMPLETED", output=invalid_output)
         assert accepted["success"] is True
         assert accepted["schema_violation"]
 
@@ -3186,9 +3250,8 @@ class TestFinalAnswerToolset:
         assert flagged_record["schema_violation"]
         assert flagged_record["output"] == invalid_output
 
-        # Phase 3: a fresh toolset (a new run's counter starts at zero) with a
-        # schema-conformant answer persists cleanly, overwriting the flagged
-        # record -- last write wins.
+        # Phase 3: a schema-conformant answer persists cleanly, overwriting
+        # the flagged record -- last write wins.
         clean_final_answer = _build_tool()
         clean = await clean_final_answer(
             ctx, status="COMPLETED", output={"answer": "42"}

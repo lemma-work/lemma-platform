@@ -37,7 +37,9 @@ def names_the_agent(text: str, agent_name: str | None) -> bool:
         return False
     escaped = re.escape(name)
     spoken_to = rf"(?:^|\n)[ \t>]*{_GREETING}@?{escaped}{_SPOKEN_TO}"
-    mentioned = rf"@{escaped}\b"
+    # Not after a word character: the "@acme" in ops@acme.com is a mail domain,
+    # and reading it as a mention woke the agent on any thread that quoted one.
+    mentioned = rf"(?<![\w.+-])@{escaped}\b"
     return bool(re.search(rf"{spoken_to}|{mentioned}", text, re.IGNORECASE))
 
 

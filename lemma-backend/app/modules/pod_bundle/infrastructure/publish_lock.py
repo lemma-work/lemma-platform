@@ -1,4 +1,10 @@
-"""Repository-scoped distributed lock for GitHub publishing."""
+"""Repository-scoped distributed lock for GitHub publishing.
+
+Keyed on the GitHub account a publish runs as and the repository name, because
+that pair is what two publishes would collide on at GitHub. The account is the
+one the pod's `github` connector resolved to when the publish started; the job
+keeps only the opaque key, to release it.
+"""
 
 from __future__ import annotations
 
@@ -27,40 +33,18 @@ class PublishConcurrencyLock:
             ttl_seconds=pod_bundle_settings.pod_bundle_publish_lock_ttl_seconds,
         )
 
-    @staticmethod
-    def _key(account_id: UUID, repo_name: str) -> str:
-        return f"{account_id}:{repo_name.casefold()}"
+    async def acquire(self, *, key: str, owner: UUID) -> bool:
+        return await self._cache.set_raw_if_absent(key, str(owner))
 
-    async def acquire(
-        self,
-        *,
-        account_id: UUID,
-        repo_name: str,
-        owner: UUID,
-    ) -> bool:
-        return await self._cache.set_raw_if_absent(
-            self._key(account_id, repo_name),
-            str(owner),
-        )
-
-    async def release(
-        self,
-        *,
-        account_id: UUID,
-        repo_name: str,
-        owner: UUID,
-    ) -> None:
+    async def release(self, *, key: str, owner: UUID) -> None:
         try:
-            await self._cache.delete_if_value(
-                self._key(account_id, repo_name),
-                str(owner),
-            )
+            await self._cache.delete_if_value(key, str(owner))
         except RedisError:
-            logger.debug(
-                "pod_bundle.publish_lock.release.diagnostic",
-                account_id=str(account_id),
-                repo_name=repo_name,
-            )
+            logger.debug("pod_bundle.publish_lock.release.diagnostic", key=key)
+
+
+def publish_lock_key(account_id: UUID, repo_name: str) -> str:
+    return f"{account_id}:{repo_name.casefold()}"
 
 
 _publish_lock: PublishConcurrencyLock | None = None
@@ -78,9 +62,5 @@ async def release_recovered_publish_locks(
 ) -> None:
     lock = get_publish_concurrency_lock()
     for state in states:
-        if isinstance(state, PublishState) and state.account_id is not None:
-            await lock.release(
-                account_id=state.account_id,
-                repo_name=state.repo_name,
-                owner=state.publish_id,
-            )
+        if isinstance(state, PublishState) and state.publish_lock_key is not None:
+            await lock.release(key=state.publish_lock_key, owner=state.publish_id)

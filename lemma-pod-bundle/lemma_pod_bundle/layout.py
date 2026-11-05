@@ -8,7 +8,16 @@ from typing import Any
 
 from .jsonc import loads_jsonc
 
-FORMAT_VERSION = 3
+#: The newest bundle format this code reads. 4 added
+#: ``connectors/<slug>/<slug>.json``: a reader of 3 would skip that directory
+#: and import everything that names those connectors bound to nothing, so a
+#: reader refuses a newer format up front (:func:`check_format_version`)
+#: rather than importing half of it.
+FORMAT_VERSION = 4
+#: The format a bundle declaring no pod connector is written as. Nothing else
+#: changed in 4, so writing 4 for it would only lock out the readers of 3 that
+#: read it whole (:func:`bundle_format_version`).
+FORMAT_VERSION_WITHOUT_CONNECTORS = 3
 # The bundle's root manifest file (pod metadata, contents scope, variables).
 POD_MANIFEST_FILE = "pod.json"
 # Legacy placeholder for a pod-member assignee; superseded by ${name} variables
@@ -22,7 +31,11 @@ JSON_FILE_REF_KEY = "$json_file"
 # Some app scaffolds write the manifest as `lemma.app.json` rather than
 # `<name>.json`. Accept it as an alias so those bundles import without a rename.
 APP_MANIFEST_ALIAS = "lemma.app.json"
+# `connectors` comes first: every other resource may name a pod connector by
+# its slug (a schedule or surface runs through one, a grant is on one), so an
+# importer declares them before anything that refers to them.
 RESOURCE_DIRS = (
+    "connectors",
     "tables",
     "functions",
     "agents",
@@ -34,6 +47,10 @@ RESOURCE_DIRS = (
 )
 EXPORTABLE_RESOURCE_DIRS = frozenset(RESOURCE_DIRS)
 RESOURCE_DIR_ALIASES = {
+    "connector": "connectors",
+    "connectors": "connectors",
+    "pod_connector": "connectors",
+    "pod_connectors": "connectors",
     "table": "tables",
     "tables": "tables",
     "function": "functions",
@@ -123,16 +140,46 @@ def _read_export_contents(source_dir: Path) -> dict[str, Any]:
     return contents if isinstance(contents, dict) else {}
 
 
+def _resolve_bundle_file_ref(raw_path: object, *, base_dir: Path) -> Path:
+    """Resolve a sidecar reference without allowing it to escape its resource.
+
+    Resolve symlinks as well as parent-directory segments before checking
+    containment: lexical path checks alone can be bypassed by a symlink.
+
+    Containment is checked before existence, so a path outside the resource is
+    refused the same way whether or not it exists; otherwise the error would
+    tell a bundle's author which files exist on the importer's disk. A missing
+    file inside the resource still fails when it is read, as it always has.
+    """
+    if not isinstance(raw_path, str) or not raw_path:
+        raise ValueError("Bundle file reference must be a non-empty path")
+
+    resource_root = base_dir.resolve()
+    resolved = (resource_root / raw_path).resolve()
+    try:
+        resolved.relative_to(resource_root)
+    except ValueError:
+        raise ValueError(
+            f"Bundle file reference escapes its resource directory: {raw_path!r}"
+        ) from None
+
+    if resolved.exists() and not resolved.is_file():
+        raise ValueError(f"Bundle file reference is not a file: {raw_path!r}")
+    return resolved
+
+
 def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     if isinstance(value, list):
         return [_resolve_file_refs(item, base_dir=base_dir) for item in value]
     if not isinstance(value, dict):
         return value
     if set(value.keys()) == {RAW_FILE_REF_KEY}:
-        raw_path = base_dir / str(value[RAW_FILE_REF_KEY])
+        raw_path = _resolve_bundle_file_ref(value[RAW_FILE_REF_KEY], base_dir=base_dir)
         return raw_path.read_text(encoding="utf-8")
     if set(value.keys()) == {JSON_FILE_REF_KEY}:
-        json_path = base_dir / str(value[JSON_FILE_REF_KEY])
+        json_path = _resolve_bundle_file_ref(
+            value[JSON_FILE_REF_KEY], base_dir=base_dir
+        )
         return loads_jsonc(json_path.read_text(encoding="utf-8"))
     return {
         key: _resolve_file_refs(item, base_dir=base_dir) for key, item in value.items()
@@ -273,3 +320,35 @@ def _bundle_folder_keys(files_root: Path) -> set[str]:
             if parts:
                 keys.add(_file_path_key(parts))
     return keys
+
+
+def check_format_version(pod_manifest: object) -> int:
+    """The manifest's ``format_version``, or ``ValueError`` when it is newer
+    than this code reads.
+
+    A missing or unreadable version reads as 0: bundles written by hand, or
+    before the field existed, are the oldest format and import as they did.
+    """
+    raw = pod_manifest.get("format_version") if isinstance(pod_manifest, dict) else None
+    try:
+        version = int(raw or 0)
+    except TypeError, ValueError:
+        raise ValueError(
+            f"{POD_MANIFEST_FILE}: format_version must be a whole number, not {raw!r}"
+        ) from None
+    if version > FORMAT_VERSION:
+        raise ValueError(
+            f"This bundle is format {version}, and this version of Lemma reads up "
+            f"to format {FORMAT_VERSION}. Update the Lemma CLI (or ask for the "
+            "server to be updated) and import it again; importing it now would "
+            "leave out what the newer format added."
+        )
+    return version
+
+
+def bundle_format_version(bundle_root: Path) -> int:
+    """The format to write in this bundle's ``pod.json``: 4 only when it
+    declares a pod connector, the one thing a reader of 3 would leave out."""
+    connectors = bundle_root / "connectors"
+    declares = connectors.is_dir() and any(p.is_dir() for p in connectors.iterdir())
+    return FORMAT_VERSION if declares else FORMAT_VERSION_WITHOUT_CONNECTORS

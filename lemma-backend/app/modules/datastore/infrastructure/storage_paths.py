@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-
+from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 
@@ -143,3 +144,127 @@ def child_page_number(artifact_rel: str) -> int | None:
     """The 1-based page number in a rendered page artifact's name, if it is one."""
     match = _CHILD_PAGE_RE.search(artifact_rel)
     return int(match.group(1)) if match else None
+
+
+# ---------------------------------------------------------------------------
+# Object layout. A file's bytes keyed by what they are rather than where they
+# sit: ``pods/{pod}/objects/{file_id}/{sha256}/content`` for the original and
+# ``…/{sha256}/derived/`` for everything made from it. A rename changes neither
+# key, so it is a metadata update; a reprocess writes a new revision's prefix
+# and readers switch to it when the row says it is indexed, so it is atomic.
+#
+# ``content`` rather than the bare digest as the original's name: a key that is
+# both an object and a prefix is fine in an object store and impossible on the
+# local filesystem backend.
+# ---------------------------------------------------------------------------
+
+PATH_LAYOUT = "path"
+OBJECT_LAYOUT = "object"
+_NO_DIGEST = "unhashed"
+
+
+class StoredFile(Protocol):
+    """What locating a file's bytes needs to know about it."""
+
+    @property
+    def id(self) -> UUID | None: ...
+    @property
+    def pod_id(self) -> UUID: ...
+    @property
+    def path(self) -> str: ...
+    @property
+    def content_sha256(self) -> str | None: ...
+    @property
+    def indexed_sha256(self) -> str | None: ...
+    @property
+    def storage_layout(self) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FileKeys:
+    """Where one revision of one file lives: its original and its derived container."""
+
+    original: str
+    child_prefix: str
+
+    def child(self, artifact_name: str) -> str:
+        return f"{self.child_prefix}{artifact_name.lstrip('/')}"
+
+    @property
+    def markdown(self) -> str:
+        return self.child(CHILD_MARKDOWN_ARTIFACT)
+
+    @property
+    def manifest(self) -> str:
+        return self.child(CHILD_MANIFEST_ARTIFACT)
+
+    @property
+    def user_markdown(self) -> str:
+        return self.child(CHILD_USER_MARKDOWN_ARTIFACT)
+
+    def page(self, page_number: int) -> str:
+        return self.child(child_page_artifact_name(page_number))
+
+
+def object_file_prefix(pod_id: UUID, file_id: UUID) -> str:
+    """Every revision of one file in the object layout."""
+    return f"pods/{pod_id}/objects/{file_id}/"
+
+
+def object_keys(pod_id: UUID, file_id: UUID, sha256: str | None) -> FileKeys:
+    base = f"{object_file_prefix(pod_id, file_id)}{sha256 or _NO_DIGEST}"
+    return FileKeys(original=f"{base}/content", child_prefix=f"{base}/derived/")
+
+
+def path_keys(pod_id: UUID, path: str) -> FileKeys:
+    return FileKeys(
+        original=build_datastore_file_storage_key(pod_id, path),
+        child_prefix=build_datastore_child_container_prefix(pod_id, path),
+    )
+
+
+def new_file_storage_layout() -> str:
+    """The layout a file written now gets: the switch, not the file, decides."""
+    from app.modules.datastore.config import datastore_settings
+
+    return (
+        OBJECT_LAYOUT
+        if datastore_settings.datastore_object_storage_layout
+        else PATH_LAYOUT
+    )
+
+
+def is_object_layout(file: StoredFile) -> bool:
+    return getattr(file, "storage_layout", PATH_LAYOUT) == OBJECT_LAYOUT
+
+
+def content_keys(file: StoredFile, *, sha256: str | None = None) -> FileKeys:
+    """The revision being written or processed: the row's bytes, or ``sha256``'s."""
+    if is_object_layout(file) and file.id is not None:
+        return object_keys(file.pod_id, file.id, sha256 or file.content_sha256)
+    return path_keys(file.pod_id, file.path)
+
+
+def readable_keys(file: StoredFile) -> FileKeys:
+    """The revision readers see: derived artifacts of what was last indexed.
+
+    In the object layout the original is always the current bytes, but the
+    derived container is the indexed revision's, so a document being
+    reprocessed keeps serving its previous conversion until the new one lands.
+    """
+    if is_object_layout(file) and file.id is not None:
+        original = object_keys(file.pod_id, file.id, file.content_sha256).original
+        indexed = object_keys(
+            file.pod_id, file.id, file.indexed_sha256 or file.content_sha256
+        )
+        return FileKeys(original=original, child_prefix=indexed.child_prefix)
+    return path_keys(file.pod_id, file.path)
+
+
+def fallback_keys(file: StoredFile) -> FileKeys | None:
+    """The other layout's keys, for reads racing the background copy."""
+    if file.id is None:
+        return None
+    if is_object_layout(file):
+        return path_keys(file.pod_id, file.path)
+    return object_keys(file.pod_id, file.id, file.content_sha256)

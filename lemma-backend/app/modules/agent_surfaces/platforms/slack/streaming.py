@@ -7,14 +7,29 @@ call has to agree on its mode.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
+
+from dataclasses import replace
+
+from app.modules.agent_surfaces.domain.models import ProgressHandle, ProgressHandleKind
+
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
 from typing import Any
 
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import is_slack_api_error
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 
 from app.modules.agent_surfaces.platforms.slack.blocks import (
@@ -23,6 +38,7 @@ from app.modules.agent_surfaces.platforms.slack.blocks import (
 from app.modules.agent_surfaces.platforms.slack.message_blocks import _markdown_chunk
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
+    classify_slack_error,
     slack_access_token,
     slack_customized_message_kwargs,
     slack_scopes,
@@ -30,16 +46,21 @@ from app.modules.agent_surfaces.platforms.slack.client import (
 
 logger = get_logger(__name__)
 
+#: Tries per overflow part once the stream has closed with the answer's start.
+#: Each try already retries what the transport may retry; this covers a failure
+#: that gave up on a part the stream's own close had nothing to do with.
+_OVERFLOW_ATTEMPTS = 2
+
 
 def _slack_error_code(exc: BaseException) -> str:
     """Slack's own error code when it sent one, else the exception's class."""
-    if isinstance(exc, SlackApiError):
+    if is_slack_api_error(exc):
         return str((exc.response or {}).get("error") or "unknown")
     return type(exc).__name__
 
 
 async def remove_processing_reaction(
-    credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+    credentials: CredentialsLike, event: ParsedInboundSurfaceEvent
 ) -> None:
     """Take the "eyes" back off the message the agent has now answered.
 
@@ -51,13 +72,13 @@ async def remove_processing_reaction(
     failing the reply that has just been delivered.
     """
     token = slack_access_token(credentials)
-    channel = event.reply_target.get("channel")
+    channel = reply_target_as(event, SlackReplyTarget).channel
     timestamp = event.external_message_id
     if not token or not channel or not timestamp:
         return
     if (
         event.is_dm
-        and event.reply_target.get("thread_ts")
+        and reply_target_as(event, SlackReplyTarget).thread_ts
         and "assistant:write" in slack_scopes(credentials)
     ):
         # The status bubble clears itself when a message is posted; there was
@@ -68,7 +89,7 @@ async def remove_processing_reaction(
         await client.reactions_remove(
             channel=str(channel), name="eyes", timestamp=str(timestamp)
         )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.debug(
             "agent_surfaces.service.slack_processing_reaction_not_removed.diagnostic",
             exc_info=True,
@@ -78,13 +99,13 @@ async def remove_processing_reaction(
 class SlackStreamSurface:
     """One live Slack message, written into across a run."""
 
-    def __init__(self, *, credentials: dict[str, Any]) -> None:
-        self.credentials = credentials
+    def __init__(self, *, credentials: CredentialsLike) -> None:
+        self.credentials = SlackCredentials.of(credentials)
 
     async def append_stream_text(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         text: str,
         metadata: dict[str, Any] | None = None,
     ) -> StreamAppendResult:
@@ -96,8 +117,8 @@ class SlackStreamSurface:
         step is invented to justify the message existing.
         """
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
-        thread_ts = event.reply_target.get("thread_ts")
+        channel = reply_target_as(event, SlackReplyTarget).channel
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         # An empty text is a request to *open* the stream (run start); only a
         # missing channel/thread makes it impossible.
         if not token or not channel or not thread_ts:
@@ -106,7 +127,7 @@ class SlackStreamSurface:
             return StreamAppendResult(handle=progress_handle, appended=False)
         client = await build_slack_client(self.credentials)
         try:
-            if not (progress_handle and progress_handle.get("ts")):
+            if progress_handle is None:
                 progress_handle = await self._open_stream(
                     client,
                     channel=str(channel),
@@ -116,15 +137,15 @@ class SlackStreamSurface:
             if not text:
                 return StreamAppendResult(handle=progress_handle, appended=False)
             await client.chat_appendStream(
-                channel=str(progress_handle.get("channel") or channel),
-                ts=str(progress_handle["ts"]),
+                channel=progress_handle.channel_id or str(channel),
+                ts=progress_handle.message_id,
                 chunks=[_markdown_chunk(text)],
             )
             return StreamAppendResult(
-                handle={**progress_handle, "streamed_text": True},
+                handle=replace(progress_handle, streamed_text=True),
                 appended=True,
             )
-        except PLATFORM_TRANSPORT_ERRORS as exc:
+        except platform_transport_errors() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_append_stream_text.diagnostic",
                 error_code=_slack_error_code(exc),
@@ -139,7 +160,7 @@ class SlackStreamSurface:
         channel: str,
         thread_ts: str,
         metadata: dict[str, Any] | None,
-    ) -> dict[str, Any]:
+    ) -> ProgressHandle:
         """Start a live stream on the thread, and describe it as a handle."""
         start_payload: dict[str, Any] = {
             "channel": channel,
@@ -157,17 +178,17 @@ class SlackStreamSurface:
             )
         )
         response = await client.chat_startStream(**start_payload)
-        return {
-            "ts": str(response["ts"]),
-            "channel": str(response.get("channel") or channel),
-            "stream": True,
-            "streamed_text": True,
-        }
+        return ProgressHandle(
+            kind=ProgressHandleKind.STREAM,
+            message_id=str(response["ts"]),
+            channel_id=str(response.get("channel") or channel),
+            streamed_text=True,
+        )
 
     async def finish_progress(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None,
+        progress_handle: ProgressHandle | None,
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
@@ -180,7 +201,9 @@ class SlackStreamSurface:
         Returns False when there is no live stream to close, so the caller can
         deliver the answer as an ordinary message instead.
         """
-        handle = progress_handle or {}
+        if progress_handle is None:
+            return False
+        handle = progress_handle
         channel = self._closable_stream_channel(event, handle, message)
         if not channel:
             return False
@@ -191,26 +214,32 @@ class SlackStreamSurface:
         )
         if not await self._close_stream(handle, channel=channel, chunks=chunks):
             return False
+        # The stream now holds the start of the answer, so from here the answer
+        # is delivered: a failed overflow part must not send the caller down
+        # the delete-and-resend path, which removed the start and posted every
+        # part again -- the ones already sent included.
         await self._send_overflow(event, chunks[1:], metadata=metadata)
         await remove_processing_reaction(self.credentials, event)
         return True
 
     def _closable_stream_channel(
-        self, event: ParsedInboundSurfaceEvent, handle: dict[str, Any], message: str
+        self, event: ParsedInboundSurfaceEvent, handle: ProgressHandle, message: str
     ) -> str:
         """The channel whose stream can be closed, or "" when none can be.
 
         A stream that already carries the answer still needs closing, so an
         empty message is only a refusal when nothing was streamed.
         """
-        if not handle.get("ts") or not slack_access_token(self.credentials):
+        if not handle.message_id or not slack_access_token(self.credentials):
             return ""
-        if not message.strip() and not handle.get("streamed_text"):
+        if not message.strip() and not handle.streamed_text:
             return ""
-        return str(handle.get("channel") or event.reply_target.get("channel") or "")
+        return handle.channel_id or str(
+            reply_target_as(event, SlackReplyTarget).channel or ""
+        )
 
     async def _close_stream(
-        self, handle: dict[str, Any], *, channel: str, chunks: list[str]
+        self, handle: ProgressHandle, *, channel: str, chunks: list[str]
     ) -> bool:
         """Append the answer to the live stream, then stop it.
 
@@ -218,14 +247,14 @@ class SlackStreamSurface:
         append is the call that carries text and stop only finalises.
         """
         client = await build_slack_client(self.credentials)
-        ts = str(handle["ts"])
+        ts = handle.message_id
         try:
             if chunks:
                 await client.chat_appendStream(
                     channel=channel, ts=ts, chunks=[_markdown_chunk(chunks[0])]
                 )
             await client.chat_stopStream(channel=channel, ts=ts)
-        except PLATFORM_TRANSPORT_ERRORS as exc:
+        except platform_transport_errors() as exc:
             # Say which Slack error it was: this path falls back to a plain
             # message, so without the code a failure here is invisible. A
             # warning, because the fallback is what puts the answer in front of
@@ -246,7 +275,13 @@ class SlackStreamSurface:
         *,
         metadata: dict[str, Any] | None,
     ) -> None:
-        """Anything past the stream's markdown budget, as ordinary messages."""
+        """Anything past the stream's markdown budget, as ordinary messages.
+
+        Each part is tried twice and the parts go in order; a part that still
+        fails stops the rest, since what follows a gap reads as nonsense. It
+        never raises: the answer has started in the stream, and resending it
+        whole would repeat what the person already has.
+        """
         if not overflow:
             return
         # Imported here rather than at module scope so the two surfaces stay
@@ -256,13 +291,35 @@ class SlackStreamSurface:
         )
 
         sender = SlackPlatformService(credentials=self.credentials)
-        for remainder in overflow:
-            await sender.send_message(event=event, message=remainder, metadata=metadata)
+        for index, remainder in enumerate(overflow):
+            for attempt in range(_OVERFLOW_ATTEMPTS):
+                try:
+                    await sender.send_message(
+                        event=event, message=remainder, metadata=metadata
+                    )
+                    break
+                except platform_transport_errors() as exc:
+                    # Again only for what provably did not post (a rate limit, a
+                    # refused connection): a timeout may have posted the part.
+                    retryable = (
+                        isinstance(exc, Exception)
+                        and classify_slack_error(exc)
+                        is DeliveryClassification.TRANSIENT
+                    )
+                    if retryable and attempt + 1 < _OVERFLOW_ATTEMPTS:
+                        continue
+                    logger.error(
+                        "agent_surfaces.service.slack_answer_overflow_lost.failed",
+                        sent_parts=index + 1,
+                        total_parts=len(overflow) + 1,
+                        exc_info=True,
+                    )
+                    return
 
     async def end_progress(
         self,
         event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Dispose of a live stream that will never receive an answer.
 
@@ -275,22 +332,22 @@ class SlackStreamSurface:
         stopped before Slack will accept a delete, and if the delete is refused
         a stopped stream is still better than a spinning one.
         """
-        if not progress_handle or not progress_handle.get("ts"):
+        if not progress_handle or not progress_handle.message_id:
             return
         token = slack_access_token(self.credentials)
         if not token:
             return
         client = await build_slack_client(self.credentials)
-        channel = progress_handle.get("channel") or event.reply_target.get("channel")
+        channel = (
+            progress_handle.channel_id
+            or reply_target_as(event, SlackReplyTarget).channel
+        )
+        ts = progress_handle.message_id
         try:
-            if progress_handle.get("stream"):
-                await client.chat_stopStream(
-                    channel=str(channel), ts=str(progress_handle["ts"])
-                )
-            await client.chat_delete(
-                channel=str(channel), ts=str(progress_handle["ts"])
-            )
-        except PLATFORM_TRANSPORT_ERRORS:
+            if progress_handle.kind is ProgressHandleKind.STREAM:
+                await client.chat_stopStream(channel=str(channel), ts=ts)
+            await client.chat_delete(channel=str(channel), ts=ts)
+        except platform_transport_errors():
             logger.debug(
                 "agent_surfaces.service.slack_end_progress_delete_channel.diagnostic",
                 exc_info=True,

@@ -11,16 +11,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
-use axum::extract::State;
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
-use axum::routing::get;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, put};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::protocol::{ControlBody, Frame, HarnessesBody, PublishedHarness, close, host, server};
+use super::protocol::{
+    ControlBody, DIGEST_HEADER, Frame, HarnessesBody, PublishedHarness, close, host, server,
+};
+use super::transfer::sha256_hex;
 use crate::protocol::{Command, EventBatch, RunState};
 
 #[derive(Default)]
@@ -62,6 +67,20 @@ pub(crate) struct StubState {
     pub(crate) refused_once_runs: Mutex<Vec<Uuid>>,
     /// Sockets the stand-in is serving right now, handshake or not.
     open_sockets: AtomicUsize,
+    /// The largest text message the host has sent, in bytes.
+    pub(crate) largest_frame: AtomicUsize,
+    /// Every `events` body accepted, in order.
+    pub(crate) accepted_batches: Mutex<Vec<Value>>,
+    /// Transfers staged for the host to fetch, by id; fetched once.
+    pub(crate) staged: Mutex<HashMap<String, Vec<u8>>>,
+    /// What the host delivered into a transfer, by id.
+    pub(crate) delivered: Mutex<HashMap<String, Vec<u8>>>,
+    /// Blobs the host uploaded, by SHA-256.
+    pub(crate) blobs: Mutex<HashMap<String, Vec<u8>>>,
+    /// Answer this many blob uploads 503 before taking them.
+    pub(crate) failing_blob_uploads: AtomicUsize,
+    /// The `Authorization` every HTTP request carried.
+    pub(crate) http_authorizations: Mutex<Vec<String>>,
     harness_ids: Mutex<HashMap<String, Uuid>>,
 }
 
@@ -132,6 +151,11 @@ impl StubLink {
         let state = Arc::<StubState>::default();
         let app = Router::new()
             .route("/agent-host/link", get(upgrade))
+            .route(
+                "/agent-host/transfers/{id}",
+                get(fetch_transfer).put(deliver_transfer),
+            )
+            .route("/agent-host/runs/{run_id}/blobs/{sha256}", put(put_blob))
             .with_state(Arc::clone(&state));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -159,6 +183,82 @@ impl Drop for StubLink {
 
 async fn upgrade(State(state): State<Arc<StubState>>, socket: WebSocketUpgrade) -> Response {
     socket.on_upgrade(move |socket| serve(state, socket))
+}
+
+fn authorized(state: &StubState, headers: &HeaderMap) -> bool {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    state
+        .http_authorizations
+        .lock()
+        .unwrap()
+        .push(authorization.clone());
+    authorization.starts_with("Bearer ") && authorization.len() > "Bearer ".len()
+}
+
+fn digest_matches(headers: &HeaderMap, body: &[u8]) -> bool {
+    headers
+        .get(DIGEST_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|digest| digest == sha256_hex(body))
+}
+
+async fn fetch_transfer(
+    State(state): State<Arc<StubState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match state.staged.lock().unwrap().remove(&id) {
+        Some(data) => data.into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn deliver_transfer(
+    State(state): State<Arc<StubState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !digest_matches(&headers, &body) {
+        return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+    }
+    state.delivered.lock().unwrap().insert(id, body.to_vec());
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn put_blob(
+    State(state): State<Arc<StubState>>,
+    Path((_run_id, sha256)): Path<(Uuid, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !authorized(&state, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if state
+        .failing_blob_uploads
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            left.checked_sub(1)
+        })
+        .is_ok()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if sha256 != sha256_hex(&body) || !digest_matches(&headers, &body) {
+        return StatusCode::UNPROCESSABLE_ENTITY.into_response();
+    }
+    state.blobs.lock().unwrap().insert(sha256, body.to_vec());
+    StatusCode::NO_CONTENT.into_response()
 }
 
 fn reply(request: &Frame, kind: &str, body: Value) -> Frame {
@@ -195,6 +295,7 @@ async fn serve(state: Arc<StubState>, mut socket: WebSocket) {
             message = socket.recv() => {
                 let Some(Ok(message)) = message else { return };
                 let Message::Text(text) = message else { continue };
+                state.largest_frame.fetch_max(text.len(), Ordering::SeqCst);
                 let frame: Frame = serde_json::from_str(&text).unwrap();
                 if let Some(re) = frame.re.clone() {
                     state.answers.lock().unwrap().insert(re, frame);
@@ -340,6 +441,11 @@ fn answer(state: &StubState, frame: &Frame) -> Option<Frame> {
                 .lock()
                 .unwrap()
                 .push((first.run_id, last.sequence));
+            state
+                .accepted_batches
+                .lock()
+                .unwrap()
+                .push(frame.body.clone());
             reply(
                 frame,
                 server::EVENTS_OK,

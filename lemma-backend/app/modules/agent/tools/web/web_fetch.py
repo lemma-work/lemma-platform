@@ -47,6 +47,7 @@ during the handshake, long before they read a `User-Agent`.
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 import shlex
 from urllib.parse import urlparse
@@ -55,13 +56,22 @@ from app.core.log.log import get_logger
 from app.core.net.impersonating_client import web_page_policy
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.web.capture_result import (
-    PREVIEW_CHARS as _PREVIEW_CHARS,
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_text
+from app.modules.agent.tools.web.browser_capture import (
+    MAX_BROWSER_RENDERS,
+    capture_with_browser,
+    needs_browser,
+    render_fits,
 )
 from app.modules.agent.tools.web.capture_result import (
     THIN_CONTENT_CHARS as _THIN_CONTENT_CHARS,
 )
-from app.modules.agent.tools.web.capture_result import finish as _finish
+from app.modules.agent.tools.web.http_capture import (
+    Refusal,
+    inline_page,
+    refusal_for,
+    write_extracted,
+)
 from app.modules.agent.tools.web.models import (
     WebFetchPage,
     WebFetchRequest,
@@ -71,20 +81,13 @@ from app.modules.agent.tools.web.page_extract import (
     ExtractedPage,
     PageFetchError,
     fetch_and_clean,
-    render_document,
 )
-from sandbox_runtime.paths import OVERLAY_FIRST_ON_PATH
 from app.modules.agent.tools.workspace_cli.workspace_cli import (
     get_workspace_session,
     workspace_runtime_context,
 )
 
 logger = get_logger(__name__)
-
-# A plain fetch is quick; a browser render has to start Chrome and wait for the
-# network to settle.
-_HTTP_TIMEOUT_SECONDS = 45
-_BROWSER_TIMEOUT_SECONDS = 75
 
 # The batch as a whole, and a hard one: the tool returns at this point whatever
 # it has, because nothing above it will stop it.
@@ -101,36 +104,19 @@ _BROWSER_TIMEOUT_SECONDS = 75
 # and a note about the fourth can act; an agent whose run disappears cannot.
 _BATCH_BUDGET_SECONDS = 240
 
-# Browser renders are the serialised, expensive path, and the batch budget is
-# the only thing bounding them.
-#
-# This is deliberately the same number as `WebFetchRequest.urls`' `max_length`,
-# and `test_web_fetch_limits_agree` fails if the two ever drift: the cap is
-# only honest when the tool cannot accept more pages than it will render. It
-# used to accept ten and render three, so a caller who sent ten JS-heavy pages
-# discovered seven were skipped only after paying for the call.
-#
-# Raising it does not endanger the cheap pages the old comment worried about --
-# the http path runs to completion first, concurrently, before any render
-# starts. What bounds the pathological case is the batch deadline, which
-# reports every page it did not reach. Measured, a real render is ~5s, so five
-# of them sit an order of magnitude inside that budget.
-_MAX_BROWSER_RENDERS = 5
-
 # Enough to saturate the network wait without opening twenty sockets to twenty
 # sites at once.
 _MAX_CONCURRENT_FETCHES = 5
 
+# The text handed back inline, for an agent with no tool that can read a saved
+# file, shared across the pages of one call -- and never less than a useful
+# share per page. Bounded because every inline character is replayed with the
+# rest of the conversation on every later step.
+_INLINE_BUDGET_CHARS = 40_000
+_INLINE_PAGE_FLOOR_CHARS = 8_000
+
 
 _ALLOWED_SCHEMES = {"http", "https"}
-
-
-def _slugify(url: str) -> str:
-    parsed = urlparse(url)
-    raw = f"{parsed.netloc}{parsed.path}".strip("/") or "page"
-    slug = "".join(char if char.isalnum() or char in "-._" else "-" for char in raw)
-    slug = "-".join(part for part in slug.split("-") if part)
-    return slug[:100].lower() or "page"
 
 
 def _validate(url: str) -> str | None:
@@ -143,54 +129,65 @@ def _validate(url: str) -> str | None:
     return None
 
 
-def _needs_browser(formats: list[str], render: bool) -> bool:
-    # A PDF or screenshot is a render by definition; markdown alone is not.
-    return render or any(fmt in {"pdf", "jpeg", "png"} for fmt in formats)
+class _Workspace:
+    """The sandbox session, opened the first time a page needs it.
 
-
-async def _write_markdown(session, *, path: str, content: str) -> None:
-    """Write already-cleaned markdown into the workspace.
-
-    Through the runtime's file API, not a shell heredoc. The heredoc could not
-    work for the pages that most need capturing: it puts the whole document in a
-    single `sh -c` argument, and Linux caps one argument at `MAX_ARG_STRLEN`
-    (32 pages = 128KB) no matter how large `ARG_MAX` is. A full Wikipedia
-    article extracts to ~185KB of markdown, so it failed with E2BIG — and the
-    caller read that failure as "this page needs a browser" and spent a Chrome
-    render re-fetching a page it had already read correctly.
-
-    Streaming the bytes also removes the quoting question entirely: no shell
-    parses this, so nothing on the page can terminate the document early.
-
-    The directory is created once for the batch by the caller, not here: this
-    runs under the write lock, once per page, against a directory that is the
-    same for every page in the call. Five pages meant five `mkdir` round trips
-    to create one directory — measured at ~80ms each, half of all the sandbox
-    chatter in a batch.
+    An agent with no tool that can read a saved file gets its pages inline, and
+    a batch the cheap path answers then never needs a sandbox at all --
+    provisioning one cost the wait for a sandbox to hand back text the backend
+    already held.
     """
-    await session.write_file(
-        path, content.encode("utf-8"), timeout=_HTTP_TIMEOUT_SECONDS
-    )
+
+    def __init__(self, ctx: BaseAgentContext, stack: AsyncExitStack) -> None:
+        self._ctx = ctx
+        self._stack = stack
+        self._session = None
+        self._opening = asyncio.Lock()
+
+    async def session(self):
+        async with self._opening:
+            if self._session is None:
+                runtime_context = workspace_runtime_context(self._ctx)
+                opened = await get_workspace_session(
+                    self._ctx,
+                    session_id=runtime_context.default_shell_session_id,
+                    close_on_exit=False,
+                )
+                self._session = await self._stack.enter_async_context(opened)
+        return self._session
 
 
-def _browser_script(url: str, out_dir: str, name: str, formats: list[str]) -> str:
-    """The capture, by name: the runtime overlay's `save-webpage`, else the image's."""
-    return (
-        OVERLAY_FIRST_ON_PATH + f"mkdir -p {shlex.quote(out_dir)} && "
-        f"save-webpage {shlex.quote(url)} "
-        f"--formats {shlex.quote(','.join(formats))} "
-        f"--out {shlex.quote(out_dir)} --name {shlex.quote(name)}"
-    )
+@dataclass(frozen=True, slots=True)
+class _Batch:
+    """What every page in one call shares."""
+
+    out_dir: str
+    formats: list[str]
+    render: bool
+    #: Pages come back in the result rather than as files to read.
+    inline: bool
+    #: Characters of each page's text handed back inline.
+    inline_limit: int
+    #: When the call's budget runs out, on the event loop's clock.
+    deadline: float
 
 
 async def web_fetch_internal(
     ctx: BaseAgentContext, request: WebFetchRequest
 ) -> WebFetchResponse:
-    runtime_context = workspace_runtime_context(ctx)
-    out_dir = request.out_dir.strip().strip("/") or "research"
-    formats = list(dict.fromkeys(request.formats)) or ["markdown"]
-
     urls = list(dict.fromkeys(request.urls))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _BATCH_BUDGET_SECONDS
+    batch = _Batch(
+        out_dir=request.out_dir.strip().strip("/") or "research",
+        formats=list(dict.fromkeys(request.formats)) or ["markdown"],
+        render=request.render,
+        inline=not ctx.workspace_readable,
+        inline_limit=max(
+            _INLINE_PAGE_FLOOR_CHARS, _INLINE_BUDGET_CHARS // max(1, len(urls))
+        ),
+        deadline=deadline,
+    )
     pages: dict[str, WebFetchPage] = {}
     reached_deadline = False
     session_error: str | None = None
@@ -199,21 +196,10 @@ async def web_fetch_internal(
         # The deadline wraps acquiring the workspace as well as using it: a cold
         # sandbox has to be provisioned before the first capture, and that wait
         # is part of what the caller is sitting through.
-        async with asyncio.timeout(_BATCH_BUDGET_SECONDS):
-            session = await get_workspace_session(
-                ctx,
-                session_id=runtime_context.default_shell_session_id,
-                close_on_exit=False,
+        async with asyncio.timeout_at(deadline), AsyncExitStack() as stack:
+            await _capture_batch(
+                _Workspace(ctx, stack), urls=urls, batch=batch, pages=pages
             )
-            async with session:
-                await _capture_batch(
-                    session,
-                    urls=urls,
-                    out_dir=out_dir,
-                    formats=formats,
-                    render=request.render,
-                    pages=pages,
-                )
     except TimeoutError:
         # Not an error: the tool ran out of its own budget. Everything captured
         # before now is still on disk and still worth returning.
@@ -256,23 +242,46 @@ async def web_fetch_internal(
         # Partial success is still success: one dead link must not discard the
         # nine pages that came back, and neither must running out of time.
         success=captured > 0,
-        out_dir=out_dir,
+        out_dir=None if batch.inline else batch.out_dir,
         pages=ordered,
         error=session_error if not captured else None,
-        message=(
-            f"Captured {captured} of {len(ordered)} page(s) into '{out_dir}'. "
-            "Read them with `exec_command` (grep/cat), view screenshots with "
-            "`view_image`."
-            + (
-                " The call hit its time budget before finishing; re-request the "
-                "pages marked not attempted."
-                if reached_deadline
-                else ""
-            )
-            if captured
-            else "No pages could be captured."
+        message=_message(
+            batch, captured=captured, total=len(ordered), cut_short=reached_deadline
         ),
     )
+
+
+def _message(batch: _Batch, *, captured: int, total: int, cut_short: bool) -> str:
+    """What to do with the result, in terms of the tools this agent has.
+
+    It used to say "read them with `exec_command`" to every agent, including
+    the ones web_fetch is given by default and `exec_command` is not, which
+    could then see only a preview of each page and fetched it again.
+    """
+    if not captured:
+        return "No pages could be captured."
+    if batch.inline:
+        message = (
+            f"Fetched {captured} of {total} page(s). Each page's text is in its "
+            f"`content`, clipped at {batch.inline_limit} characters."
+        )
+        if any(fmt != "markdown" for fmt in batch.formats):
+            message += (
+                " Screenshots and PDFs were saved in the sandbox at the paths "
+                "given, but you have no tool that can open them."
+            )
+    else:
+        message = (
+            f"Captured {captured} of {total} page(s) into '{batch.out_dir}'. "
+            "Read them with `exec_command` (grep/cat), view screenshots with "
+            "`view_image`."
+        )
+    if cut_short:
+        message += (
+            " The call hit its time budget before finishing; re-request the "
+            "pages marked not attempted."
+        )
+    return message
 
 
 async def _reject_unsafe_urls(urls: list[str], pages: dict[str, WebFetchPage]) -> None:
@@ -309,12 +318,10 @@ async def _reject_unsafe_urls(urls: list[str], pages: dict[str, WebFetchPage]) -
 
 
 async def _capture_batch(
-    session,
+    workspace: _Workspace,
     *,
     urls: list[str],
-    out_dir: str,
-    formats: list[str],
-    render: bool,
+    batch: _Batch,
     pages: dict[str, WebFetchPage],
 ) -> None:
     """Fill ``pages`` for every URL, cheap path first and in parallel.
@@ -322,152 +329,144 @@ async def _capture_batch(
     Written to mutate a dict the caller owns so that a batch cut short by the
     deadline above still returns everything captured before it.
     """
-    needs_browser: list[str] = []
-
     await _reject_unsafe_urls(urls, pages)
 
+    to_render: list[str] = []
     cheap = [
-        url for url in urls if url not in pages and not _needs_browser(formats, render)
+        url
+        for url in urls
+        if url not in pages and not needs_browser(batch.formats, batch.render)
     ]
     if cheap:
-        # Once for the batch, before any page is written. Every page in a call
-        # shares `out_dir`, so doing this per page was the same directory
-        # created five times over five serialised round trips.
-        await session.exec_command(cmd=f"mkdir -p {shlex.quote(out_dir)}", timeout=20)
-        # Binds only if the URL cap is ever raised above it -- `WebFetchRequest`
-        # accepts five and this allows five. Kept because the cap is the thing
-        # that moves, and an unbounded gather over a longer list is how you open
-        # twenty sockets at once.
-        limit = asyncio.Semaphore(_MAX_CONCURRENT_FETCHES)
-        # Writes share one workspace session, so they are serialised even though
-        # the fetches are not.
-        writing = asyncio.Lock()
+        await _capture_cheap(
+            workspace, cheap, batch=batch, pages=pages, to_render=to_render
+        )
+    to_render.extend(url for url in urls if url not in pages and url not in to_render)
 
-        async def _capture(url: str) -> None:
-            """Fetch, then save — and record the result the moment it exists.
-
-            Deliberately not `gather`-then-write: collecting every extraction
-            before writing any makes the batch all-or-nothing, so one slow site
-            costs the caller every fast page that had already come back when the
-            deadline fired. Recording per URL is what makes a partial result
-            actually partial.
-            """
-            async with limit:
-                page = await _clean_or_none(url)
-            if page is None:
-                needs_browser.append(url)
-                return
-            if isinstance(page, _Refusal):
-                pages[url] = WebFetchPage(
-                    url=url,
-                    success=False,
-                    error=page.message,
-                    fetched_with="http",
-                    status=page.status,
-                    blocked_by=page.blocked_by,
-                )
-                return
-            async with writing:
-                written = await _write_extracted(
-                    session, url=url, page=page, out_dir=out_dir
-                )
-            if written is None:
-                needs_browser.append(url)
-            else:
-                pages[url] = written
-
-        await asyncio.gather(*(_capture(url) for url in cheap))
-
-    needs_browser.extend(
-        url for url in urls if url not in pages and url not in needs_browser
-    )
-
-    for index, url in enumerate(needs_browser):
-        if index >= _MAX_BROWSER_RENDERS:
+    loop = asyncio.get_running_loop()
+    for index, url in enumerate(to_render):
+        if index >= MAX_BROWSER_RENDERS:
             pages[url] = WebFetchPage(
                 url=url,
                 success=False,
                 error=(
                     f"Skipped: this page needs the full browser, and a single "
-                    f"call renders at most {_MAX_BROWSER_RENDERS} (the sandbox "
+                    f"call renders at most {MAX_BROWSER_RENDERS} (the sandbox "
                     "has one browser, so they run one at a time). Ask for it "
                     "again on its own."
                 ),
             )
             continue
-        pages[url] = await _capture_with_browser(
-            session, url=url, out_dir=out_dir, formats=formats
+        if not render_fits(batch.deadline - loop.time()):
+            # Not started rather than cut off: a render begun with too little
+            # time left is abandoned mid-flight by the deadline, and the agent
+            # learns nothing it would not learn from asking again.
+            pages[url] = WebFetchPage(
+                url=url,
+                success=False,
+                error=(
+                    "Not attempted: this page needs the full browser and too "
+                    "little of this call's time was left to render it. Ask for "
+                    "it again on its own."
+                ),
+            )
+            continue
+        session = await workspace.session()
+        page = await capture_with_browser(
+            session, url=url, out_dir=batch.out_dir, formats=batch.formats
+        )
+        pages[url] = (
+            await _with_saved_text(session, page, limit=batch.inline_limit)
+            if batch.inline
+            else page
         )
 
 
-async def _capture_with_browser(
-    session,
+async def _capture_cheap(
+    workspace: _Workspace,
+    urls: list[str],
     *,
-    url: str,
-    out_dir: str,
-    formats: list[str],
-) -> WebFetchPage:
-    name = _slugify(url)
-    browser_formats = formats if "markdown" in formats else [*formats, "markdown"]
-    result = await session.exec_command(
-        cmd=_browser_script(url, out_dir, name, browser_formats),
-        timeout=_BROWSER_TIMEOUT_SECONDS,
-    )
-    return await _finish(
-        session,
-        url=url,
-        out_dir=out_dir,
-        name=name,
-        formats=browser_formats,
-        fetched_with="browser",
-        failure_output=(result.get("stderr") or result.get("stdout") or ""),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _Refusal:
-    """A "do not try the browser" answer, with the reason for the agent.
-
-    The third outcome the cheap path needed and did not have. It used to
-    collapse every failure to `None`, which means "escalate" -- so a site
-    that refuses our address was retried through a browser it refuses
-    identically, at seven seconds and one of only five render slots.
-    """
-
-    message: str
-    status: int | None
-    blocked_by: str | None
-
-
-def _refusal_for(url: str, exc: PageFetchError) -> _Refusal | None:
-    """What to tell the agent, when the browser would not help."""
-    verdict = exc.verdict
-    if verdict is not None and verdict.blocked:
-        if verdict.browser_may_help:
-            return None
-        return _Refusal(
-            message=(
-                f"{url} was refused by a bot defence ({verdict.vendor}). The "
-                "sandbox browser reaches the site from the same address and "
-                "was measured to be refused identically, so it was not tried. "
-                "Use a different source, or ask the person for the page."
-            ),
-            status=exc.status,
-            blocked_by=verdict.vendor,
+    batch: _Batch,
+    pages: dict[str, WebFetchPage],
+    to_render: list[str],
+) -> None:
+    """The http path for ``urls``, concurrently; what it cannot read joins
+    ``to_render``."""
+    if not batch.inline:
+        # Once for the batch, before any page is written. Every page in a call
+        # shares `out_dir`, so doing this per page was the same directory
+        # created five times over five serialised round trips.
+        session = await workspace.session()
+        await session.exec_command(
+            cmd=f"mkdir -p {shlex.quote(batch.out_dir)}", timeout=20
         )
-    if exc.status in (404, 410):
-        return _Refusal(
-            message=(
-                f"The page is not there (HTTP {exc.status}). The browser was "
-                "not tried -- it would get the same answer."
-            ),
-            status=exc.status,
-            blocked_by=None,
-        )
-    return None
+    # Binds only if the URL cap is ever raised above it -- `WebFetchRequest`
+    # accepts five and this allows five. Kept because the cap is the thing
+    # that moves, and an unbounded gather over a longer list is how you open
+    # twenty sockets at once.
+    limit = asyncio.Semaphore(_MAX_CONCURRENT_FETCHES)
+    # Writes share one workspace session, so they are serialised even though
+    # the fetches are not.
+    writing = asyncio.Lock()
+
+    async def _capture(url: str) -> None:
+        """Fetch, then save — and record the result the moment it exists.
+
+        Deliberately not `gather`-then-write: collecting every extraction
+        before writing any makes the batch all-or-nothing, so one slow site
+        costs the caller every fast page that had already come back when the
+        deadline fired. Recording per URL is what makes a partial result
+        actually partial.
+        """
+        async with limit:
+            page = await _clean_or_none(url, can_download=not batch.inline)
+        if page is None:
+            to_render.append(url)
+            return
+        if isinstance(page, Refusal):
+            pages[url] = WebFetchPage(
+                url=url,
+                success=False,
+                error=page.message,
+                fetched_with="http",
+                status=page.status,
+                blocked_by=page.blocked_by,
+            )
+            return
+        if batch.inline:
+            pages[url] = inline_page(url, page, limit=batch.inline_limit)
+            return
+        async with writing:
+            written = await write_extracted(
+                await workspace.session(), url=url, page=page, out_dir=batch.out_dir
+            )
+        if written is None:
+            to_render.append(url)
+        else:
+            pages[url] = written
+
+    await asyncio.gather(*(_capture(url) for url in urls))
 
 
-async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
+async def _with_saved_text(session, page: WebFetchPage, *, limit: int) -> WebFetchPage:
+    """A rendered page with its text attached, for an agent that cannot read
+    the file it was saved to."""
+    path = page.files.get("markdown")
+    if not page.success or path is None:
+        return page
+    # Bytes, not characters; four per character covers any UTF-8 text.
+    read = await session.exec_command(
+        cmd=f"head -c {limit * 4} {shlex.quote(path)}", timeout=20
+    )
+    text = str(read.get("stdout") or "")
+    return page.model_copy(
+        update={"content": bounded_tool_text(text, limit=limit, what="page")}
+    )
+
+
+async def _clean_or_none(
+    url: str, *, can_download: bool
+) -> ExtractedPage | Refusal | None:
     """Fetch and clean in-process. `None` means "try the browser".
 
     Cheap path: no browser start-up and no container round-trip to fetch, so raw
@@ -488,7 +487,7 @@ async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
             signal=exc.verdict.signal if exc.verdict else None,
             exc_info=True,
         )
-        return _refusal_for(url, exc)
+        return refusal_for(url, exc, can_download=can_download)
     except Exception as exc:  # noqa: BLE001 - one URL must not sink the batch
         # These run under `gather`, so anything unhandled here fails every other
         # page in the call too. A malformed charset or an extractor crash is one
@@ -508,53 +507,6 @@ async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
     # a 3,670-character block page. `classify` ran before this and owns that
     # question; what reaches here is "there was nothing to read", which a
     # browser genuinely can fix.
-    if len(page.markdown) < _THIN_CONTENT_CHARS:
+    if not page.raw and len(page.markdown) < _THIN_CONTENT_CHARS:
         return None
     return page
-
-
-async def _write_extracted(
-    session, *, url: str, page: ExtractedPage, out_dir: str
-) -> WebFetchPage | None:
-    """Save a cleaned page, or None when the write itself failed."""
-    document = render_document(page)
-    markdown_path = f"{out_dir}/{_slugify(url)}.md"
-    try:
-        await _write_markdown(session, path=markdown_path, content=document)
-    except Exception:  # noqa: BLE001 - falls back to the browser path
-        # Logged rather than swallowed: the caller will spend a browser render
-        # recovering from this, and a recurring write failure is a workspace
-        # problem, not a property of the page.
-        logger.warning(
-            "agent.web_fetch.workspace_write_failed.degraded",
-            characters=len(document),
-            exc_info=True,
-        )
-        return None
-
-    return WebFetchPage(
-        url=url,
-        success=True,
-        title=page.title,
-        files={"markdown": markdown_path},
-        preview=document[:_PREVIEW_CHARS],
-        characters=len(document),
-        fetched_with="http",
-        status=page.status,
-        notice=_status_notice(page),
-    )
-
-
-def _status_notice(page: ExtractedPage) -> str | None:
-    """Said only when the status and the page disagree.
-
-    Measured: reuters.com/technology/ answered 429 and served the whole
-    article. Throwing that away because of the number would cost a browser
-    render for a page we already had.
-    """
-    if page.status < 400:
-        return None
-    return (
-        f"The site answered HTTP {page.status} but served the article anyway, "
-        "so it was saved. Re-request with `render=true` if it looks short."
-    )

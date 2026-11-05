@@ -26,6 +26,7 @@ from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.outsider_tools import outsider_may_call
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 
 logger = get_logger(__name__)
 
@@ -69,6 +70,7 @@ class AgentToolDispatcher:
         toolsets: list[object] | None = None,
         agent_run_id: UUID | None = None,
         include_final_answer: bool = False,
+        grants: AgentGrantSummary | None = None,
     ) -> list[ToolInfo]:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -79,6 +81,7 @@ class AgentToolDispatcher:
                 agent_run_id=agent_run_id,
                 exit_stack=exit_stack,
                 include_final_answer=include_final_answer,
+                grants=grants,
             )
             return [
                 ToolInfo(
@@ -103,7 +106,8 @@ class AgentToolDispatcher:
         agent_run_id: UUID | None = None,
         include_final_answer: bool = False,
         tool_call_id: str | None = None,
-        include_notification_tools: bool = False,
+        include_question_tools: bool = False,
+        grants: AgentGrantSummary | None = None,
     ) -> object:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -114,7 +118,9 @@ class AgentToolDispatcher:
                 agent_run_id=agent_run_id,
                 exit_stack=exit_stack,
                 include_final_answer=include_final_answer,
-                include_notification_tools=include_notification_tools,
+                include_question_tools=include_question_tools,
+                grants=grants,
+                only=name,
             )
             tool = prepared.get(name)
             if tool is None:
@@ -142,13 +148,26 @@ class AgentToolDispatcher:
         exit_stack: AsyncExitStack,
         toolsets: list[object] | None = None,
         include_final_answer: bool = False,
-        include_notification_tools: bool = False,
+        include_question_tools: bool = False,
+        grants: AgentGrantSummary | None = None,
+        only: str | None = None,
     ) -> dict[str, PreparedTool]:
+        """Every tool, or with ``only`` just the toolset that owns that name.
+
+        A call needs one tool, and each toolset is opened -- entered, listed --
+        to find it. Every MCP `tools/call` opened all of them for the one it
+        ran; with ``only`` the walk stops at the owner, so the ones after it are
+        never entered. Listing still opens all of them, which is also what
+        catches two toolsets claiming one name.
+        """
         if toolsets is None:
             toolsets = await self._assembler.assemble(
                 agent=agent,
                 conversation=conversation,
                 include_final_answer=include_final_answer,
+                # Handed over by a caller that already holds them, so the
+                # assembler does not read the same grants again.
+                grants=grants,
                 # The whole reason a remote harness never saw `view_image`.
                 vision_mode=ctx.vision_mode,
                 # Only on the Agent Host bridge, which is what asks for
@@ -161,9 +180,10 @@ class AgentToolDispatcher:
                 # The Agent Host bridge is the caller that asks for
                 # `final_answer`, and it has no capability to carry these; the
                 # approval executor runs an approved answer to one of them.
-                include_notification_tools=(
-                    include_final_answer or include_notification_tools
-                ),
+                include_question_tools=(include_final_answer or include_question_tools),
+                # Decided per run, as the runner decides it: a run asked in
+                # Lemma has no platform's tools.
+                surface_platform=getattr(ctx, "surface_platform", None),
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}
@@ -182,6 +202,8 @@ class AgentToolDispatcher:
                     tool=tool,
                     run_ctx=run_ctx,
                 )
+            if only is not None and only in prepared:
+                break
         if (
             run_audience(ctx).answers_outsiders
             or Audience.of(conversation).answers_outsiders

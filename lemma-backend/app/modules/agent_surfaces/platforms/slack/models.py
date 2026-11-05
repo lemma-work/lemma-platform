@@ -13,6 +13,10 @@ from app.modules.agent_surfaces.platforms.common import SurfaceFileAttachment
 # block_actions parser matches on this to recognise a form submission.
 SLACK_FORM_SUBMIT_ACTION_ID = "lemma_form_submit"
 
+# action_id of the "Try again" button on a failure notice. Its tap re-runs the
+# conversation's failed request; the thread it was tapped in names which one.
+SLACK_RETRY_ACTION_ID = "lemma_retry"
+
 # action_id per approval decision on a native Slack approval prompt. The inbound
 # block_actions parser matches these to recover the decision (the button's
 # ``value`` carries the callback id). Kept as a decision→action_id map so the

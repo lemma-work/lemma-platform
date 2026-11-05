@@ -15,7 +15,7 @@ from ..openapi_client.models.agent_host_list_response import AgentHostListRespon
 from ..openapi_client.models.agent_host_pairing_create import AgentHostPairingCreate
 from ..openapi_client.models.agent_host_pairing_created import AgentHostPairingCreated
 from ..openapi_client.models.agent_host_response import AgentHostResponse
-from .base import Resource
+from .base import Resource, as_uuid
 
 
 class AgentHosts(Resource):
@@ -41,7 +41,7 @@ class AgentHosts(Resource):
 
     def harnesses(self, host_id: str | UUID) -> AgentHostHarnessListResponse:
         """List the harnesses a host reported, with the ids profiles bind to."""
-        return self._call(agent_host_harnesses_list, UUID(str(host_id)))
+        return self._call(agent_host_harnesses_list, as_uuid(host_id))
 
     def revoke(self, host_id: str | UUID) -> AgentHostResponse:
-        return self._call(agent_host_revoke, UUID(str(host_id)))
+        return self._call(agent_host_revoke, as_uuid(host_id))

@@ -237,6 +237,45 @@ pub struct RunSpec {
     /// run that never happens at all.
     #[serde(default)]
     pub system_prompt_delivery: Option<String>,
+    /// Permissions the person granted after the turn that asked had ended.
+    /// See [`PreApproval`]. Sent only to a harness that published
+    /// `pre_approval`.
+    #[serde(default)]
+    pub pre_approvals: Vec<PreApproval>,
+}
+
+/// A permission the person granted for a call an earlier turn never made.
+///
+/// A turn that waited past Lemma's parked window was ended, and the request it
+/// was holding open went with it. The person's later approval resumes the
+/// conversation with a new run, whose agent asks again for the same thing:
+/// this lets that one request through without asking the person a second time
+/// (`acp::pre_approval`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PreApproval {
+    /// The approval in Lemma that granted it, named in the transcript.
+    pub approval_id: String,
+    /// The canonical tool name the request was shown under.
+    pub tool_name: String,
+    /// The canonical input the request was shown with.
+    #[serde(default)]
+    pub input: Value,
+    /// `APPROVE_ONCE` or `APPROVE_FOR_SESSION`; either allows one call. A
+    /// string, so a decision this host does not know allows nothing rather
+    /// than failing the whole run spec.
+    pub decision: String,
+}
+
+impl PreApproval {
+    /// Whether this is an approval at all. Anything else -- a denial, a
+    /// spelling this host does not know -- allows nothing.
+    #[must_use]
+    pub fn approves(&self) -> bool {
+        matches!(
+            self.decision.as_str(),
+            "APPROVE_ONCE" | "APPROVE_FOR_SESSION"
+        )
+    }
 }
 
 /// The one value that lets a turn leave the instructions out.
@@ -453,7 +492,9 @@ impl HarnessSnapshot {
     /// -- the model Claude Code is set to use, say -- and a person changing it
     /// in the agent's settings changes nothing a profile was bound against:
     /// what is offered stayed the same. Hashing it meant that edit refused
-    /// every run already dispatched as `CONFIG_REVISION_STALE`.
+    /// every run already dispatched as `CONFIG_REVISION_STALE`. The same goes
+    /// for the options under each model's `MODEL_OPTION_SET_KEY`: what a
+    /// model offers is bound, which of it the probe found selected is not.
     #[must_use]
     pub fn revision(&self) -> String {
         let offered: Vec<Value> = self
@@ -463,6 +504,19 @@ impl HarnessSnapshot {
                 let mut value = serde_json::to_value(option).expect("option serialization");
                 if let Some(object) = value.as_object_mut() {
                     object.remove("current_value");
+                    let model_sets = object
+                        .get_mut("options")
+                        .and_then(Value::as_array_mut)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|entry| entry.get_mut(MODEL_OPTION_SET_KEY))
+                        .filter_map(Value::as_array_mut)
+                        .flatten();
+                    for nested in model_sets {
+                        if let Some(nested) = nested.as_object_mut() {
+                            nested.remove("current_value");
+                        }
+                    }
                 }
                 value
             })
@@ -509,7 +563,21 @@ pub struct HarnessCapabilities {
     /// one thing it was: a harness nobody asked to steer.
     #[serde(default)]
     pub steering: bool,
+    /// This host honours a run spec's `pre_approvals`. Not the adapter's: the
+    /// host answers the permission request itself, so every harness of this
+    /// host has it.
+    #[serde(default)]
+    pub pre_approval: bool,
 }
+
+/// The key, on one value of a model option, under which that model's own
+/// options are published: a JSON array of `ConfigOption`, the model option
+/// itself left out. Absent means the model offers what the top level does.
+///
+/// Per model because an adapter's options beside its model are that model's
+/// -- Claude's and Codex's offer different reasoning levels per model -- and
+/// `session/new` only describes the machine's default.
+pub const MODEL_OPTION_SET_KEY: &str = "lemma_options";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigOption {
@@ -660,6 +728,51 @@ mod tests {
         after.config_options.push(option("sonnet"));
 
         assert_eq!(before.revision(), after.revision());
+    }
+
+    /// Nor is the default a model's own options report: the probe reads those
+    /// with that model selected, and which effort it starts on is the agent's
+    /// setting, not something a profile bound against.
+    #[test]
+    fn a_models_own_defaults_do_not_change_the_revision() {
+        let option = |effort: &str| {
+            let mut model = JsonMap::new();
+            model.insert("value".into(), Value::from("opus"));
+            model.insert(
+                MODEL_OPTION_SET_KEY.into(),
+                serde_json::json!([{
+                    "id": "effort",
+                    "category": "thought_level",
+                    "name": "Effort",
+                    "description": null,
+                    "current_value": effort,
+                    "options": [{"value": "low"}, {"value": "high"}],
+                    "metadata": {},
+                }]),
+            );
+            ConfigOption {
+                id: "model".into(),
+                category: "model".into(),
+                name: "Model".into(),
+                description: None,
+                current_value: Value::from("opus"),
+                options: vec![model],
+                metadata: JsonMap::new(),
+            }
+        };
+        let mut before = snapshot();
+        before.config_options.push(option("low"));
+        let mut after = snapshot();
+        after.config_options.push(option("high"));
+        assert_eq!(before.revision(), after.revision());
+
+        // What the model offers is still bound.
+        let mut narrowed = snapshot();
+        let mut model = option("low");
+        model.options[0].get_mut(MODEL_OPTION_SET_KEY).unwrap()[0]["options"] =
+            serde_json::json!([{"value": "low"}]);
+        narrowed.config_options.push(model);
+        assert_ne!(before.revision(), narrowed.revision());
     }
 
     /// Capabilities decide whether a run may resume a session, so a harness

@@ -8,6 +8,9 @@ the architecture gate is there to stop.
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from uuid import UUID
+
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +36,31 @@ async def retire_accounts_for_tenant(
         .where(
             Account.connector_id == connector_id,
             Account.external_ref == external_ref,
+            Account.status != AccountStatus.REAUTH_REQUIRED.value,
+        )
+        .values(status=AccountStatus.REAUTH_REQUIRED.value)
+    )
+    return int(result.rowcount or 0)
+
+
+async def retire_accounts(
+    session: AsyncSession, *, connector_id: str, account_ids: Collection[UUID]
+) -> int:
+    """Mark these accounts as needing re-authorization, by id.
+
+    For a provider whose tenant is not one install: a Slack workspace holds
+    Lemma's app and any number of an org's own, all under the same team id, so
+    an uninstall names the app and `retire_accounts_for_tenant` would stand
+    down every one of them. The caller knows which accounts the departed app's
+    tokens were on; `connector_id` keeps an id from another connector out.
+    """
+    if not account_ids:
+        return 0
+    result = await session.execute(
+        update(Account)
+        .where(
+            Account.connector_id == connector_id,
+            Account.id.in_(list(account_ids)),
             Account.status != AccountStatus.REAUTH_REQUIRED.value,
         )
         .values(status=AccountStatus.REAUTH_REQUIRED.value)

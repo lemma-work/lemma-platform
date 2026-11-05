@@ -7,7 +7,14 @@ per-resource payload normalization, and archive pack/extract.
 
 from __future__ import annotations
 
-from .apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
+from .apply_fields import (
+    GRANT_HOLDER_DIRS,
+    POD_CONNECTOR_FIELDS,
+    SCHEDULE_APPLY_FIELDS,
+    SURFACE_APPLY_FIELDS,
+    BundleConnector,
+    read_bundle_connector,
+)
 from .archive import extract_bundle, pack_bundle
 from .diff import TableDiff, diff_table_columns
 from .jsonc import loads_jsonc, strip_jsonc
@@ -16,6 +23,7 @@ from .layout import (
     EXPORTABLE_RESOURCE_DIRS,
     FILES_MANIFEST,
     FORMAT_VERSION,
+    FORMAT_VERSION_WITHOUT_CONNECTORS,
     JSON_FILE_REF_KEY,
     POD_MANIFEST_FILE,
     POD_MEMBER_TOKEN,
@@ -24,18 +32,26 @@ from .layout import (
     RESOURCE_DIRS,
     SYSTEM_TABLE_COLUMNS,
     TABLE_DATA_FILE,
+    bundle_format_version,
+    check_format_version,
     load_resource_payload,
     normalize_resource_dir_name,
 )
-from .normalize import BundleValidationIssue
-from .portability import require_account_variable_metadata
+from .normalize import (
+    BundleValidationIssue,
+    load_bundle_connectors,
+    referenced_connector_slugs,
+)
 
 __all__ = [
     "APP_MANIFEST_ALIAS",
     "EXPORTABLE_RESOURCE_DIRS",
     "FILES_MANIFEST",
     "FORMAT_VERSION",
+    "FORMAT_VERSION_WITHOUT_CONNECTORS",
+    "GRANT_HOLDER_DIRS",
     "JSON_FILE_REF_KEY",
+    "POD_CONNECTOR_FIELDS",
     "POD_MANIFEST_FILE",
     "POD_MEMBER_TOKEN",
     "RAW_FILE_REF_KEY",
@@ -45,14 +61,19 @@ __all__ = [
     "SURFACE_APPLY_FIELDS",
     "SYSTEM_TABLE_COLUMNS",
     "TABLE_DATA_FILE",
+    "BundleConnector",
     "BundleValidationIssue",
     "TableDiff",
+    "bundle_format_version",
+    "check_format_version",
     "diff_table_columns",
     "extract_bundle",
+    "load_bundle_connectors",
     "load_resource_payload",
     "loads_jsonc",
     "normalize_resource_dir_name",
     "pack_bundle",
-    "require_account_variable_metadata",
+    "read_bundle_connector",
+    "referenced_connector_slugs",
     "strip_jsonc",
 ]

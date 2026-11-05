@@ -41,7 +41,13 @@ class _FakeSession:
 def _connection() -> SimpleNamespace:
     return SimpleNamespace(
         url=SimpleNamespace(path="/pods/does-not-matter"),
-        scope={"type": "http", "method": "GET"},
+        # A matched pod route: `verify_auth` reads the route a workload token
+        # is calling, and pod routes are the ones open to it.
+        scope={
+            "type": "http",
+            "method": "GET",
+            "route": SimpleNamespace(path_format="/pods/{pod_id}"),
+        },
         headers={},
         state=SimpleNamespace(),
     )

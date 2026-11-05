@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Optional
 from uuid import UUID
 
+from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import DomainError
 from app.core.domain.uow import IUnitOfWork
 from app.core.log.log import get_logger
@@ -88,7 +89,14 @@ from app.modules.connectors.services.auth_install_resolver import (
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
     pkce_verifier_for,
-    with_return_path,
+    request_attributes,
+    safe_return_path,
+)
+from app.modules.connectors.services.connector_status import connector_status
+from app.modules.connectors.services.install_on_connect import (
+    install_to_connect,
+    missing_install,
+    open_connect_request,
 )
 from app.modules.connectors.services.install_provisioning import (
     DiscoveryOutcome,
@@ -101,16 +109,13 @@ from app.modules.connectors.services.install_provisioning import (
 )
 from app.modules.connectors.services.install_update import update_install
 from app.modules.connectors.services.oauth_callback import handle_oauth_callback
+from app.modules.connectors.services import pod_reference_cleanup as pod_refs
 from app.modules.connectors.services.profile_operation_execution import (
     execute_profile_operation,
     normalize_profile_result,
 )
 
 logger = get_logger(__name__)
-
-# Who may install a connector, and -- since an install config is entirely
-# tenant-written for the mcp/http/sql kinds -- who may read one back.
-INSTALL_MANAGER_ROLES = ["ORG_OWNER", "ORG_EDITOR"]
 
 
 class ConnectorService:
@@ -247,15 +252,19 @@ class ConnectorService:
         *,
         user_id: UUID,
         organization_id: UUID,
-        allowed_roles: list[str] | None = None,
+        permission: str | None = None,
     ) -> None:
         exists = await self.organization_access.organization_exists(organization_id)
         if not exists:
             raise OrganizationConnectorsNotFoundError(str(organization_id))
-        has_access = await self.organization_access.user_has_organization_role(
-            user_id=user_id,
-            organization_id=organization_id,
-            allowed_roles=allowed_roles,
+        has_access = (
+            await self.organization_access.user_holds_organization_permission(
+                user_id, organization_id, permission
+            )
+            if permission is not None
+            else await self.organization_access.user_has_organization_role(
+                user_id, organization_id
+            )
         )
         if not has_access:
             raise OrganizationConnectorsNotFoundError(str(organization_id))
@@ -273,10 +282,16 @@ class ConnectorService:
         in `extra_headers`/`default_headers` -- so the read is levelled with
         the write and the mask is a second line, not the only one.
         """
-        return await self.organization_access.user_has_organization_role(
-            user_id=user_id,
-            organization_id=organization_id,
-            allowed_roles=INSTALL_MANAGER_ROLES,
+        return await self.may_manage_installs(
+            user_id=user_id, organization_id=organization_id
+        )
+
+    async def may_manage_installs(
+        self, *, user_id: UUID, organization_id: UUID
+    ) -> bool:
+        """Whether this member may add or remove the org's installs."""
+        return await self.organization_access.user_holds_organization_permission(
+            user_id, organization_id, Permissions.ORG_INSTALLATION_MANAGE
         )
 
     def _provider_value(self, auth_config: AuthConfigEntity) -> str:
@@ -344,11 +359,13 @@ class ConnectorService:
         kind: str | None = None,
         config: dict | None = None,
         name: str | None = None,
+        is_default: bool | None = None,
     ) -> AuthConfigEntity:
+        # `is_default=None`: the first install of a connector is the default.
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
-            allowed_roles=INSTALL_MANAGER_ROLES,
+            permission=Permissions.ORG_INSTALLATION_MANAGE,
         )
         connector = await self.get_connector(connector_id)
         config_source_enum = AuthConfigSource(config_source)
@@ -403,7 +420,7 @@ class ConnectorService:
             config=validated_config or None,
             name=name or connector_id,
             # First install of a connector answers a bare connector_id lookup.
-            is_default=is_first_install,
+            is_default=is_first_install if is_default is None else is_default,
             created_by_user_id=user_id,
             updated_by_user_id=user_id,
         )
@@ -523,8 +540,11 @@ class ConnectorService:
                 organization_id, connector_id
             )
         if not auth_config:
-            raise ConnectorNotFoundError(
-                connector_id or auth_config_name or str(auth_config_id)
+            raise await missing_install(
+                self,
+                connector_id=connector_id,
+                auth_config_name=auth_config_name,
+                auth_config_id=auth_config_id,
             )
         if require_active:
             reject_if_disabled(auth_config)
@@ -564,46 +584,7 @@ class ConnectorService:
         organization_id: UUID,
     ) -> dict:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
-
-        configs, _ = await self.auth_config_repository.list_by_org(
-            organization_id, limit=200
-        )
-        accounts, _ = await self.account_repository.list_by_user_and_org(
-            user_id, organization_id, limit=200
-        )
-
-        # One query for every title, not one per distinct connector: this is
-        # the connectors landing page's single call, and an org with installs
-        # of a dozen connectors was paying a round trip each on every load.
-        app_ids = {c.connector_id for c in configs} | {a.connector_id for a in accounts}
-        app_titles = await self.connector_repository.titles_for(sorted(app_ids))
-
-        return {
-            "installed": [
-                {
-                    "name": c.name,
-                    "connector_id": c.connector_id,
-                    "title": app_titles.get(c.connector_id),
-                    "status": c.status.value
-                    if hasattr(c.status, "value")
-                    else str(c.status),
-                    "kind": c.kind.value if hasattr(c.kind, "value") else str(c.kind),
-                }
-                for c in configs
-            ],
-            "accounts": [
-                {
-                    "id": str(a.id),
-                    "connector_id": a.connector_id,
-                    "title": app_titles.get(a.connector_id),
-                    "email": a.email,
-                    "status": a.status.value
-                    if hasattr(a.status, "value")
-                    else str(a.status),
-                }
-                for a in accounts
-            ],
-        }
+        return await connector_status(self, user_id, organization_id)
 
     async def initiate_connect_request(
         self,
@@ -613,16 +594,32 @@ class ConnectorService:
         auth_config_id: UUID | None = None,
         return_to: str | None = None,
         connection_fields: dict[str, object] | None = None,
+        purpose: str | None = None,
+        omit_authorize_params: frozenset[str] = frozenset(),
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
-        auth_config = await self._resolve_auth_config(
+        auth_config = await install_to_connect(
+            self,
+            user_id=user_id,
             organization_id=organization_id,
             connector_id=connector_id,
             auth_config_id=auth_config_id,
         )
+        reused = await open_connect_request(
+            self,
+            user_id=user_id,
+            auth_config_id=auth_config.id,
+            return_to=safe_return_path(return_to),
+            purpose=purpose,
+            reusable=not connection_fields and not omit_authorize_params,
+        )
+        if reused is not None:
+            return reused
         connector = await self.get_connector(auth_config.connector_id)
         provider_value = self._provider_value(auth_config)
-        auth_install = self._resolve_auth_install(connector, auth_config)
+        auth_install = self._resolve_auth_install(
+            connector, auth_config
+        ).without_authorize_params(omit_authorize_params)
         if provider_value == AuthProvider.LEMMA.value:
             # The *install's* scheme, not the catalog's. `mcp` is one catalog
             # entry standing for every server a tenant may point at, so whether
@@ -692,13 +689,8 @@ class ConnectorService:
             connector_id=connector.id,
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
-            attributes=with_return_path(
-                {
-                    "state": state,
-                    "provider_state": provider_state,
-                    **({"code_verifier": code_verifier} if code_verifier else {}),
-                },
-                return_to,
+            attributes=request_attributes(
+                state, provider_state, code_verifier, return_to, purpose
             ),
         )
         connect_request = await self.connect_request_repository.create(connect_request)
@@ -860,11 +852,11 @@ class ConnectorService:
         self,
         redirect_uri: str,
         state: Optional[str] = None,
+        browser_user_id: UUID | None = None,
     ) -> AccountEntity:
-        """See `oauth_callback`, which owns the resolve/release/call/persist
-        split this path needs and the request-scoped session cannot express
-        inline."""
-        return await handle_oauth_callback(self, redirect_uri=redirect_uri, state=state)
+        """See `oauth_callback`: it owns the resolve/release/call/persist split."""
+        callback = {"state": state, "browser_user_id": browser_user_id}
+        return await handle_oauth_callback(self, redirect_uri=redirect_uri, **callback)
 
     async def list_accounts(
         self,
@@ -961,22 +953,16 @@ class ConnectorService:
                         user_id=account.user_id,
                     )
                 except Exception as exc:
-                    # An expired token we cannot refresh, or a withdrawn grant:
-                    # the account is unusable until the user reconnects.
-                    if is_expired or isinstance(exc, ConnectorReauthRequiredError):
+                    # Only the issuer withdrawing the grant marks the account.
+                    # A timeout, 5xx or 429 says nothing about the grant, and
+                    # marking on it disabled accounts that never recovered: an
+                    # expired token fails this call, an unexpired one carries
+                    # on, and the next use tries again either way.
+                    if isinstance(exc, ConnectorReauthRequiredError):
                         await self._persist_account_status(
                             account, AccountStatus.REAUTH_REQUIRED
                         )
                         raise_refresh_failure(account, exc)
-                    if isinstance(exc, DomainError):
-                        raise
-                    # The stored token has not expired yet, so the account
-                    # keeps working -- for now. But a provider that rejects a
-                    # refresh has usually revoked the grant, which is exactly
-                    # the case an expiry check cannot see, and at debug this
-                    # left no trace at all in production: the first signal was
-                    # the account flipping to REAUTH_REQUIRED hours later, with
-                    # nothing saying when it actually broke.
                     logger.warning(
                         "connectors.connector_service.credential_refresh_rejected.degraded",
                         account_id=str(account_id),
@@ -984,6 +970,8 @@ class ConnectorService:
                         error_type=type(exc).__name__,
                         exc_info=True,
                     )
+                    if is_expired or isinstance(exc, DomainError):
+                        raise_refresh_failure(account, exc)
                 else:
                     account.credentials = new_credentials
                     # A successful refresh restores a previously-degraded account.
@@ -1072,6 +1060,7 @@ class ConnectorService:
                 user_id=user_id,
             )
 
+        await pod_refs.forget_account_in_pods(self.uow, account_id)
         await self.account_repository.delete(account_id)
         # Keep the "exactly one default per (user, auth_config)" invariant: if the
         # deleted account was the default, promote the oldest remaining one so
@@ -1095,7 +1084,7 @@ class ConnectorService:
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
-            allowed_roles=INSTALL_MANAGER_ROLES,
+            permission=Permissions.ORG_INSTALLATION_MANAGE,
         )
         auth_config = await self._resolve_auth_config(
             organization_id=organization_id,
@@ -1140,9 +1129,9 @@ class ConnectorService:
                 user_id=user_id,
             )
 
+        await pod_refs.forget_installation_in_pods(self.uow, auth_config.id)
         for account in accounts:
             await self.account_repository.delete(account.id)
-
         await self.auth_config_repository.delete(auth_config.id)
         await self.uow.commit()
 

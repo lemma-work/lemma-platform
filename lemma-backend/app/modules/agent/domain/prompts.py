@@ -16,11 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.modules.agent.domain.outsiders import (
-    OUTSIDER_TOOLSETS,
-    Audience,
-    run_audience,
-)
+from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.prompt_directories import _directory_sections
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -32,6 +28,7 @@ if TYPE_CHECKING:
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _THE_POD_PROMPT_PATH = _PROMPT_DIR / "the_pod.md"
 _TEAMMATE_PROMPT_PATH = _PROMPT_DIR / "teammate.md"
+_OUTSIDER_PROMPT_PATH = _PROMPT_DIR / "outsider.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
 _CONNECTORS_PROMPT_PATH = _PROMPT_DIR / "connectors.md"
 _REPLIES_PROMPT_PATH = _PROMPT_DIR / "replies.md"
@@ -44,8 +41,16 @@ _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _MEMORY_PROMPT_PATH = _PROMPT_DIR / "memory.md"
+_MEMORY_AFTER_TURN_PROMPT_PATH = _PROMPT_DIR / "memory_after_turn.md"
+_MEMORY_PASS_PROMPT_PATH = _PROMPT_DIR / "memory_pass.md"
+_MEMORY_SCREEN_PROMPT_PATH = _PROMPT_DIR / "memory_screen.md"
+#: memory.md's sections, and the one that differs between a run that saves
+#: memory itself and one whose memory is kept after it ends.
+_MEMORY_SECTION_HEADING = "### "
+_MEMORY_TIMING_SECTION = "When to write"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
+_SUBAGENTS_PROMPT_PATH = _PROMPT_DIR / "subagents.md"
 _USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 _AGENT_HOST_HOST_EXECUTION_PROMPT_PATH = _PROMPT_DIR / "agent_host_host_execution.md"
@@ -72,6 +77,12 @@ FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     AgentToolset.TODO: _TODO_PROMPT_PATH,
     AgentToolset.MEMORY: _MEMORY_PROMPT_PATH,
     AgentToolset.MESSAGING: _MESSAGING_PROMPT_PATH,
+    # A coding agent on Agent Host met `lemma_spawn_subagent` as one MCP tool
+    # beside its own Task/Agent tool and never used it: nothing said to, and
+    # its own system prompt says delegate with the native one, whose work Lemma
+    # never sees. The spawn -> wait_for -> end-the-turn loop is not in any one
+    # tool's description either.
+    AgentToolset.SUBAGENTS: _SUBAGENTS_PROMPT_PATH,
     # `display_resource` had no fragment on either path for a long time, on the
     # theory that the tool's own description was enough. It is enough for an
     # in-process run, where that description is a first-class tool definition
@@ -107,6 +118,10 @@ def load_teammate_base_prompt() -> str:
 
 def load_agent_base_prompt() -> str:
     return _read_required_prompt(_AGENT_BASE_PROMPT_PATH)
+
+
+def load_outsider_base_prompt() -> str:
+    return _read_required_prompt(_OUTSIDER_PROMPT_PATH)
 
 
 def load_connectors_prompt() -> str:
@@ -181,6 +196,10 @@ def load_messaging_prompt() -> str:
     return _read_required_prompt(_MESSAGING_PROMPT_PATH)
 
 
+def load_subagents_prompt() -> str:
+    return _read_required_prompt(_SUBAGENTS_PROMPT_PATH)
+
+
 def load_speech_prompt() -> str:
     return _read_required_prompt(_SPEECH_PROMPT_PATH)
 
@@ -189,7 +208,7 @@ def load_user_interaction_prompt() -> str:
     return _read_required_prompt(_USER_INTERACTION_PROMPT_PATH)
 
 
-def load_memory_prompt() -> str:
+def load_memory_prompt(*, after_turn: bool = False) -> str:
     """The memory contract: where durable facts live and how AGENTS.md is used.
 
     One file, read by both harnesses -- the remote one through
@@ -197,8 +216,59 @@ def load_memory_prompt() -> str:
     It used to be three hand-synced copies (this fragment inside
     ``workspace_cli.md``, plus paragraphs in the ``pod_write_file`` and
     ``pod_read_file`` docstrings), which is two more than can stay true.
+
+    With ``after_turn`` its ``When to write`` section is the one in
+    ``memory_after_turn.md``: the run a person is waiting on, whose memory a
+    pass keeps once it ends (``memory_kept_after_turn``). Only that section
+    differs, so what is worth keeping and how it is written cannot drift
+    between the two.
     """
-    return _read_required_prompt(_MEMORY_PROMPT_PATH)
+    contract = _read_required_prompt(_MEMORY_PROMPT_PATH)
+    if not after_turn:
+        return contract
+    return _replace_section(
+        contract,
+        _read_required_prompt(_MEMORY_AFTER_TURN_PROMPT_PATH),
+        title=_MEMORY_TIMING_SECTION,
+    )
+
+
+def load_memory_pass_prompt() -> str:
+    """What the memory pass is told: its own framing, then the contract.
+
+    The contract without its ``When to write`` section, which speaks to an
+    agent in the middle of a turn. The pass runs once the turn is over, and
+    keeps memory by the same rules the agent itself writes it by.
+    """
+    sections = _prompt_sections(
+        _read_required_prompt(_MEMORY_PROMPT_PATH), heading=_MEMORY_SECTION_HEADING
+    )
+    if sections.pop(_MEMORY_TIMING_SECTION, None) is None:
+        raise ValueError(f"memory.md has no '{_MEMORY_TIMING_SECTION}' section")
+    rules = "\n\n".join(body.strip() for body in sections.values())
+    return f"{_read_required_prompt(_MEMORY_PASS_PROMPT_PATH)}\n\n{rules}"
+
+
+def load_memory_screen_prompt() -> str:
+    """What the memory pass's first, cheap read of a turn is told.
+
+    No memory and no tools: most turns hold nothing to keep, and saying so
+    should not cost a read of everything the agent already remembers.
+    """
+    return _read_required_prompt(_MEMORY_SCREEN_PROMPT_PATH)
+
+
+def _replace_section(text: str, replacement: str, *, title: str) -> str:
+    """``text`` with its memory section named ``title`` swapped for ``replacement``.
+
+    Raises rather than returning ``text`` unchanged: a renamed heading would
+    otherwise tell a run the rule it was meant not to get.
+    """
+    sections = _prompt_sections(text, heading=_MEMORY_SECTION_HEADING)
+    if title not in sections:
+        raise ValueError(f"no '{title}' section to replace")
+    sections[title] = replacement
+    return "\n\n".join(body.strip() for body in sections.values())
 
 
 def load_agent_host_runtime_prompt(*, host_execution: bool = False) -> str:
@@ -269,17 +339,21 @@ def build_agent_instruction_parts(
     include_toolset_prompts: bool = True,
     runs_as_remote_process: bool = False,
 ) -> tuple[str, str]:
-    """Compose the full system prompt for an agent run.
+    """Compose the system prompt for an agent run.
 
     Returned in two parts: what is the same for every conversation with this
     agent (base prompt, reply discipline, per-toolset fragments, the agent's
-    own instruction), and what belongs to this conversation and this run
-    (working directory, conversation instructions, runtime brief, the open
-    doc, the task list). A provider caches the literal prefix, so the split is
-    the cache boundary: the in-process harness puts the capability guidance
-    between the two, which keeps that large and unchanging block inside the
-    prefix a new conversation can reuse, rather than behind a working
-    directory that differs in every conversation.
+    own instruction), and what belongs to this conversation (working directory,
+    conversation instructions, the runtime brief). A provider caches the literal
+    prefix, so the split is the cache boundary: the in-process harness puts the
+    capability guidance between the two, which keeps that large and unchanging
+    block inside the prefix a new conversation can reuse, rather than behind a
+    working directory that differs in every conversation.
+
+    Nothing here may change between two runs of one conversation: the replayed
+    history sits behind it, and a changed byte here re-reads all of it. What
+    does change run to run -- the task list, the attached doc, memory, open
+    requests -- is in `run_context_prompt` instead.
 
     ``include_toolset_prompts`` controls whether the per-toolset fragments are
     folded in here. The in-process LEMMA harness passes ``False`` because those
@@ -296,7 +370,15 @@ def build_agent_instruction_parts(
     # Shared resource guidance stays ahead of agent-specific content for caching.
     sections = [load_the_pod_prompt()]
 
-    if conversation.is_pod_assistant:
+    # Somebody outside the pod is told what they can have, not how to build and
+    # write: a run that read "build missing pieces" told a stranger it had
+    # saved what it had no tool to save.
+    # A contact's run. A linked pod's keeps the member prompt and the pod
+    # fragment: it reads what was shared with it, through the pod tools.
+    for_outsider = run_audience(ctx).is_contact
+    if for_outsider:
+        sections.append(load_outsider_base_prompt())
+    elif conversation.is_pod_assistant:
         sections.append(load_teammate_base_prompt())
     else:
         sections.append(load_agent_base_prompt())
@@ -307,183 +389,118 @@ def build_agent_instruction_parts(
     # would otherwise be told nothing at all about length or narration.
     sections.append(load_replies_prompt())
 
-    enabled = _fragment_toolsets(agent=agent, conversation=conversation)
+    enabled = _fragment_toolsets(agent=agent, conversation=conversation, ctx=ctx)
 
     if include_toolset_prompts:
-        for toolset, path in FRAGMENT_BY_TOOLSET.items():
-            if toolset in enabled:
-                sections.append(_read_required_prompt(path))
+        sections.extend(_remote_fragments(enabled, ctx=ctx))
 
-        # Per-platform surface guidance for remote harnesses (which have no
-        # capability layer). The in-process LEMMA harness passes
-        # include_toolset_prompts=False and gets the same text from
-        # SurfacePlatformCapability instead, so this never double-injects.
-        # Imported where it is used so the prompt layer, which every run loads,
-        # does not carry the platform tables a surface run needs.
-        surface_platform = getattr(ctx, "surface_platform", None)
-        if surface_platform:
-            from app.modules.agent.domain.surface_prompts import (
-                is_group_conversation,
-                surface_platform_guidance,
-            )
-
-            fragment = surface_platform_guidance(
-                surface_platform,
-                audience=run_audience(ctx),
-                in_group=is_group_conversation(ctx),
-            )
-            if fragment:
-                sections.append(fragment)
-
-    # The agent's actual working directory is dynamic (per conversation), so it
-    # can't live in a static fragment. Inject it here so BOTH harnesses (in-process
-    # passes include_toolset_prompts=False; remote passes True) and BOTH agent types
-    # (pod-default + user) get told their cwd whenever they can run workspace tools.
-    #
-    # Native agents also have a host cwd, resolved by Agent Host at dispatch.
-    # Keep the sandbox path scoped to its tools so neither path masquerades as
-    # a mount that does not exist.
     if agent.instruction.strip():
         sections.append("# Agent Instructions\n" + agent.instruction.strip())
 
     stable = sections
-    sections = list(
-        _directory_sections(
-            ctx=ctx,
-            conversation=conversation,
-            enabled=enabled,
-            runs_as_remote_process=runs_as_remote_process,
+    # The agent's working directory is per conversation, so it cannot live in a
+    # static fragment. Both harnesses and both agent kinds are told their cwd
+    # here whenever they can run workspace tools. A native agent also has a host
+    # cwd, resolved by Agent Host at dispatch; the sandbox path stays scoped to
+    # its tools so neither masquerades as a mount that does not exist.
+    # No working directory for somebody outside: theirs is the member's who
+    # looks after them, and none of it is readable to them.
+    sections = (
+        []
+        if for_outsider
+        else list(
+            _directory_sections(
+                ctx=ctx,
+                conversation=conversation,
+                enabled=enabled,
+                runs_as_remote_process=runs_as_remote_process,
+            )
         )
     )
     if conversation.instructions and conversation.instructions.strip():
         sections.append(
             "# Conversation Instructions\n" + conversation.instructions.strip()
         )
-    # Runtime context (pod, user, granted resources) built once per run and
-    # carried on the context.
+    # The part of the runtime brief that holds for the conversation: the pod,
+    # the person, this agent, and what it can reach.
     context_brief = getattr(ctx, "context_brief", None)
     if isinstance(context_brief, str) and context_brief.strip():
         sections.append(context_brief.strip())
-    # The doc this conversation is attached to, read fresh this run. After the
-    # brief because it changes whenever the doc does, which is most turns.
-    attached_document = getattr(ctx, "attached_document", None)
-    if isinstance(attached_document, str) and attached_document.strip():
-        sections.append(attached_document.strip())
-
-    # The task list the conversation already has, if any. Without this a run
-    # starts blind: the list lives in conversation metadata, and the tool return
-    # that last showed it is an old message that history trimming can drop. An
-    # agent that cannot see its own plan cannot tick anything off it, which is
-    # exactly how a checklist written in turn one stays unchecked forever.
-    #
-    # Last on purpose. This is the most volatile thing in the prompt -- every
-    # `write_todos` rewrites it -- and an OpenAI-compatible provider caches on
-    # the literal prefix, so whatever sits after the first changed byte is what
-    # gets re-read. Anything ahead of this stays cached across a checklist
-    # update; anything behind it would not. Appended unconditionally; the join
-    # below drops it when it is empty.
-    sections.append(_task_list_section(conversation, enabled=enabled))
     return (
         _SEPARATOR.join(section.strip() for section in stable if section.strip()),
         _SEPARATOR.join(section.strip() for section in sections if section.strip()),
     )
 
 
-def _stored_todos(conversation: Conversation) -> list[tuple[str, bool]]:
-    """The conversation's task list as ``(content, done)``, oldest first."""
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    raw = metadata.get("todos")
-    if not isinstance(raw, list):
-        return []
-    items: list[tuple[str, bool]] = []
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        content = str(entry.get("content") or "").strip()
-        if content:
-            # `status == "completed"` is the pre-simplification shape; rows in
-            # that form are still in metadata on older conversations.
-            items.append(
-                (content, bool(entry.get("done")) or entry.get("status") == "completed")
-            )
-    return items
+def _remote_fragments(enabled: set[AgentToolset], *, ctx: AgentContext) -> list[str]:
+    """The per-toolset guidance a harness with no capability layer is given.
 
-
-def _task_list_section(
-    conversation: Conversation, *, enabled: set[AgentToolset]
-) -> str:
-    """Show the run its own task list, and say what finishing an item requires.
-
-    Empty for an agent without the todo toolset, and for a conversation that has
-    never planned anything: an agent with no list should decide whether the work
-    needs one, not be nagged about a checklist that does not exist.
+    The in-process LEMMA harness gets the same text from its capabilities, and
+    passes ``include_toolset_prompts=False`` so this never double-injects.
     """
-    if AgentToolset.TODO not in enabled:
-        return ""
-    items = _stored_todos(conversation)
-    if not items:
-        return ""
-    rendered = "\n".join(
-        f"- [{'x' if done else ' '}] {content}" for content, done in items
-    )
-    done_count = sum(1 for _, done in items if done)
-    if done_count == len(items):
-        return (
-            "# Task list\n"
-            "Every item on this conversation's list is finished:\n\n"
-            f"{rendered}\n\n"
-            "That plan is history. If this message needs multi-step work, call "
-            "`write_todos` with the new plan and it replaces the old one."
+    # An Agent Host run with host execution on has no Lemma command tools
+    # (docs/architecture/desktop-host-execution.md §7): its own runtime section
+    # says so, and the workspace contract -- a VM home, `exec_command` -- would
+    # contradict it.
+    native_commands = bool(getattr(ctx, "host_runs_native_commands", False))
+    # Not how to write and post to a run answering somebody outside the pod,
+    # which can do neither (``capabilities/assembler._NOT_FOR_OUTSIDERS``).
+    # A contact's run; a linked pod's reads through the pod tools.
+    outsider = run_audience(ctx).is_contact
+    fragments = [
+        _read_required_prompt(path)
+        for toolset, path in FRAGMENT_BY_TOOLSET.items()
+        if toolset in enabled
+        and not (toolset is AgentToolset.WORKSPACE_CLI and native_commands)
+        and not (outsider and toolset in (AgentToolset.POD, AgentToolset.MESSAGING))
+    ]
+    # Imported where it is used so the prompt layer, which every run loads,
+    # does not carry the platform tables a surface run needs.
+    surface_platform = getattr(ctx, "surface_platform", None)
+    if surface_platform:
+        from app.modules.agent.domain.surface_prompts import (
+            is_group_conversation,
+            surface_platform_guidance,
         )
-    first_open = next(content for content, done in items if not done)
-    return (
-        "# Task list\n"
-        "This conversation already has a task list. Lemma stores it, the person "
-        f"can see it, and right now it reads ({done_count} of {len(items)} "
-        "done):\n\n"
-        f"{rendered}\n\n"
-        f"Pick up at the first unchecked item — **{first_open}** — unless this "
-        "message sends you somewhere else. Check each item off with "
-        f'`write_todos` (`["- [x] {first_open}"]`) as you finish it, before '
-        "starting the next."
-    )
+
+        fragment = surface_platform_guidance(
+            surface_platform,
+            audience=run_audience(ctx),
+            in_group=is_group_conversation(ctx),
+        )
+        if fragment:
+            fragments.append(fragment)
+    return fragments
 
 
 def _fragment_toolsets(
     *,
     agent: Agent,
     conversation: Conversation,
+    ctx: AgentContext,
 ) -> set[AgentToolset]:
-    """Toolsets whose guidance fragment should be included for this run."""
-    if Audience.of(conversation).answers_outsiders:
-        # A stranger's run is not told about a sandbox, a browser or a task
-        # list it does not have -- only what `resolve_toolsets` leaves it.
-        configured = (
-            set(FRAGMENT_BY_TOOLSET)
-            if conversation.is_pod_assistant
-            else _configured_toolsets(agent)
+    """Toolsets whose guidance this run gets: the ones it actually has.
+
+    The run's *effective* toolsets -- declared, always-on and grant-derived, as
+    `RunToolAssembler` builds tools from -- not the agent's declared list. Read
+    from the declared list, a named agent was never shown its stored task list
+    (TODO is always-on, never declared), and one with a folder grant but no
+    WORKSPACE_CLI was never told where its pod files are.
+    """
+    run_toolsets = getattr(ctx, "run_toolsets", None)
+    if run_toolsets is None:
+        # A context the run-context builder did not make; resolve the same way
+        # it does, minus grants it cannot see.
+        from app.modules.agent.tools.toolset_selection import resolve_toolset_names
+
+        run_toolsets, _ = resolve_toolset_names(
+            None if conversation.is_pod_assistant else agent, conversation
         )
-        return configured & OUTSIDER_TOOLSETS
-    if conversation.is_pod_assistant:
-        # The pod-default assistant runs the full batteries-included toolset, so it
-        # gets every fragment regardless of the (possibly synthetic) agent passed.
-        return set(FRAGMENT_BY_TOOLSET)
-    enabled = _configured_toolsets(agent)
-    # Memory is the one fragment that can be configured and still be useless:
-    # it carries no tools, so without WORKSPACE_CLI or POD it would teach an
-    # agent to write files it has no way to write. Same predicate the brief's
-    # memory section and the in-process capability gate on.
+    enabled = set(run_toolsets)
+    # Memory is the one fragment that can be present and still be useless: it
+    # carries no tools, so without WORKSPACE_CLI or POD it would teach an agent
+    # to write files it has no way to write. Same predicate the brief's memory
+    # section and the in-process capability gate on.
     if AgentToolset.MEMORY in enabled and not memory_is_active(enabled):
         enabled.discard(AgentToolset.MEMORY)
-    return enabled
-
-
-def _configured_toolsets(agent: Agent) -> set[AgentToolset]:
-    """The toolsets an agent is configured with, ignoring names this build lacks."""
-    enabled: set[AgentToolset] = set()
-    for name in agent.toolsets:
-        try:
-            enabled.add(AgentToolset(name))
-        except ValueError:  # pragma: no cover - defensive
-            continue
     return enabled

@@ -159,9 +159,8 @@ class TelegramManagedBotSetup(BaseModel):
     suggested_bot_username: str
     status: TelegramManagedBotSetupStatus = TelegramManagedBotSetupStatus.PENDING
     telegram_user_id: int | None = None
-    telegram_username: str | None = None
-    telegram_display_name: str | None = None
-    account_id: UUID | None = None
+    #: The SHARED pod connector the new bot was shared into the pod as.
+    pod_connector_slug: str | None = None
     surface_id: UUID | None = None
     bot_id: int | None = None
     bot_username: str | None = None
@@ -173,11 +172,23 @@ class TelegramManagedBotSetupStore:
     def __init__(
         self,
         *,
-        redis_url: str | None = None,
+        redis: Redis | None = None,
         ttl_seconds: int = TELEGRAM_MANAGED_BOT_SETUP_TTL_SECONDS,
     ) -> None:
-        self._redis_url = redis_url or settings.redis_url
+        """``redis`` is the client every read and write goes through.
+
+        Left out, it is the process's shared client for the configured URL,
+        looked up on each call so a changed ``settings.redis_url`` is followed.
+        Given, it is used as is -- a test passes an in-memory Redis that runs
+        the same Lua scripts, rather than writing to whatever server answers.
+        """
+        self._client = redis
         self._ttl_seconds = ttl_seconds
+
+    def _redis(self) -> Redis:
+        if self._client is not None:
+            return self._client
+        return get_redis(url=settings.redis_url)
 
     @staticmethod
     def _setup_key(setup_id: str) -> str:
@@ -211,7 +222,7 @@ class TelegramManagedBotSetupStore:
         return f"agent_surfaces:telegram_manager:update:{update_id}"
 
     async def create(self, setup: TelegramManagedBotSetup) -> bool:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         target_key = self._target_key(setup.pod_id, setup.surface_name)
         async with redis.pipeline(transaction=True) as pipe:
             pipe.set(
@@ -252,7 +263,7 @@ class TelegramManagedBotSetupStore:
         return False
 
     async def get(self, setup_id: str) -> TelegramManagedBotSetup | None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         raw = await redis.get(self._setup_key(setup_id))
         return TelegramManagedBotSetup.model_validate_json(raw) if raw else None
 
@@ -261,7 +272,7 @@ class TelegramManagedBotSetupStore:
         pod_id: UUID,
         surface_name: str,
     ) -> TelegramManagedBotSetup | None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         target_key = self._target_key(pod_id, surface_name)
         setup_id = await redis.get(target_key)
         if not setup_id:
@@ -281,14 +292,14 @@ class TelegramManagedBotSetupStore:
     async def get_by_request_id(
         self, request_id: int
     ) -> TelegramManagedBotSetup | None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         setup_id = await redis.get(self._request_key(request_id))
         return await self.get(setup_id) if setup_id else None
 
     async def get_by_telegram_user_id(
         self, telegram_user_id: int
     ) -> TelegramManagedBotSetup | None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         setup_id = await redis.get(self._telegram_user_key(telegram_user_id))
         return await self.get(setup_id) if setup_id else None
 
@@ -298,7 +309,7 @@ class TelegramManagedBotSetupStore:
         setup_id: str,
         telegram_user_id: int,
     ) -> bool:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         result = await _eval(
             redis,
             _BIND_TELEGRAM_USER_SCRIPT,
@@ -316,7 +327,7 @@ class TelegramManagedBotSetupStore:
         expected: set[TelegramManagedBotSetupStatus],
         owner: str | None = None,
     ) -> bool:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         result = await _eval(
             redis,
             _SAVE_IF_STATUS_SCRIPT,
@@ -336,7 +347,7 @@ class TelegramManagedBotSetupStore:
         bot_id: int,
         owner: str,
     ) -> TelegramManagedBotProvisioningClaim:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         result = int(
             await _eval(
                 redis,
@@ -362,7 +373,7 @@ class TelegramManagedBotSetupStore:
         setup_id: str,
         owner: str,
     ) -> bool:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         result = await _eval(
             redis,
             _REFRESH_LEASE_SCRIPT,
@@ -379,7 +390,7 @@ class TelegramManagedBotSetupStore:
         setup_id: str,
         owner: str,
     ) -> None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         await _eval(
             redis,
             _COMPARE_DELETE_SCRIPT,
@@ -389,7 +400,7 @@ class TelegramManagedBotSetupStore:
         )
 
     async def release_reservations(self, setup: TelegramManagedBotSetup) -> None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         async with redis.pipeline(transaction=True) as pipe:
             pipe.eval(
                 _COMPARE_DELETE_SCRIPT,
@@ -407,11 +418,11 @@ class TelegramManagedBotSetupStore:
             await pipe.execute()
 
     async def is_update_processed(self, update_id: int) -> bool:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         return bool(await redis.exists(self._processed_update_key(update_id)))
 
     async def mark_update_processed(self, update_id: int) -> None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         await redis.set(
             self._processed_update_key(update_id),
             "1",
@@ -419,10 +430,10 @@ class TelegramManagedBotSetupStore:
         )
 
     async def load_offset(self) -> int | None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         raw = await redis.get("agent_surfaces:telegram_manager:offset")
         return int(raw) if raw else None
 
     async def save_offset(self, offset: int) -> None:
-        redis = get_redis(url=self._redis_url)
+        redis = self._redis()
         await redis.set("agent_surfaces:telegram_manager:offset", str(offset))

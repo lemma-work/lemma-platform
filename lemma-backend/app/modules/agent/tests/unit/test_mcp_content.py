@@ -178,3 +178,21 @@ def test_a_pydantic_response_is_read_the_same_way():
     result = tool_call_result(_Response(error="the write never landed"))
 
     assert result.is_error is True
+
+
+def test_a_large_result_crosses_the_bridge_once_not_twice():
+    """A dict went out as its JSON text and again as `structuredContent`, so a
+    big query result reached the Agent Host bridge's 8 MiB cap on half the
+    data. The text -- what every client hands its model -- is the copy kept."""
+    from app.modules.agent.services.mcp_content import STRUCTURED_COPY_LIMIT_CHARS
+
+    rows = [{"id": index, "note": "x" * 100} for index in range(5_000)]
+    payload = {"success": False, "rows": rows}
+
+    result = tool_call_result(payload)
+
+    (text,) = result.content
+    assert len(text.text) > STRUCTURED_COPY_LIMIT_CHARS
+    assert '"rows"' in text.text
+    assert result.structured_content is None
+    assert result.is_error is True

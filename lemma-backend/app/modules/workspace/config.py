@@ -154,14 +154,14 @@ class WorkspaceSettings(BaseSettings):
             "rather than lost work. 0 disables the sweep."
         ),
     )
-    sweep_cron: str = Field(
-        default="2-59/5 * * * *",
-        validation_alias=AliasChoices("WORKSPACE_SWEEP_CRON"),
+    sweep_interval_seconds: int = Field(
+        default=300,
+        ge=30,
+        validation_alias=AliasChoices("WORKSPACE_SWEEP_INTERVAL_SECONDS"),
         description=(
-            "How often idle release and orphan reclaim run. Orphan reclaim is "
-            "what stops a container or paid sandbox outliving the row that "
-            "owned it, so this is a cost control. Offset off the round minute "
-            "on purpose -- see test_cron_schedule_spread."
+            "How often idle release and orphan reclaim run, as a periodic work "
+            "item. Orphan reclaim is what stops a container or paid sandbox "
+            "outliving the row that owned it, so this is a cost control."
         ),
     )
 
@@ -257,6 +257,18 @@ class WorkspaceSettings(BaseSettings):
         default="lemma-function",
         validation_alias=AliasChoices("E2B_FUNCTION_TEMPLATE"),
         description="E2B template backing function runtime sandboxes",
+    )
+    e2b_workspace_template_size: str = Field(
+        default="1x2048",
+        pattern=r"^[1-9][0-9]*x[1-9][0-9]*$",
+        validation_alias=AliasChoices("E2B_WORKSPACE_TEMPLATE_SIZE"),
+        description=(
+            "The size E2B_WORKSPACE_TEMPLATE was built at, keyed like "
+            "E2B_WORKSPACE_SIZE_TEMPLATES. A plan selling this size is served "
+            "from it with no template of its own. The default is what "
+            "`build_templates.py` builds when E2B_WORKSPACE_CPU_COUNT and "
+            "E2B_WORKSPACE_MEMORY_MB are unset."
+        ),
     )
     e2b_workspace_size_templates: dict[str, str] = Field(
         default_factory=dict,

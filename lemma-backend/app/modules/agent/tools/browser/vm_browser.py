@@ -39,6 +39,15 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
 
 AGENT_BROWSER = "agent-browser"
 
+# The lock `save-webpage` holds for the length of one capture. Every command of
+# a capture acts on whatever tab the shared session is bound to *now*, so a
+# command from here landing mid-capture switched the tab under it, and the
+# capture saved the wrong page under the right name.
+_CAPTURE_LOCK = "/tmp/lemma-capture.lock"
+_CAPTURE_LOCK_WAIT_SECONDS = 45
+_LOCK_BUSY_EXIT = 75
+_DEFAULT_TIMEOUT_SECONDS = 60
+
 
 class BrowserCommandRequest(BaseModel):
     args: str = Field(
@@ -52,8 +61,11 @@ class BrowserCommandRequest(BaseModel):
     timeout_seconds: Optional[int] = Field(
         default=None,
         ge=10,
-        le=300,
-        description="How long to wait for the command, instead of the default 30s.",
+        le=600,
+        description=(
+            "How long to wait for the command, instead of the default "
+            f"{_DEFAULT_TIMEOUT_SECONDS}s."
+        ),
     )
 
 
@@ -65,6 +77,31 @@ def browser_argv(args: str) -> list[str]:
     if not argv:
         raise ValueError("give the agent-browser arguments, e.g. `open <url>`")
     return [AGENT_BROWSER, *argv]
+
+
+def locked_command(argv: list[str], *, timeout_seconds: int | None) -> str:
+    """``argv`` run while holding the capture lock.
+
+    The wait stays inside this call's own patience: a command still queued when
+    the call gave up would otherwise run later, unasked -- a click landing
+    after the agent had moved on. ``-o`` keeps the lock from leaking into a
+    daemon the command starts, which is what once held it for the life of a
+    sandbox.
+    """
+    patience = timeout_seconds or _DEFAULT_TIMEOUT_SECONDS
+    wait = max(1, min(_CAPTURE_LOCK_WAIT_SECONDS, patience - 10))
+    return shlex.join(
+        [
+            "flock",
+            "-o",
+            "-w",
+            str(wait),
+            "-E",
+            str(_LOCK_BUSY_EXIT),
+            _CAPTURE_LOCK,
+            *argv,
+        ]
+    )
 
 
 async def _no_project(*_args: object, **_kwargs: object) -> None:
@@ -81,16 +118,27 @@ async def browser_command_internal(
     # The VM workspace, whatever this run's own shell is: dropping the host
     # workspace from a copy of the context is what routes it there.
     vm_ctx = ctx.model_copy(update={"host_workspace": None})
-    return await exec_command_internal(
+    result = await exec_command_internal(
         vm_ctx,
         ExecCommandRequest(
-            cmd=shlex.join(argv),
+            cmd=locked_command(argv, timeout_seconds=request.timeout_seconds),
             comment=request.comment,
             timeout_seconds=request.timeout_seconds,
         ),
         runtime=runtime,
         prepare_project=_no_project,
     )
+    if result.exit_code == _LOCK_BUSY_EXIT and not (result.stdout or "").strip():
+        return result.model_copy(
+            update={
+                "success": False,
+                "error": (
+                    "The browser is busy saving a page for `web_fetch`, so this "
+                    "command was not run. Try it again in a moment."
+                ),
+            }
+        )
+    return result
 
 
 async def browser(

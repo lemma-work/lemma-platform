@@ -23,6 +23,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
+
+from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_profiles import (
+    RuntimeModelCapability,
+    RuntimeProfileProtocol,
+)
 import structlog
 
 from app.core.log.log import setup_logging
@@ -132,15 +139,8 @@ class _FakeRepo:
         self.uow = uow
 
     async def get_conversation(
-        self, conversation_id, *, include_messages=False, include_runs=False
+        self, conversation_id, *, include_runs=False
     ) -> Conversation | None:
-        if include_messages:
-            # Titling needs two rows. Loading the transcript to find them cost
-            # seconds of materialisation inside an open transaction.
-            raise AssertionError(
-                "titling must not load the transcript; "
-                "use get_conversation_opening_texts"
-            )
         return self.uow.conversation
 
     async def get_conversation_opening_texts(self, conversation_id):
@@ -482,21 +482,29 @@ async def test_counter_says_which_title_path_ran(
 class _FakeResolved:
     credentials: dict[str, object] = {}
     model_name_for_harness = "deepseek-v4-flash"
+    profile = SimpleNamespace(protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE)
 
-    def public_snapshot(self) -> dict[str, object | None]:
-        return {
-            "profile_id": "system:lemma",
-            "scope": "SYSTEM",
-            "protocol": "OPENAI_COMPATIBLE",
-            "model_name": "deepseek-v4-flash",
-            "provider_model_name": "accounts/fireworks/models/deepseek-v4-flash",
-            "config": {"base_url": "http://fireworks.test/v1"},
-        }
+    def __init__(self, *, reasons: bool = True) -> None:
+        self.capabilities = [RuntimeModelCapability.TEXT] + (
+            [RuntimeModelCapability.REASONING] if reasons else []
+        )
+
+    def runtime_snapshot(self) -> RuntimeSnapshot:
+        return RuntimeSnapshot(
+            profile_id="system:lemma",
+            profile_name="Lemma",
+            scope="SYSTEM",
+            protocol="OPENAI_COMPATIBLE",
+            model_name="deepseek-v4-flash",
+            provider_model_name="accounts/fireworks/models/deepseek-v4-flash",
+            config={"base_url": "http://fireworks.test/v1"},
+        )
 
 
 class _FakeProfileService:
-    def __init__(self) -> None:
+    def __init__(self, *, reasons: bool = True) -> None:
         self.resolved: list[dict] = []
+        self.reasons = reasons
 
     async def resolve(self, *, runtime, organization_id, user_id):
         self.resolved.append(
@@ -507,14 +515,19 @@ class _FakeProfileService:
                 "user_id": user_id,
             }
         )
-        return _FakeResolved()
+        return _FakeResolved(reasons=self.reasons)
 
 
 def _generator(
-    *, output: str = "A nice title", raise_on_run: bool = False
+    *,
+    output: str = "A nice title",
+    raise_on_run: bool = False,
+    reasons: bool = True,
+    refuses_effort: bool = False,
+    answers_status: int | None = None,
 ) -> tuple[ConversationTitleGenerator, dict]:
     """The real generator with only the model boundary faked."""
-    capture: dict[str, object] = {"run_calls": 0, "usage": []}
+    capture: dict[str, object] = {"run_calls": 0, "usage": [], "settings_seen": []}
 
     class _FakeLLMAgent:
         def __init__(self, model, system_prompt=None):
@@ -526,11 +539,16 @@ def _generator(
             capture["prompt"] = prompt
             capture["usage_limits"] = usage_limits
             capture["model_settings"] = model_settings
+            capture["settings_seen"].append(dict(model_settings or {}))
             if raise_on_run:
                 raise RuntimeError("llm boom")
+            if refuses_effort and "openai_reasoning_effort" in (model_settings or {}):
+                raise ModelHTTPError(400, "a-model", {"error": "unknown field"})
+            if answers_status is not None:
+                raise ModelHTTPError(answers_status, "a-model", {"error": "no"})
             return SimpleNamespace(output=output)
 
-    profiles = _FakeProfileService()
+    profiles = _FakeProfileService(reasons=reasons)
     capture["profiles"] = profiles
     return (
         ConversationTitleGenerator(
@@ -566,7 +584,7 @@ async def test_generator_sanitizes_what_the_model_returned() -> None:
 @pytest.mark.asyncio
 async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
     """A reasoning model must not spend the token budget on a chain-of-thought
-    trace for a 3-6 word title (see the module docstring / _TITLE_MODEL_SETTINGS)."""
+    trace for a 3-6 word title (see `unreasoned_model_settings`)."""
     generator, capture = _generator()
 
     await _ask(generator, user_text="Plan a trip to Japan")
@@ -574,6 +592,49 @@ async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
     assert capture["model_settings"] == {"openai_reasoning_effort": "none"}
     assert capture["usage_limits"].request_limit == 1
     assert capture["system_prompt"] == cts._TITLE_SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_an_undeclared_model_is_asked_for_no_effort_too() -> None:
+    """A reasoning model nobody declared would otherwise think at its default
+    for a few words."""
+    generator, capture = _generator(reasons=False)
+
+    await _ask(generator, user_text="Plan a trip to Japan")
+
+    assert capture["settings_seen"] == [{"openai_reasoning_effort": "none"}]
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_refuses_the_effort_field_is_asked_again_without_it() -> (
+    None
+):
+    """A strict endpoint's 400 used to fall back, silently, to the first
+    message as the title. Now it is asked once more, plainly."""
+    generator, capture = _generator(reasons=False, refuses_effort=True)
+
+    title = await _ask(generator, user_text="Plan a trip to Japan")
+
+    assert title == "A nice title"
+    assert capture["settings_seen"] == [{"openai_reasoning_effort": "none"}, {}]
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_title_is_not_asked_again() -> None:
+    """Only a refused reasoning field earns a second request: a 429 or a 401
+    would answer the same, and the fallback title is the caller's."""
+    generator, capture = _generator(answers_status=429)
+
+    with pytest.raises(ModelHTTPError):
+        await _ask(generator, user_text="Plan a trip to Japan")
+
+    assert capture["run_calls"] == 1
+
+
+def test_a_title_reasoned_at_length_is_kept_not_discarded() -> None:
+    """The output cap is checked after the response: at 256, a model that
+    reasoned anyway had its finished title thrown away every time."""
+    assert (cts._TITLE_USAGE_LIMITS.output_tokens_limit or 0) >= 4_096
 
 
 @pytest.mark.asyncio
@@ -596,7 +657,7 @@ async def test_a_title_for_a_contacts_conversation_is_the_contacts_spend(
     _enable_llm_titling(monkeypatch)
     contact_id = uuid4()
     conv = _conversation()
-    conv.metadata = Audience.contact(contact_id).to_metadata()
+    conv.contact_id = contact_id
     generator = _FakeGenerator()
 
     await _service(_FakeUow(conv, []), generator=generator).generate_title_if_absent(

@@ -29,6 +29,7 @@ from sandbox_runtime.protocol import (
 )
 
 from sandbox_runtime.errors import (
+    SandboxError,
     SandboxPathConflict,
     SandboxPathNotFound,
     SandboxProcessNotFound,
@@ -37,7 +38,11 @@ from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     PythonResult,
     ProviderCapability,
+    ProviderFailed,
+    ProviderGone,
     ProviderInstance,
+    ProviderNotReady,
+    ProviderRejected,
 )
 from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
@@ -75,6 +80,11 @@ _FINISHED_PROCESS_STATES = frozenset(
         ProcessState.TIMED_OUT,
     }
 )
+
+
+#: How often an output wait looks at the buffer: soon at first, then backing off.
+_FIRST_POLL_SECONDS = 0.1
+_MAX_POLL_SECONDS = 1.0
 
 
 def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
@@ -143,11 +153,37 @@ class E2BOpsMixin(E2BReachMixin):
         see `e2b_process_index.read_descriptors`.
         """
         del deadline_at
+
+        async def live_pids() -> frozenset[int] | None:
+            # Without this a lost watch leaves a finished command reading as
+            # running until its deadline. A sandbox that cannot answer leaves
+            # it UNKNOWN, which is the truth, rather than failing the listing.
+            try:
+                sandbox = await self._connect(instance.provider_id)
+                with sdk_errors():
+                    listed = await sandbox.commands.list()
+            except (
+                SandboxError,
+                ProviderFailed,
+                ProviderGone,
+                ProviderNotReady,
+                ProviderRejected,
+            ) as exc:
+                logger.warning(
+                    "workspace.e2b.process_table_unreadable.degraded",
+                    sandbox_id=instance.provider_id,
+                    error_type=type(exc).__name__,
+                    exc_info=True,
+                )
+                return None
+            return frozenset(info.pid for info in listed)
+
         return await read_descriptors(
             self._redis(),
             self._output,
             sandbox_id=instance.provider_id,
             now=datetime.now(timezone.utc).timestamp(),
+            live_pids=live_pids,
         )
 
     @staticmethod
@@ -263,9 +299,16 @@ class E2BOpsMixin(E2BReachMixin):
         # workspace, `lemma tables list` ran in 771 ms and the tool call around
         # it took 23-39 s, which agents read as a hang: they poll, give up, kill
         # the process and start again.
-        deadline = asyncio.get_running_loop().time() + wait_seconds
-        while asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.1)
+        #
+        # The interval starts short, because a fast finish is the common case,
+        # and doubles to a ceiling: a quiet build polled at a fixed 100 ms cost
+        # three hundred Redis round trips per window for nothing.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait_seconds
+        interval = _FIRST_POLL_SECONDS
+        while (remaining := deadline - loop.time()) > 0:
+            await asyncio.sleep(min(interval, remaining))
+            interval = min(interval * 2, _MAX_POLL_SECONDS)
             snapshot = await self._output.read(
                 process_id, after_sequence=after_sequence
             )

@@ -21,7 +21,7 @@ from app.modules.usage.domain.accounting import (
     OUTSIDER_RUN,
     MeteringIdentity,
 )
-from app.modules.usage.domain.budget_windows import budget_windows
+from app.modules.usage.domain.budget_windows import budget_windows, contacts_window
 from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.services.metering_scope import MeteringScope
 from app.modules.usage.services.usage_context import UsageExecutionContext
@@ -88,6 +88,22 @@ def test_without_a_cap_the_contacts_window_limits_nothing():
     windows = budget_windows(_identity(CONTACT_RUN), uncapped, NOW)
 
     assert [w.limit for w in windows if w.kind == "contacts_month"] == [None]
+
+
+def test_a_surface_asks_the_window_a_contacts_requests_count_in():
+    """Limit and basis alike: a counter asked with another limit or basis than
+    it last counted under is recounted, so two windows sharing one would have
+    it recounted every time each asked after the other."""
+    [counted_in] = [
+        window
+        for window in budget_windows(_identity(CONTACT_RUN), LIMITS, NOW)
+        if window.kind == "contacts_month"
+    ]
+
+    asked = contacts_window(ORG, LIMITS, NOW)
+
+    assert asked == counted_in
+    assert asked.basis == counted_in.basis
 
 
 def test_an_organizations_own_key_is_not_metered_at_all():

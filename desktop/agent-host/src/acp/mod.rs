@@ -34,22 +34,34 @@ mod driver;
 mod options;
 mod outcome;
 mod permission;
+mod pre_approval;
 mod prompt;
 mod session_options;
 mod session_setup;
+mod shell_path;
+mod start_gate;
 mod steering;
 mod supervision;
+mod tolerance;
 
-pub(crate) use claude_settings::{claude_config_dir, claude_sign_in};
+pub(crate) use claude_settings::{claude_config_dir, claude_permission_rules, claude_sign_in};
 pub use driver::*;
 pub(crate) use options::*;
 pub use outcome::*;
 pub(crate) use permission::*;
+pub(crate) use pre_approval::PreApprovals;
 pub use prompt::*;
 pub(crate) use session_options::*;
 pub(crate) use session_setup::*;
+pub(crate) use start_gate::{START_ATTEMPTS, StartPermit};
+pub use start_gate::{StartGates, is_transient_start_failure};
 pub use steering::*;
 pub(crate) use supervision::*;
+pub(crate) use tolerance::{STOP_REASONS, Tolerance, note_unknown};
+pub use tolerance::{
+    cancelled_permission, sanitize_permission_request, sanitize_session_update,
+    session_notification, whole_count,
+};
 
 #[cfg(test)]
 mod tests;
@@ -66,6 +78,11 @@ pub struct AcpRunRequest {
     /// Whether the person chose to have this agent load its own skills and
     /// settings (`HostConfig::own_settings`). See `session_options`.
     pub own_settings: bool,
+    /// The `bin/` of the `lemma` CLI this run's agent may run without asking,
+    /// first on its `PATH`. Chosen by the runtime, which knows whose pairing
+    /// the run is for (`lemma_cli::cli_bin_for_run`); `None` gives the agent no
+    /// such rule.
+    pub lemma_cli_bin: Option<PathBuf>,
     pub mcp_server: Option<McpServer>,
     /// Whether this harness advertised `loadSession` at probe time. A run only
     /// tries to resume `run_spec.resume_session_id` when it did.

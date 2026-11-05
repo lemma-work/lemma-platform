@@ -22,10 +22,17 @@ from typing import Any
 
 import httpx
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    WhatsAppCredentials,
+)
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 from app.modules.agent_surfaces.platforms.delivery import (
     DeliveryClassification,
     RetryPolicy,
+    classify_transport_failure,
     with_retry,
 )
 from app.core.net.capped_read import read_capped
@@ -60,13 +67,9 @@ def groups_api_base(api_base: str) -> str:
     return trimmed
 
 
-def resolve_api_base(credentials: dict[str, Any] | None) -> str:
+def resolve_api_base(credentials: CredentialsLike | None) -> str:
     """Resolve the WhatsApp Graph API base, honoring a credential override."""
-    if credentials:
-        candidate = str(credentials.get("api_base_url") or "").strip()
-        if candidate:
-            return candidate
-    return _WHATSAPP_API_BASE
+    return WhatsAppCredentials.of(credentials).api_base_url or _WHATSAPP_API_BASE
 
 
 class WhatsAppApiError(Exception):
@@ -133,12 +136,15 @@ class WhatsAppClient:
 
     @classmethod
     def from_credentials(
-        cls, credentials: dict[str, Any], *, timeout: float = 60.0
+        cls, credentials: CredentialsLike, *, timeout: float = 60.0
     ) -> "WhatsAppClient":
+        """A client for this number. The token is revealed here, into a client
+        built for the call at hand."""
+        whatsapp = WhatsAppCredentials.of(credentials)
         return cls(
-            access_token=str(credentials.get("access_token") or ""),
-            phone_number_id=str(credentials.get("phone_number_id") or ""),
-            api_base=resolve_api_base(credentials),
+            access_token=reveal_secret(whatsapp.access_token) or "",
+            phone_number_id=whatsapp.phone_number_id or "",
+            api_base=whatsapp.api_base_url or _WHATSAPP_API_BASE,
             timeout=timeout,
         )
 
@@ -177,6 +183,43 @@ class WhatsAppClient:
             payload["context"] = {"message_id": reply_to_message_id}
         return await self.send_message_payload(
             phone_number_id=phone_number_id, payload=payload
+        )
+
+    async def send_template(
+        self,
+        *,
+        phone_number_id: str,
+        to: str,
+        name: str,
+        language: str,
+        body_parameters: list[str] | None = None,
+    ) -> str | None:
+        """Send an approved message template; return the outbound message id.
+
+        The one message a business may start outside the 24-hour window. Meta
+        checks ``name`` and ``language`` against the templates approved on the
+        number's business account, and the body's parameters against the
+        template's own placeholders, so neither is checked here.
+        """
+        template: dict[str, object] = {"name": name, "language": {"code": language}}
+        if body_parameters:
+            template["components"] = [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": text} for text in body_parameters
+                    ],
+                }
+            ]
+        return await self.send_message_payload(
+            phone_number_id=phone_number_id,
+            payload={
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": to,
+                "type": "template",
+                "template": template,
+            },
         )
 
     async def send_interactive(
@@ -315,7 +358,7 @@ class WhatsAppClient:
         """Upload a media object; return its media id."""
         url = f"{self._api_base}/{phone_number_id}/media"
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.post(
                 url,
                 data={"messaging_product": "whatsapp", "type": mime_type},
@@ -328,13 +371,13 @@ class WhatsAppClient:
     async def get_media_info(self, media_id: str) -> dict[str, Any] | None:
         url = f"{self._api_base}/{media_id}"
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.get(url, headers=self._auth_headers)
         data = self._parse(response, method="media.info")
         return data if isinstance(data, dict) else None
 
     async def download_media(self, url: str) -> bytes:
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             async with client.stream(
                 "GET", url, headers=self._auth_headers
             ) as response:
@@ -378,7 +421,7 @@ class WhatsAppClient:
         """The link people join a group by."""
         url = f"{groups_api_base(self._api_base)}/{group_id}/invite_link"
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.get(url, headers=self._auth_headers)
         data = self._parse(response, method="groups.invite_link")
         return str(data.get("invite_link") or "").strip() or None
@@ -388,7 +431,7 @@ class WhatsAppClient:
         if not self._access_token or not self._phone_number_id:
             return None
         url = f"{self._api_base}/{self._phone_number_id}"
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.get(
                 url, params={"fields": field}, headers=self._auth_headers
             )
@@ -403,7 +446,7 @@ class WhatsAppClient:
         # `api_base_url` is tenant-supplied (a sovereign Graph endpoint is a
         # real deployment), so the target is checked before the token goes out.
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.post(url, json=json, headers=self._auth_headers)
         return self._parse(response, method=method)
 
@@ -429,9 +472,9 @@ def classify_whatsapp_error(exc: Exception) -> DeliveryClassification:
         if exc.status_code == 429 or exc.status_code >= 500:
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
-    if isinstance(exc, httpx.RequestError):
-        return DeliveryClassification.TRANSIENT
-    return DeliveryClassification.PERMANENT
+    # Only message sends are retried through this, and a message send is not
+    # idempotent: a read timeout after it went out may have delivered it.
+    return classify_transport_failure(exc)
 
 
 def _body_excerpt(response: httpx.Response, *, limit: int = 500) -> str:

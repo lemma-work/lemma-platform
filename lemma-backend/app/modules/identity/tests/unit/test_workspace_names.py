@@ -81,6 +81,21 @@ def test_a_personal_address_skips_straight_to_a_generated_name() -> None:
     assert organization_name_candidate(email="ada@gmail.com") == "Golden Summit"
 
 
+def test_a_personal_workspace_is_named_after_its_person() -> None:
+    """Never "Personal 5": the name says whose it is."""
+    assert (
+        organization_name_candidate(email="ada@gmail.com", full_name="Ada Lovelace")
+        == "Ada's workspace"
+    )
+    # A company still names a company's workspace.
+    assert (
+        organization_name_candidate(
+            email="ada@acme.com", work_domain="acme.com", full_name="Ada Lovelace"
+        )
+        == "Acme"
+    )
+
+
 @pytest.mark.parametrize(
     "full_name,expected",
     [

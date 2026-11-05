@@ -23,6 +23,6 @@ def telegram_requires_webhook_setup(surface: AgentSurfaceEntity) -> bool:
     """True when this surface needs a Telegram ``setWebhook`` registration."""
     return (
         surface.surface_type is SurfacePlatform.TELEGRAM
-        and surface.account_id is not None
+        and surface.pod_connector_slug is not None
         and not telegram_polling_enabled()
     )

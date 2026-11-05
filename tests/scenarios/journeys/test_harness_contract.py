@@ -328,6 +328,88 @@ def test_every_scenario_declares_what_it_proves(path: Path):
     assert not missing, f"{path.name}:\n  " + "\n  ".join(missing)
 
 
+#: Journeys still holding a ``>= 400`` comparison, and how many. Each is a
+#: refusal a crash would satisfy -- a 500 from a verifier that fell over reads as
+#: "rejected" -- so the number only goes down: pin the code the scenario means,
+#: then lower the count here. A new journey never appears in this table.
+LOOSE_REFUSALS = {
+    "automating_work/test_waiting_runs.py": 1,
+    "automating_work/test_workflow_lifecycle.py": 2,
+    "building_a_pod/test_join_request_authority.py": 1,
+    "building_a_pod/test_pod_and_membership.py": 1,
+    "connectors_and_accounts/test_catalog_details.py": 2,
+    "connectors_and_accounts/test_lifecycle.py": 2,
+    "connectors_and_accounts/test_provider_trouble.py": 1,
+    "getting_started/test_invitations.py": 1,
+    "getting_started/test_last_owner_and_names.py": 3,
+    "getting_started/test_organization_admin.py": 1,
+    "operating_a_deployment/test_stats_and_retry.py": 1,
+    "packaging_and_reuse/test_app_and_import_details.py": 2,
+    "packaging_and_reuse/test_bundle_safety.py": 2,
+    "packaging_and_reuse/test_bundles_and_apps.py": 3,
+    "packaging_and_reuse/test_sharing_a_bundle.py": 1,
+    "scheduling_and_triggers/test_schedules.py": 2,
+    "scheduling_and_triggers/test_triggers.py": 2,
+    "sharing_and_permissions/test_authorization.py": 6,
+    "sharing_and_permissions/test_grants.py": 1,
+    "sharing_and_permissions/test_workload_access.py": 2,
+    "surfaces_and_notifications/test_surface_management.py": 1,
+    "working_with_data/test_bulk_fairness.py": 1,
+    "working_with_data/test_tables_and_records.py": 3,
+}
+
+
+def _loose_refusals(tree: ast.AST) -> int:
+    """Comparisons of the form ``<anything> >= 400``."""
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        for op, right in zip(node.ops, node.comparators)
+        if isinstance(op, ast.GtE)
+        and isinstance(right, ast.Constant)
+        and right.value == 400
+    )
+
+
+def test_a_refusal_names_its_status_code():
+    """A refusal asserts the code it means, not ``status_code >= 400``.
+
+    ``>= 400`` cannot tell a refusal from a crash, and it cannot tell a 403
+    from a 404 -- which is how an existence leak passes a permission test. The
+    signature scenarios for every surface webhook were written that way, so a
+    verifier that raised would have proved them. Where "refused, however
+    expressed" genuinely is the claim, say which codes count.
+    """
+    found = {
+        path.relative_to(JOURNEYS).as_posix(): count
+        for path in _scenario_files()
+        if (
+            count := _loose_refusals(
+                ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            )
+        )
+    }
+    grew = {
+        name: f"{count} (allowed {LOOSE_REFUSALS.get(name, 0)})"
+        for name, count in found.items()
+        if count > LOOSE_REFUSALS.get(name, 0)
+    }
+    shrank = {
+        name: f"{found.get(name, 0)} (table says {allowed})"
+        for name, allowed in LOOSE_REFUSALS.items()
+        if found.get(name, 0) < allowed
+    }
+    assert not grew, "assert the exact status code, not `>= 400`:\n  " + "\n  ".join(
+        f"{name}: {detail}" for name, detail in sorted(grew.items())
+    )
+    assert not shrank, (
+        "fewer loose refusals than LOOSE_REFUSALS records -- lower the table so "
+        "they cannot come back:\n  "
+        + "\n  ".join(f"{name}: {detail}" for name, detail in sorted(shrank.items()))
+    )
+
+
 def test_step_names_do_not_collide():
     """No two step mixins define the same verb.
 

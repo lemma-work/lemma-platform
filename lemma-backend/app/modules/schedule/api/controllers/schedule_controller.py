@@ -1,15 +1,22 @@
 """Schedule API controller."""
 
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from app.core.api.dependencies import UoWDep
+from app.core.api.deprecation import note_deprecated_use
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.context import ResourceRef
+from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.core.authorization.permissions import Permissions
+from app.modules.connectors.contracts.deprecations import (
+    ACCOUNT_ADDRESSING_SUNSET,
+    ACCOUNT_ID_REPLACEMENT,
+)
+from app.modules.connectors.contracts.pod_connectors import pod_connector_for_account
 from app.modules.schedule.api.dependencies import (
     ScheduleServiceDep,
     get_current_user_id,
@@ -17,14 +24,21 @@ from app.modules.schedule.api.dependencies import (
 from app.modules.schedule.api.schemas.schedule_schemas import (
     CreateScheduleRequest,
     ScheduleDetailResponse,
+    ListeningResponse,
     ScheduleListResponse,
     UpdateScheduleRequest,
     ScheduleResponse,
     ScheduleRunListResponse,
     ScheduleRunResponse,
+    TriggerSkipListResponse,
+    TriggerSkipReason,
+    TriggerSkipResponse,
 )
 from app.modules.schedule.domain.schedule import (
+    MCP_EVENT_SOURCE,
     ScheduleCreateEntity,
+    ScheduleEntity,
+    ScheduleRunStatus,
     ScheduleType,
     ScheduleUpdateEntity,
 )
@@ -33,10 +47,64 @@ router = APIRouter(prefix="/pods/{pod_id}/schedules", tags=["Schedules"])
 
 
 async def _schedule_detail_response(schedule) -> ScheduleDetailResponse:
-    return ScheduleDetailResponse(
-        **ScheduleResponse.model_validate(schedule).model_dump(),
-        allowed_actions=schedule.allowed_actions,
+    [response] = await _with_listening(
+        [
+            ScheduleDetailResponse(
+                **ScheduleResponse.model_validate(schedule).model_dump(),
+                allowed_actions=schedule.allowed_actions,
+            )
+        ]
     )
+    return response
+
+
+async def _with_listening(
+    responses: list[ScheduleDetailResponse],
+) -> list[ScheduleDetailResponse]:
+    """Say, for each schedule on an MCP server's event, whether it is still
+    hearing from the server. Without it a schedule whose subscription lapsed
+    reads exactly like one that is working and has had no events."""
+    from app.modules.connectors.contracts.mcp_events import mcp_listening_states
+
+    wanted = {
+        response.id: str(response.config.get("provider_trigger_id"))
+        for response in responses
+        if response.config.get("source") == MCP_EVENT_SOURCE
+        and response.config.get("provider_trigger_id")
+    }
+    if not wanted:
+        return responses
+    states = await mcp_listening_states(
+        list(wanted.values()), now=datetime.now(timezone.utc)
+    )
+    shown: list[ScheduleDetailResponse] = []
+    for response in responses:
+        state = states.get(wanted.get(response.id, ""))
+        if state is None:
+            shown.append(response)
+            continue
+        shown.append(
+            response.model_copy(
+                update={
+                    "listening": ListeningResponse(
+                        state=(
+                            "pending"
+                            if not state.granted
+                            else "lapsed"
+                            if state.lapsed
+                            else "retrying"
+                            if state.renew_failures
+                            else "listening"
+                        ),
+                        last_error=state.last_error,
+                        last_event_at=state.last_event_at,
+                        refresh_before=state.refresh_before,
+                        server=state.server,
+                    )
+                }
+            )
+        )
+    return shown
 
 
 @router.post(
@@ -50,10 +118,28 @@ async def create_schedule(
     request: CreateScheduleRequest,
     service: ScheduleServiceDep,
     ctx: PodContextDep,
+    uow: UoWDep,
+    http_request: Request,
+    response: Response,
     current_user_id: UUID = Depends(get_current_user_id),
 ):
     """Create a new pod schedule."""
     await ctx.require(Permissions.SCHEDULE_CREATE, ResourceRef.pod(pod_id))
+    pinned = None
+    if request.account_id is not None and request.pod_connector is None:
+        # The account it named stays the one it listens through (pinned),
+        # not whichever of the owner's accounts is their default.
+        binding = await pod_connector_for_account(
+            uow, ctx, pod_id=pod_id, account_id=request.account_id
+        )
+        request.pod_connector, pinned = binding.slug, binding.pod_account_id
+        note_deprecated_use(
+            http_request,
+            response,
+            use="schedule.create.account_id",
+            replacement=ACCOUNT_ID_REPLACEMENT,
+            sunset=ACCOUNT_ADDRESSING_SUNSET,
+        )
     schedule_create_data = {
         "user_id": current_user_id,
         "pod_id": pod_id,
@@ -63,11 +149,13 @@ async def create_schedule(
         "workflow_name": request.workflow_name,
         "config": request.config,
         "instruction": request.instruction,
-        "account_id": request.account_id,
+        "pod_connector_slug": request.pod_connector,
+        "pod_account_id": pinned,
         "connector_trigger_id": request.connector_trigger_id,
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,
         "include_outside_rows": request.include_outside_rows,
+        "created_by_workload_id": _acting_workload_id(ctx, pod_id),
     }
     if request.visibility is not None:
         schedule_create_data["visibility"] = request.visibility
@@ -120,7 +208,9 @@ async def list_schedules(
     # fixes for the context-building step that runs before this handler.
     await uow.commit()
     return ScheduleListResponse(
-        items=[ScheduleDetailResponse.model_validate(t) for t in schedules],
+        items=await _with_listening(
+            [ScheduleDetailResponse.model_validate(t) for t in schedules]
+        ),
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
@@ -137,16 +227,73 @@ async def list_schedule_runs(
     service: ScheduleServiceDep,
     ctx: PodContextDep,
     limit: int = 100,
+    status: Optional[ScheduleRunStatus] = Query(
+        None,
+        description=(
+            "Only runs that report this status -- the target's outcome once "
+            "there is one."
+        ),
+    ),
+    skipped: Optional[bool] = Query(
+        None,
+        description=(
+            "true: only events the schedule's filter skipped. false: leave them "
+            "out, which is what a busy webhook schedule's history usually needs. "
+            "Omitted: both."
+        ),
+    ),
 ) -> ScheduleRunListResponse:
-    runs = await service.list_schedule_runs(
+    # Straight to the run service: the schedule service only passed it along.
+    runs = await service.run_service.list_schedule_runs(
         pod_id=pod_id,
         schedule_id=schedule_id,
         ctx=ctx,
         limit=max(1, min(limit, 1000)),
+        status=status,
+        skipped=skipped,
     )
     return ScheduleRunListResponse(
         items=[ScheduleRunResponse.model_validate(item) for item in runs],
         limit=max(1, min(limit, 1000)),
+    )
+
+
+@router.get(
+    "/{schedule_id}/skips",
+    response_model=TriggerSkipListResponse,
+    operation_id="schedule.skip.list",
+)
+async def list_schedule_skips(
+    pod_id: UUID,
+    schedule_id: UUID,
+    service: ScheduleServiceDep,
+    ctx: PodContextDep,
+    limit: int = Query(50, ge=1, le=500),
+    page_token: str | None = None,
+) -> TriggerSkipListResponse:
+    """What the trigger let pass without firing -- e.g. the changes of a bulk
+    write or an import it is set to skip -- newest first."""
+    skips, next_page_token = await service.run_service.list_trigger_skips(
+        pod_id=pod_id,
+        schedule_id=schedule_id,
+        ctx=ctx,
+        limit=limit,
+        page_token=page_token,
+    )
+    return TriggerSkipListResponse(
+        items=[
+            TriggerSkipResponse(
+                id=skip.id,
+                reason=TriggerSkipReason(skip.reason),
+                first=skip.first,
+                last=skip.last,
+                count=skip.count,
+                at=skip.at,
+            )
+            for skip in skips
+        ],
+        limit=limit,
+        next_page_token=next_page_token,
     )
 
 
@@ -257,9 +404,45 @@ async def delete_schedule(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found"
         )
-    await ctx.require(
-        Permissions.SCHEDULE_DELETE, ResourceRef.schedule(pod_id, schedule_id)
-    )
+    if _deleting_own_agent_schedule(ctx, schedule, pod_id):
+        await ctx.require(Permissions.SCHEDULE_CREATE, ResourceRef.pod(pod_id))
+    else:
+        await ctx.require(
+            Permissions.SCHEDULE_DELETE, ResourceRef.schedule(pod_id, schedule_id)
+        )
 
     await service.delete_schedule(schedule_id)
     return
+
+
+def _acting_workload_id(ctx: Context, pod_id: UUID) -> UUID | None:
+    """The agent acting for a person on this request: a named agent's id, or
+    the pod's id for its default assistant, which is how its row is keyed.
+    ``None`` for a person acting for themselves."""
+    if ctx.is_assistant:
+        return pod_id
+    workload = ctx.workload
+    if ctx.is_named_workload and workload is not None:
+        return workload.workload_id
+    return None
+
+
+def _deleting_own_agent_schedule(
+    ctx: Context, schedule: ScheduleEntity, pod_id: UUID
+) -> bool:
+    """Whether an agent is deleting a schedule it created, for the same person.
+
+    ``schedule.delete`` is a destructive action no agent holds by default, so
+    an agent that made a schedule -- to try something out, or by mistake --
+    could not take it back without asking the person to approve the delete,
+    and the pod kept both the schedule and the approval request. Undoing your
+    own creation needs no more authority than making it did: the delete is
+    authorized as ``schedule.create`` on the pod. Only for the same agent
+    acting for the schedule's owner; anyone else's schedule keeps the gate.
+    """
+    acting = _acting_workload_id(ctx, pod_id)
+    return (
+        acting is not None
+        and schedule.created_by_workload_id == acting
+        and schedule.user_id == ctx.delegating_user_id
+    )

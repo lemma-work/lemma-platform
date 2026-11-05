@@ -6,15 +6,12 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
 from uuid import UUID
 
 import httpx
 from opentelemetry import trace
 
 
-from app.modules.function.config import function_settings
-from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
@@ -27,6 +24,11 @@ from app.modules.function.application.dispatch_failures import (
     runtime_failure_message,
 )
 from app.modules.function.application.function_run_token import function_run_token
+from app.modules.function.application.dispatch_failures import (
+    PodAtCapacity,
+    SandboxNotReady,
+    not_a_failure,
+)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -35,9 +37,16 @@ from app.modules.function.application.function_session_token_cache import (
 from app.modules.function.application.runtime_policy import (
     FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
 )
+from sandbox_runtime.errors import SandboxUnavailable
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
     FunctionRuntimeEndpointCache,
+)
+from app.modules.function.application.function_runtime_invoker import (
+    FunctionRuntimeInvoker,
+)
+from app.modules.function.application.function_runtime_quarantine import (
+    FunctionRuntimeQuarantine,
 )
 from app.modules.function.application.function_runtime_route_resolver import (
     SandboxClientFactory,
@@ -45,16 +54,14 @@ from app.modules.function.application.function_runtime_route_resolver import (
 )
 from app.modules.function.contracts.runtime import (
     RuntimeAcceptedResponse,
-    RuntimeIdentity,
-    RuntimeInvocationRequest,
     RuntimeTerminalRequest,
-    invocation_payload,
 )
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
     FunctionExecutionDispatch,
     FunctionRunEntity,
     FunctionRunRuntimeContext,
+    FunctionRunStatus,
 )
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
@@ -65,12 +72,29 @@ from app.modules.function.infrastructure.repositories import FunctionRunReposito
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# What a run keeps of its own output, and how much extra is redacted before
-# trimming so a credential cannot survive by straddling the cut. The margin is
-# far larger than any single credential (a PEM private key block is a few KB).
+# Allowed between preparing a run and starting it -- a cold start, mostly -- so
+# the lease and token fetched beforehand still cover the execution window that
+# starting opens. If a start takes longer, the lease is fetched again.
+_START_ALLOWANCE_SECONDS = 60
+
+#: How long a synchronous call waits between looks at a full pod's gate.
+_CAPACITY_POLL_SECONDS = (0.25, 2.0)
+#: A queued run's wait for its sandbox before it hands back its work slot (one
+#: of the pod's automation slots, shared with titles and schedule starts).
+_QUEUED_ENDPOINT_WAIT = timedelta(seconds=60)
+
+POD_AT_CAPACITY_ERROR = (
+    "Function never started: its pod was running as many functions as it can "
+    "until this run's start deadline. Nothing ran, so it is safe to retry."
+)
+START_DEADLINE_ERROR = (
+    "Function never started before its start deadline. Nothing ran, so it is "
+    "safe to retry."
+)
 
 
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
+SafePoint = Callable[[], None]
 TokenMinter = Callable[..., Awaitable[FunctionSessionToken]]
 OrganizationResolver = Callable[[UUID | None], Awaitable[str | None]]
 
@@ -94,6 +118,7 @@ class FunctionDispatcher:
         runtime_http_client_factory: RuntimeHttpClientFactory,
         organization_resolver: OrganizationResolver,
         delegated_tokens_enabled: bool,
+        max_running_per_pod: int,
     ) -> None:
         self._uow_factory = uow_factory
         self._token_minter = token_minter
@@ -105,6 +130,17 @@ class FunctionDispatcher:
         self._runtime_http_client_factory = runtime_http_client_factory
         self._organization_resolver = organization_resolver
         self._delegated_tokens_enabled = delegated_tokens_enabled
+        self._max_running_per_pod = max_running_per_pod
+        self._quarantine = FunctionRuntimeQuarantine(
+            routes=self._routes,
+            uow_factory=uow_factory,
+            runtime_http_client_factory=runtime_http_client_factory,
+        )
+        self._invoker = FunctionRuntimeInvoker(
+            routes=self._routes,
+            quarantine=self._quarantine,
+            runtime_http_client_factory=runtime_http_client_factory,
+        )
 
     async def execute(
         self,
@@ -112,6 +148,8 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
+        """Run it now, for a caller holding a request open. A full pod is waited
+        out up to the start deadline: the budget starts only when the run does."""
         # Spanned per phase because the gap between a run being created and
         # reaching RUNNING was measurable even warm and uncontended, but not
         # attributable: this path had no instrumentation at all, so the only
@@ -125,15 +163,63 @@ class FunctionDispatcher:
             if isinstance(dispatch, FunctionRunEntity):
                 return dispatch
             span.set_attribute("lemma.pod_id", str(dispatch.pod_id))
-            return await self._execute_dispatch(run_id, dispatch)
+            pause, longest = _CAPACITY_POLL_SECONDS
+            while True:
+                try:
+                    if await self._pod_has_room(dispatch.pod_id):
+                        return await self._execute_dispatch(run_id, dispatch)
+                except PodAtCapacity:
+                    pass
+                remaining = (dispatch.deadline_at - self._now()).total_seconds()
+                if remaining <= 0:
+                    return await self._fail_unstarted(
+                        run_id, error=POD_AT_CAPACITY_ERROR
+                    )
+                await asyncio.sleep(min(pause, remaining))
+                pause = min(pause * 2, longest)
+
+    async def run_queued(
+        self, run_id: UUID, *, before_start: SafePoint | None = None
+    ) -> FunctionRunEntity:
+        """Start and invoke a queued run (``function.run``). ``PodAtCapacity``
+        and ``SandboxNotReady`` leave it PENDING for the item to come back to;
+        a run already started is returned untouched, never started twice."""
+        dispatch = await self._resolve_dispatch(
+            run_id, mode=FunctionDispatchMode.ASYNCHRONOUS
+        )
+        if isinstance(dispatch, FunctionRunEntity):
+            return dispatch
+        # Unlocked and cheap; the start re-checks under the pod's lock.
+        if not await self._pod_has_room(dispatch.pod_id):
+            raise PodAtCapacity(str(dispatch.pod_id))
+        return await self._execute_dispatch(
+            run_id, dispatch, queued=True, before_start=before_start
+        )
 
     async def _execute_dispatch(
         self,
         run_id: UUID,
         dispatch: FunctionExecutionDispatch,
+        *,
+        queued: bool = False,
+        before_start: SafePoint | None = None,
     ) -> FunctionRunEntity:
-        endpoint_task = create_inherited_task(self._runtime_endpoint(dispatch))
-        token_task = create_inherited_task(self._function_session_token(dispatch))
+        """Start it and invoke it. A ``queued`` run's work item can come back,
+        so before the start an unreachable sandbox raises ``SandboxNotReady``
+        and a stop leaves the run PENDING, instead of failing it."""
+        execution_ends_at = self._now() + timedelta(
+            seconds=dispatch.execution_seconds + _START_ALLOWANCE_SECONDS
+        )
+        bound = min(dispatch.deadline_at, self._now() + _QUEUED_ENDPOINT_WAIT)
+        wait_until = bound if queued else None
+        endpoint_task = create_inherited_task(
+            self._runtime_endpoint(
+                dispatch, execution_ends_at=execution_ends_at, wait_until=wait_until
+            )
+        )
+        token_task = create_inherited_task(
+            self._function_session_token(dispatch, valid_until=execution_ends_at)
+        )
         organization_task = create_inherited_task(
             self._resolve_organization(dispatch.pod_id)
         )
@@ -144,15 +230,23 @@ class FunctionDispatcher:
             # the three rather than their sum. Which one that is comes from the
             # child spans each of them opens.
             with tracer.start_as_current_span("lemma.function.dispatch.prepare"):
-                endpoint, function_token, organization_id = await asyncio.gather(
-                    endpoint_task,
-                    token_task,
-                    organization_task,
-                )
+                try:
+                    endpoint, function_token, organization_id = await asyncio.gather(
+                        endpoint_task,
+                        token_task,
+                        organization_task,
+                    )
+                except (SandboxUnavailable, TimeoutError) as exc:
+                    if not queued:  # its item retries; the endpoint keeps loading
+                        raise
+                    raise SandboxNotReady(str(exc)) from exc
+            if before_start is not None:
+                before_start()
             with tracer.start_as_current_span("lemma.function.dispatch.start"):
                 started = await self._start_dispatch(dispatch)
             if started is None:
-                return await self._load_run(run_id)
+                return await self._not_started(run_id, dispatch)
+            endpoint = await self._endpoint_covering(dispatch, endpoint, started)
 
             runtime_response = await self._invoke_runtime_with_recovery(
                 dispatch,
@@ -166,9 +260,12 @@ class FunctionDispatcher:
             return await self._complete_dispatch(started, runtime_response)
         except BaseException as exc:
             if isinstance(exc, asyncio.CancelledError):
-                async with self._uow_factory() as uow:
-                    await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
-                await self._best_effort_cancel(dispatch, endpoint=endpoint)
+                # A queued run stopped before its start goes back to the queue
+                # untouched; anything else that is cancelled ends cancelled.
+                if started is not None or not queued:
+                    async with self._uow_factory() as uow:
+                        await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
+                    await self._best_effort_cancel(dispatch, endpoint=endpoint)
                 raise
             # Interpreter teardown is not a dispatch failure. `CancelledError`
             # is handled above because it has a durable outcome to record --
@@ -179,40 +276,13 @@ class FunctionDispatcher:
             # `agent_runner_service` re-raises at the same boundary and for the
             # same reason -- swallowing it there made every interrupted run look
             # like a success, and a deploy ended every conversation in flight.
-            if not isinstance(exc, Exception):
-                raise
-            if (
-                isinstance(exc, InvocationOutcomeUnconfirmed)
-                and dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
-                and started is not None
+            if not isinstance(exc, Exception) or not_a_failure(
+                exc, queued=queued, started=started is not None
             ):
-                # The runtime may still own the task. Its callback or the
-                # deadline reconciler will durably settle this JOB run.
-                return await self._load_run(run_id)
-            if isinstance(exc, InvocationOutcomeUnconfirmed) and started is not None:
-                await self._best_effort_cancel(dispatch, endpoint=endpoint)
-            message = self._execution_error(exc)
-            # Every branch above turns a *recognised* failure into a specific
-            # message. Anything reaching the generic fallback is by definition
-            # unanticipated, so it is the one most worth recording: otherwise a
-            # run stores "Function execution failed" with no way to find out why.
-            logger.warning(
-                "function.function_dispatcher.execution_failed",
-                run_id=str(run_id),
-                error_type=type(exc).__name__,
-                # The type alone is not enough to act on: a bare `DBAPIError`
-                # names the wrapper, not the driver error inside it, and the
-                # message stored on the run is the generic one built above. A
-                # CI failure here was undiagnosable for exactly that reason.
-                error=str(exc),
-                exc_info=exc,
+                raise
+            return await self._after_failure(
+                run_id, dispatch, exc, started=started, endpoint=endpoint
             )
-            async with self._uow_factory() as uow:
-                failed = await FunctionExecutionRepository(uow).fail_dispatch(
-                    dispatch,
-                    error=message,
-                )
-            return failed or await self._load_run(run_id)
         finally:
             for task in (endpoint_task, token_task, organization_task):
                 if not task.done():
@@ -224,17 +294,70 @@ class FunctionDispatcher:
                 return_exceptions=True,
             )
 
-    async def cancel(self, run_id: UUID) -> FunctionRunEntity:
-        dispatch = await self._active_dispatch(
-            run_id,
-            mode=FunctionDispatchMode.ASYNCHRONOUS,
+    async def _after_failure(
+        self,
+        run_id: UUID,
+        dispatch: FunctionExecutionDispatch,
+        exc: Exception,
+        *,
+        started: FunctionRunRuntimeContext | None,
+        endpoint: FunctionRuntimeEndpoint | None,
+    ) -> FunctionRunEntity:
+        """What a dispatch that raised leaves behind on its run."""
+        unconfirmed = isinstance(exc, InvocationOutcomeUnconfirmed)
+        if (
+            unconfirmed
+            and dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS
+            and started is not None
+        ):
+            # The runtime may still own the task. Its callback or the run's
+            # deadline item will durably settle this JOB run.
+            return await self._load_run(run_id)
+        if unconfirmed and started is not None:
+            await self._best_effort_cancel(dispatch, endpoint=endpoint)
+        message = self._execution_error(exc)
+        # An unrecognised failure stores only "Function execution failed", so the
+        # log is the one place that says why.
+        logger.warning(
+            "function.function_dispatcher.execution_failed",
+            run_id=str(run_id),
+            error_type=type(exc).__name__,
+            # A bare `DBAPIError` names the wrapper, not the driver error.
+            error=str(exc),
+            exc_info=exc,
         )
+        async with self._uow_factory() as uow:
+            failed = await FunctionExecutionRepository(uow).fail_dispatch(
+                dispatch,
+                error=message,
+            )
+        return failed or await self._load_run(run_id)
+
+    async def cancel(self, run_id: UUID) -> FunctionRunEntity:
+        async with self._uow_factory() as uow:
+            dispatch = await FunctionExecutionRepository(uow).active_dispatch(
+                run_id, mode=FunctionDispatchMode.ASYNCHRONOUS
+            )
         if dispatch is None:
             return await self._load_run(run_id)
         async with self._uow_factory() as uow:
             run = await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
         await self._best_effort_cancel(dispatch)
         return run or await self._load_run(run_id)
+
+    async def cancel_in_runtime(self, run_id: UUID) -> None:
+        """Ask the sandbox to stop a run already cancelled in the database."""
+        async with self._uow_factory() as uow:
+            dispatch = await FunctionExecutionRepository(uow).dispatch_of(
+                run_id, mode=FunctionDispatchMode.ASYNCHRONOUS
+            )
+        if dispatch is not None:
+            await self._best_effort_cancel(dispatch)
+
+    async def _pod_has_room(self, pod_id: UUID) -> bool:
+        async with self._uow_factory() as uow:
+            running = await FunctionExecutionRepository(uow).running_on_pod(pod_id)
+        return running < self._max_running_per_pod
 
     async def _resolve_dispatch(
         self,
@@ -253,32 +376,64 @@ class FunctionDispatcher:
             isinstance(resolved, FunctionExecutionDispatch)
             and self._now() >= resolved.deadline_at
         ):
-            async with self._uow_factory() as uow:
-                failed = await FunctionExecutionRepository(uow).fail_unfinished(
-                    run_id,
-                    error="Function execution deadline exceeded",
-                )
-            return failed or await self._load_run(run_id)
+            return await self._fail_unstarted(run_id, error=START_DEADLINE_ERROR)
         return resolved
 
-    async def _active_dispatch(
+    async def _not_started(
         self,
         run_id: UUID,
-        *,
-        mode: FunctionDispatchMode,
-    ) -> FunctionExecutionDispatch | None:
+        dispatch: FunctionExecutionDispatch,
+    ) -> FunctionRunEntity:
+        """Another dispatcher won the start, or the start deadline passed first.
+
+        Nothing can start a run after its start deadline, so one still PENDING
+        then never will: fail it now rather than answer a synchronous caller
+        with a run that only the sweep will ever settle.
+        """
+        run = await self._load_run(run_id)
+        if (
+            run.status == FunctionRunStatus.PENDING
+            and self._now() >= dispatch.deadline_at
+        ):
+            return await self._fail_unstarted(run_id, error=START_DEADLINE_ERROR)
+        return run
+
+    async def _fail_unstarted(self, run_id: UUID, *, error: str) -> FunctionRunEntity:
         async with self._uow_factory() as uow:
-            return await FunctionExecutionRepository(uow).active_dispatch(
+            failed = await FunctionExecutionRepository(uow).fail_unfinished(
                 run_id,
-                mode=mode,
+                error=error,
             )
+        return failed or await self._load_run(run_id)
+
+    async def _endpoint_covering(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        endpoint: FunctionRuntimeEndpoint,
+        started: FunctionRunRuntimeContext,
+    ) -> FunctionRuntimeEndpoint:
+        """The prepared lease, unless a slow start left it short of the deadline.
+
+        The lease is what keeps the sandbox from being released as idle, so it
+        must last as long as the run that was just started can.
+        """
+        needed = self._routes.lease_needed_until(dispatch, started.deadline_at)
+        if endpoint.expires_at >= needed:
+            return endpoint
+        return await self._runtime_endpoint(
+            dispatch,
+            execution_ends_at=started.deadline_at,
+            wait_until=started.deadline_at,
+        )
 
     async def _start_dispatch(
         self,
         dispatch: FunctionExecutionDispatch,
     ) -> FunctionRunRuntimeContext | None:
         async with self._uow_factory() as uow:
-            return await FunctionExecutionRepository(uow).start_execution(dispatch)
+            return await FunctionExecutionRepository(uow).start_execution(
+                dispatch, max_running_per_pod=self._max_running_per_pod
+            )
 
     async def _complete_dispatch(
         self,
@@ -323,7 +478,7 @@ class FunctionDispatcher:
         # was never delivered. Everything else -- our own deadline, a broken read,
         # a runtime 5xx -- is ambiguous and must never be replayed.
         try:
-            return await self._invoke_runtime(
+            return await self._invoker.post(
                 dispatch,
                 context=context,
                 endpoint=endpoint,
@@ -334,16 +489,20 @@ class FunctionDispatcher:
             if exc.response.status_code not in {401, 403, 404, 410}:
                 raise
         except RuntimeNeverReached:
-            # The endpoint was quarantined on the way out, so re-resolving now
-            # cannot hand back the sandbox that just refused us. Retried once
-            # and once only: a second failure is a real one and is reported.
+            # A dead runtime was quarantined on the way out, so re-resolving
+            # cannot hand it back; a live one is simply asked again. Retried
+            # once and once only: a second failure is a real one and is reported.
             logger.info(
                 "function.runtime.reresolved_after_refused_connection",
                 pod_id=str(dispatch.pod_id),
                 run_id=str(dispatch.run_id),
             )
-        refreshed = await self._runtime_endpoint(dispatch)
-        return await self._invoke_runtime(
+        refreshed = await self._runtime_endpoint(
+            dispatch,
+            execution_ends_at=context.deadline_at,
+            wait_until=context.deadline_at,
+        )
+        return await self._invoker.post(
             dispatch,
             context=context,
             endpoint=refreshed,
@@ -351,135 +510,13 @@ class FunctionDispatcher:
             organization_id=organization_id,
         )
 
-    async def _invoke_runtime(
-        self,
-        dispatch: FunctionExecutionDispatch,
-        *,
-        context: FunctionRunRuntimeContext,
-        endpoint: FunctionRuntimeEndpoint,
-        function_token: str,
-        organization_id: str | None,
-    ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse:
-        remaining = (dispatch.deadline_at - self._now()).total_seconds()
-        if remaining <= 0:
-            raise TimeoutError("function execution deadline elapsed")
-        url = urljoin(
-            endpoint.url,
-            f"functions/{dispatch.function_id}/runs/{dispatch.run_id}",
-        )
-        headers = {
-            **endpoint.headers(),
-            "Authorization": f"Bearer {function_token}",
-            "If-Match": f'"{dispatch.revision_hash}"',
-            "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
-        }
-        if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
-            headers["Prefer"] = "respond-async"
-        body = RuntimeInvocationRequest(
-            input=context.input_data,
-            config=context.config,
-            identity=RuntimeIdentity(
-                user_id=context.user_id,
-                user_email=context.user_email,
-                contact_id=context.contact_id,
-                pod_id=context.pod_id,
-                function_id=context.function_id,
-                function_name=context.function_name,
-                organization_id=UUID(organization_id) if organization_id else None,
-            ),
-            lemma_base_url=self._runtime_gateway_url(),
-            deadline_at=context.deadline_at,
-        )
-        try:
-            runtime = self._runtime_http_client_factory()
-            response = await runtime.post(
-                url,
-                headers=headers,
-                json=invocation_payload(body),
-                timeout=httpx.Timeout(
-                    max(0.1, min(10.0, remaining)),
-                    read=max(0.1, remaining),
-                ),
-            )
-        except httpx.TimeoutException as exc:
-            # Our own deadline expired. Still unconfirmed — the sandbox may be
-            # mid-execution, so this must not be replayed — but the run's error
-            # should name the deadline, which is the cause the caller can act on,
-            # rather than the generic "response was lost".
-            raise InvocationOutcomeUnconfirmed(
-                "function invocation exceeded its deadline"
-            ) from exc
-        except httpx.ConnectError as exc:
-            # The connection was never established, so the request was never
-            # delivered and the run cannot have started. This endpoint has
-            # proved it is not answering, so it must not be handed to the next
-            # run -- and because nothing executed, this one can be re-resolved
-            # and replayed rather than failed.
-            await self._routes.quarantine(dispatch.pod_id, endpoint)
-            raise RuntimeNeverReached(
-                "function runtime refused the connection"
-            ) from exc
-        except httpx.TransportError as exc:
-            # Bytes crossed the wire and then something broke -- a read error, a
-            # half-written request, a server that hung up mid-response. The run
-            # may be underway with only the response lost, so this must not be
-            # replayed even though the endpoint is clearly unhealthy.
-            await self._routes.quarantine(dispatch.pod_id, endpoint)
-            raise InvocationOutcomeUnconfirmed(
-                "function invocation response was lost"
-            ) from exc
-        if response.status_code >= 500:
-            # A runtime that answers 5xx is reachable and broken. This was the
-            # one case that did *not* evict, while a healthy-but-routeless
-            # sandbox (404, below) did -- exactly inverted. A dead runtime
-            # process answers 502 here, so every later run was handed the same
-            # sandbox and failed the same way, indefinitely.
-            await self._routes.quarantine(dispatch.pod_id, endpoint)
-            raise InvocationOutcomeUnconfirmed(
-                f"function runtime returned {response.status_code}"
-            )
-        if response.status_code in {401, 403, 404, 410}:
-            await self._routes.invalidate(dispatch, endpoint)
-        response.raise_for_status()
-        if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
-            if response.status_code != 202:
-                raise InvocationOutcomeUnconfirmed(
-                    "function runtime did not acknowledge asynchronous execution"
-                )
-            accepted = RuntimeAcceptedResponse.model_validate(response.json())
-            if accepted.run_id != dispatch.run_id:
-                raise InvocationOutcomeUnconfirmed(
-                    "function runtime acknowledged a different run"
-                )
-            return accepted
-        if response.status_code != 200:
-            raise InvocationOutcomeUnconfirmed(
-                "function runtime did not return a terminal API response"
-            )
-        return RuntimeTerminalRequest.model_validate(response.json())
-
     async def _best_effort_cancel(
         self,
         dispatch: FunctionExecutionDispatch,
         *,
         endpoint: FunctionRuntimeEndpoint | None = None,
     ) -> None:
-        try:
-            control_endpoint = endpoint or await self._routes.control_endpoint(dispatch)
-            runtime = self._runtime_http_client_factory()
-            await runtime.post(
-                urljoin(
-                    control_endpoint.url,
-                    (f"functions/{dispatch.function_id}/runs/{dispatch.run_id}:cancel"),
-                ),
-                headers=control_endpoint.headers(),
-                timeout=httpx.Timeout(5),
-            )
-        except Exception:
-            logger.warning(
-                "function.dispatcher.runtime_cancellation.failed",
-                run_id=str(dispatch.run_id),
-            )
+        await self._invoker.cancel(dispatch, endpoint=endpoint)
 
     # Above this, the lease was not reusable and a sandbox had to be brought up.
     # A warm reuse is a dict lookup; anything in this range is a control-plane
@@ -489,25 +526,25 @@ class FunctionDispatcher:
     async def _runtime_endpoint(
         self,
         dispatch: FunctionExecutionDispatch,
+        *,
+        execution_ends_at: datetime,
+        wait_until: datetime | None = None,
     ) -> FunctionRuntimeEndpoint:
         """Acquire the runtime lease, and say how much it cost.
 
-        This is the largest single component of function latency and nothing
-        measured it. Production over seven days: 8,877 runs, a median wait of
-        2.6s between the run row being created and the function starting, p95
-        8.3s. Split by whether the pod had run anything recently, the median is
-        727ms warm against 3,272ms cold -- and 64% of runs are cold.
-
-        That is not a bug; it is the cost side of a deliberate trade. The lease
-        horizon is kept short on purpose because the sandbox runtime treats a
-        lease as activity, so a generous horizon keeps idle sandboxes billing
-        (see ``function_runtime_endpoint_reuse_seconds``). But the trade was
-        being made blind: there was no signal anywhere saying how often a run
-        pays for a cold start, so nobody could tell what lengthening the horizon
-        would buy or cost. This is that signal.
+        Usually the largest single component of function latency, and most of
+        it is cold starts. That is the cost side of a deliberate trade: the
+        lease horizon is kept short because the sandbox runtime treats a lease
+        as activity, so a generous horizon keeps idle sandboxes billing (see
+        ``function_runtime_endpoint_reuse_seconds``). This log line is what
+        says how often a run pays for that trade.
         """
         started = time.monotonic()
-        endpoint = await self._routes.endpoint(dispatch)
+        endpoint = await self._routes.endpoint(
+            dispatch,
+            execution_ends_at=execution_ends_at,
+            wait_until=wait_until,
+        )
         elapsed_ms = (time.monotonic() - started) * 1000
         logger.info(
             "function.runtime.endpoint_acquired",
@@ -531,8 +568,10 @@ class FunctionDispatcher:
     async def _function_session_token(
         self,
         dispatch: FunctionExecutionDispatch,
+        *,
+        valid_until: datetime,
     ) -> FunctionSessionToken:
-        required_until = dispatch.deadline_at
+        required_until = valid_until
         if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
             required_until += timedelta(seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS)
         if dispatch.user_id is None:
@@ -550,11 +589,6 @@ class FunctionDispatcher:
             minter=self._token_minter,
             min_validity_until=required_until,
         )
-
-    @staticmethod
-    def _runtime_gateway_url() -> str:
-        configured = function_settings.function_runtime_gateway_url or settings.api_url
-        return configured.rstrip("/")
 
     @staticmethod
     def _now() -> datetime:

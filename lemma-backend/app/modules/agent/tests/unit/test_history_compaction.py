@@ -187,7 +187,7 @@ async def test_the_guard_trims_when_summarization_returned_oversized_history() -
         ),
         summarization_model="openai:gpt-4.1",
     )
-    guard = processors[-2]
+    (guard,) = [p for p in processors if getattr(p, "__name__", "") == "_ceiling_guard"]
 
     oversized = [_text("filler " * 400) for _ in range(30)]
     result = await guard(oversized)
@@ -318,48 +318,43 @@ class TestImagesAreNotCountedAsText:
         assert count_model_message_tokens([message]) > 1_000
 
 
-def test_a_known_size_skips_the_measurement_it_was_given(monkeypatch) -> None:
+def test_a_known_size_skips_the_measurement_it_was_given() -> None:
     """`known_size` exists to skip one re-tokenisation on the request path.
 
     Comparing two calls to each other cannot show that: both sides move
     together, so deleting the short-circuit entirely left the old version of
     this test passing. Count the measurements instead.
     """
-    from app.modules.agent.infrastructure.harnesses import history as history_module
-
     calls: list[int] = []
-    real = history_module.count_model_message_tokens
 
     def counted(messages):
         calls.append(1)
-        return real(messages)
+        return count_model_message_tokens(messages)
 
-    monkeypatch.setattr(history_module, "count_model_message_tokens", counted)
     messages = [_text("filler " * 500) for _ in range(20)]
-    measured = real(messages)
+    measured = count_model_message_tokens(messages)
 
-    calls.clear()
-    enforce_token_ceiling(messages, ceiling=5_000)
+    enforce_token_ceiling(messages, ceiling=5_000, count=counted)
     without = len(calls)
     calls.clear()
-    enforce_token_ceiling(messages, ceiling=5_000, known_size=measured)
+    enforce_token_ceiling(messages, ceiling=5_000, known_size=measured, count=counted)
     with_known = len(calls)
 
     assert with_known == without - 1
 
 
-def test_a_known_size_under_the_ceiling_short_circuits(monkeypatch) -> None:
+def test_a_known_size_under_the_ceiling_short_circuits() -> None:
     """The contract callers rely on: pass a size and it is believed."""
-    from app.modules.agent.infrastructure.harnesses import history as history_module
 
-    monkeypatch.setattr(
-        history_module,
-        "count_model_message_tokens",
-        lambda messages: pytest.fail("should not have measured"),
-    )
+    def refuse(messages):
+        pytest.fail("should not have measured")
+
     messages = [_text("filler " * 500) for _ in range(20)]
 
-    assert enforce_token_ceiling(messages, ceiling=5_000, known_size=10) == messages
+    assert (
+        enforce_token_ceiling(messages, ceiling=5_000, known_size=10, count=refuse)
+        == messages
+    )
 
 
 class TestTheCeilingGuardActuallyEnforces:

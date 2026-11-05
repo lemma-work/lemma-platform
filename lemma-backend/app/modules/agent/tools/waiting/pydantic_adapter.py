@@ -30,14 +30,20 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
 from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
-from app.modules.agent.domain.wait import AgentConversationWaitEntity, AgentWaitType
+from app.modules.agent.domain.wait import (
+    AgentConversationWaitEntity,
+    AgentWaitType,
+    WaitSpec,
+)
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
 from app.modules.agent.services.run_suspension import suspend_remote_run
+from app.modules.agent.services.wait_timers import arm_wait
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.agent.tools.waiting.models import (
@@ -88,7 +94,7 @@ async def wait_for(
       anything you need to keep to the pod first.
 
     Don't use it to wait for a person: `ask_user` pauses for the one you are
-    talking to, and `message_user` ends your turn and gets you a new one when
+    talking to, and `channel_post` ends your turn and gets you a new one when
     the answers arrive.
     """
     deps = ctx.deps
@@ -128,6 +134,18 @@ async def wait_for(
                 f"Minimum wait is {MIN_WAIT_SECONDS}s — waking replays this "
                 "whole conversation, so anything shorter costs more than it "
                 "saves. Do the work now instead."
+            ),
+        )
+
+    if request.max_seconds is not None and request.max_seconds < MIN_WAIT_SECONDS:
+        # `max_seconds=0` used to fall through to the default and silently mean
+        # the whole default ceiling -- the opposite of what was asked.
+        return WaitForResponse(
+            success=False,
+            error=(
+                f"`max_seconds` must be at least {MIN_WAIT_SECONDS}s. Leave it out "
+                f"for the default of {DEFAULT_TARGET_DEADLINE_SECONDS // 60} "
+                "minutes, or set it to how long you are prepared to wait."
             ),
         )
 
@@ -186,22 +204,23 @@ async def wait_for(
         wait_type=wait_type,
         external_ref=str(wait_ref),
         scheduled_at=scheduled_at,
-        spec={
-            "reason": request.reason,
-            "note_to_self": request.note_to_self,
-            "started_at": now.isoformat(),
-            "deadline_at": deadline_at.isoformat(),
-            "target_ref": external_ref,
-            "user_id": str(deps.user_id),
-            # The unclamped ask, kept so the resolution can see what the model
-            # actually wanted rather than only what it was allowed.
-            "requested_seconds": request.seconds,
-            "requested_max_seconds": request.max_seconds,
-        },
+        spec=WaitSpec(
+            reason=request.reason,
+            note_to_self=request.note_to_self,
+            started_at=now,
+            deadline_at=deadline_at,
+            target_ref=external_ref,
+            user_id=deps.user_id,
+            requested_seconds=request.seconds,
+            requested_max_seconds=request.max_seconds,
+        ).to_json(),
     )
     suspends_itself = bool(getattr(deps, "supports_pause_signal", False))
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         await AgentConversationWaitRepository(uow).create(wait)
+        # The wait's timer is a work item committed with the row: there is no
+        # window in which a wait exists that nothing will fire.
+        await arm_wait(WorkWriter.of(uow), wait, scheduled_at)
         # One transaction, because a run asked to stop with no wait row to wake
         # it is an agent that waits forever.
         host_to_poke = (
@@ -250,7 +269,17 @@ async def _already_settled(
         target_ref=external_ref,
         user_id=deps.user_id,
         pod_id=deps.pod_id,
+        conversation_id=deps.conversation_id,
     )
+    if outcome.unreadable:
+        # The wait still goes ahead -- the resolver gives an unreadable target a
+        # grace period -- but it starts blind, and the probe failing is the only
+        # trace of why a wait that should have answered at once did not.
+        logger.warning(
+            "agent.wait.target_unreadable_at_suspend.degraded",
+            conversation_id=str(deps.conversation_id),
+            wait_type=wait_type.value,
+        )
     if outcome.reason is None:
         return None
     return WaitForResponse(

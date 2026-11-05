@@ -154,6 +154,59 @@ class TestSetConfigIsRejected:
         analyze_query(query)
 
 
+class TestFunctionsThatReadByStringAreRejected:
+    """A table named inside a string is invisible to the per-table read check.
+
+    The query role can use every pod's schema, so `table_to_xml` on another
+    pod's table read another organization's rows, and `query_to_xml` ran any
+    SQL at all -- the catalog included -- without naming a single table.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT table_to_xml('pod_x.customers', true, false, '')",
+            "SELECT query_to_xml('select * from pod_x.customers', true, false, '')",
+            "SELECT query_to_xml('select nspname from pg_namespace', true, false, '')",
+            "SELECT * FROM query_to_xml('select 1', true, false, '')",
+            "SELECT pg_catalog.table_to_xml('pod_x.customers', true, false, '')",
+            "SELECT TABLE_TO_XML('pod_x.customers', true, false, '')",
+            "SELECT schema_to_xml('pod_x', true, false, '')",
+            "SELECT database_to_xml(true, false, '')",
+            "SELECT table_to_xml_and_xmlschema('pod_x.t', true, false, '')",
+            "SELECT * FROM expenses WHERE EXISTS (SELECT query_to_xml('select 1', true, false, ''))",
+            "SELECT ts_stat('select v from pod_x.docs')",
+            "SELECT ts_rewrite('a'::tsquery, 'select q, s from pod_x.rules')",
+            "SELECT dblink('host=elsewhere', 'select 1')",
+            "SELECT lo_get(16384)",
+            "SELECT pg_read_file('/etc/passwd')",
+            "SELECT pg_read_binary_file('/etc/passwd')",
+            "SELECT pg_ls_dir('.')",
+            "SELECT * FROM pg_ls_logdir()",
+            "SELECT * FROM pg_ls_waldir()",
+            "SELECT pg_notify('datastore_pending', 'x')",
+            "SELECT pg_advisory_lock(1)",
+            "SELECT pg_terminate_backend(1)",
+        ],
+    )
+    def test_rejected(self, query):
+        with pytest.raises(DatastoreQueryError, match="not allowed"):
+            analyze_query(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT xmlelement(name e, name) FROM expenses",
+            "SELECT id FROM expenses WHERE note = 'table_to_xml'",
+            "SELECT to_tsvector(name) @@ to_tsquery('lunch') FROM expenses",
+            # The three-argument overload rewrites a tsquery; it runs no SQL text.
+            "SELECT ts_rewrite('a & b'::tsquery, 'a'::tsquery, 'c'::tsquery)",
+        ],
+    )
+    def test_ordinary_queries_still_pass(self, query):
+        analyze_query(query)
+
+
 def test_extract_referenced_tables_delegates_to_analyze_query():
     assert extract_referenced_tables(
         "SELECT * FROM customers c JOIN orders o ON o.cid = c.id"

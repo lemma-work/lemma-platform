@@ -27,6 +27,8 @@ from lemma_pod_bundle.normalize import _split_resource_permissions_payload
 
 from ..io import to_plain
 from ..payload import build_request
+from rich.markup import escape
+
 from ..state import console, err_console
 
 # Grantee kinds and the pod-SDK resource that serves each. Both expose the same
@@ -138,7 +140,7 @@ def render_grants(kind: str, name: str, grants: list[dict[str, Any]]) -> None:
     """
     if not grants:
         console.print(
-            f"  [yellow]none[/yellow] — {kind} '{name}' has zero access to pod "
+            f"  [yellow]none[/yellow] — {kind} '{escape(name)}' has zero access to pod "
             "resources."
         )
         return
@@ -146,7 +148,8 @@ def render_grants(kind: str, name: str, grants: list[dict[str, Any]]) -> None:
         permission_ids = ", ".join(grant.get("permission_ids") or [])
         console.print(
             f"  {grant.get('resource_type')} {grant.get('resource_name')}: "
-            f"{permission_ids}"
+            f"{permission_ids}",
+            markup=False,
         )
 
 
@@ -167,7 +170,7 @@ def emit_grants(state: Any, kind: str, name: str, payload: Any) -> None:
     if getattr(state, "output", None) == "json":
         emit(state, {"grants": grants})
         return
-    console.print(f"[bold]{kind} {name}[/bold] — {len(grants)} grant(s)")
+    console.print(f"[bold]{kind} {escape(name)}[/bold] — {len(grants)} grant(s)")
     render_grants(kind, name, grants)
 
 

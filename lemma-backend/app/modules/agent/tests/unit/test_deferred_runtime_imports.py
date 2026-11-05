@@ -34,6 +34,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 
 pytestmark = pytest.mark.unit
@@ -59,7 +61,13 @@ def _resolved_stub(capabilities):
     return SimpleNamespace(
         model=SimpleNamespace(capabilities=capabilities),
         credentials=None,
-        public_snapshot=dict,
+        runtime_snapshot=_snapshot,
+    )
+
+
+def _snapshot() -> RuntimeSnapshot:
+    return RuntimeSnapshot(
+        profile_id="p", profile_name="p", scope="SYSTEM", protocol="OPENAI_COMPATIBLE"
     )
 
 
@@ -99,7 +107,7 @@ class TestVisionModelResolution:
     ) -> None:
         """The capability guard must be reachable, not shadowed by ImportError.
 
-        Its whole purpose is to fail with a message naming VISION_MODEL rather
+        Its whole purpose is to fail with a message naming the cause rather
         than as an opaque provider error -- which only works if execution gets
         that far.
         """
@@ -117,16 +125,19 @@ class TestVisionModelResolution:
                     organization_id=None, user_id=uuid4()
                 )
 
-        assert "VISION_MODEL" in str(caught.value)
+        message = str(caught.value)
+        assert "deepseek-v4-flash" in message and "reading images" in message
+        # The setting is for whoever runs the deployment; the log names it.
+        assert "VISION_MODEL" not in message
 
     @pytest.mark.asyncio
     async def test_no_configured_model_raises_before_any_deferred_import(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The early-return path the module docstring describes but nothing
-        actually exercised: with VISION_MODEL unset, resolution must fail fast
-        naming the setting, without ever reaching the deferred imports (and so
-        without ever calling out to AgentRuntimeProfileService)."""
+        actually exercised: with VISION_MODEL unset, resolution must fail fast,
+        without ever reaching the deferred imports (and so without ever calling
+        out to AgentRuntimeProfileService)."""
         from app.modules.agent.services import vision_service
 
         monkeypatch.delenv("VISION_MODEL", raising=False)
@@ -142,7 +153,39 @@ class TestVisionModelResolution:
                     organization_id=None, user_id=uuid4()
                 )
 
-        assert "VISION_MODEL" in str(caught.value)
+        assert "reads images" in str(caught.value)
+        assert "VISION_MODEL" not in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_model_the_system_does_not_offer_is_reported_as_that(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Resolution refuses a name the profile does not list -- in words
+        written for a teammate's pinned model. For vision the cause is that the
+        deployment does not offer the model, not that it cannot read images."""
+        from app.modules.agent.domain.errors import RuntimeUnavailableError
+        from app.modules.agent.services import vision_service
+
+        monkeypatch.setenv("VISION_MODEL", "retired-vision-model")
+
+        with patch(
+            "app.modules.agent.services.runtime_profile_service."
+            "AgentRuntimeProfileService.resolve",
+            new=AsyncMock(
+                side_effect=RuntimeUnavailableError(
+                    "System no longer offers retired-vision-model, the model "
+                    "this teammate is set to use."
+                )
+            ),
+        ):
+            with pytest.raises(vision_service.VisionUnavailableError) as caught:
+                await vision_service._resolve_vision_model(
+                    organization_id=None, user_id=uuid4()
+                )
+
+        message = str(caught.value)
+        assert "retired-vision-model" in message and "not offered" in message
+        assert "teammate" not in message and "VISION_MODEL" not in message
 
     @pytest.mark.asyncio
     async def test_a_model_the_factory_cannot_build_is_reported_by_name(
@@ -189,7 +232,7 @@ class TestVisionModelResolution:
         monkeypatch.setenv("VISION_MODEL", "unlisted-model")
         sentinel = object()
         resolved_without_entry = SimpleNamespace(
-            model=None, credentials=None, public_snapshot=dict
+            model=None, credentials=None, runtime_snapshot=_snapshot
         )
 
         with (

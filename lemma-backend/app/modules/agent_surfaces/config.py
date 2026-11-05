@@ -75,6 +75,15 @@ class SurfaceSettings(BaseSettings):
             "testing of Bot Framework/Graph token acquisition."
         ),
     )
+    microsoft_bot_service_extra_host: Optional[str] = Field(
+        default=None,
+        description=(
+            "One more host, besides Microsoft's Bot Framework endpoints, that a "
+            "Teams activity's serviceUrl may name and so receive the bot token. "
+            "For test doubles and gateways only; it joins the allow-list, it "
+            "does not replace it."
+        ),
+    )
     microsoft_bot_app_name: Optional[str] = Field(
         default=None,
         description=(
@@ -131,6 +140,19 @@ class SurfaceSettings(BaseSettings):
     whatsapp_app_secret: Optional[SecretStr] = Field(
         default=None,
         description="Meta app secret for verifying WhatsApp webhook signatures",
+    )
+    whatsapp_reengage_template: str | None = Field(
+        default=None,
+        description=(
+            "An approved message template on the shared WhatsApp number's "
+            "business account, sent to a member whose 24-hour window has closed "
+            "on a surface with no template of its own. Unset, such a message is "
+            "refused."
+        ),
+    )
+    whatsapp_reengage_template_language: str = Field(
+        default="en_US",
+        description="The language code of WHATSAPP_REENGAGE_TEMPLATE.",
     )
     whatsapp_display_phone_number: Optional[str] = Field(
         default=None,
@@ -228,17 +250,6 @@ class SurfaceSettings(BaseSettings):
             "short enough that coming back later still gets an answer."
         ),
     )
-    surface_dm_conversation_reset_after_hours: int = Field(
-        default=24,
-        description=(
-            "Hours since a person's last inbound DM after which their next "
-            "message opens a fresh Lemma conversation instead of continuing the "
-            "old one. This is the only way a surface decides which conversation "
-            "a message joins; what the agent then sees of that conversation is "
-            "the agent module's business. Set to 0 to never start a fresh DM "
-            "conversation on inactivity."
-        ),
-    )
     surface_outsider_turns_per_person_per_10_minutes: int = Field(
         default=10,
         description=(
@@ -283,6 +294,31 @@ class SurfaceSettings(BaseSettings):
         default=500,
         description="How many times one web form may be submitted in a day.",
     )
+    surface_web_attachment_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        gt=0,
+        description=(
+            "The largest file a person outside may attach to one answer of a "
+            "web form. Anybody with the page can send one, so it is smaller "
+            "than a member's upload."
+        ),
+    )
+    surface_web_attachments_max_bytes: int = Field(
+        default=25 * 1024 * 1024,
+        gt=0,
+        description=(
+            "The most one web form response may carry, every attached file "
+            "and answer together."
+        ),
+    )
+    surface_web_reads_per_widget_per_day: int = Field(
+        default=20000,
+        description=(
+            "How many times pages may read Public tables through one web widget "
+            "in a day. Reads start no agent work, so this is a crawl ceiling, "
+            "not a cost one."
+        ),
+    )
     surface_web_stream_seconds: int = Field(
         default=300,
         description=(
@@ -297,15 +333,6 @@ class SurfaceSettings(BaseSettings):
             "How many strangers one bot set to answer anyone may turn into "
             "contacts in a day. Past it, new senders go unanswered until the "
             "next day; contacts it already knows are unaffected."
-        ),
-    )
-    surface_contact_follow_ups_per_contact_per_day: int = Field(
-        default=10,
-        ge=0,
-        description=(
-            "How many messages members may write first to one contact in a "
-            "day. A follow-up speaks for the pod to somebody who did not ask, "
-            "on a number or address whose sender reputation the pod depends on."
         ),
     )
     surface_parked_mail_notes_per_surface_per_hour: int = Field(
@@ -353,6 +380,17 @@ class SurfaceSettings(BaseSettings):
             "Start the native Slack Socket Mode receiver from the worker process. "
             "Requires SLACK_APP_TOKEN. Workspace bot credentials are resolved from "
             "the matched surface account."
+        ),
+    )
+    surface_send_backoff_scale: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Multiplies the exponential wait between inline retries of a "
+            "platform send (0.5s doubling to 8s). Attempt counts and a "
+            "platform's Retry-After are unchanged. Tests that make a fake "
+            "platform fail on purpose shrink it. Env: "
+            "``SURFACE_SEND_BACKOFF_SCALE``."
         ),
     )
     enable_resend_polling_mode: bool = Field(

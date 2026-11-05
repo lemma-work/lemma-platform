@@ -27,7 +27,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.domain.outsiders import OUTSIDE_ANSWER_TOOL
+from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.services.vision_service import vision_delegate_available
@@ -35,6 +35,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     agent_host_permission_request,
 )
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.approvals import expired_unanswered
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.run_budget_pause import is_budget_pause
@@ -45,10 +46,7 @@ from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
 from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.services.pod_runtime_defaults import (
-    default_agent_runtime_for_pod,
-)
-from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.agent.domain.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
 
@@ -79,6 +77,26 @@ def _budget_decision_return(decision: AgentRunApprovalDecision) -> dict[str, obj
             "anything new."
         ),
     }
+
+
+def _unanswered_message(response: dict[str, object]) -> str:
+    if expired_unanswered(response):
+        return (
+            "Nobody answered these questions in the time they had, and they "
+            "expired. Do not assume an answer: carry on without one, or ask "
+            "again if you still need it."
+        )
+    return "User dismissed the questions without answering."
+
+
+def _denied_message(inner_tool: str, response: dict[str, object]) -> str:
+    if expired_unanswered(response):
+        return (
+            f"Nobody decided whether to run {inner_tool} in the time the request "
+            "had, so it expired and did not run. Treat it as not approved; ask "
+            "again if it is still needed."
+        )
+    return f"User denied running {inner_tool}."
 
 
 class ResumeToolReturnBuilder:
@@ -122,7 +140,7 @@ class ResumeToolReturnBuilder:
             if decision == AgentRunApprovalDecision.DENY:
                 content = AskUserResponse(
                     success=False,
-                    message="User dismissed the questions without answering.",
+                    message=_unanswered_message(response),
                 )
             else:
                 answers: dict[str, object] = {}
@@ -180,7 +198,7 @@ class ResumeToolReturnBuilder:
         if decision == AgentRunApprovalDecision.DENY:
             content = RequestApprovalResponse(
                 success=False,
-                message=f"User denied running {inner_tool}.",
+                message=_denied_message(inner_tool, response),
                 decision=decision,
                 executed=False,
                 response=response,
@@ -192,8 +210,10 @@ class ResumeToolReturnBuilder:
             # workload can keep performing this action type in this
             # conversation (the authorizer honors it as an ephemeral grant,
             # which is the only unlock for DESTRUCTIVE_ACTIONS besides an
-            # explicit grant). The permission ids ride in the request_approval
-            # args, copied by the agent from the denied tool result.
+            # explicit grant). The permissions are what the card showed: the
+            # server's record of what it refused when the card went up -- not
+            # the request_approval's own `permission_ids`, which are the
+            # model's words, nor anything refused since (H6).
             # Queued, not awaited: a Redis write inline holds a connection
             # inside an open write transaction, and a rollback must not leave an
             # approval standing. Lands before the tool runs because
@@ -204,8 +224,10 @@ class ResumeToolReturnBuilder:
                     record_session_approvals,
                     conversation_id=conversation.id,
                     agent_id=conversation.agent_id,
+                    pod_id=conversation.pod_id,
                     tool_args=tool_args,
                     user_id=user_id,
+                    approval_id=tool_call_id,
                 )
             )
 
@@ -352,11 +374,8 @@ class ResumeToolReturnBuilder:
         """
         from app.core.infrastructure.db.session import async_session_maker
         from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-        from app.modules.agent.infrastructure.repositories import (
-            AgentRuntimeProfileRepository,
-        )
         from app.modules.agent.services.runtime_profile_service import (
-            AgentRuntimeProfileService,
+            runtime_profile_service_for,
         )
         from app.modules.agent.tools.callable_tool_factory import (
             AgentCallableToolFactory,
@@ -365,8 +384,7 @@ class ResumeToolReturnBuilder:
         from app.modules.agent.services.host_execution_selection import (
             recorded_host_workspace,
         )
-        from app.core.crypto import get_secret_cipher
-        from app.modules.agent.services.workspace_location import resolve_pod_cwd
+        from app.modules.agent.domain.workspace_location import resolve_pod_cwd
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         agent = await resolve_agent(
@@ -374,16 +392,9 @@ class ResumeToolReturnBuilder:
             user_id=user_id,
             agent_repository=self.agent_repository,
         )
-        selected_runtime = (
-            conversation.agent_runtime
-            or agent.agent_runtime
-            or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
-        )
+        selected_runtime = await turn_runtime(self.uow, conversation, agent)
         async with uow_factory() as uow:
-            profile_service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
-            )
-            resolved = await profile_service.resolve(
+            resolved = await runtime_profile_service_for(uow).resolve(
                 runtime=selected_runtime,
                 organization_id=conversation.organization_id,
                 user_id=user_id,
@@ -412,8 +423,7 @@ class ResumeToolReturnBuilder:
             workload_id=agent.id,
             is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
             configured_accounts=configured_accounts,
-            runtime_profile=resolved.public_snapshot(),
-            runtime_credentials=resolved.credentials or {},
+            runtime_profile=resolved.runtime_snapshot().as_payload(),
             workspace_id=workspace_location.workspace_id,
             workspace_cwd=workspace_location.cwd,
             workspace_repo=workspace_location.repo,
@@ -428,12 +438,6 @@ class ResumeToolReturnBuilder:
 def _remembered_for_the_session(
     decision: AgentRunApprovalDecision, tool_name: str
 ) -> bool:
-    """Whether this approval also stands for later calls in the conversation.
-
-    Never for an answer to someone outside the pod: it is approved word for
-    word, once, and nothing about it carries to the next one.
-    """
-    return (
-        decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION
-        and tool_name != OUTSIDE_ANSWER_TOOL
-    )
+    """Whether this approval also stands for later calls in the conversation."""
+    del tool_name
+    return decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION

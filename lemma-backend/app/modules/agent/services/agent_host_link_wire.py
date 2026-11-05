@@ -19,6 +19,7 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.log.log import get_logger
+from app.core.server_limits import WS_MAX_BYTES
 from app.modules.agent.domain.agent_host import (
     AgentHostCommand,
     AgentHostCommandRejection,
@@ -111,6 +112,23 @@ class LinkRequestError(Exception):
         self.code = code
         self.message = message
         self.retryable = retryable
+
+
+class OutboundFrameTooLarge(Exception):
+    """A frame Lemma would send a host is past ``WS_MAX_BYTES``; not sent.
+
+    Raised only for a frame that answers nothing -- a push, or an ``op`` --
+    whose sender decides what failing it means. An answer too large is
+    answered ``FRAME_TOO_LARGE`` instead, by the writer itself.
+    """
+
+    def __init__(self, frame_type: str, size: int) -> None:
+        super().__init__(
+            f"a {frame_type} frame of {size} bytes is past the link's "
+            f"{WS_MAX_BYTES}-byte ceiling"
+        )
+        self.frame_type = frame_type
+        self.size = size
 
 
 class EmptyBody(BaseModel):
@@ -240,6 +258,8 @@ class LinkWriter:
         self._lock = asyncio.Lock()
         self._on_lost = on_lost
         self.peer_gone = False
+        #: For the log line a refused frame leaves; set once ``hello`` names it.
+        self.host_id: UUID | None = None
 
     async def send_frame(
         self,
@@ -255,6 +275,9 @@ class LinkWriter:
             re=re,
             body=body.model_dump(mode="json"),
         ).model_dump_json(exclude_none=True)
+        size = len(text.encode())
+        if size > WS_MAX_BYTES:
+            text = self._refused(frame_type, size, re=re, id=id)
         async with self._lock:
             if self.peer_gone:
                 return
@@ -262,6 +285,37 @@ class LinkWriter:
                 await self._socket.send_text(text)
             except WebSocketDisconnect, RuntimeError, OSError:
                 self.lost()
+
+    def _refused(
+        self, frame_type: ServerFrameType, size: int, *, re: str | None, id: str | None
+    ) -> str:
+        """The one outbound guard: no frame past the ceiling reaches the host.
+
+        The host would read it -- its own limit is far higher -- but one frame
+        of many megabytes holds up every answer queued behind it on the only
+        socket the machine has. An answer becomes an ``error`` for that one
+        request; anything else is raised to the code that sent it.
+        """
+        logger.warning(
+            "agent.agent_host_link.frame_too_large",
+            host_id=str(self.host_id) if self.host_id else None,
+            frame_type=frame_type.value,
+            size_bytes=size,
+        )
+        if re is None or id is not None:
+            raise OutboundFrameTooLarge(frame_type.value, size)
+        return LinkFrame(
+            type=ServerFrameType.ERROR.value,
+            re=re,
+            body=ServerErrorBody(
+                code=LinkErrorCode.FRAME_TOO_LARGE,
+                message=(
+                    f"the answer is {size} bytes, past the {WS_MAX_BYTES} bytes "
+                    "one link frame carries"
+                ),
+                retryable=False,
+            ).model_dump(mode="json"),
+        ).model_dump_json(exclude_none=True)
 
     async def send_error(
         self,
@@ -324,6 +378,10 @@ class SentCommands:
     def acknowledged(self, command_ids: list[UUID]) -> None:
         for command_id in command_ids:
             self._sent_at.pop(command_id, None)
+
+    def forget(self, command_ids: list[UUID]) -> None:
+        """Commands handed out that never reached the socket after all."""
+        self.acknowledged(command_ids)
 
 
 async def answer_request(

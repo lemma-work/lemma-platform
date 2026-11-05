@@ -76,6 +76,21 @@ class LinkOwnership:
         superseded, and announces nothing then -- a link on its way out must
         not unseat the one that replaced it.
         """
+        newer = await self.newer_generation(host_id)
+        if newer is not None:
+            return newer
+        await self._announce(host_id)
+        return None
+
+    async def newer_generation(self, host_id: UUID) -> int | None:
+        """The generation that has superseded this link, as the database says.
+
+        Read at the claim and again on every push floor tick. The notice is
+        the fast path and this is the floor under it: a link whose
+        subscription degraded to the timer, or that missed a newer link's
+        announcement, otherwise never learned it had lost the host, and two
+        sockets went on pushing commands and claiming ops for it.
+        """
         try:
             current = await self._store.link_generation(host_id)
         except TRANSIENT_ERRORS:
@@ -86,10 +101,9 @@ class LinkOwnership:
                 host_id=str(host_id),
                 exc_info=True,
             )
-            current = None
+            return None
         if current is not None and current > self.generation:
             return current
-        await self._announce(host_id)
         return None
 
     async def _announce(self, host_id: UUID) -> None:

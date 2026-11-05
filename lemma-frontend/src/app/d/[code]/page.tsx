@@ -1,5 +1,6 @@
 import { configuredApiUrl, MISSING_API_URL } from "@/session/origins";
 import { readAs, toRows } from "./kinds";
+import { rewriteHtml } from "./embedded";
 import { SharedProse } from "./shared-prose";
 import { SharedShell } from "./shared-shell";
 
@@ -112,18 +113,19 @@ export default async function SharedDocument({ params }: { params: Promise<{ cod
         const text = await response.text();
 
         if (kind === "markdown") {
-            return <SharedShell name={name} download={download}><SharedProse text={text} /></SharedShell>;
+            return <SharedShell name={name} download={download}><SharedProse text={text} code={code} /></SharedShell>;
         }
 
         if (kind === "html") {
             /* Sandboxed with nothing granted. Inside the app an agent's HTML
                may run scripts, because a signed-in member asked for it; this
                page is opened by strangers from a link, so the markup renders
-               and nothing executes. */
+               and nothing executes. What it loads from the pod — pictures,
+               stylesheets — comes through the link (`embedded.ts`). */
             return (
                 <SharedShell name={name} download={download} bleed>
                     {/* A shared HTML file is a page. It gets the screen. */}
-                    <iframe className="shared__frame" sandbox="" srcDoc={text} title={name} />
+                    <iframe className="shared__frame" sandbox="" srcDoc={rewriteHtml(text, code)} title={name} />
                 </SharedShell>
             );
         }

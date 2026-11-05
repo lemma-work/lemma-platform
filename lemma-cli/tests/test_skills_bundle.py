@@ -134,3 +134,21 @@ def test_builder_skill_documents_every_grantable_toolset():
         f"agents.md documents unknown toolsets: "
         f"{sorted(documented - grantable - _UNGRANTABLE_TOOLSETS)}"
     )
+
+
+def test_user_skill_names_the_surfaces_the_pod_already_has():
+    """The skill an agent loads *inside* a pod has to carry this.
+
+    ``lemma-builder`` documents surfaces, but an agent operating an existing pod
+    is pointed at ``lemma-user`` — and asked to set a pod up to send email, a run
+    offered to create an address, because nothing it read said surfaces exist or
+    that every agent already has a mailbox.
+    """
+    repo = _repo_skills_dir()
+    if repo is None:
+        pytest.skip("repo-root lemma-skills/ not available")
+    skill = (repo / "lemma-user" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "lemma surfaces list" in skill
+    assert "lemma surfaces get resend-assistant" in skill
+    assert "minted an email surface when it is created" in skill

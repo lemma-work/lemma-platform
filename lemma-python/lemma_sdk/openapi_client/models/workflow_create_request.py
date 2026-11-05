@@ -36,6 +36,9 @@ class WorkflowCreateRequest:
         description (None | str | Unset): Optional workflow description.
         edges (list[WorkflowEdge] | Unset): Optional initial graph edges connecting the provided nodes.
         icon_url (None | str | Unset): Optional public icon URL for the workflow.
+        max_concurrent_runs (int | None | Unset): How many runs of this workflow may be in progress at once. A run
+            started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run
+            finishes. Null means no limit.
         mode (WorkflowMode | Unset): Workflow schedule ownership mode.
         nodes (list[AgentNode | DecisionNode | EndNode | FormNode | FunctionNode | LoopNode | WaitUntilNode] | Unset):
             Optional initial graph nodes. When provided, the graph is stored at creation time so a separate
@@ -56,6 +59,7 @@ class WorkflowCreateRequest:
     description: None | str | Unset = UNSET
     edges: list[WorkflowEdge] | Unset = UNSET
     icon_url: None | str | Unset = UNSET
+    max_concurrent_runs: int | None | Unset = UNSET
     mode: WorkflowMode | Unset = UNSET
     nodes: (
         list[
@@ -113,6 +117,12 @@ class WorkflowCreateRequest:
             icon_url = UNSET
         else:
             icon_url = self.icon_url
+
+        max_concurrent_runs: int | None | Unset
+        if isinstance(self.max_concurrent_runs, Unset):
+            max_concurrent_runs = UNSET
+        else:
+            max_concurrent_runs = self.max_concurrent_runs
 
         mode: str | Unset = UNSET
         if not isinstance(self.mode, Unset):
@@ -175,6 +185,8 @@ class WorkflowCreateRequest:
             field_dict["edges"] = edges
         if icon_url is not UNSET:
             field_dict["icon_url"] = icon_url
+        if max_concurrent_runs is not UNSET:
+            field_dict["max_concurrent_runs"] = max_concurrent_runs
         if mode is not UNSET:
             field_dict["mode"] = mode
         if nodes is not UNSET:
@@ -232,6 +244,17 @@ class WorkflowCreateRequest:
             return cast(None | str | Unset, data)
 
         icon_url = _parse_icon_url(d.pop("icon_url", UNSET))
+
+        def _parse_max_concurrent_runs(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        max_concurrent_runs = _parse_max_concurrent_runs(
+            d.pop("max_concurrent_runs", UNSET)
+        )
 
         _mode = d.pop("mode", UNSET)
         mode: WorkflowMode | Unset
@@ -398,6 +421,7 @@ class WorkflowCreateRequest:
             description=description,
             edges=edges,
             icon_url=icon_url,
+            max_concurrent_runs=max_concurrent_runs,
             mode=mode,
             nodes=nodes,
             run_title=run_title,

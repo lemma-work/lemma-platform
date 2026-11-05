@@ -18,6 +18,8 @@ the production path had no coverage.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.modules.agent_surfaces.platforms.email_authentication import (
@@ -257,3 +259,82 @@ def test_an_authserv_id_wrapped_in_a_comment_still_matches_its_name():
 def test_a_forged_header_is_ignored_when_the_receiver_is_named():
     headers = _list("evil.example; dmarc=pass", "mx.google.com; dmarc=fail")
     assert _verdict(headers, trusted=RECEIVER) is EmailAuthenticationVerdict.FAIL
+
+
+# ── A forger can write the trusted id too ───────────────────────────────────
+
+_SES = frozenset({"amazonses.com"})
+_REAL_NO_DMARC = (
+    "amazonses.com; spf=pass smtp.mailfrom=bounce@evil.com; "
+    "dkim=pass header.i=@evil.com; dmarc=none header.from=corp.com"
+)
+_FORGED_PASS = "amazonses.com; dmarc=pass header.from=corp.com"
+
+
+def test_a_forged_header_bearing_the_trusted_id_cannot_upgrade_unknown():
+    """The receiver prepends its own header; the sender's copy comes after it."""
+    headers = _list(_REAL_NO_DMARC, _FORGED_PASS)
+
+    assert _verdict(headers, trusted=_SES) is EmailAuthenticationVerdict.UNKNOWN
+
+
+def test_the_same_forgery_in_resends_json_array_shape_cannot_upgrade_unknown():
+    """Resend returns a repeated header as a JSON array inside a string."""
+    headers = {"Authentication-Results": json.dumps([_REAL_NO_DMARC, _FORGED_PASS])}
+
+    assert _verdict(headers, trusted=_SES) is EmailAuthenticationVerdict.UNKNOWN
+
+
+def test_a_trusted_pass_contradicted_by_a_later_trusted_header_is_not_believed():
+    """With no header of the receiver's own, the forgery would be first."""
+    headers = _list(_FORGED_PASS, _REAL_NO_DMARC)
+
+    assert _verdict(headers, trusted=_SES) is not EmailAuthenticationVerdict.PASS
+
+
+def test_the_receivers_own_pass_still_passes_alone():
+    assert (
+        _verdict(_list(_FORGED_PASS), trusted=_SES) is EmailAuthenticationVerdict.PASS
+    )
+
+
+# ── A DMARC pass is for the domain it names ─────────────────────────────────
+
+
+def test_a_dmarc_pass_for_another_domain_does_not_vouch_for_this_one():
+    headers = _list("amazonses.com; dmarc=pass header.from=evil.com")
+
+    assert _verdict(headers, trusted=_SES) is EmailAuthenticationVerdict.UNKNOWN
+
+
+def test_a_dmarc_pass_for_a_subdomain_of_the_same_organization_aligns():
+    headers = _list("amazonses.com; dmarc=pass header.from=mail.corp.com")
+
+    assert _verdict(headers, trusted=_SES) is EmailAuthenticationVerdict.PASS
+
+
+# ── Relaxed alignment goes through the public-suffix list ───────────────────
+
+
+@pytest.mark.parametrize(
+    ("signing_domain", "sender", "expected"),
+    [
+        # A bare public suffix is nobody's organization.
+        ("com", "ceo@corp.com", EmailAuthenticationVerdict.UNKNOWN),
+        ("co.uk", "ceo@corp.co.uk", EmailAuthenticationVerdict.UNKNOWN),
+        ("github.io", "ceo@corp.github.io", EmailAuthenticationVerdict.UNKNOWN),
+        # Two tenants of a private suffix are two organizations.
+        ("evil.github.io", "ceo@corp.github.io", EmailAuthenticationVerdict.UNKNOWN),
+        # Relaxed mode aligns in both directions and across siblings.
+        ("corp.com", "ceo@news.corp.com", EmailAuthenticationVerdict.PASS),
+        ("news.corp.com", "ceo@corp.com", EmailAuthenticationVerdict.PASS),
+        ("mail.corp.com", "ceo@news.corp.com", EmailAuthenticationVerdict.PASS),
+        ("corp.co.uk", "ceo@sales.corp.co.uk", EmailAuthenticationVerdict.PASS),
+    ],
+)
+def test_dkim_alignment_compares_organizational_domains(
+    signing_domain: str, sender: str, expected: EmailAuthenticationVerdict
+):
+    headers = _list(f"amazonses.com; dkim=pass header.d={signing_domain}")
+
+    assert _verdict(headers, sender=sender, trusted=_SES) is expected

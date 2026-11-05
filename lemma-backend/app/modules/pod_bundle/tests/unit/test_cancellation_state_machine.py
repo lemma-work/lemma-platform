@@ -160,7 +160,7 @@ async def test_apply_job_terminalizes_preexisting_cancelling_state(monkeypatch):
     store = _Store(state)
     finalize = AsyncMock()
     monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: store)
-    monkeypatch.setattr(handlers, "streaq_worker", SimpleNamespace(context=object()))
+    monkeypatch.setattr(handlers, "_worker_ctx", lambda: object())
     staging = AsyncMock()
     monkeypatch.setattr(handlers, "BundleStagingStorage", lambda: staging)
     monkeypatch.setattr(handlers, "_finalize_import_cancellation", finalize)
@@ -193,7 +193,7 @@ async def test_fetch_jobs_terminalize_cancellation_control_flow(
     store = _Store(state)
     staging = AsyncMock()
     finalize = AsyncMock()
-    monkeypatch.setattr(handlers, "streaq_worker", SimpleNamespace(context=object()))
+    monkeypatch.setattr(handlers, "_worker_ctx", lambda: object())
     monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: store)
     monkeypatch.setattr(handlers, "BundleStagingStorage", lambda: staging)
     monkeypatch.setattr(
@@ -214,7 +214,7 @@ async def test_plan_job_terminalizes_cancellation_control_flow(monkeypatch):
     store = _Store(state)
     staging = AsyncMock()
     finalize = AsyncMock()
-    monkeypatch.setattr(handlers, "streaq_worker", SimpleNamespace(context=object()))
+    monkeypatch.setattr(handlers, "_worker_ctx", lambda: object())
     monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: store)
     monkeypatch.setattr(handlers, "BundleStagingStorage", lambda: staging)
     monkeypatch.setattr(
@@ -235,7 +235,7 @@ async def test_apply_job_catches_midflight_cancellation(monkeypatch):
     store = _Store(state)
     staging = AsyncMock()
     finalize = AsyncMock()
-    monkeypatch.setattr(handlers, "streaq_worker", SimpleNamespace(context=object()))
+    monkeypatch.setattr(handlers, "_worker_ctx", lambda: object())
     monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: store)
     monkeypatch.setattr(handlers, "BundleStagingStorage", lambda: staging)
     monkeypatch.setattr(
@@ -275,8 +275,8 @@ async def test_app_step_cancellation_checkpoints_committed_step_before_terminali
 
     monkeypatch.setattr(
         handlers,
-        "streaq_worker",
-        SimpleNamespace(context=SimpleNamespace(uow_factory=object())),
+        "_worker_ctx",
+        lambda: SimpleNamespace(uow_factory=object()),
     )
     monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: store)
     monkeypatch.setattr(handlers, "BundleStagingStorage", lambda: staging)
@@ -323,7 +323,7 @@ async def test_fetch_jobs_skip_missing_and_terminal_state(
     monkeypatch, task, extra_context, state
 ):
     store = _Store(state)
-    monkeypatch.setattr(handlers, "streaq_worker", SimpleNamespace(context=object()))
+    monkeypatch.setattr(handlers, "_worker_ctx", lambda: object())
     monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: store)
     monkeypatch.setattr(handlers, "BundleStagingStorage", AsyncMock)
     import_id = state.import_id if state is not None else uuid4()

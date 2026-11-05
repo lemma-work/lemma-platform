@@ -19,7 +19,7 @@ name = "lemma-agent-host"
 path = "src/main.rs"
 
 [dependencies]
-agent-client-protocol = { version = "=2.0.0", features = ["unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "=2.2.0", features = ["unstable_end_turn_token_usage"] }
 # The agent child is spawned through the protocol crate's escape hatch and
 # supervised here; see `SupervisedAgent` in acp.rs for why.
 async-process = "2.5"
@@ -31,6 +31,10 @@ clap = { version = "4.5", features = ["derive", "env"] }
 getrandom = "0.3"
 hex = "0.4"
 rusqlite = { version = "0.40.2", features = ["bundled", "uuid"] }
+# Bulk bytes beside the link: file chunks an op moves and images a run's events
+# name (`link::transfer`), since the link takes no message past 1 MiB. The
+# workspace's pinned version, already in the lockfile for the app and locald.
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

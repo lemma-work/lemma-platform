@@ -27,6 +27,7 @@ _MACHINE_WAIT_TYPES = (
     WorkflowRunWaitType.FUNCTION.value,
     WorkflowRunWaitType.AGENT.value,
     WorkflowRunWaitType.TIME.value,
+    WorkflowRunWaitType.DECISION.value,
 )
 
 _TERMINAL_STATUSES = (

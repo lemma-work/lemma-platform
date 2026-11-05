@@ -19,6 +19,10 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.modules.agent_surfaces.caches import (
+    PENDING_DISPLAY_PATHS,
+    surface_caches,
+)
 
 from app.modules.agent.tools.user_interaction.models import (
     DisplayResourceRequest,
@@ -32,7 +36,6 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
     DeliveryCardinality,
 )
-from app.modules.agent_surfaces.services import pending_envelope
 from app.modules.agent_surfaces.services.pending_envelope import (
     RunFiles,
     discard_display_paths,
@@ -53,10 +56,8 @@ def _held_paths_in_redis():
         redis_url=settings.redis_url, key_prefix="test:held", ttl_seconds=60
     )
     cache._redis = fakeredis.FakeAsyncRedis(decode_responses=True)
-    previous = pending_envelope._cache
-    pending_envelope._cache = cache
-    yield cache
-    pending_envelope._cache = previous
+    with surface_caches.substituted(PENDING_DISPLAY_PATHS, cache):
+        yield cache
 
 
 # --- the capability -------------------------------------------------------
@@ -164,8 +165,8 @@ async def test_held_files_are_visible_to_a_different_process(
         redis_url=settings.redis_url, key_prefix="test:held", ttl_seconds=60
     )
     other_process._redis = _held_paths_in_redis._redis
-    pending_envelope._cache = other_process
-    assert await held_display_paths(conversation, RUN) == ["/me/q3.pdf"]
+    with surface_caches.substituted(PENDING_DISPLAY_PATHS, other_process):
+        assert await held_display_paths(conversation, RUN) == ["/me/q3.pdf"]
 
 
 async def test_redis_being_down_declines_the_file_and_does_not_raise(
@@ -377,32 +378,6 @@ async def test_an_approval_is_asked_in_the_reply_rather_than_suppressed() -> Non
     body = call.kwargs["message"]
     assert "Delete order 42" in body
     assert '"approve"' in body and '"deny"' in body
-
-
-async def test_a_failed_run_on_email_says_so_instead_of_vanishing() -> None:
-    """It used to return early here, so the person's message simply disappeared
-    and nothing distinguished that from never having been read."""
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-    from uuid import uuid4
-
-    from app.modules.agent_surfaces.services.progress_observer import (
-        SurfaceAgentRunProgressObserver,
-    )
-
-    observer = SurfaceAgentRunProgressObserver.__new__(SurfaceAgentRunProgressObserver)
-    observer._error_delivered = False
-    observer._run_error_text = "I couldn't finish that request."
-    sent: list[str] = []
-    observer._send_agent_message = AsyncMock(  # type: ignore[method-assign]
-        side_effect=lambda **kwargs: sent.append(kwargs["message"])
-    )
-
-    await observer._deliver_run_error(
-        SimpleNamespace(id=uuid4(), metadata={"surface_platform": "RESEND"})
-    )
-
-    assert sent == ["I couldn't finish that request."]
 
 
 # --- what a run says aloud, on a surface that only gets one reply ------------

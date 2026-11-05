@@ -7,6 +7,8 @@ decides whether a delivery is worth retrying should not have to live in it.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -25,7 +27,7 @@ async def enrich_or_drop(
     adapter,
     surface: AgentSurfaceEntity,
     parsed: ParsedInboundSurfaceEvent,
-    credentials: dict,
+    credentials: SurfaceCredentials,
 ) -> ParsedInboundSurfaceEvent | None:
     """The enriched event, or None when this delivery is over.
 

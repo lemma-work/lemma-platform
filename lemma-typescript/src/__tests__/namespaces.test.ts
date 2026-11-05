@@ -7,12 +7,16 @@ import {
 } from "../namespaces/agent-runtime.js";
 import { AgentsNamespace } from "../namespaces/agents.js";
 import { DecisionsNamespace } from "../namespaces/decisions.js";
+import { PodLinksNamespace } from "../namespaces/pod-links.js";
+import { SchedulesNamespace } from "../namespaces/schedules.js";
 import { FunctionsNamespace } from "../namespaces/functions.js";
 import { RecordsNamespace } from "../namespaces/records.js";
 import type { ConversationsNamespace } from "../namespaces/conversations.js";
 import { AgentHostService } from "../openapi_client/services/AgentHostService.js";
 import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
+import { AgentAsksService } from "../openapi_client/services/AgentAsksService.js";
 import { DecisionsService } from "../openapi_client/services/DecisionsService.js";
+import { SchedulesService } from "../openapi_client/services/SchedulesService.js";
 import { FunctionsService } from "../openapi_client/services/FunctionsService.js";
 import { RecordsService } from "../openapi_client/services/RecordsService.js";
 
@@ -269,5 +273,80 @@ describe("DecisionsNamespace.make", () => {
       schema,
       priority: "interactive",
     });
+  });
+});
+
+describe("SchedulesNamespace.runs", () => {
+  it("asks for one status, or leaves out the events the filter skipped", async () => {
+    const listSpy = vi
+      .spyOn(SchedulesService, "scheduleRunList")
+      .mockResolvedValue({ items: [], limit: 20 } as never);
+    const schedules = new SchedulesNamespace(passthroughAdapter, () => "pod-1");
+
+    await schedules.runs("sched-1", { limit: 20, skipped: false });
+    await schedules.runs("sched-1", { status: "DEAD_LETTERED" });
+
+    expect(listSpy).toHaveBeenNthCalledWith(1, "pod-1", "sched-1", 20, undefined, false);
+    expect(listSpy).toHaveBeenNthCalledWith(2, "pod-1", "sched-1", 100, "DEAD_LETTERED", undefined);
+  });
+});
+
+describe("SchedulesNamespace.skips", () => {
+  it("pages with the token the server returned", async () => {
+    const listSpy = vi
+      .spyOn(SchedulesService, "scheduleSkipList")
+      .mockResolvedValue({ items: [], limit: 50 } as never);
+    const schedules = new SchedulesNamespace(passthroughAdapter, () => "pod-1");
+
+    await schedules.skips("sched-1");
+    await schedules.skips("sched-1", { limit: 10, pageToken: "next" });
+
+    expect(listSpy).toHaveBeenNthCalledWith(1, "pod-1", "sched-1", 50, undefined);
+    expect(listSpy).toHaveBeenNthCalledWith(2, "pod-1", "sched-1", 10, "next");
+  });
+});
+
+describe("PodLinksNamespace.connect", () => {
+  it("shares tables and folders for reading only", async () => {
+    const connectSpy = vi
+      .spyOn(AgentAsksService, "agentPodLinkConnect")
+      .mockResolvedValue(undefined as never);
+    const links = new PodLinksNamespace(passthroughAdapter);
+
+    await links.connect("pod-1", "pod-2", { tables: ["orders"], folders: ["/specs"] });
+    await links.connect("pod-1", "pod-3");
+
+    expect(connectSpy).toHaveBeenNthCalledWith(1, "pod-1", "pod-2", {
+      shares: [
+        {
+          resource_type: "datastore_table",
+          resource_name: "orders",
+          permission_ids: ["datastore.table.read", "datastore.record.read"],
+        },
+        { resource_type: "folder", resource_name: "/specs", permission_ids: ["folder.read"] },
+      ],
+    });
+    expect(connectSpy).toHaveBeenNthCalledWith(2, "pod-1", "pod-3", { shares: [] });
+  });
+
+  it("disconnects and lists against the pod named", async () => {
+    const disconnectSpy = vi
+      .spyOn(AgentAsksService, "agentPodLinkDisconnect")
+      .mockResolvedValue(undefined as never);
+    const listSpy = vi
+      .spyOn(AgentAsksService, "agentPodLinkList")
+      .mockResolvedValue({ items: [] } as never);
+    const askableSpy = vi
+      .spyOn(AgentAsksService, "agentAskablePodList")
+      .mockResolvedValue({ items: [] } as never);
+    const links = new PodLinksNamespace(passthroughAdapter);
+
+    await links.disconnect("pod-1", "pod-2");
+    await links.list("pod-1");
+    await links.askable("pod-1");
+
+    expect(disconnectSpy).toHaveBeenCalledWith("pod-1", "pod-2");
+    expect(listSpy).toHaveBeenCalledWith("pod-1");
+    expect(askableSpy).toHaveBeenCalledWith("pod-1");
   });
 });

@@ -257,10 +257,13 @@ def _todo_result(todos: list[JsonObject]) -> JsonObject:
         return result
     next_item = str(open_items[0].get("content", ""))
     result["next"] = next_item
+    # "As soon as it is finished", not "before starting the next": the plan is
+    # a record of progress, not a lock on the work, and independent steps can
+    # run in the same turn.
     result["reminder"] = (
         f"{len(todos) - len(open_items)} of {len(todos)} done. Next: {next_item}. "
-        f'Call write_todos(["- [x] {next_item}"]) the moment it is finished and '
-        "before starting the one after it -- not in a batch at the end."
+        f'Check it off with write_todos(["- [x] {next_item}"]) as soon as it is '
+        "finished, not in a batch at the end."
     )
     return result
 

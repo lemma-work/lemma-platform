@@ -1,4 +1,4 @@
-"""What one reader may do with a pod's groups.
+"""What one reader may do with a pod's group sources.
 
 Reading a group takes what reading its bot takes. Changing one -- switching its
 people outside the pod on or off, or taking it over -- is narrower: the member
@@ -7,7 +7,8 @@ answers for it; or an admin of the pod. Anyone else who configures the bot could
 otherwise take a colleague's clients off them, or open their group to
 strangers, without a word to them.
 
-And when an admin does change somebody's group, that member is told.
+When an admin does change somebody's group, that member is told
+(`services.group_owner_notes`).
 """
 
 from __future__ import annotations
@@ -19,22 +20,10 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     may_perform_surface_agent_action,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
+from app.modules.agent_surfaces.services.source_settings import (
+    SourceSettings,
+    SourceState,
 )
-from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
-    SqlAlchemySurfaceRoutingResolutionAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceRepository,
-)
-from app.modules.agent_surfaces.services.space_groups import GroupSummary
 
 
 class GroupAccess:
@@ -62,7 +51,7 @@ class GroupAccess:
             self._admin = bool(await self.ctx.can(Permissions.POD_MEMBER_MANAGE))
         return self._admin
 
-    async def manages(self, summary: GroupSummary) -> bool:
+    async def manages(self, summary: SourceState) -> bool:
         """Whether the reader may switch this group's outsiders or take it over."""
         if not await self.configures(summary.group.surface_id):
             return False
@@ -84,41 +73,6 @@ class GroupAccess:
 
     async def _agent_of(self, surface_id: UUID) -> UUID | None:
         if surface_id not in self._agents:
-            surface = await SurfaceRepository(self.uow).get(surface_id)
+            surface = await SourceSettings(self.uow).surface(surface_id)
             self._agents[surface_id] = surface.agent_id if surface else None
         return self._agents[surface_id]
-
-
-async def tell_previous_owner(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    pod_id: UUID,
-    previous_owner: UUID,
-    actor_id: UUID,
-    group: SurfaceGroup,
-    what_changed: str,
-) -> None:
-    """Put a note in the inbox of the member whose group somebody else changed.
-
-    Inbox only: it is news, not a question, and it is written on the request's
-    own unit of work with nothing sent anywhere.
-    """
-    people = SqlAlchemySurfaceRoutingResolutionAdapter(uow)
-    member_id = await people.get_pod_member_id(previous_owner, pod_id)
-    if member_id is None:
-        return
-    actor = await people.get_user_display_name(actor_id) or "An admin of the space"
-    place = group.title or "one of the space's groups"
-    await NotificationRepository(uow).create(
-        NotificationEntity(
-            pod_id=pod_id,
-            recipient_user_id=previous_owner,
-            recipient_pod_member_id=member_id,
-            actor_user_id=actor_id,
-            origin_kind=NotificationOriginKind.API,
-            title=f"{actor} changed {place}"[:120],
-            body=f"{actor} {what_changed} in {place}.",
-            expects_response=False,
-            delivery_status=NotificationDeliveryStatus.UNDELIVERABLE,
-        )
-    )

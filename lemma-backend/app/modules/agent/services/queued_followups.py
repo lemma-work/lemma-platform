@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from uuid import UUID
 
-from app.modules.agent.domain.ports import ConversationRepository
+from app.modules.agent.domain.conversation_ports import QueuedMessages
 
 #: On a follow-up run: the finished runs still holding messages of the kind it
 #: did not answer, for the follow-up after it to find.
@@ -32,29 +32,39 @@ def leftover_sources(run_metadata: Mapping[str, object] | None) -> list[UUID]:
 
 
 async def next_queue(
-    repository: ConversationRepository,
+    repository: QueuedMessages,
     sources: list[UUID],
+    *,
+    after_sequence: int | None = None,
 ) -> tuple[UUID, bool] | None:
-    """The run whose queue to answer, and whether its oldest message is a note."""
+    """The run whose queue to answer, and whether its oldest message is a note.
+
+    ``after_sequence`` keeps to what was said after that point (after Stop).
+    """
     for source in sources:
-        notes = await repository.earliest_queued_is_note(source)
+        notes = await repository.earliest_queued_is_note(
+            source, after_sequence=after_sequence
+        )
         if notes is not None:
             return source, notes
     return None
 
 
 async def still_waiting(
-    repository: ConversationRepository,
+    repository: QueuedMessages,
     sources: list[UUID],
     *,
     answering: UUID,
     notes: bool,
+    after_sequence: int | None = None,
 ) -> list[str]:
     """The sources that will still hold unanswered messages once this one is claimed."""
     waiting: list[str] = []
     for source in sources:
         left = await repository.count_queued_user_messages(
-            source, notes=(not notes) if source == answering else None
+            source,
+            notes=(not notes) if source == answering else None,
+            after_sequence=after_sequence,
         )
         if left:
             waiting.append(str(source))

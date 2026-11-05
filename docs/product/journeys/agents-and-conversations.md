@@ -205,6 +205,10 @@ whether copying succeeded.
   shall not re-check what a tool has already reported, render or screenshot
   what it has just written in order to check it, or build machinery a plain
   answer does not need.
+- When a person mentions something worth remembering while asking for
+  something else, the system shall answer without first stopping to save it,
+  and remember it once the answer is given. When they ask outright for
+  something to be remembered, the system shall remember it before it answers.
 - A widget's page shall already carry the design tokens and the means to query
   the pod and draw the common shapes, so that a widget is the answer's own
   markup and not a copy of shared boilerplate.
@@ -231,7 +235,7 @@ whether copying succeeded.
 **Status:** covered
 
 - If an agent attempts something destructive — dropping a table, deleting
-  records in bulk, sending a message outside the pod — then the system shall
+  records, sending a message outside the pod — then the system shall
   pause the run and ask a person before doing it.
 - While a run is paused for approval, the system shall keep it paused
   indefinitely rather than timing out and proceeding.
@@ -357,6 +361,123 @@ OpenAPI operation)
 **Contracts:** `agent.host.harnesses.list` (dispatch itself travels on the
 host's link WebSocket -- `control`, `commands` and `events` frames -- which has
 no OpenAPI operation)
+
+---
+
+## Capability: Ask another pod
+
+A pod's assistant can put a request to another pod's assistant and carry on
+with the answer. It asks either as the person it is working for, with their
+access, or, where the other pod has been connected to it, on its own with
+nobody present.
+
+### PS-AGENT-042 — A pod's assistant asks another pod as the person it works for
+**Status:** planned
+
+- Where a person is a member of both pods, the system shall let one pod's
+  assistant ask the other's on that person's behalf, from a conversation the
+  person is in.
+- The system shall answer that request with the person's own access in the
+  other pod.
+- The system shall keep the other pod's side of the request as a conversation
+  of the person's own there.
+- The system shall ask the person before the first request to each other pod
+  in a conversation.
+- When the other pod answers, the system shall bring the answer back into the
+  conversation that asked, exactly once.
+- If the conversation is one the person is not present in, such as a schedule's
+  or a subagent's, then the system shall not ask on their behalf.
+- If the conversation is one other people read, such as a channel or an email
+  thread, then the system shall not ask on the person's behalf.
+- If a request would reach a pod already asked earlier in the same chain, or go
+  more than three pods deep, then the system shall refuse it.
+
+**Contracts:** `agent.conversation.get`, `agent.conversation.approval.resolve`
+
+### PS-AGENT-043 — A person can see which other pods a pod can ask
+**Status:** planned
+
+- The system shall show a person, on a pod's page, the other pods its assistant
+  can ask, and whether each is asked through them, over a connection, or both.
+- The system shall tell a pod's assistant which other pods it can ask, without a
+  person having to name them.
+- The system shall tell a pod's assistant, in each conversation, only the pods
+  it may ask from that conversation, and only the ways it may ask them there.
+- The system shall list only pods in the same organization.
+- If the person is not in another pod, and that pod is not connected to this
+  one, then the system shall not list it.
+
+**Contracts:** `agent.askable_pod.list`
+
+### PS-AGENT-044 — Another pod's answer comes back as information, with how the ask ended
+**Status:** planned
+
+- When another pod answers, the system shall give the answer to the assistant
+  that asked as information from that pod, never as an instruction from the
+  person it works for.
+- The system shall say of every ask whether it was answered, ended without an
+  answer, could not finish, or was cut off by a disconnection.
+- The system shall show a person each of those outcomes distinctly in the
+  conversation that asked.
+- If the other pod ends without an answer, then the system shall not present
+  its silence as an answer.
+
+**Contracts:** `agent.conversation.get`, `agent.conversation.message.list`
+
+### PS-ACCESS-045 — An admin lets another pod ask theirs, sharing only what they choose
+**Status:** planned
+
+- Where a person administers a pod and is a member of another pod in the same
+  organization, the system shall let them connect that other pod so it may ask
+  theirs.
+- While two pods are connected, the system shall let the connected pod ask with
+  nobody present.
+- The system shall let a connected pod read only what is Public in the pod it
+  asks, plus the tables and folders shared with it.
+- The system shall show a connected pod only the rows of a table that an
+  outsider may see, never a contact's or a member's own rows.
+- The system shall share with a connected pod for reading only.
+- If a connected pod tries to change anything in the pod it asks, then the
+  system shall refuse, whatever it was shared.
+- If someone tries to share more than reading with a connected pod, then the
+  system shall refuse.
+- If someone tries to share a person's own table or folder, such as a `/me`
+  folder, with a connected pod, then the system shall refuse.
+- The system shall show, on the pod's page, which pods can ask it, what each
+  reads, and who connected it.
+- The system shall show the controls to connect and disconnect a pod only to
+  people who administer the pod.
+- When an admin connects a pod that is already connected, the system shall
+  show what it already shares.
+- When an admin connects a pod that is already connected, the system shall
+  keep what it already shares unless they change it.
+- While a person chooses what to share, the system shall keep the actions to
+  connect and to cancel in view.
+- If someone who does not administer the pod tries to connect another, then the
+  system shall refuse.
+- If the person connecting is not a member of the other pod, then the system
+  shall refuse.
+- If someone who does not administer the pod tries to disconnect another, then
+  the system shall refuse.
+- If the person who connected two pods no longer administers the pod being
+  asked, then the system shall refuse the connected pod's asks.
+- If the person who connected two pods no longer belongs to the pod that asks,
+  then the system shall refuse the connected pod's asks.
+- If a connected pod asks more than 30 times in an hour, then the system shall
+  refuse its further asks until the hour has passed.
+- If an ask over a connection would be answered in a conversation other people
+  read, such as a channel or an email thread, then the system shall refuse it.
+- When a pod is disconnected, the system shall stop the asks it has in
+  progress.
+- When a pod is disconnected, the system shall take back what was shared with
+  it.
+- If an ask finishes after its pods were disconnected, then the system shall
+  not deliver its answer.
+- If someone disconnects a pod that is not connected, then the system shall
+  say it is not connected.
+
+**Contracts:** `agent.pod_link.connect`, `agent.pod_link.list`,
+`agent.pod_link.disconnect`, `agent.askable_pod.list`
 
 ---
 

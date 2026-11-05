@@ -3,6 +3,7 @@ import type { HttpClient } from "../http.js";
 import type { WorkflowCreateRequest } from "../openapi_client/models/WorkflowCreateRequest.js";
 import type { WorkflowGraphUpdateRequest } from "../openapi_client/models/WorkflowGraphUpdateRequest.js";
 import type { WorkflowRunFormSubmitRequest } from "../openapi_client/models/WorkflowRunFormSubmitRequest.js";
+import type { WorkflowRunResponse } from "../openapi_client/models/WorkflowRunResponse.js";
 import type { WorkflowRunStatus } from "../openapi_client/models/WorkflowRunStatus.js";
 import type { WorkflowUpdateRequest } from "../openapi_client/models/WorkflowUpdateRequest.js";
 import { WorkflowsService } from "../openapi_client/services/WorkflowsService.js";
@@ -92,5 +93,13 @@ export class WorkflowsNamespace {
 
     cancel: (runId: string, podId = this.podId()) =>
       this.client.request(() => WorkflowsService.workflowRunCancel(podId, runId)),
+
+    /**
+     * Resume a failed run from the node that failed, keeping every earlier
+     * node's output. Refused (409) unless that node is a function, decision,
+     * loop or wait-until node.
+     */
+    retry: (runId: string, podId = this.podId()) =>
+      this.http.request<WorkflowRunResponse>("POST", `/pods/${podId}/workflow-runs/${runId}/retry`),
   };
 }

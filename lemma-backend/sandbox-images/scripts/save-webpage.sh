@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The whole capture under one ceiling, when the caller sets one.
+#
+# A caller stops *waiting* at its own deadline, but nothing on its side ends
+# the process: a capture that outlived its window kept running, kept the
+# browser lock below, and every capture queued behind it overran too. A ceiling
+# inside the sandbox is the only one that holds. `-k 5` follows SIGTERM with
+# SIGKILL for a step that ignores it.
+if [[ -n "${SAVE_WEBPAGE_TIMEOUT:-}" && -z "${SAVE_WEBPAGE_UNDER_TIMEOUT:-}" ]] \
+    && command -v timeout >/dev/null 2>&1; then
+  export SAVE_WEBPAGE_UNDER_TIMEOUT=1
+  exec timeout -k 5 "$SAVE_WEBPAGE_TIMEOUT" "$0" "$@"
+fi
+
 usage() {
   cat >&2 <<'EOF'
 Usage: save-webpage <url> [options]
@@ -141,11 +154,12 @@ OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 # measured 75.4s against 11.0s for the same three run one after another. The
 # serialisation was already the faster arrangement.
 #
-# The wait sits just under `_BROWSER_TIMEOUT_SECONDS` (75s), which is what
-# `web_fetch` gives one capture. Longer would be moot -- the caller kills us
-# first, and the agent gets a bare timeout instead of a sentence saying the
-# browser was busy. A typical capture is 4-12s, so this covers a queue of
-# several.
+# The default wait suits a capture run by hand. `web_fetch` passes a shorter
+# one, inside the ceiling it sets with SAVE_WEBPAGE_TIMEOUT, so a capture that
+# queued still has time to render before that ceiling. A typical capture is
+# 4-12s, so either covers a queue of several. The interactive `browser` tool
+# takes this same lock around each command, so it cannot switch the tab out
+# from under a capture either.
 CAPTURE_LOCK="${AGENT_BROWSER_CAPTURE_LOCK:-/tmp/lemma-capture.lock}"
 CAPTURE_LOCK_WAIT="${AGENT_BROWSER_CAPTURE_LOCK_WAIT:-70}"
 exec 9>"$CAPTURE_LOCK"
@@ -196,6 +210,8 @@ close_capture_tab() {
   fi
 }
 trap close_capture_tab EXIT
+# Stopped by the ceiling: leave through the EXIT trap, so the tab is closed.
+trap 'exit 124' TERM
 
 if [[ "$OPEN_PAGE" == "1" ]]; then
   # Brings up the daemon, Xvfb and the dashboard if they are not up yet,

@@ -8,12 +8,22 @@ it, and the Home tab.
 
 from __future__ import annotations
 
-from typing import Any
+from app.modules.agent_surfaces.domain.reply_targets import (
+    SlackReplyTarget,
+    reply_target_as,
+)
 
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.domain.credentials import (
+    CredentialsLike,
+    SlackCredentials,
+)
+
+
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts, PlacePrivacy
 
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     channel_setup_confirmation_blocks,
@@ -36,8 +46,8 @@ logger = get_logger(__name__)
 class SlackHomeSurface:
     """Everything a person interacts with to configure Lemma inside Slack."""
 
-    def __init__(self, *, credentials: dict[str, Any]) -> None:
-        self.credentials = credentials
+    def __init__(self, *, credentials: CredentialsLike) -> None:
+        self.credentials = SlackCredentials.of(credentials)
 
     async def send_channel_setup_prompt(
         self,
@@ -86,7 +96,7 @@ class SlackHomeSurface:
                 ),
             )
             return True
-        except SlackApiError:
+        except slack_api_error():
             logger.debug("agent_surfaces.service.slack_channel_setup_prompt.diagnostic")
             return False
 
@@ -119,7 +129,7 @@ class SlackHomeSurface:
                 ),
             )
             return True
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_open_setup_modal.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
@@ -155,7 +165,7 @@ class SlackHomeSurface:
                 ],
             )
             return True
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_starter_prompt.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
@@ -197,7 +207,7 @@ class SlackHomeSurface:
                 ),
             )
             return True
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_publish_home_view.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
@@ -214,8 +224,41 @@ class SlackHomeSurface:
             response = await client.conversations_info(channel=str(channel_id))
             name = ((response.get("channel") or {}).get("name") or "").strip()
             return name or None
-        except SlackApiError:
+        except slack_api_error():
             return None
+
+    async def place_facts(self, channel_id: str) -> PlaceFacts | None:
+        """Whether Slack keeps this conversation to its members, from
+        ``conversations.info``; None when Slack would not say."""
+        if not slack_access_token(self.credentials) or not channel_id:
+            return None
+        try:
+            client = await build_slack_client(self.credentials)
+            response = await client.conversations_info(channel=str(channel_id))
+        except slack_api_error() as exc:
+            logger.info(
+                "agent_surfaces.slack.place_privacy_unknown.observed",
+                error_code=str((exc.response or {}).get("error") or "unknown"),
+            )
+            return None
+        channel = response.get("channel") or {}
+        if not isinstance(channel, dict) or not channel:
+            return None
+        if channel.get("is_im"):
+            kind = "im"
+        elif channel.get("is_mpim"):
+            kind = "mpim"
+        elif channel.get("is_private") or channel.get("is_group"):
+            kind = "group"
+        elif channel.get("is_channel"):
+            kind = "channel"
+        else:
+            return None
+        return PlaceFacts(
+            privacy=PlacePrivacy.PUBLIC if kind == "channel" else PlacePrivacy.PRIVATE,
+            channel_type=kind,
+            shared_externally=bool(channel.get("is_ext_shared")),
+        )
 
     async def set_thread_title(
         self,
@@ -230,8 +273,8 @@ class SlackHomeSurface:
         and simply keeps Slack's default thread naming.
         """
         token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
-        thread_ts = event.reply_target.get("thread_ts")
+        channel = reply_target_as(event, SlackReplyTarget).channel
+        thread_ts = reply_target_as(event, SlackReplyTarget).thread_ts
         clean_title = _truncate_slack_text(str(title or "").strip(), 250)
         if not token or not channel or not thread_ts or not clean_title:
             return False
@@ -245,6 +288,6 @@ class SlackHomeSurface:
                 title=clean_title,
             )
             return True
-        except SlackApiError:
+        except slack_api_error():
             logger.debug("agent_surfaces.service.slack_set_thread_title.diagnostic")
             return False

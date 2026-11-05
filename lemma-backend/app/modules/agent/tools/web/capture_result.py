@@ -12,6 +12,7 @@ back as a success naming a file that was never written.
 from __future__ import annotations
 
 import shlex
+from urllib.parse import urlparse
 
 from app.modules.agent.tools.web.blocked import classify
 from app.modules.agent.tools.web.models import WebFetchPage
@@ -24,6 +25,14 @@ PREVIEW_CHARS = 400
 #: plenty of real pages are short, and treating "short" as "broken" throws
 #: away a page that was read correctly.
 THIN_CONTENT_CHARS = 120
+
+
+def slugify(url: str) -> str:
+    parsed = urlparse(url)
+    raw = f"{parsed.netloc}{parsed.path}".strip("/") or "page"
+    slug = "".join(char if char.isalnum() or char in "-._" else "-" for char in raw)
+    slug = "-".join(part for part in slug.split("-") if part)
+    return slug[:100].lower() or "page"
 
 
 def expected_files(out_dir: str, name: str, formats: list[str]) -> dict[str, str]:

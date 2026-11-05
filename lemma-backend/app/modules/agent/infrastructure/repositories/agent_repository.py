@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
@@ -28,9 +29,13 @@ from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
 )
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.errors import AgentAlreadyExistsError
 from app.modules.agent.infrastructure.models import (
     AgentModel,
 )
+
+#: ``uq_agent_pod_name`` on ``(pod_id, name)``, in ``models/agent.py``.
+_POD_NAME_CONSTRAINT = "uq_agent_pod_name"
 
 
 class AgentRepository:
@@ -64,7 +69,15 @@ class AgentRepository:
             agent_metadata=agent.metadata,
         )
         self.session.add(model)
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except IntegrityError as exc:
+            # The service checks the name first, but two creates racing both
+            # pass that check; the constraint decides, and the loser gets the
+            # same 409 a sequential duplicate does rather than a 500.
+            if _POD_NAME_CONSTRAINT in str(exc.orig):
+                raise AgentAlreadyExistsError(agent.name) from exc
+            raise
         # The single write path behind every creation route.
         self.uow.collect_events(
             [

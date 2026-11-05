@@ -7,7 +7,12 @@ from lemma_sdk.openapi_client.models.add_column_request import AddColumnRequest
 from lemma_sdk.openapi_client.models.create_table_request import CreateTableRequest
 from lemma_sdk.openapi_client.models.update_table_request import UpdateTableRequest
 
-from ...cli_app.enums import COLUMN_TYPES, VISIBILITY_VALUES
+from ...cli_app.enums import (
+    COLUMN_TYPES,
+    VISIBILITY_VALUES,
+    canonical_column,
+    canonical_columns,
+)
 from ...cli_app.record_io import (
     RECORD_EXPORT_DEFAULT_LIMIT,
     fetch_records_capped,
@@ -110,6 +115,13 @@ def create_table(
     this for per-user/personal data. Set `"enable_rls": false` for shared/
     reference/team tables that all members read and mutate. RLS only scopes which
     rows a non-admin can touch; writing any table still needs the POD_USER role.
+
+    Column types: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, JSON, UUID,
+    ENUM (with "options"), FILE_PATH, USER, VECTOR, SERIAL. TIMESTAMP is read
+    as DATETIME and NUMBER/NUMERIC/DECIMAL as FLOAT. An `id` key is added for
+    you. Example:
+
+    lemma tables create expenses --data '{"columns":[{"name":"day","type":"DATE"},{"name":"amount","type":"FLOAT"}],"enable_rls":false}'
     """
     payload = read_json(json_payload, file, required=True)
     state = state_from_ctx(ctx)
@@ -121,7 +133,7 @@ def create_table(
                 {
                     **payload,
                     "name": payload.get("name", table),
-                    "columns": payload.get("columns", []),
+                    "columns": canonical_columns(payload.get("columns", [])),
                 },
                 context="table",
             )
@@ -227,7 +239,8 @@ def add_table_column(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).tables.add_column(
-            table, build_request(AddColumnRequest, {"column": column})
+            table,
+            build_request(AddColumnRequest, {"column": canonical_column(column)}),
         ),
     )
     if result is not None:
@@ -327,9 +340,22 @@ def import_records(
         None, "--format", help="csv | jsonl | json (default: from file extension)."
     ),
     limit: int = typer.Option(0, "--limit", help="Import at most N rows (0 = all)."),
+    intent: str = typer.Option(
+        "import",
+        "--intent",
+        help=(
+            "How DATASTORE triggers see these rows: import (default) or bulk "
+            "-- each trigger decides by its settings, by default skipping and "
+            "recording them -- or normal, to fire triggers as single writes do."
+        ),
+    ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Bulk-seed records into a table from a CSV/JSONL/JSON file."""
+    if intent not in ("import", "bulk", "normal"):
+        raise typer.BadParameter(
+            "must be import, bulk or normal", param_hint="--intent"
+        )
     rows = read_record_rows(file, fmt)
     if limit:
         rows = rows[:limit]
@@ -339,7 +365,9 @@ def import_records(
 
     count = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).records.bulk_create(table, rows),
+        lambda client, s: pod_client(client, s, pod).records.bulk_create(
+            table, rows, intent=intent
+        ),
     )
     if count is not None:
         typer.echo(f"Imported {count} record(s) into {table}.")

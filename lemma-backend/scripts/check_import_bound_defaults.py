@@ -51,8 +51,7 @@ job; a baseline would only offer somewhere to hide it.
 flag — it is most of the import graph), and the FastStream ``Protocol``
 annotation, which is not a default at all. The first is partly covered by
 preferring ``import module`` over ``from module import name`` at call sites;
-the second by ``app/core/tests/unit/test_worker_subscribers_build.py``, which
-builds every subscriber's dependency model in the unit lane.
+the second is gone with FastStream.
 
 Usage::
 

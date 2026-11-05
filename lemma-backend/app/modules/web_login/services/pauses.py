@@ -111,7 +111,7 @@ async def resume_through_approvals(
         resolve_pending_interaction,
     )
 
-    return await resolve_pending_interaction(
+    resolution = await resolve_pending_interaction(
         uow,
         conversation_id=conversation_id,
         approval_id=tool_call_id,
@@ -123,6 +123,7 @@ async def resume_through_approvals(
         ),
         response=response,
     )
+    return resolution is not None
 
 
 __all__ = [

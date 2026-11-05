@@ -77,6 +77,25 @@ class FunctionRevisionRepositoryMixin:
 
     session: AsyncSession
 
+    async def get_for_share(self, function_id: UUID) -> FunctionEntity | None:
+        """The function, held against a revision change for this transaction.
+
+        For creating a run against the active revision: FOR SHARE, so a publish
+        or a promotion (FOR UPDATE, or the row's own update) waits, while other
+        run creations do not. FOR UPDATE here serialised every run of a
+        function, and under a trigger that started one per record write it
+        cut writes about fivefold, with statement timeouts.
+        """
+        model = (
+            await self.session.execute(
+                select(FunctionModel)
+                .where(FunctionModel.id == function_id)
+                .with_for_update(read=True)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return model.to_entity() if model else None
+
     async def get_for_update(self, function_id: UUID) -> FunctionEntity | None:
         model = (
             await self.session.execute(

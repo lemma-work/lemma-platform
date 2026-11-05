@@ -23,6 +23,7 @@ from collections.abc import Collection, Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -35,6 +36,8 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
     bot_creates_groups_on,
 )
 from app.modules.agent_surfaces.services.group_names import spoken_to_by_name
+
+logger = get_logger(__name__)
 
 
 async def created_group_surfaces(
@@ -65,6 +68,14 @@ async def created_group_surfaces(
             surface_id for surface_id in surface_ids if surface_id in allowed
         ]
     if not surface_ids:
+        # Nobody's here, by design; said where an admin can find it.
+        logger.info(
+            "agent_surfaces.created_groups.unknown_group_dropped.observed",
+            platform=platform,
+            surface_id=",".join(
+                sorted(str(each) for each in receiver_surface_ids or ())
+            ),
+        )
         return []
     return await surfaces.list_active_for_routing(platform, surface_ids=surface_ids)
 

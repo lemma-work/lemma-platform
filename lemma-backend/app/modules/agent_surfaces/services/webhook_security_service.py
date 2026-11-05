@@ -1,22 +1,19 @@
 from __future__ import annotations
 
-import json
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
+)
+
+from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
+
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-import httpx
-import jwt
-from redis.exceptions import RedisError
-from jwt.algorithms import RSAAlgorithm
-
 from app.core.config import reveal_secret
 from app.core.authorization.scope import uow_scope
-from app.core.config import settings
-from app.core.domain.errors import DomainError
-from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import (
     constant_time_equals,
@@ -36,6 +33,15 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
+from app.modules.agent_surfaces.services.teams_jwt_verifier import TeamsJwtVerifier
+
+__all__ = [
+    "SlackWebhookVerificationCandidate",
+    "SurfaceWebhookAuthenticationError",
+    "SurfaceWebhookSecurityService",
+    "VerifiedSlackIngress",
+]
 
 if TYPE_CHECKING:
     from app.modules.agent_surfaces.services.credential_resolver import (
@@ -48,20 +54,6 @@ logger = get_logger(__name__)
 # shared secret and Svix's base64 HMAC. What stays here is which credential each
 # platform is checked against, and what a failure means: this module has its own
 # error type and distinguishes a misconfiguration (503) from a bad delivery.
-_BOT_FRAMEWORK_OPENID_CONFIG_URL = (
-    "https://login.botframework.com/v1/.well-known/openidconfiguration"
-)
-_BOT_FRAMEWORK_ALLOWED_ISSUERS = frozenset(
-    {
-        "https://api.botframework.com",
-        "https://api.botframework.com/",
-    }
-)
-_OIDC_CACHE_TTL_SECONDS = 60 * 10
-
-# Shared Redis cache of OIDC/JWKS documents used to verify Teams webhook JWTs, so
-# the metadata is fetched once across replicas. Redis unavailable -> refetch.
-_oidc_cache: RedisJsonCache | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,32 +67,6 @@ class SlackWebhookVerificationCandidate:
 class VerifiedSlackIngress:
     app_id: str
     receiver_surface_ids: tuple[UUID, ...]
-
-
-def _get_oidc_cache() -> RedisJsonCache:
-    global _oidc_cache
-    if _oidc_cache is None or _oidc_cache._redis_url != settings.redis_url:
-        _oidc_cache = RedisJsonCache(
-            redis_url=settings.redis_url,
-            key_prefix="surface:oidc",
-            ttl_seconds=_OIDC_CACHE_TTL_SECONDS,
-        )
-    return _oidc_cache
-
-
-class SurfaceWebhookAuthenticationError(DomainError):
-    """Webhook signature / authenticity check failed.
-
-    A ``DomainError`` so the global handler translates it automatically (no
-    manual catch-and-remap in the webhook controller). ``status_code`` is
-    caller-supplied (401 for bad signatures, 404 for platforms without direct
-    ingress).
-    """
-
-    def __init__(self, detail: str, *, status_code: int = 401):
-        super().__init__(
-            detail, code="SURFACE_WEBHOOK_AUTH_FAILED", status_code=status_code
-        )
 
 
 class SurfaceWebhookSecurityService:
@@ -123,9 +89,11 @@ class SurfaceWebhookSecurityService:
         *,
         uow_factory: Any = None,
         resolver_factory: Callable[[Any], SurfaceCredentialResolver] | None = None,
+        teams_verifier: TeamsJwtVerifier | None = None,
     ):
         self._uow_factory = uow_factory
         self._resolver_factory = resolver_factory
+        self._teams_verifier = teams_verifier or TeamsJwtVerifier()
 
     @asynccontextmanager
     async def _resolver(self):
@@ -140,7 +108,9 @@ class SurfaceWebhookSecurityService:
         return surface_webhook_verification_enabled()
 
     def assert_platform_request_allowed(self, platform: str) -> None:
-        if str(platform).upper() not in {"SLACK", "TEAMS", "WHATSAPP", "TELEGRAM"}:
+        # Every chat platform; mail arrives on its own provider's route.
+        capabilities = get_platform_capabilities(str(platform).upper())
+        if capabilities is None or capabilities.is_email:
             raise SurfaceWebhookAuthenticationError(
                 f"Platform '{platform}' does not support direct webhook ingress",
                 status_code=404,
@@ -177,8 +147,9 @@ class SurfaceWebhookSecurityService:
             )
             return
         if normalized == "TEAMS":
-            await self._verify_teams_jwt(
+            await self._teams_verifier.verify(
                 headers=headers,
+                raw_body=raw_body,
                 expected_app_id=surface_settings.microsoft_bot_app_id,
             )
             return
@@ -226,7 +197,7 @@ class SurfaceWebhookSecurityService:
         if surface.surface_type is SurfacePlatform.TELEGRAM:
             self._verify_telegram_secret(
                 headers=headers,
-                webhook_secret=surface.webhook_secret,
+                webhook_secret=reveal_secret(surface.webhook_secret),
             )
             return
         if surface.surface_type is SurfacePlatform.WHATSAPP:
@@ -238,7 +209,7 @@ class SurfaceWebhookSecurityService:
             )
             return
         if surface.surface_type is SurfacePlatform.SLACK:
-            signing_secret = surface.webhook_secret or reveal_secret(
+            signing_secret = reveal_secret(surface.webhook_secret) or reveal_secret(
                 surface_settings.slack_signing_secret
             )
             async with self._resolver() as resolver:
@@ -394,20 +365,29 @@ class SurfaceWebhookSecurityService:
         Lemma's own managed number. Only account-less (Lemma-managed) surfaces
         use the env-configured system credentials.
         """
-        if surface is not None and surface.account_id is not None:
+        if surface is not None and surface.pod_connector_slug is not None:
             try:
                 async with self._resolver() as resolver:
                     if resolver is None:
                         return None, None
-                    credentials = await resolver.for_account(surface.account_id)
-            except Exception:
-                logger.debug(
-                    "agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic",
-                    account_id=surface.account_id,
-                    exc_info=True,
+                    credentials = WhatsAppCredentials.of(
+                        await resolver.for_surface(surface)
+                    )
+            except Exception as exc:
+                # The request is refused as unverifiable either way; this is
+                # what tells a broken connector account apart from a setting
+                # nobody configured.
+                logger.warning(
+                    "agent_surfaces.webhook_security_service.whatsapp_credentials_unavailable.degraded",
+                    surface_id=str(surface.id),
+                    error_type=type(exc).__name__,
+                    exc_info=exc,
                 )
                 return None, None
-            return credentials.get("app_secret"), credentials.get("verify_token")
+            return (
+                reveal_secret(credentials.app_secret),
+                reveal_secret(credentials.verify_token),
+            )
         return (
             reveal_secret(surface_settings.whatsapp_app_secret),
             reveal_secret(surface_settings.whatsapp_verify_token),
@@ -419,6 +399,30 @@ class SurfaceWebhookSecurityService:
         """The verify token to check ``hub.verify_token`` against for this surface."""
         _, verify_token = await self._resolve_whatsapp_secrets(surface)
         return verify_token
+
+    def verify_slack_handshake(self, *, headers: dict[str, str]) -> None:
+        """Check what can be checked of Slack's ``url_verification`` request.
+
+        Slack signs the handshake like any other request, but its body names
+        no workspace and no app -- it is ``{token, challenge, type}`` -- so
+        there is no signing secret to select. Checking it against the
+        deployment's own would refuse every org pointing its own Slack app at
+        this shared endpoint. What is left is that it carries Slack's headers
+        and a timestamp inside the replay window; the caller answers with the
+        challenge alone, bounded, and acts on nothing else in the body.
+        """
+        if not self.verification_enabled():
+            return
+        signature = headers.get("x-slack-signature") or headers.get("X-Slack-Signature")
+        timestamp = headers.get("x-slack-request-timestamp") or headers.get(
+            "X-Slack-Request-Timestamp"
+        )
+        if not signature or not timestamp:
+            raise SurfaceWebhookAuthenticationError("Missing Slack signature headers")
+        if not timestamp_within_skew(timestamp):
+            raise SurfaceWebhookAuthenticationError(
+                "Slack request timestamp is too old"
+            )
 
     def _verify_slack_signature(
         self,
@@ -489,103 +493,3 @@ class SurfaceWebhookSecurityService:
             )
         if not shared_secret_matches(header_secret, [webhook_secret]):
             raise SurfaceWebhookAuthenticationError("Invalid Telegram webhook secret")
-
-    async def _verify_teams_jwt(
-        self,
-        *,
-        headers: dict[str, str],
-        expected_app_id: str | None,
-    ) -> None:
-        if not expected_app_id:
-            raise SurfaceWebhookAuthenticationError(
-                "Teams bot app ID is not configured",
-                status_code=503,
-            )
-        auth_header = headers.get("authorization") or headers.get("Authorization")
-        if not auth_header or not auth_header.lower().startswith("bearer "):
-            raise SurfaceWebhookAuthenticationError("Missing Teams bearer token")
-        token = auth_header.split(" ", 1)[1].strip()
-        if not token:
-            raise SurfaceWebhookAuthenticationError("Missing Teams bearer token")
-
-        openid_url = (
-            surface_settings.microsoft_bot_openid_config_url
-            or _BOT_FRAMEWORK_OPENID_CONFIG_URL
-        )
-        openid_config = await self._get_json_cached(openid_url)
-        jwks_uri = str(openid_config.get("jwks_uri") or "").strip()
-        if not jwks_uri:
-            raise SurfaceWebhookAuthenticationError(
-                "Teams OpenID metadata is missing jwks_uri",
-                status_code=503,
-            )
-        jwks = await self._get_json_cached(jwks_uri)
-        keys = jwks.get("keys") or []
-        signing_key = self._resolve_jwt_signing_key(token, keys)
-        try:
-            claims = jwt.decode(
-                token,
-                signing_key,
-                algorithms=["RS256"],
-                audience=expected_app_id,
-                options={"verify_iss": False},
-            )
-        except jwt.PyJWTError as exc:
-            raise SurfaceWebhookAuthenticationError(
-                "Invalid Teams bearer token"
-            ) from exc
-
-        issuer = str(claims.get("iss") or "").strip()
-        if issuer not in _BOT_FRAMEWORK_ALLOWED_ISSUERS:
-            raise SurfaceWebhookAuthenticationError("Invalid Teams token issuer")
-
-    async def _get_json_cached(self, url: str) -> dict[str, Any]:
-        cache = _get_oidc_cache()
-        try:
-            cached = await cache.get_json(url)
-        except RedisError, OSError, TimeoutError, ValueError:
-            cached = None
-        if cached is not None:
-            return cached
-
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(url)
-            if response.status_code != 200:
-                raise SurfaceWebhookAuthenticationError(
-                    f"Failed to load Teams verification metadata from {url}",
-                    status_code=503,
-                )
-            payload = response.json()
-        if not isinstance(payload, dict):
-            raise SurfaceWebhookAuthenticationError(
-                f"Invalid Teams verification metadata from {url}",
-                status_code=503,
-            )
-        try:
-            await cache.set_json(url, payload, ttl_seconds=_OIDC_CACHE_TTL_SECONDS)
-        except RedisError, OSError, TimeoutError, TypeError:
-            # The OIDC metadata was fetched and verified above; caching it only
-            # spares the next webhook the same fetch. An uncacheable document is
-            # still a valid one, and `payload` is returned below regardless.
-            pass
-        return payload
-
-    def _resolve_jwt_signing_key(self, token: str, keys: list[dict[str, Any]]) -> Any:
-        try:
-            header = jwt.get_unverified_header(token)
-        except jwt.PyJWTError as exc:
-            raise SurfaceWebhookAuthenticationError(
-                "Malformed Teams bearer token"
-            ) from exc
-
-        key_id = header.get("kid") or header.get("x5t")
-        if not key_id:
-            raise SurfaceWebhookAuthenticationError(
-                "Teams bearer token is missing key id"
-            )
-
-        for key in keys:
-            if key.get("kid") == key_id or key.get("x5t") == key_id:
-                return RSAAlgorithm.from_jwk(json.dumps(key))
-
-        raise SurfaceWebhookAuthenticationError("Unable to resolve Teams signing key")

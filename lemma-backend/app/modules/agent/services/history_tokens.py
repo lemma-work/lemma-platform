@@ -193,12 +193,79 @@ def _part_binary_tokens(part: object) -> int:
     return total
 
 
+def _message_tokens(message: object) -> int:
+    total = _PER_MESSAGE_OVERHEAD_TOKENS
+    for part in getattr(message, "parts", ()) or ():
+        total += count_text_tokens(_part_text(part))
+        total += _part_binary_tokens(part)
+    return total
+
+
 def count_model_message_tokens(messages: Sequence[object]) -> int:
     """Token count for a pydantic-ai message history."""
-    total = 0
-    for message in messages:
-        total += _PER_MESSAGE_OVERHEAD_TOKENS
-        for part in getattr(message, "parts", ()) or ():
-            total += count_text_tokens(_part_text(part))
-            total += _part_binary_tokens(part)
-    return total
+    return sum(_message_tokens(message) for message in messages)
+
+
+#: Entries one run's counter keeps before starting over. Far above any history
+#: that fits a window; only a pathological run ever reaches it.
+_MAX_MEMO_ENTRIES = 20_000
+
+
+class MessageTokenCounter:
+    """`count_model_message_tokens`, remembering each message's count for a run.
+
+    Every model request measures the whole history at least twice -- the
+    compactor and the ceiling guard -- and the guard's trimming re-measures each
+    candidate it tries. Messages do not change once written: a processor that
+    alters one builds a new object. So a count is kept per message object, and
+    each request tokenizes only what is new.
+
+    Keyed by identity, with the message held alongside its count: an id alone
+    can be reused by a new object once the old one is collected, and would
+    then answer with somebody else's count.
+
+    Per run and in process on purpose: the counts are of objects that exist
+    only in this run's memory, so there is nothing to share across processes.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[int, tuple[object, int]] = {}
+
+    def count(self, messages: Sequence[object]) -> int:
+        return sum(self.message(message) for message in messages)
+
+    def message(self, message: object) -> int:
+        cached = self._counts.get(id(message))
+        if cached is not None and cached[0] is message:
+            return cached[1]
+        tokens = _message_tokens(message)
+        if len(self._counts) >= _MAX_MEMO_ENTRIES:
+            self._counts.clear()
+        self._counts[id(message)] = (message, tokens)
+        return tokens
+
+
+#: Per-tool framing a provider adds around each schema (type wrapper, name and
+#: parameter keys) that the schema text alone does not carry.
+_PER_TOOL_OVERHEAD_TOKENS = 8
+
+
+def count_tool_definition_tokens(
+    name: str, description: str | None, parameters: object
+) -> int:
+    """What one tool's definition costs in the request, schema included.
+
+    The schema is measured as the JSON a provider is sent, punctuation and all:
+    a schema is mostly punctuation and short keys, which is exactly what the
+    prose-shaped `_stringify` would leave out.
+    """
+    try:
+        schema = json.dumps(parameters, default=str, separators=(",", ":"))
+    except TypeError, ValueError:  # pragma: no cover - defensive
+        schema = _stringify(parameters)
+    return (
+        _PER_TOOL_OVERHEAD_TOKENS
+        + count_text_tokens(name)
+        + count_text_tokens(description or "")
+        + count_text_tokens(schema)
+    )

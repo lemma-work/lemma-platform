@@ -21,12 +21,16 @@ EXPECTED = [
     # Per-request accounting, from #478.
     ("usage_request_output_ceiling", "USAGE_REQUEST_OUTPUT_CEILING", 8192),
     ("usage_limit_warn_fraction", "USAGE_LIMIT_WARN_FRACTION", 0.8),
+    # How long a window's running total is trusted before a ledger recount.
+    ("usage_counter_refresh_seconds", "USAGE_COUNTER_REFRESH_SECONDS", 600),
     # Deployment-wide spend limits, moved off `app/core/config.py`.
     ("usage_org_monthly_limit_usd", "USAGE_ORG_MONTHLY_LIMIT_USD", None),
     ("usage_user_weekly_limit_usd", "USAGE_USER_WEEKLY_LIMIT_USD", None),
     ("usage_user_monthly_limit_usd", "USAGE_USER_MONTHLY_LIMIT_USD", None),
     # The contacts cap an organization has until an owner sets its own.
     ("usage_contacts_monthly_default_usd", "USAGE_CONTACTS_MONTHLY_DEFAULT_USD", 50),
+    # How many contacts its bots may answer, until an owner sets a number.
+    ("usage_contacts_max_default", "USAGE_CONTACTS_MAX_DEFAULT", 500),
     # What a limit does when the cost of the work cannot be established.
     ("usage_unpriced_limit_policy", "USAGE_UNPRICED_LIMIT_POLICY", "allow"),
 ]

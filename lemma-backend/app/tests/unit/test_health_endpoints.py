@@ -63,6 +63,12 @@ def healthy_by_default(monkeypatch):
     monkeypatch.setattr(
         healthmod, "schema_migration_state", AsyncMock(return_value="current")
     )
+    # The datastore's own probe, stubbed where it lives: a collaborator of the
+    # endpoint, which reads it through its module.
+    monkeypatch.setattr(
+        "app.modules.datastore.contracts.query_role_health.datastore_role_state",
+        AsyncMock(return_value="ok"),
+    )
     _worker_redis(monkeypatch)
 
 
@@ -153,6 +159,7 @@ def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
         "redis": "ok",
         "supertokens": "ok",
         "migrations": "current",
+        "datastore_roles": "ok",
     }
 
 
@@ -559,3 +566,40 @@ def test_ready_does_not_hold_a_process_out_over_a_schema_it_could_not_read(
 
     assert r.status_code == 200
     assert r.json()["components"]["migrations"] == "unknown"
+
+
+def test_ready_does_not_wait_on_a_slow_datastore_role_probe(client, monkeypatch):
+    """The role probe never blocks readiness, so it must not be able to time
+    out the whole check either: had the gather timed out, every component
+    would be dropped, this one included."""
+    import asyncio
+
+    async def _slow() -> str:
+        await asyncio.sleep(5)
+        return "ok"
+
+    monkeypatch.setattr(
+        "app.modules.datastore.contracts.query_role_health.datastore_role_state", _slow
+    )
+
+    r = client.get("/health/ready")
+
+    assert r.json()["components"]["datastore_roles"] == "unknown"
+
+
+def test_a_failing_datastore_role_probe_takes_nothing_else_down(client, monkeypatch):
+    """A probe error reaching the gather used to report every required
+    component down; it answers `unknown` for itself instead."""
+
+    async def _broken() -> str:
+        raise ConnectionResetError(54, "reset mid-probe")
+
+    monkeypatch.setattr(
+        "app.modules.datastore.contracts.query_role_health.datastore_role_state",
+        _broken,
+    )
+
+    components = client.get("/health/ready").json()["components"]
+
+    assert components["datastore_roles"] == "unknown"
+    assert components["supertokens"] == "ok"

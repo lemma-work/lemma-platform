@@ -38,6 +38,90 @@ class AgentAlreadyExistsError(AgentModuleError):
         super().__init__(message, code="AGENT_ALREADY_EXISTS", status_code=409)
 
 
+class OrganizationDefaultConflictError(AgentModuleError):
+    """Another default was chosen for the organization at the same moment.
+
+    At most one profile carries the mark, and the database holds that; two
+    owners choosing at once both pass every check before either commits, and
+    the second write is refused here rather than leaving two defaults.
+    """
+
+    def __init__(
+        self,
+        message: str = (
+            "The organization's default model was changed at the same time; "
+            "reload and choose again"
+        ),
+    ):
+        super().__init__(message, code="ORGANIZATION_DEFAULT_CONFLICT", status_code=409)
+
+
+class RuntimeProfileValidationError(AgentModuleError):
+    """A runtime profile create or edit the caller can correct.
+
+    The message is always written for the person: a validator's text is
+    passed through ``invalid_profile``, never a raw pydantic error, which
+    quotes the input it refused. Callers that are not a request -- Agent Host
+    admission, a run carrying selections across a harness republish -- catch
+    this type by name.
+    """
+
+    def __init__(self, message: str, *, code: str = "RUNTIME_PROFILE_INVALID"):
+        super().__init__(message, code=code, status_code=400)
+
+
+class RuntimeProfileNotFoundError(AgentModuleError):
+    """The profile is gone, or is not one this person can see."""
+
+    def __init__(self, message: str = "Runtime profile not found"):
+        super().__init__(message, code="RUNTIME_PROFILE_NOT_FOUND", status_code=404)
+
+
+class RuntimeProfileNameTakenError(AgentModuleError):
+    """Another profile in the same scope already has this name."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            f"Runtime profile named {name!r} already exists",
+            code="RUNTIME_PROFILE_NAME_TAKEN",
+            status_code=409,
+        )
+
+
+class RuntimeProfileConflictError(AgentModuleError):
+    """Someone else changed this profile between this edit's read and its write.
+
+    Writing anyway would put back every field the other edit changed -- a
+    rotated key restored, an archived profile made active -- because an edit
+    writes the whole row it read.
+    """
+
+    def __init__(
+        self,
+        message: str = (
+            "These provider settings were changed by someone else while you "
+            "were editing them; reload and try again"
+        ),
+    ):
+        super().__init__(message, code="RUNTIME_PROFILE_CONFLICT", status_code=409)
+
+
+class RuntimeProfileUnreadableError(AgentModuleError):
+    """A stored profile whose configuration no longer validates.
+
+    Raised instead of re-reading it as some other shape: that is how a harness
+    profile used to lose its selections without anyone noticing.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This model's saved settings can't be read. Add it again in "
+            "Settings → Models.",
+            code="RUNTIME_PROFILE_UNREADABLE",
+            status_code=409,
+        )
+
+
 class AgentValidationError(AgentModuleError):
     """Agent payload failed module-level validation."""
 
@@ -91,6 +175,28 @@ class ApprovalNotOwnedError(AgentModuleError):
         message: str = "Only the person this agent is working for can approve this",
     ):
         super().__init__(message, code="APPROVAL_NOT_OWNED", status_code=403)
+
+
+class RuntimeUnavailableError(AgentModuleError):
+    """The model, or the runtime profile, a teammate is set to use cannot run.
+
+    One class, three codes, because the remedy is the same -- pick another
+    model -- and the reader needs to know which part is wrong:
+
+    * ``model_unavailable`` -- the profile no longer offers that model, or its
+      provider just answered that it does not serve it;
+    * ``runtime_profile_unavailable`` -- the profile is archived, gone, or
+      someone else's personal one;
+    * ``runtime_profile_not_shareable`` -- another member's own runtime (their
+      Claude Code, their key), reached by someone who is not them. The owner
+      may pin it to any teammate, a pod-visible one included; it runs for them.
+
+    422 when a save names it, and the same error, not a substitute model, when
+    a run reaches it.
+    """
+
+    def __init__(self, message: str, *, code: str = "model_unavailable"):
+        super().__init__(message, code=code, status_code=422)
 
 
 class HarnessNotFoundError(AgentModuleError):

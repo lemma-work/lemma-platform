@@ -3,6 +3,7 @@ from __future__ import annotations
 import email.utils
 import json
 import time
+import warnings
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,6 +12,7 @@ import httpx
 from .errors import (
     LemmaAPIError,
     LemmaConnectionError,
+    LemmaDeprecationWarning,
     LemmaTimeoutError,
     api_error,
 )
@@ -121,6 +123,29 @@ def _note_latest_cli(headers: Any) -> None:
         return
     global _suggested_cli
     _suggested_cli = str(latest)
+
+
+#: Set by the server on a response to a deprecated route or field: one line
+#: naming it and what to call instead (``app/core/api/deprecation.py``).
+_DEPRECATION_HEADER = "x-lemma-deprecation"
+_warned_deprecations: set[str] = set()
+
+
+def _note_deprecation(headers: Any) -> None:
+    """Warn, once per deprecated use per process, that the server said so.
+
+    Never raises: the call succeeded, and a warning must not change that.
+    """
+    if not headers:
+        return
+    try:
+        message = headers.get(_DEPRECATION_HEADER)
+    except AttributeError:
+        return
+    if not message or message in _warned_deprecations:
+        return
+    _warned_deprecations.add(message)
+    warnings.warn(str(message), LemmaDeprecationWarning, stacklevel=4)
 
 
 def suggested_cli_version() -> str | None:
@@ -243,6 +268,7 @@ class LemmaTransport:
             status_code = int(response.status_code)
             headers = getattr(response, "headers", {}) or {}
             _note_latest_cli(headers)
+            _note_deprecation(headers)
             # Short-circuit order matters: reading the verb rebuilds the
             # request, so it only happens on the rare path where a retry is
             # otherwise on the table.
@@ -305,6 +331,7 @@ class LemmaTransport:
             raise LemmaConnectionError(str(exc) or "Network request failed") from exc
 
         _note_latest_cli(response.headers)
+        _note_deprecation(response.headers)
         if response.status_code >= 400:
             content = response.read()
             response.close()
@@ -408,6 +435,7 @@ class LemmaTransport:
 
             status_code = response.status_code
             _note_latest_cli(response.headers)
+            _note_deprecation(response.headers)
             if _should_retry(status_code, method) and attempt < self._max_retries:
                 time.sleep(_retry_delay(attempt, response.headers.get("retry-after")))
                 attempt += 1

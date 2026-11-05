@@ -187,4 +187,4 @@ async def test_an_outsider_cannot_add_a_provider(world, org, run):
         },
     )
 
-    assert response.status_code >= 400, response.status_code
+    assert response.status_code == 403, response.status_code

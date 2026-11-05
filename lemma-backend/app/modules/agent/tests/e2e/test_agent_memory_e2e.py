@@ -92,13 +92,15 @@ async def _brief(*, agent_name: str, pod_id: str, user_id: str) -> str:
     conversation = type(
         "_Conversation", (), {"id": uuid4(), "is_pod_assistant": False}
     )()
-    return await AgentContextBriefBuilder(uow_factory).build(
+    brief = await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,
         conversation=conversation,
         user_id=UUID(user_id),
         pod_id=UUID(pod_id),
         toolsets=[AgentToolset(name) for name in agent.toolsets],
     )
+    # Memory changes run to run, so it rides in the run's context part.
+    return brief.per_run
 
 
 @pytest.fixture(autouse=True)

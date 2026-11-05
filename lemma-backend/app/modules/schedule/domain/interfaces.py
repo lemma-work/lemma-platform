@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict, Protocol
+from typing import List, Optional, Any, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -52,6 +52,18 @@ class DatastoreSchedulePolicy(Protocol):
     ) -> bool: ...
 
 
+@dataclass(frozen=True)
+class FilterVerdict:
+    """What a filter decided about one event, and the answers it decided from.
+
+    `output` is kept whichever way the verdict went: a fire passes it on as the
+    run's `llm_output`, and a skip is recorded with it so the owner can see why.
+    """
+
+    proceed: bool
+    output: dict[str, object]
+
+
 class ScheduleEventFilter(Protocol):
     """Evaluate an optional schedule filter without exposing model infrastructure."""
 
@@ -62,7 +74,7 @@ class ScheduleEventFilter(Protocol):
         output_schema: dict[str, Any] | None,
         event_payload: dict[str, Any],
         schedule: ScheduleEntity,
-    ) -> tuple[bool, dict[str, Any] | None]: ...
+    ) -> FilterVerdict: ...
 
 
 class ScheduleRepository(ABC):
@@ -216,34 +228,3 @@ class ExternalScheduleWriter(ABC):
     @abstractmethod
     async def delete_provider_trigger(self, schedule: ScheduleEntity) -> None:
         """Delete the external provider subscription associated with the schedule."""
-
-
-class ScheduleEventPublisher(ABC):
-    """Port for publishing ScheduleFired events."""
-
-    @abstractmethod
-    async def publish_schedule_fired(
-        self,
-        schedule: ScheduleEntity,
-        payload: Dict[str, Any],
-        source_event_id: str,
-        user_id: UUID,
-        metadata: Optional[Dict[str, Any]] = None,
-        llm_output: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Publish a ScheduleFired event."""
-
-
-class ScheduleFilterTaskQueue(ABC):
-    """Port for queueing deferred LLM filtering for schedules."""
-
-    @abstractmethod
-    async def enqueue(
-        self,
-        *,
-        schedule_id: UUID,
-        payload: Dict[str, Any],
-        metadata: Dict[str, Any],
-        source_event_id: str,
-    ) -> None:
-        """Enqueue background LLM filter work for a schedule."""

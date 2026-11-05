@@ -343,3 +343,44 @@ async fn a_host_superseded_again_and_again_backs_off() {
     };
     assert_eq!(harness.worker.superseded_wait(&other, just_now), None);
 }
+
+/// A command whose payload Lemma staged -- a `START_RUN` with a very long
+/// prompt -- is taken with its payload fetched and checked. One whose fetch
+/// may pass later is left for Lemma to send again rather than refused.
+#[tokio::test]
+async fn a_staged_command_payload_is_fetched_before_the_command_is_taken() {
+    use crate::link::protocol::STAGED_FIELD;
+    use crate::link::transfer::{TransferClient, sha256_hex};
+
+    let mut harness = Harness::new().await;
+    let payload = serde_json::json!({ "prompt": "p".repeat(2 * 1024 * 1024) });
+    let body = serde_json::to_vec(&payload).unwrap();
+    harness
+        .stub
+        .staged
+        .lock()
+        .unwrap()
+        .insert("payload".to_owned(), body.clone());
+    let staged = serde_json::json!({
+        STAGED_FIELD: { "id": "payload", "size": body.len(), "sha256": sha256_hex(&body) }
+    });
+    let mut command = cancel_command(Uuid::new_v4());
+    command.payload = staged.clone();
+    let resolved = harness
+        .worker
+        .resolve_staged_payloads(vec![command.clone()])
+        .await;
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload, payload);
+
+    // Lemma unreachable: the command waits to be sent again.
+    harness.worker.transfers =
+        Some(TransferClient::new(&url::Url::parse("http://127.0.0.1:9").unwrap(), "s").unwrap());
+    assert!(
+        harness
+            .worker
+            .resolve_staged_payloads(vec![command])
+            .await
+            .is_empty()
+    );
+}

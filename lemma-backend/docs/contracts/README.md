@@ -28,12 +28,10 @@ Per operation:
 | Events | Domain events published, analytics events recorded |
 | Errors | Status → condition |
 
-Per event: who publishes it, which stream it lands on, which consumer groups
-read it, whether it is delivered once or at least once, and what a consumer must
-tolerate on redelivery. This is the part with no written contract before now,
-and the part where the platform has actually been bitten — a consumer group lost
-to a flush drops events silently, and nothing in the code says whose job it was
-to notice.
+Per event: who emits it, and who reacts. A domain event reaches only the
+after-commit sink (analytics and cache invalidation, best effort); a fact is
+written in the emitting transaction as one work item per subscriber, and a
+subscriber's handler must tolerate running again after a lost lease.
 
 ## Generated, then gated
 

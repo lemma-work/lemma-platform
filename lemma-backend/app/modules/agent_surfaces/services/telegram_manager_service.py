@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import (
+    TelegramCredentials,
+    as_secret,
+)
+
 import asyncio
 import re
 import secrets
@@ -63,7 +68,7 @@ class TelegramManagerService:
         manager_token: str | None = None,
         manager_username: str | None = None,
         api_base_url: str | None = None,
-        bot_username_lookup: Callable[[dict[str, str]], Awaitable[str | None]]
+        bot_username_lookup: Callable[[TelegramCredentials], Awaitable[str | None]]
         | None = None,
     ) -> None:
         self._uow_factory = uow_factory
@@ -83,12 +88,12 @@ class TelegramManagerService:
         self._bot_username_lookup = bot_username_lookup or telegram_bot_username
         self._client = TelegramClient.from_credentials(self._credentials(), timeout=65)
 
-    def _credentials(self) -> dict[str, str]:
+    def _credentials(self) -> TelegramCredentials:
         """The manager bot's credentials, as every call about it needs them."""
-        credentials: dict[str, str] = {"bot_token": self._manager_token or ""}
-        if self._api_base_url:
-            credentials["api_base_url"] = self._api_base_url
-        return credentials
+        return TelegramCredentials(
+            bot_token=as_secret(self._manager_token),
+            api_base_url=self._api_base_url or None,
+        )
 
     @property
     def configured(self) -> bool:
@@ -210,7 +215,7 @@ class TelegramManagerService:
         bot_id: int,
         bot_username: str | None,
         bot_token: str,
-    ) -> tuple[UUID, UUID]:
+    ) -> tuple[str, UUID]:
         return await persist_managed_bot(
             uow_factory=self._uow_factory,
             setup=setup,
@@ -301,7 +306,7 @@ class TelegramManagerService:
         await self._client.call("sendMessage", payload)
 
 
-async def telegram_bot_username(credentials: dict[str, str]) -> str | None:
+async def telegram_bot_username(credentials: TelegramCredentials) -> str | None:
     """What Telegram says a bot is called, or None when it cannot be asked.
 
     The same answer a surface's own bot gets, from the same per-token cache

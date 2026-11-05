@@ -61,14 +61,17 @@ async def test_a_schedule_keeps_its_instruction(pod_with_agent):
 @covers("schedule.create", "schedule.get")
 async def test_the_instruction_and_the_condition_are_both_kept(pod_with_agent):
     alice, pod, agent = pod_with_agent
+    # An event schedule: only an event can be judged, so a time schedule
+    # refuses a condition (PS-SCHED-012).
+    table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
 
     schedule = await alice.api.post(
         f"/pods/{pod['id']}/schedules",
         what="creating a schedule with both an instruction and a condition",
         json={
             "name": "digest_with_a_condition",
-            "schedule_type": "TIME",
-            "config": {"cron": "0 9 * * *"},
+            "schedule_type": "DATASTORE",
+            "config": {"table_name": table["name"], "operations": ["INSERT"]},
             "agent_name": agent["name"],
             "instruction": "Post the digest to the team.",
             "filter_instruction": "Only when something actually changed.",

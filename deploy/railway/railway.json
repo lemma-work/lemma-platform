@@ -22,7 +22,7 @@
   "services": {
     "api": {
       "deploy": {
-        "startCommand": "uvicorn app.app:app --host 0.0.0.0 --port $PORT --ws websockets-sansio --no-access-log",
+        "startCommand": "uvicorn app.app:app --host 0.0.0.0 --port $PORT --ws websockets-sansio --ws-max-size 1048576 --no-access-log",
         "preDeployCommand": ["alembic upgrade head"],
         "healthcheckPath": "/health/ready",
         "healthcheckTimeout": 120,

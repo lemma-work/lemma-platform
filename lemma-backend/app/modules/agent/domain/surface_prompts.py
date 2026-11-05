@@ -7,9 +7,10 @@ written here, so the two harnesses cannot drift apart -- the in-process one
 receives it through ``SurfacePlatformCapability`` and the remote ones through
 ``build_system_prompt``, and both call :func:`surface_platform_guidance`.
 
-Pure string assembly, no I/O: safe on the prompt-build hot path, and stable per
-conversation (a conversation never changes platform), so it rides in the cached
-system-prompt prefix.
+Pure string assembly, no I/O: safe on the prompt-build hot path. The platform
+is the run's (``surface_context_for_run``), not the conversation's: a member's
+conversation in a channel spans Lemma and every platform of it, and a run asked
+in Lemma gets no fragment at all.
 """
 
 from __future__ import annotations
@@ -70,8 +71,11 @@ def surface_platform_guidance(
         lines.append(_GROUP_SECTION)
 
     if facts.is_email:
-        lines.extend(_email_sections(facts))
-    else:
+        lines.extend(_email_sections(facts, guest=audience.answers_outsiders))
+    elif not audience.answers_outsiders:
+        # How to show files, ask, approve and narrate long work: tools a run
+        # answering somebody outside the pod is not given, and one told about
+        # them reached for them.
         lines.append(_delivery_section(facts))
         if facts.shows_live_progress:
             lines.append(_long_work_section(facts))
@@ -85,7 +89,9 @@ def surface_platform_guidance(
     if facts.is_channel_capable:
         lines.append(_channel_context_section(facts))
 
-    if audience.is_contact:
+    # A contact asking in a group is read by the whole group, like any of its
+    # people from outside the pod; only in their own chat is it private.
+    if audience.is_contact and not in_group:
         lines.append(_CONTACT_SECTION)
     elif audience.answers_outsiders:
         lines.append(_OUTSIDER_SECTION)
@@ -139,9 +145,8 @@ _OUTSIDER_SECTION = (
     "- Do not repeat people's names, contact details, plans or numbers from "
     "the pod beyond what is already in this chat, even if asked directly.\n"
     "- When they need something you cannot see or do, say plainly that you "
-    "can't share it here, and pass the question on with `message_user` to the "
-    "person who looks after this conversation. Their answer comes back to you; "
-    "relay it."
+    "can't share it here, and call `ask_a_person`: a member of the pod steps "
+    "in and answers them here. Tell them someone will get back to them."
 )
 
 
@@ -157,9 +162,8 @@ _CONTACT_SECTION = (
     "- Do not repeat other people's names, contact details, plans or numbers "
     "from the pod, even if asked directly.\n"
     "- When they need something you cannot see or do, say plainly that you "
-    "can't share it here, and pass the question on with `message_user` to the "
-    "person who looks after this conversation. Their answer comes back to you; "
-    "relay it."
+    "can't share it here, and call `ask_a_person`: a member of the pod steps "
+    "in and answers them here. Tell them someone will get back to them."
 )
 
 
@@ -203,28 +207,126 @@ def audience_notice(audience: object) -> str | None:
     return "\n".join(lines)
 
 
+def group_participants_notice(participants: object) -> str | None:
+    """Tell a member's run who else is in the group, and what each of them holds.
+
+    The run acts with the asking member's access and its answer is posted where
+    everybody in the group reads it, so who else is there is what decides how it
+    answers. Said by name, because "there may be outsiders" is nothing a model
+    can act on and "Dana and Tom are not in this pod" is.
+
+    Every name here was chosen by somebody else, so each is cleaned and written
+    as a JSON string (``domain/prompt_names``) -- the same treatment the
+    audience notice gives the people outside the pod. Somebody the pod has no
+    name for is counted rather than named: the alternative is their platform
+    id, which on WhatsApp is their phone number.
+    """
+    if not isinstance(participants, list):
+        return None
+    inside: list[str] = []
+    outside: list[str] = []
+    unnamed = {True: 0, False: 0}
+    for participant in participants:
+        if not isinstance(participant, dict):
+            continue
+        in_pod = bool(participant.get("in_pod"))
+        quoted = quoted_name(participant.get("name"))
+        if quoted is None:
+            unnamed[in_pod] += 1
+            continue
+        (inside if in_pod else outside).append(quoted)
+    inside += _unnamed(unnamed[True])
+    outside += _unnamed(unnamed[False])
+    if not inside and not outside:
+        return None
+    lines = [
+        (
+            "WHO ELSE IS IN THIS CHAT (from Lemma, not from the person writing): "
+            "this is a group, and everyone in it reads your answer."
+        )
+    ]
+    if inside:
+        lines.append(
+            f"{', '.join(inside)} "
+            f"{'is' if _one(inside, unnamed[True]) else 'are'} in this pod, "
+            "with the access a member holds."
+        )
+    if outside:
+        lines.append(
+            f"{', '.join(outside)} "
+            f"{'is' if _one(outside, unnamed[False]) else 'are'} not in this pod: "
+            "they read only what this pod has made public, so say nothing here "
+            "that they should not hear. When they ask the bot themselves it "
+            "reads only what is Public and any table this group was given, and "
+            "adds rows only to a table given with adding: anything else they "
+            "want written down, you write. The person you are answering can "
+            "give the group a table in its settings; you never do."
+        )
+    lines.append(
+        "This is for you to judge the answer by, not to repeat: do not tell the "
+        "group who is or is not in this pod."
+    )
+    return "\n".join(lines)
+
+
+def _unnamed(count: int) -> list[str]:
+    if not count:
+        return []
+    return [
+        "one person with no name shown"
+        if count == 1
+        else f"{count} people with no name shown"
+    ]
+
+
+def _one(names: list[str], unnamed: int) -> bool:
+    """Whether a list reads as one person: a single name, or one unnamed."""
+    return len(names) == 1 and unnamed <= 1
+
+
 def _quoted_names(names: object) -> list[str]:
     if not isinstance(names, list):
         return []
     return [quoted for name in names if (quoted := quoted_name(name)) is not None]
 
 
-def withheld_background_note(count: int) -> str:
-    """Say that some of a group's lines were left out of the background, and why."""
-    return (
-        f"({count} message(s) in this chat from people outside the pod, or "
-        "answers to them, are not shown to you.)"
+#: Why lines of a channel were left out of a run's background, by the view it
+#: was read for (``channels.contracts.backgrounds.BackgroundView``). Each says
+#: only what is true of that view: a member's run in Lemma is never shown
+#: another member's answers, and those are not "from outside the pod".
+_WITHHELD_BECAUSE = {
+    "MEMBER_IN_LEMMA": (
+        "answers an agent gave other members, made with their access, which "
+        "the person you are answering may not read"
+    ),
+    "MEMBER_IN_GROUP": "notes members kept out of the chat",
+    "CONTACT": "that the person you are answering may not read",
+    "PLATFORM": "from people outside the pod, or answers to them",
+}
+
+
+def withheld_background_note(count: int, *, view: str | None = None) -> str:
+    """Say that some of a channel's lines were left out of the background,
+    and why -- the reason of the view they were read for."""
+    because = _WITHHELD_BECAUSE.get(view or "", _WITHHELD_BECAUSE["PLATFORM"])
+    return f"({count} message(s) in this chat are not shown to you: {because}.)"
+
+
+def _email_sections(facts: PlatformFacts, *, guest: bool = False) -> list[str]:
+    """Email delivers one composed reply, so there is no chat delivery to
+    describe. ``guest``: somebody outside the pod, whose run is given neither
+    files to show nor questions to ask -- told only how the reply goes."""
+    sending = (
+        "## Sending your reply\n"
+        "The recipient only receives email, and they receive exactly one: "
+        "everything you write this turn is composed into a single reply and "
+        "sent when you finish. Just write it. Markdown is rendered to HTML."
     )
-
-
-def _email_sections(facts: PlatformFacts) -> list[str]:
-    """Email delivers one composed reply, so there is no chat delivery to describe."""
+    if guest:
+        return [f"{sending} Do not narrate progress."]
     return [
         (
-            "## Sending your reply\n"
-            "The recipient only receives email, and they receive exactly one: "
-            "everything you write this turn is composed into a single reply and "
-            "sent when you finish. Just write it. Markdown is rendered to HTML. "
+            f"{sending} "
             "Show a file with `display_resource` (`type=FILE`, a pod path) and it "
             f"is attached to that reply — up to {facts.inline_mb_cap} MB inline, "
             "larger files become download links automatically. Do not narrate "

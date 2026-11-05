@@ -274,8 +274,7 @@ taxonomy.
 
 ```bash
 research_slug="refund-policy-review"
-lemma files mkdir /me/research
-lemma files mkdir "/me/research/$research_slug"
+# upload creates missing parent folders; no mkdir needed
 lemma files upload ./memo.md "/me/research/$research_slug/memo.md"
 lemma files upload ./sources.md "/me/research/$research_slug/sources.md"
 lemma files upload ./evidence.csv "/me/research/$research_slug/evidence.csv" --no-search

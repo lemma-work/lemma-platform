@@ -15,6 +15,9 @@ from app.modules.pod_bundle.domain.state import (
     ImportStatus,
 )
 from app.modules.pod_bundle.domain.errors import BundleStateConflictError
+from app.modules.pod_bundle.infrastructure.state_checkpoints import (
+    validate_transition,
+)
 from app.modules.pod_bundle.infrastructure.state_store import PodBundleStateStore
 from app.modules.pod_bundle.infrastructure import state_store as state_store_module
 
@@ -225,7 +228,7 @@ def test_transition_refuses_to_overwrite_terminal_state():
     incoming.status = ImportStatus.APPLYING
 
     with pytest.raises(BundleStateConflictError):
-        PodBundleStateStore._validate_transition(
+        validate_transition(
             BundleJobKind.IMPORT,
             existing,
             incoming,
@@ -244,7 +247,7 @@ def test_transition_rejects_stale_worker_after_cancellation():
     incoming.committed_steps = [1]
 
     with pytest.raises(BundleStateConflictError):
-        PodBundleStateStore._validate_transition(
+        validate_transition(
             BundleJobKind.IMPORT,
             existing,
             incoming,
@@ -259,7 +262,7 @@ def test_failed_job_reopens_only_with_explicit_incremented_attempt():
     incoming.status = ImportStatus.APPLYING
 
     with pytest.raises(BundleStateConflictError):
-        PodBundleStateStore._validate_transition(
+        validate_transition(
             BundleJobKind.IMPORT,
             existing,
             incoming,
@@ -267,7 +270,7 @@ def test_failed_job_reopens_only_with_explicit_incremented_attempt():
         )
 
     incoming.attempt += 1
-    PodBundleStateStore._validate_transition(
+    validate_transition(
         BundleJobKind.IMPORT,
         existing,
         incoming,
@@ -283,7 +286,7 @@ def test_retryable_nonterminal_job_advances_once_when_marker_is_cleared():
     incoming.retryable = False
     incoming.attempt += 1
 
-    PodBundleStateStore._validate_transition(
+    validate_transition(
         BundleJobKind.IMPORT,
         existing,
         incoming,
@@ -292,7 +295,7 @@ def test_retryable_nonterminal_job_advances_once_when_marker_is_cleared():
 
     still_marked = incoming.model_copy(update={"retryable": True})
     with pytest.raises(BundleStateConflictError):
-        PodBundleStateStore._validate_transition(
+        validate_transition(
             BundleJobKind.IMPORT,
             existing,
             still_marked,

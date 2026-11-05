@@ -15,6 +15,7 @@ goes to the host the conversation's most recent host run chose
 
 from __future__ import annotations
 
+from app.modules.agent.domain.conversation_metadata import source_of
 from uuid import UUID
 
 from sqlalchemy import func, literal, select, update
@@ -27,10 +28,27 @@ from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 #: "host", "host_id": ..., "sandbox_id": ..., "root": ...}``.
 EXECUTION_METADATA_KEY = "execution"
 HOST_TARGET = "host"
+#: An Agent Host run's answer to "does its own shell replace Lemma's command
+#: tools": ``{"enabled": bool, "host_id": ...}`` (``host_native_commands``).
+NATIVE_COMMANDS_METADATA_KEY = "host_native_commands"
 
 
 async def read_run_execution(
     uow: SqlAlchemyUnitOfWork, run_id: UUID
+) -> dict[str, object] | None:
+    return await read_run_metadata_value(uow, run_id, key=EXECUTION_METADATA_KEY)
+
+
+async def record_run_execution(
+    uow: SqlAlchemyUnitOfWork, run_id: UUID, value: dict[str, object]
+) -> None:
+    await record_run_metadata_value(
+        uow, run_id, key=EXECUTION_METADATA_KEY, value=value
+    )
+
+
+async def read_run_metadata_value(
+    uow: SqlAlchemyUnitOfWork, run_id: UUID, *, key: str
 ) -> dict[str, object] | None:
     metadata = (
         await uow.session.execute(
@@ -39,12 +57,12 @@ async def read_run_execution(
     ).scalar_one_or_none()
     if not isinstance(metadata, dict):
         return None
-    value = metadata.get(EXECUTION_METADATA_KEY)
+    value = metadata.get(key)
     return value if isinstance(value, dict) else None
 
 
-async def record_run_execution(
-    uow: SqlAlchemyUnitOfWork, run_id: UUID, value: dict[str, object]
+async def record_run_metadata_value(
+    uow: SqlAlchemyUnitOfWork, run_id: UUID, *, key: str, value: dict[str, object]
 ) -> None:
     await uow.session.execute(
         update(AgentRunModel)
@@ -52,12 +70,40 @@ async def record_run_execution(
         .values(
             run_metadata=func.jsonb_set(
                 func.coalesce(AgentRunModel.run_metadata, literal({}, JSONB)),
-                array([EXECUTION_METADATA_KEY]),
+                array([key]),
                 literal(value, JSONB),
                 True,
             )
         )
     )
+
+
+async def claim_run_metadata_key(
+    uow: SqlAlchemyUnitOfWork, run_id: UUID, *, key: str, value: str
+) -> bool:
+    """Set ``key`` on the run's metadata if nobody has yet. True if this call did.
+
+    One ``UPDATE`` naming the key's absence, so of two racing claimers the
+    second waits on the first's row lock, re-reads it, and finds the key there.
+    """
+    claimed = await uow.session.execute(
+        update(AgentRunModel)
+        .where(
+            AgentRunModel.id == run_id,
+            ~func.coalesce(AgentRunModel.run_metadata, literal({}, JSONB)).has_key(key),
+        )
+        .values(
+            run_metadata=func.jsonb_set(
+                func.coalesce(AgentRunModel.run_metadata, literal({}, JSONB)),
+                array([key]),
+                literal(value, JSONB),
+                True,
+            )
+        )
+        .returning(AgentRunModel.id)
+        .execution_options(synchronize_session=False)
+    )
+    return claimed.scalar_one_or_none() is not None
 
 
 async def latest_host_execution(
@@ -115,6 +161,5 @@ async def earlier_run_sources(
     ).scalars()
     sources: list[str | None] = []
     for metadata in rows:
-        source = metadata.get("source") if isinstance(metadata, dict) else None
-        sources.append(source if isinstance(source, str) else None)
+        sources.append(source_of(metadata))
     return sources

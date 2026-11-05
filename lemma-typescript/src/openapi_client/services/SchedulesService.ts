@@ -3,16 +3,43 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { CreateScheduleRequest } from '../models/CreateScheduleRequest.js';
+import type { EventCatalogResponse } from '../models/EventCatalogResponse.js';
 import type { ScheduleDetailResponse } from '../models/ScheduleDetailResponse.js';
 import type { ScheduleListResponse } from '../models/ScheduleListResponse.js';
 import type { ScheduleRunListResponse } from '../models/ScheduleRunListResponse.js';
 import type { ScheduleRunResponse } from '../models/ScheduleRunResponse.js';
+import type { ScheduleRunStatus } from '../models/ScheduleRunStatus.js';
 import type { ScheduleType } from '../models/ScheduleType.js';
+import type { TriggerSkipListResponse } from '../models/TriggerSkipListResponse.js';
 import type { UpdateScheduleRequest } from '../models/UpdateScheduleRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class SchedulesService {
+    /**
+     * List Events
+     * What standing work here can start on: the platform's own events, then
+     * every event on an MCP server behind one of the pod's connectors the caller
+     * may use. A connected app's catalog triggers are listed per install
+     * (`connector.trigger.list`).
+     * @param podId
+     * @returns EventCatalogResponse Successful Response
+     * @throws ApiError
+     */
+    public static scheduleEventList(
+        podId: string,
+    ): CancelablePromise<EventCatalogResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/events',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
     /**
      * List Schedules
      * List pod schedules.
@@ -163,6 +190,8 @@ export class SchedulesService {
      * @param podId
      * @param scheduleId
      * @param limit
+     * @param status Only runs that report this status -- the target's outcome once there is one.
+     * @param skipped true: only events the schedule's filter skipped. false: leave them out, which is what a busy webhook schedule's history usually needs. Omitted: both.
      * @returns ScheduleRunListResponse Successful Response
      * @throws ApiError
      */
@@ -170,6 +199,8 @@ export class SchedulesService {
         podId: string,
         scheduleId: string,
         limit: number = 100,
+        status?: (ScheduleRunStatus | null),
+        skipped?: (boolean | null),
     ): CancelablePromise<ScheduleRunListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -180,6 +211,8 @@ export class SchedulesService {
             },
             query: {
                 'limit': limit,
+                'status': status,
+                'skipped': skipped,
             },
             errors: {
                 422: `Validation Error`,
@@ -206,6 +239,39 @@ export class SchedulesService {
                 'pod_id': podId,
                 'schedule_id': scheduleId,
                 'run_id': runId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Schedule Skips
+     * What the trigger let pass without firing -- e.g. the changes of a bulk
+     * write or an import it is set to skip -- newest first.
+     * @param podId
+     * @param scheduleId
+     * @param limit
+     * @param pageToken
+     * @returns TriggerSkipListResponse Successful Response
+     * @throws ApiError
+     */
+    public static scheduleSkipList(
+        podId: string,
+        scheduleId: string,
+        limit: number = 50,
+        pageToken?: (string | null),
+    ): CancelablePromise<TriggerSkipListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/schedules/{schedule_id}/skips',
+            path: {
+                'pod_id': podId,
+                'schedule_id': scheduleId,
+            },
+            query: {
+                'limit': limit,
+                'page_token': pageToken,
             },
             errors: {
                 422: `Validation Error`,

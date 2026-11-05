@@ -18,7 +18,7 @@ SCRIPT = (
 )
 
 
-def _environment(tmp_path: Path) -> dict[str, str]:
+def _environment(tmp_path: Path, **inherited: str) -> dict[str, str]:
     home = tmp_path / "home"
     home.mkdir()
     result = subprocess.run(
@@ -27,7 +27,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         text=True,
         check=True,
         cwd=home,
-        env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+        env={"PATH": "/usr/bin:/bin", "HOME": str(home), **inherited},
     )
     values: dict[str, str] = {}
     for line in result.stdout.splitlines():
@@ -40,6 +40,15 @@ def test_gh_is_pointed_at_the_directory_the_bridge_writes(tmp_path: Path) -> Non
     """This is the whole mechanism: the bridge writes hosts.yml here, so `gh`
     ends up authenticated as the account `git` is already using."""
     assert _environment(tmp_path)["GH_CONFIG_DIR"] == "/tmp/lemma-gh"
+
+
+def test_a_sessions_own_directory_is_not_overwritten(tmp_path: Path) -> None:
+    """Commands run in a login shell, which reads this file after the session's
+    environment is set. Overwriting the session's directory here would put
+    every session in the sandbox back on one shared `gh` login."""
+    own = "/tmp/lemma-sess/conversation-1/gh"
+
+    assert _environment(tmp_path, GH_CONFIG_DIR=own)["GH_CONFIG_DIR"] == own
 
 
 def test_the_token_never_enters_the_environment(tmp_path: Path) -> None:

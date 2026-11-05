@@ -75,6 +75,8 @@ TESTING_SETTINGS = {
     "AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
     "AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED": "false",
     "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED": "false",
+    # See `harness/stack.py`: how a scenario proves a Telegram account.
+    "SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH": "true",
     "USER_CACHE_TTL_SECONDS": "1",
     "AUTHORIZATION_ROLE_CACHE_TTL_SECONDS": "1",
     "ORGANIZATION_HOME_CACHE_TTL_SECONDS": "1",
@@ -190,7 +192,16 @@ def _commands(spec: StackSpec) -> dict[str, list[str]]:
     default = StackSpec(kind="compose", port=0, base_url="")
     commands: dict[str, list[str]] = {}
     if spec.app != default.app:
-        commands["api"] = ["uvicorn", spec.app, "--host", "0.0.0.0", "--port", "8000"]
+        commands["api"] = [
+            "uvicorn",
+            spec.app,
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+            "--ws-max-size",
+            "1048576",
+        ]
     if spec.worker != default.worker:
         commands["worker"] = ["python", *spec.worker]
     if spec.migrations != default.migrations:

@@ -2,14 +2,12 @@
 
 import json
 from uuid import uuid4
-from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -21,7 +19,7 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
 )
-from app.modules.agent_surfaces.services.onboarding_replay import replay_onboarding
+from app.modules.agent_surfaces.services.onboarding_replay import hand_off_onboarding
 from app.modules.agent_surfaces.composition import (
     build_surface_turn_starter,
 )
@@ -131,23 +129,13 @@ async def test_shared_whatsapp_without_a_surface_provisions_and_replays(
         )
         assert pending is not None and pending.ready_at is not None
         pending_id = pending.id
-    queue = AsyncMock(spec=SharedStreaqJobQueue)
-    queue.enqueue.side_effect = RuntimeError("queue temporarily unavailable")
-    with pytest.raises(RuntimeError, match="queue temporarily unavailable"):
-        await replay_onboarding(pending_id, uow_factory=factory, job_queue=queue)
-    async with sessions() as session:
-        pending = await session.get(PendingChatOnboarding, pending_id)
-        assert pending.original_event is not None and pending.handed_off_at is None
-    queue.enqueue.side_effect = None
-    queue.reset_mock()
-    await replay_onboarding(pending_id, uow_factory=factory, job_queue=queue)
-    queue.enqueue.assert_awaited_once()
-    context = queue.enqueue.call_args.kwargs["payload"]["context"]
+    parsed_context = await hand_off_onboarding(factory, pending_id)
+    assert isinstance(parsed_context, SurfaceChatContext)
+    context = parsed_context.model_dump(mode="json")
     assert context["mode"] == "chat"
     assert context["message_text"] == "Please check this invoice"
     assert codes[0] not in str(context)
     assert context["event"]["is_dm"] is True
-    parsed_context = SurfaceChatContext.model_validate(context)
     handler = build_surface_turn_starter(factory)
     with suppress_agent_run_enqueue():
         await handler.execute_chat(parsed_context)
@@ -185,8 +173,8 @@ async def test_shared_whatsapp_without_a_surface_provisions_and_replays(
         "Your invoice is ready to review." in str(item)
         for item in message_store.get_all("WHATSAPP")
     )
-    await replay_onboarding(pending_id, uow_factory=factory, job_queue=queue)
-    queue.enqueue.assert_awaited_once()
+    # Handed off once: a second replay of the same onboarding finds nothing.
+    assert await hand_off_onboarding(factory, pending_id) is None
     assert not (await say("Thanks, now check the totals")).handled
     async with sessions() as session:
         pending = await session.get(PendingChatOnboarding, pending_id)
@@ -260,11 +248,8 @@ async def test_telegram_requires_own_contact_without_a_username_or_existing_surf
         )
         assert pending.ready_at is not None
         pending_id = pending.id
-    queue = AsyncMock(spec=SharedStreaqJobQueue)
-    await replay_onboarding(pending_id, uow_factory=factory, job_queue=queue)
-    context = SurfaceChatContext.model_validate(
-        queue.enqueue.call_args.kwargs["payload"]["context"]
-    )
+    context = await hand_off_onboarding(factory, pending_id)
+    assert isinstance(context, SurfaceChatContext)
     assert context.message_text == "Help plan my day"
     with suppress_agent_run_enqueue():
         await build_surface_turn_starter(factory).execute_chat(context)
@@ -281,6 +266,7 @@ async def test_telegram_requires_own_contact_without_a_username_or_existing_surf
     )
 
 
+@pytest.mark.drives_work
 async def test_removing_the_number_hands_it_back_as_a_stranger(
     authenticated_client, fixed_test_user, db_session, fake_whatsapp, monkeypatch
 ):
@@ -297,7 +283,7 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
     `_match_user_by_phone` resolves the next message to them anyway through
     `AgentSurfaceExternalUser.resolved_user_id` -- the binding is gone and the
     person is still signed in as its owner. Removing the number from the account
-    is what closes both: `UserMobileChangedEvent` revokes every phone-bound
+    is what closes both: `UserMobileChanged` revokes every phone-bound
     identity *and* clears the cached resolution.
 
     So this asserts the end state an operator actually needs -- the number
@@ -305,7 +291,9 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
     that a row is missing.
     """
     from uuid import UUID
-    from app.modules.agent_surfaces.events.handlers import on_identity_event
+    from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+        mobile_changed,
+    )
     from app.modules.agent_surfaces.infrastructure.models import (
         AgentSurfaceExternalUser,
     )
@@ -313,8 +301,6 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
     from app.modules.agent_surfaces.infrastructure.onboarding_models import (
         PendingChatOnboarding,
     )
-    from app.modules.identity.domain.events import UserMobileChangedEvent
-    from app.modules.test_support.fakes import PassthroughEventInbox
 
     monkeypatch.setattr(
         "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
@@ -377,16 +363,13 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
         assert bound[0].user_id == user_id
 
     # The number is taken off the account, which is the explicit removal the
-    # product makes the un-binding depend on.
-    async with sessions.begin() as session:
-        user = await session.get(User, user_id)
-        user.mobile_number = None
-        user.mobile_verified_at = None
-    await on_identity_event(
-        UserMobileChangedEvent(user_id=user_id).model_dump(mode="json"),
-        uow_factory=factory,
-        inbox=PassthroughEventInbox(),
+    # product makes the un-binding depend on -- through the profile API, so
+    # identity is what announces it.
+    removed = await authenticated_client.post(
+        "/users/me/profile", json={"mobile_number": None}
     )
+    assert removed.status_code == 201, removed.text
+    await mobile_changed(user_id)
 
     async with sessions() as session:
         live = list(
@@ -444,13 +427,14 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
     )
 
 
+@pytest.mark.drives_work
 async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
     authenticated_client, fixed_test_user, db_session, fake_whatsapp, monkeypatch
 ):
     from uuid import UUID
-    from app.modules.agent_surfaces.events.handlers import on_identity_event
-    from app.modules.identity.domain.events import UserMobileChangedEvent
-    from app.modules.test_support.fakes import PassthroughEventInbox
+    from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+        mobile_changed,
+    )
     from datetime import datetime, timezone
 
     monkeypatch.setattr(
@@ -510,11 +494,7 @@ async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
     assert (await say("Hello from my new number")).handled
     assert (await say(email)).handled
     assert (await say(codes[0])).handled
-    await on_identity_event(
-        UserMobileChangedEvent(user_id=user_id).model_dump(mode="json"),
-        uow_factory=factory,
-        inbox=PassthroughEventInbox(),
-    )
+    await mobile_changed(user_id)
     async with sessions() as session:
         user = await session.get(User, user_id)
         assert user.mobile_number == "+" + phone

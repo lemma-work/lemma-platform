@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from app.core.infrastructure.redis.client import get_redis
@@ -55,19 +56,20 @@ _PAYLOAD_FIELD = "event"
 # reaches a terminal state.
 _STREAM_TTL_SECONDS = 24 * 60 * 60
 
-# The TTL was the only bound here: a run's stream could hold every event it ever
-# emitted, and an agent event can carry a base64 image. A run may last four
-# hours, so "expires in a day" is not a size limit. Entries past this are the
-# ones a reader has long since passed; the durable record is the run's own
-# storage, not this feed.
-_STREAM_MAXLEN = 10_000
+# The stream is bounded by its consumer, not by a length. Each worker driving
+# the run trims it to the last entry it has persisted (``trim_consumed``), so
+# what remains is what nobody has turned into messages yet -- exactly what a
+# worker reclaiming the run has to read. A length cap trimmed by count instead,
+# and a run left without a consumer for a few minutes (a deploy) lost its
+# oldest unread events, tool calls and sealed text included. What bounds a
+# stream nobody is consuming is the per-event payload cap at intake, the run's
+# deadline, and the TTL.
 
-#: ARGV slots before the (sequence, payload) pairs begin: the TTL and the
-#: MAXLEN. The Lua loop starts at `_LEADING_ARGV + 1`, substituted into the
-#: script below rather than written twice -- adding a leading argument without
-#: moving the loop reads the first payload as a sequence number and silently
-#: drops the batch.
-_LEADING_ARGV = 2
+#: ARGV slots before the (sequence, payload) pairs begin: the TTL. The Lua loop
+#: starts at `_LEADING_ARGV + 1`, substituted into the script below rather than
+#: written twice -- adding a leading argument without moving the loop reads the
+#: first payload as a sequence number and silently drops the batch.
+_LEADING_ARGV = 1
 
 _START_ID = "0-0"
 
@@ -93,7 +95,6 @@ _SEQUENCE_FIELD = "sequence"
 _APPEND_SCRIPT = """
 local key = KEYS[1]
 local ttl = tonumber(ARGV[1])
-local maxlen = tonumber(ARGV[2])
 
 local last = 0
 local newest = redis.call('XREVRANGE', key, '+', '-', 'COUNT', 1)
@@ -137,7 +138,7 @@ for index = __EVENT_START__, #ARGV, 2 do
         return {1, last, expected, sequence, 0}
       end
     end
-    redis.call('XADD', key, 'MAXLEN', '~', maxlen, '*', 'sequence', sequence, 'event', payload)
+    redis.call('XADD', key, '*', 'sequence', sequence, 'event', payload)
     appended = appended + 1
     expected = expected + 1
   end
@@ -215,11 +216,19 @@ class StreamBatch(list[StreamedEvent]):
 class AgentHostEventStream:
     """Append and tail one run's events."""
 
-    def __init__(self, redis_url: str | None = None) -> None:
+    def __init__(
+        self, redis_url: str | None = None, *, client: Redis | None = None
+    ) -> None:
         self._redis_url = redis_url
+        # A client handed in is used as is: the unit tests give an in-process
+        # Redis rather than writing into whatever answers on the developer's
+        # default port.
+        self._given_client = client
 
-    def _client(self):
+    def _client(self) -> Redis:
         """The process-wide pooled client; disposal is the lifespan's job."""
+        if self._given_client is not None:
+            return self._given_client
         return get_redis(
             url=self._redis_url,
             socket_timeout=_SOCKET_TIMEOUT_SECONDS,
@@ -240,7 +249,7 @@ class AgentHostEventStream:
         if not events:
             return AppendOutcome(watermark=await self.last_sequence(run_id=run_id))
         redis = self._client()
-        arguments: list[object] = [_STREAM_TTL_SECONDS, _STREAM_MAXLEN]
+        arguments: list[object] = [_STREAM_TTL_SECONDS]
         for event in events:
             arguments.append(integer(event.get("sequence")))
             arguments.append(json.dumps(event))
@@ -341,6 +350,25 @@ class AgentHostEventStream:
             return integer(fields[_SEQUENCE_FIELD])
         parsed = _decode(fields)
         return integer(parsed.get("sequence")) if parsed else 0
+
+    async def trim_consumed(self, *, run_id: UUID, cursor: str) -> None:
+        """Drop the entries before ``cursor``, which a worker has persisted.
+
+        ``cursor`` itself stays. It is never past the newest entry, so the
+        stream is never left empty by a trim -- an empty stream is what the
+        append script reads as a lost one, and it would then accept a gap.
+        Best effort: a failed trim leaves entries the next one removes.
+        """
+        try:
+            await self._client().xtrim(
+                run_events_stream_key(run_id), minid=cursor, approximate=False
+            )
+        except RedisError:
+            logger.warning(
+                "agent.infrastructure.agent_host_event_stream.trim_failed.degraded",
+                agent_run_id=str(run_id),
+                exc_info=True,
+            )
 
     async def delete(self, *, run_id: UUID) -> None:
         """Drop a terminalized run's stream; best effort."""

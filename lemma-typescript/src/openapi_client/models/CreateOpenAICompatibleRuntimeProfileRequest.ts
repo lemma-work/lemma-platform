@@ -11,6 +11,7 @@ export type CreateOpenAICompatibleRuntimeProfileRequest = {
     model_names?: Array<string>;
     model_settings?: Record<string, any>;
     name: string;
+    reasoning_model_names?: Array<string>;
     source?: string;
     vision_model_names?: Array<string>;
 };

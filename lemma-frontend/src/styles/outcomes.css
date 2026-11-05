@@ -1,0 +1,2773 @@
+/* The outcome frame (`/o`): a sidebar of places and of every outcome with
+   the chats in it, and beside it the page or the chat it opened.
+
+   Colour has three jobs and no others: `--lemma` for what Lemma itself did,
+   `--behind-*` for what is behind, the neutral ground for everything else.
+   Text sits on Albert Sans; anything that counts sits on Inter, which lines
+   its figures up. Weight stops at 500, as everywhere in the app. */
+
+.ox {
+    display: grid;
+    grid-template-columns: 272px minmax(0, 1fr);
+    height: 100dvh;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-outcomes), var(--ui);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+/* Scrollbars are thin and one quiet grey on every scroller in the frame,
+   the workspace's own panes included. Zero specificity, so a pane that hides
+   its scrollbar on purpose still hides it. */
+:where(.ox) {
+    scrollbar-color: var(--line-2) transparent;
+}
+
+:where(.ox) :where(*) {
+    scrollbar-width: thin;
+}
+
+/* Zero specificity, so a link styled as a button keeps the button's ink. */
+:where(.ox) a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.ox-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+.ox-num,
+.ox-big {
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+
+.ox-bars rect {
+    fill: var(--brand-bars);
+}
+
+.ox-icon {
+    flex: none;
+}
+
+/* ── the sidebar ─────────────────────────────────────────────────────── */
+
+/* Places on top, then each outcome as a section of the chats in it, one
+   line each: the shape of a chat app's sidebar, not a list of tool types. */
+
+.ox-side {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+    border-right: 1px solid var(--line-2);
+    background: var(--chrome);
+}
+
+.ox-side__top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 10px 10px 16px;
+}
+
+.ox-org {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.ox-org select {
+    appearance: none;
+    max-width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+}
+
+.ox-org select:enabled {
+    padding-right: 20px;
+    cursor: pointer;
+}
+
+.ox-org select:enabled:hover {
+    background: var(--wash-b);
+}
+
+.ox-org .ox-icon {
+    position: absolute;
+    right: 6px;
+    pointer-events: none;
+    color: var(--ink-2);
+}
+
+.ox-side__search {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    margin-left: auto;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ox-side__search:hover {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.ox-palette__in kbd {
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line-2);
+    color: var(--ink-2);
+    font-family: var(--ui);
+    font-size: 11px;
+}
+
+.ox-side__places {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 0 8px 10px;
+    border-bottom: 1px solid var(--line);
+}
+
+/* One column for glyphs -- a place's icon, an outcome's face, a chat's
+   state -- and one edge every name starts on, so an outcome and the chats
+   under it read as a heading and its lines. */
+.ox-glyph {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 18px;
+    height: 18px;
+}
+
+.ox-place,
+.ox-srow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 8px;
+    color: var(--ink);
+    font-size: 13.5px;
+}
+
+.ox-place .ox-icon {
+    color: var(--ink-2);
+}
+
+.ox-place__t {
+    flex: 1;
+    min-width: 0;
+}
+
+.ox-place:hover,
+.ox-srow:hover,
+.ox-group__name:hover {
+    background: var(--wash-b);
+}
+
+.ox-place[aria-current="page"],
+.ox-srow[aria-current="page"],
+.ox-group__name[aria-current="page"] {
+    background: var(--wash-a);
+}
+
+.ox-count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--lemma);
+    color: var(--on-accent);
+    font-family: var(--ui);
+    font-size: 11px;
+}
+
+.ox-count--quiet {
+    background: var(--wash-a);
+    color: var(--ink);
+    margin-right: 6px;
+}
+
+.ox-side__chats {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px 8px 12px;
+    /* Out of sight until the pointer is in the sidebar. Only the colour
+       changes, so nothing moves when it appears. */
+    scrollbar-color: transparent transparent;
+}
+
+.ox-side:hover .ox-side__chats {
+    scrollbar-color: var(--line-2) transparent;
+}
+
+/* An outcome: its face and name, the one weight-500 line in the list, with
+   space above it. Folded ones pack together into a list of names. */
+.ox-group {
+    margin-top: 14px;
+}
+
+.ox-group--folded {
+    margin-top: 6px;
+}
+
+.ox-group--folded + .ox-group--folded {
+    margin-top: 0;
+}
+
+.ox-group__head {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 32px;
+    padding-right: 3px;
+}
+
+.ox-group__name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    height: 32px;
+    padding: 0 6px 0 10px;
+    border-radius: 8px;
+    color: var(--ink);
+    font-size: 13.5px;
+    font-weight: 500;
+}
+
+.ox-group__t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-group__fold,
+.ox-group__add {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+/* The name takes the row, so the controls and signs line up at its end,
+   over the chats' own signs. */
+.ox-group__name {
+    flex: 1;
+}
+
+.ox-group__fold:hover,
+.ox-group__add:hover {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.ox-group__head > .ox-sign {
+    margin: 0 4px;
+}
+
+/* An open section's fold and every section's + wait for a pointer. A folded
+   section always shows its chevron: that is what says it is folded. */
+@media (hover: hover) {
+    .ox-group:not(.ox-group--folded) .ox-group__fold,
+    .ox-group__add {
+        opacity: 0;
+    }
+
+    .ox-group__head:hover .ox-group__fold,
+    .ox-group__head:hover .ox-group__add,
+    .ox-group__head:focus-within .ox-group__fold,
+    .ox-group__head:focus-within .ox-group__add {
+        opacity: 1;
+    }
+}
+
+.ox-group__rows {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+/* What a chat is sits in the glyph column, quiet: a platform's mark, #, a
+   lock, a bell -- or a plain ring for a chat with Lemma. */
+.ox-glyph {
+    color: var(--ink-2);
+}
+
+.ox-glyph .channel-icon,
+.ox-glyph .chatmark__hash {
+    opacity: 0.85;
+}
+
+.ox-glyph .chatmark__hash {
+    font-family: var(--ui);
+    font-size: 15px;
+}
+
+.ox-ring {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.25px var(--ink-3);
+    opacity: 0.6;
+}
+
+/* What is happening in it sits at the row's end: a question waiting on the
+   reader is a violet dot, Lemma working in it a violet ring. */
+.ox-sign {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin-right: 5px;
+    border-radius: 50%;
+}
+
+.ox-sign--ask {
+    background: var(--lemma);
+}
+
+.ox-sign--live {
+    box-shadow: inset 0 0 0 1.5px var(--lemma);
+}
+
+.ox-srow__t {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-srow__when {
+    flex: none;
+    color: var(--ink-2);
+    font-family: var(--ui);
+    font-size: 11.5px;
+}
+
+.ox-srow__n {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 11px;
+}
+
+.ox-srow__n--ask {
+    background: var(--lemma);
+    color: var(--on-accent);
+}
+
+.ox-group__more {
+    align-self: flex-start;
+    height: 28px;
+    padding: 0 10px 0 36px;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-group__more:hover {
+    color: var(--ink);
+}
+
+.ox-side__foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+}
+
+.ox-side__foot .human-profile {
+    flex: 1;
+    min-width: 0;
+}
+
+.ox-side__me {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--lemma-ink);
+    font-family: var(--ui);
+    font-size: 12.5px;
+}
+
+.ox-live i,
+.ox-now--live i {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--lemma);
+    box-shadow: 0 0 0 3px var(--lemma-wash);
+}
+
+.ox-classic {
+    color: var(--ink-2);
+    font-size: 12.5px;
+    white-space: nowrap;
+}
+
+.ox-classic:hover {
+    color: var(--ink);
+}
+
+.ox-me,
+.ox-avatar {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-weight: 500;
+}
+
+.ox-me {
+    width: 26px;
+    height: 26px;
+    font-size: 12px;
+}
+
+/* The bar a narrow screen gets instead of the sidebar, which slides over. */
+.ox-topbar,
+.ox-navscrim {
+    display: none;
+}
+
+/* The sidebar and the main side scroll apart, each inside itself, and the
+   page never does: one scrollbar per thing that moves. */
+.ox-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    height: 100dvh;
+}
+
+/* ── pages ───────────────────────────────────────────────────────────── */
+
+.ox-main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 48px;
+}
+
+.ox-page {
+    width: 100%;
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 28px 28px 0;
+}
+
+.ox-loading {
+    padding: 28px;
+    color: var(--ink-2);
+}
+
+.ox-page .ox-loading {
+    padding: 8px 0;
+}
+
+.ox-title {
+    margin: 0;
+    font-size: 30px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+}
+
+.ox-sub {
+    margin: 8px 0 0;
+    max-width: 64ch;
+    color: var(--ink-2);
+    font-size: 15px;
+}
+
+.ox-vs {
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.ox-link:hover {
+    color: var(--ink);
+}
+
+.ox-sec {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 32px 0 10px;
+}
+
+.ox-sec h2 {
+    margin: 0;
+    font-size: 15px;
+}
+
+.ox-note {
+    margin: 12px 0 0;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-note a {
+    text-decoration: underline;
+}
+
+.ox-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--wash-a);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.ox-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.ox-btn--primary {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.ox-btn--lemma {
+    background: var(--lemma-wash);
+    color: var(--lemma-ink);
+}
+
+.ox-btn--small {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12.5px;
+}
+
+.ox-empty {
+    padding: 40px 0;
+}
+
+.ox-empty__title {
+    margin: 0;
+    font-size: 17px;
+}
+
+.ox-empty__body {
+    margin-top: 8px;
+    color: var(--ink-2);
+}
+
+.ox-empty__body p {
+    margin: 0 0 14px;
+}
+
+.ox-pill,
+.ox-tag,
+.ox-kind {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    color: var(--ink);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.ox-pill--behind {
+    background: var(--behind-wash);
+    color: var(--behind-ink);
+}
+
+.ox-kind--decide {
+    background: var(--lemma-wash);
+    color: var(--lemma-ink);
+}
+
+.ox-tag--link:hover {
+    background: var(--line-2);
+}
+
+.ox-dot {
+    display: inline-block;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.ox-dot--lemma {
+    background: var(--lemma);
+}
+
+.ox-dot--person {
+    background: var(--person-mark);
+}
+
+.ox-age {
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+/* ── today ───────────────────────────────────────────────────────────── */
+
+.ox-board {
+    border: 1px solid var(--line-2);
+    border-radius: 16px;
+    background: var(--paper);
+    overflow: hidden;
+}
+
+.ox-board__head,
+.ox-lane {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr) 140px 220px 110px;
+    gap: 24px;
+    align-items: center;
+    padding: 0 22px;
+}
+
+.ox-board__head {
+    height: 40px;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-lane {
+    min-height: 84px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-lane:last-child {
+    border-bottom: 0;
+}
+
+.ox-lane:hover {
+    background: var(--wash-b);
+}
+
+.ox-lane__who {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.ox-lane__name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.ox-lane__owner {
+    color: var(--ink-2);
+    font-size: 12.5px;
+    font-weight: 400;
+}
+
+.ox-lane__owns {
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.ox-lane__owns--none {
+    font-style: italic;
+}
+
+.ox-chart {
+    display: block;
+    width: 100%;
+    max-width: 420px;
+    height: 48px;
+}
+
+.ox-chart__lemma {
+    fill: var(--lemma);
+}
+
+.ox-chart__people {
+    fill: var(--person-mark);
+    opacity: 0.78;
+}
+
+.ox-chart__none {
+    fill: var(--line-2);
+}
+
+.ox-lane__num {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+.ox-big {
+    font-size: 26px;
+    line-height: 1;
+}
+
+.ox-now,
+.ox-wait {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--ink);
+    font-size: 13.5px;
+}
+
+.ox-now span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-now:not(.ox-now--live) {
+    color: var(--ink-2);
+}
+
+.ox-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-foot p {
+    margin: 0;
+}
+
+.ox-legend {
+    display: flex;
+    gap: 16px;
+}
+
+.ox-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* ── one outcome ─────────────────────────────────────────────────────── */
+
+.ox-crumb {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.ox-crumb a:hover {
+    color: var(--ink);
+}
+
+.ox-ohead {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+
+.ox-ohead__l {
+    min-width: 0;
+}
+
+.ox-ohead__who {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ox-ohead__name {
+    margin: 0;
+    font-size: 30px;
+    letter-spacing: -0.02em;
+}
+
+.ox-ohead__owns {
+    margin: 6px 0 0;
+    max-width: 70ch;
+    font-size: 16px;
+}
+
+/* No bar or finish line yet: the description, if any, then the nudge. */
+.ox-ohead__nudge {
+    margin: 6px 0 0;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-ohead__nudge a {
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+
+.ox-ohead__nudge a:hover {
+    color: var(--ink);
+}
+
+.ox-ohead__people {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 0;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-faces {
+    display: inline-flex;
+}
+
+.ox-faces span + span {
+    margin-left: -5px;
+}
+
+.ox-faces .ox-avatar {
+    box-shadow: 0 0 0 2px var(--paper);
+}
+
+.ox-ohead__r {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+.ox-stand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ox-ohead__acts {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.ox-otabs {
+    display: flex;
+    gap: 2px;
+    margin: 20px 0 18px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line-2);
+}
+
+.ox-otab {
+    height: 32px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 8px;
+    color: var(--ink-2);
+}
+
+.ox-otab:hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.ox-otab[aria-current="page"] {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.ox-split {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
+    align-items: flex-start;
+}
+
+.ox-split__main {
+    flex: 999 1 560px;
+    min-width: 0;
+}
+
+.ox-split__side {
+    flex: 1 1 300px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.ox-panel {
+    padding: 14px 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+}
+
+.ox-panel h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+}
+
+.ox-mini {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-mini li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
+    border-top: 1px solid var(--line);
+    font-size: 13.5px;
+}
+
+.ox-mini li:first-child {
+    border-top: 0;
+}
+
+.ox-mini a {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-mini a:hover {
+    text-decoration: underline;
+}
+
+.ox-mini--recent {
+    margin-top: 10px;
+}
+
+/* the plan */
+
+.ox-plan {
+    border: 1px solid var(--line-2);
+    border-radius: 16px;
+    background: var(--paper);
+    padding: 6px 0 12px;
+}
+
+.ox-plan__intro {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 12px 18px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-plan__lead {
+    margin: 0;
+    font-size: 15px;
+}
+
+.ox-plan__acts {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ox-plan--draft .ox-line__t {
+    color: var(--ink-2);
+}
+
+.ox-plan__sec {
+    padding: 12px 18px 2px;
+}
+
+.ox-plan__sec ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-plan__h {
+    margin: 0 0 4px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-plan__none {
+    margin: 4px 0 8px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 38px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-line__dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--line-2);
+}
+
+.ox-line__dot--lemma {
+    background: var(--lemma);
+}
+
+.ox-line__t {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14.5px;
+    text-align: left;
+    cursor: text;
+}
+
+.ox-line__input {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14.5px;
+}
+
+.ox-line__by {
+    color: var(--ink-2);
+    font-size: 12.5px;
+    white-space: nowrap;
+}
+
+.ox-line__x {
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--ink-2);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+}
+
+.ox-line:hover .ox-line__x,
+.ox-line__x:focus-visible {
+    opacity: 1;
+}
+
+.ox-add {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0 10px;
+    color: var(--ink-2);
+}
+
+.ox-add input {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+}
+
+.ox-add input::placeholder {
+    color: var(--ink-2);
+}
+
+/* The inputs drop their own outline, so the row around each shows focus. */
+.ox-add:focus-within {
+    outline: 2px solid var(--ink-2);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+.ox-measure {
+    display: flex;
+    gap: 16px;
+    padding: 14px 18px 4px;
+}
+
+.ox-measure__form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 6px 18px 4px;
+    padding: 14px;
+    border-radius: 12px;
+    background: var(--wash-b);
+}
+
+.ox-measure__form label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-measure__form input,
+.ox-measure__form select,
+.ox-measure__form textarea {
+    padding: 7px 9px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+}
+
+.ox-measure__form textarea {
+    font-family: var(--font-mono, ui-monospace), monospace;
+    font-size: 13px;
+}
+
+.ox-measure__row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* apps, made, x-ray */
+
+.ox-reach {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--lemma-wash);
+}
+
+.ox-reach__t {
+    margin: 0 0 2px;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.ox-reach .ox-vs {
+    margin: 0;
+}
+
+.ox-apps {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 14px;
+}
+
+.ox-app {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ox-app__cover {
+    display: block;
+    aspect-ratio: 1200 / 630;
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    background: var(--wash-a);
+    overflow: hidden;
+}
+
+.ox-app__cover img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.ox-app__blank {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    color: var(--ink-2);
+}
+
+.ox-app__name {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 500;
+}
+
+.ox-app__meta {
+    margin: -4px 0 0;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-app__acts {
+    display: flex;
+    gap: 8px;
+}
+
+.ox-list {
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+    overflow: hidden;
+}
+
+.ox-row {
+    display: grid;
+    grid-template-columns: 20px minmax(160px, 260px) minmax(0, 1fr) auto auto;
+    gap: 14px;
+    align-items: center;
+    min-height: 48px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+}
+
+.ox-row:last-child {
+    border-bottom: 0;
+}
+
+.ox-row__t {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 14.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+a.ox-row__t:hover,
+a.ox-row:hover .ox-row__t {
+    text-decoration: underline;
+}
+
+.ox-row__d {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-row__d--none {
+    font-style: italic;
+}
+
+.ox-row__m {
+    font-size: 12.5px;
+    white-space: nowrap;
+}
+
+.ox-row--person {
+    grid-template-columns: 28px minmax(160px, 320px) minmax(0, 1fr);
+}
+
+.ox-row__email {
+    margin-left: 8px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-row__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ox-list__foot {
+    margin: 0;
+    padding: 12px 16px;
+}
+
+.ox-xray__lead {
+    margin: 0 0 14px;
+    color: var(--ink-2);
+}
+
+.ox-xray {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.ox-xray__g {
+    padding: 14px 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+}
+
+.ox-xray__g h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+}
+
+.ox-pieces {
+    display: flex;
+    flex-direction: column;
+}
+
+.ox-piece {
+    display: grid;
+    grid-template-columns: 28px minmax(0, auto) minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-height: 40px;
+    border-top: 1px solid var(--line);
+}
+
+.ox-piece:first-child {
+    border-top: 0;
+}
+
+.ox-piece:hover .ox-piece__t {
+    text-decoration: underline;
+}
+
+.ox-piece--off {
+    opacity: 0.6;
+}
+
+.ox-piece__i {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+
+.ox-piece__i--lemma {
+    background: var(--lemma-wash);
+    color: var(--lemma-ink);
+}
+
+.ox-piece__t {
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+.ox-piece__d {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── needs you ───────────────────────────────────────────────────────── */
+
+.ox-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 16px 0 14px;
+}
+
+.ox-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 11px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-chip[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--on-accent);
+    box-shadow: none;
+}
+
+.ox-chip:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.ox-chip span {
+    font-family: var(--ui);
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.ox-queue {
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+    overflow: hidden;
+}
+
+.ox-queue__h {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    margin: 0;
+    padding: 10px 16px;
+    background: var(--wash-b);
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+}
+
+.ox-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 70px auto;
+    gap: 14px;
+    align-items: center;
+    min-height: 54px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-item:hover {
+    background: var(--wash-b);
+}
+
+.ox-item__t {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.ox-item__w {
+    overflow: hidden;
+    font-size: 14.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-item__o {
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-item__age {
+    color: var(--ink-2);
+    font-size: 12.5px;
+    text-align: right;
+}
+
+.ox-item__age--old {
+    color: var(--behind-ink);
+}
+
+.ox-queue__foot {
+    margin: 12px 0 0;
+}
+
+/* ── outcomes ────────────────────────────────────────────────────────── */
+
+.ox-cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.ox-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 16px;
+    background: var(--paper);
+}
+
+.ox-card__top {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+}
+
+.ox-card__name {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.ox-card__owns {
+    margin: -6px 0 0;
+    font-size: 14.5px;
+    line-height: 1.35;
+}
+
+.ox-facts {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 6px 10px;
+    margin: 0;
+    font-size: 13px;
+}
+
+.ox-facts dt {
+    color: var(--ink-2);
+}
+
+.ox-facts dd {
+    margin: 0;
+}
+
+.ox-card__acts {
+    margin-top: auto;
+}
+
+.ox-own {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    padding: 10px 10px 10px 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+}
+
+.ox-own label {
+    color: var(--ink-2);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.ox-own input {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    outline: none;
+}
+
+.ox-own:focus-within {
+    border-color: var(--ink-2);
+}
+
+/* ── palette ─────────────────────────────────────────────────────────── */
+
+.ox-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 12vh 16px 16px;
+    background: var(--line-2);
+}
+
+.ox-palette {
+    width: min(640px, 100%);
+    border-radius: 16px;
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+    overflow: hidden;
+}
+
+.ox-palette__in {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+}
+
+.ox-palette__in input {
+    flex: 1;
+    min-width: 0;
+    height: 52px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 16px;
+    outline: none;
+}
+
+.ox-palette__in:focus-within {
+    border-bottom-color: var(--ink-2);
+}
+
+.ox-palette__ask {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--lemma-wash);
+    color: var(--lemma-ink);
+    font-size: 13.5px;
+}
+
+.ox-palette__ask select {
+    height: 28px;
+    padding: 0 6px;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+
+.ox-palette__ask .ox-btn {
+    margin-left: auto;
+}
+
+.ox-palette .ox-note {
+    margin: 8px 16px 0;
+}
+
+.ox-palette__h {
+    margin: 0;
+    padding: 12px 16px 4px;
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+.ox-palette__list {
+    margin: 0;
+    padding: 0 8px 8px;
+    list-style: none;
+}
+
+.ox-palette__list button {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-palette__list button:hover,
+.ox-palette__list button:focus-visible {
+    background: var(--wash-a);
+}
+
+.ox-palette__name {
+    font-size: 14.5px;
+}
+
+.ox-palette__desc {
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-palette__none {
+    padding: 8px 10px;
+}
+
+/* ── home: asking, and every app ─────────────────────────────────────── */
+
+/* One column, about as wide as a thread: what needs you said once, the box
+   to ask, a few lines of what waits, and a row of apps. */
+.ox-home {
+    max-width: 880px;
+    padding-top: 56px;
+}
+
+.ox-home__t {
+    margin: 0;
+    font-size: 30px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+}
+
+.ox-home__sub {
+    margin: 8px 0 0;
+    color: var(--ink-2);
+    font-size: 15px;
+}
+
+.ox-askbox {
+    margin-top: 24px;
+    border: 1px solid var(--line-2);
+    border-radius: 16px;
+    background: var(--paper);
+    box-shadow: var(--depth-rest);
+}
+
+.ox-askbox:focus-within {
+    border-color: var(--ink-2);
+}
+
+.ox-askbox textarea {
+    display: block;
+    width: 100%;
+    min-height: 64px;
+    max-height: 240px;
+    padding: 14px 16px 4px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 15.5px;
+    line-height: 1.45;
+    resize: none;
+    outline: none;
+    field-sizing: content;
+}
+
+.ox-askbox textarea::placeholder {
+    color: var(--ink-2);
+}
+
+.ox-askbox__bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px 10px 16px;
+}
+
+.ox-askbox__in {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-askbox__in select {
+    max-width: 240px;
+    height: 28px;
+    padding: 0 6px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+
+.ox-askbox__send {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    margin-left: auto;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--on-accent);
+    cursor: pointer;
+}
+
+.ox-askbox__send:disabled {
+    background: var(--line-2);
+    color: var(--ink-2);
+    cursor: default;
+}
+
+.ox-apps--home {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.ox-apps--home .ox-app__cover {
+    border-radius: 10px;
+}
+
+.ox-apptile {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.ox-apptile:hover .ox-apptile__name {
+    text-decoration: underline;
+}
+
+.ox-apptile__name {
+    overflow: hidden;
+    font-size: 13.5px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-apptile__pod {
+    margin-top: -4px;
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-apps__none {
+    margin: 0;
+}
+
+.ox-btn--icon {
+    width: 32px;
+    padding: 0;
+}
+
+.ox-plan__more {
+    margin: 2px 0 8px 17px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-plan__more:hover {
+    color: var(--ink);
+}
+
+.ox-sec__side {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 14px;
+}
+
+/* ── views that fill the main side ───────────────────────────────────── */
+
+/* A chat, a run, a workflow, an app: each fills the height beside the
+   sidebar and scrolls inside itself, so a composer stays put. Its height is
+   what the column leaves it, so a strip above it (reconnect, the phone's
+   bar) never pushes the composer off the bottom. */
+
+.ox-main--fill {
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0;
+    overflow: hidden;
+}
+
+.ox-main--fill > .ox-thread,
+.ox-main--fill > .ox-queuepane,
+.ox-main--fill > .ox-stagepage {
+    flex: 1;
+    min-height: 0;
+}
+
+/* one chat */
+
+.ox-chats__home {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    max-width: 440px;
+    margin: auto;
+    padding: 24px;
+    text-align: center;
+}
+
+.ox-chats__home-t {
+    margin: 0;
+    font-size: 18px;
+}
+
+.ox-chats__home .ox-vs {
+    margin: 0 0 4px;
+    font-size: 13.5px;
+}
+
+.ox-thread {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.ox-thread__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-thread__head--slim {
+    min-height: 40px;
+    padding: 4px 16px;
+}
+
+.ox-thread__t {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    font-size: 15px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-thread__in {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-2);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.ox-thread__in select,
+.ox-queuepane__status select {
+    height: 28px;
+    padding: 0 6px;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+
+.ox-thread__out {
+    flex: none;
+    margin-left: auto;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-thread__out:hover,
+.ox-thread__crumb:hover {
+    color: var(--ink);
+}
+
+.ox-thread__crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-thread__body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+
+.ox-thread__none {
+    padding: 24px;
+}
+
+/* a new chat: who it is with, its apps, and the box at the foot */
+
+.ox-newchat {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.ox-newchat__body {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 26px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    width: min(100%, 808px);
+    margin: 0 auto;
+    padding: 32px 24px 20px;
+}
+
+.ox-newchat__who {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.ox-newchat__id {
+    min-width: 0;
+}
+
+.ox-newchat__name {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+}
+
+.ox-newchat__owns {
+    margin: 2px 0 0;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-newchat__h {
+    margin: 0 0 10px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-newchat__foot {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(100%, 808px);
+    margin: 0 auto;
+    padding: 0 24px 20px;
+}
+
+.ox-newchat__foot .ox-askbox {
+    margin-top: 0;
+}
+
+/* A Lemma's home: one column -- what it owns if nothing yet, the box to
+   talk to it, what it needs from you, what it has been doing, what it runs. */
+/* A Lemma's page is one column, its header and tabs included, so what is
+   at the header's end lines up with the edge of what is under it. */
+.ox-page--lemma {
+    max-width: 1000px;
+}
+
+.ox-lhome {
+    display: flex;
+    flex-direction: column;
+}
+
+.ox-lhome > .ox-askbox {
+    margin-top: 4px;
+}
+
+.ox-lhome .ox-askbox textarea {
+    min-height: 44px;
+}
+
+.ox-lhome > .ox-shelf {
+    margin-top: 28px;
+}
+
+.ox-ownit {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding: 16px 18px;
+    border-radius: 14px;
+    background: var(--lemma-wash);
+}
+
+.ox-ownit__t {
+    margin: 0 0 2px;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.ox-ownit .ox-vs {
+    margin: 0;
+    font-size: 13px;
+}
+
+.ox-ownit__acts {
+    display: flex;
+    gap: 8px;
+}
+
+.ox-recent {
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+    overflow: hidden;
+}
+
+.ox-recent__row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 42px;
+    padding: 4px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+}
+
+.ox-recent__row:last-child {
+    border-bottom: 0;
+}
+
+.ox-recent__row:hover {
+    background: var(--wash-b);
+}
+
+.ox-recent__t {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-recent__k {
+    flex: none;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-recent__when {
+    flex: none;
+    width: 64px;
+    color: var(--ink-2);
+    font-family: var(--ui);
+    font-size: 12px;
+    text-align: right;
+}
+
+/* A Lemma's "more": who has access, where people reach it, share or
+   export, its settings, the workspace. */
+.ox-more {
+    position: relative;
+}
+
+.ox-more > summary {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    color: var(--ink-2);
+    list-style: none;
+    cursor: pointer;
+}
+
+.ox-more > summary::-webkit-details-marker {
+    display: none;
+}
+
+.ox-more > summary:hover,
+.ox-more[open] > summary {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.ox-more__menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+}
+
+.ox-more__menu > button,
+.ox-more__menu > a {
+    display: flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-more__menu > button:hover,
+.ox-more__menu > a:hover {
+    background: var(--wash-b);
+}
+
+/* The workspace's own pages, set into a Lemma's tab: their outer padding
+   and width are the tab's, not theirs. */
+.ox-embed .library-view {
+    max-width: none;
+    padding: 0;
+}
+
+/* Starting a Lemma from scratch, the workspace's way, in the main area. */
+.ox-hire {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* What a Lemma runs, a shelf each: apps, tables, automations. */
+.ox-shelf__head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.ox-shelf__t {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 500;
+}
+
+.ox-shelf__n {
+    color: var(--ink-2);
+    font-family: var(--ui);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.ox-shelf__all {
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-shelf__all:hover {
+    color: var(--ink);
+}
+
+.ox-shelf__new {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+
+.ox-shelf__new:hover {
+    color: var(--ink);
+}
+
+.ox-shelf__none {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-chiplinks {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.ox-chiplink {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    height: 30px;
+    padding: 0 11px;
+    border-radius: 8px;
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font-size: 13px;
+}
+
+.ox-chiplink span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-chiplink .ox-icon {
+    color: var(--ink-2);
+}
+
+.ox-chiplink:hover {
+    background: var(--wash-b);
+}
+
+.ox-chiplinks__more {
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+/* Starting with people instead: a group made here, or one on a platform. */
+.ox-startwith {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.ox-startwith__t {
+    margin-right: 2px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-startwith__b {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-startwith__b:hover {
+    background: var(--wash-b);
+}
+
+.ox-startwith__b .ox-icon {
+    color: var(--ink-2);
+}
+
+.ox-startwith__more {
+    margin-left: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+    color: var(--ink-2);
+    font-size: 13px;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+
+.ox-startwith__more:hover {
+    color: var(--ink);
+}
+
+/* contacts */
+
+.ox-contacts__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.ox-contacts__head > .ox-vs {
+    max-width: 52ch;
+    margin: 0;
+    font-size: 13.5px;
+}
+
+.ox-queuepane {
+    overflow-y: auto;
+    padding: 24px 28px 32px;
+}
+
+.ox-queuepane__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.ox-queuepane__head h1 {
+    margin: 4px 0 0;
+    font-size: 24px;
+    letter-spacing: -0.015em;
+}
+
+.ox-queuepane__head .ox-vs {
+    margin: 4px 0 0;
+}
+
+.ox-queuepane__views {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.ox-queuepane__views .ox-chips {
+    margin: 0;
+}
+
+.ox-queuepane__none {
+    margin: 16px 0;
+}
+
+.ox-queuepane__more {
+    margin-top: 12px;
+}
+
+.ox-kind--behind {
+    margin-left: 8px;
+    background: var(--behind-wash);
+    color: var(--behind-ink);
+}
+
+/* ── inside an outcome: a run, a workflow, an app, a file, a table ───── */
+
+.ox-stagepage {
+    display: flex;
+    flex-direction: column;
+    /* At least as tall as the main side, so the stage's paper reaches the
+       bottom of a short page without making it scroll. */
+    min-height: 100%;
+}
+
+.ox-stagebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 48px;
+    padding: 8px 24px;
+    border-bottom: 1px solid var(--line-2);
+    background: var(--paper);
+}
+
+.ox-stagebar .ox-crumb {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.ox-crumb__here {
+    overflow: hidden;
+    color: var(--ink);
+    text-overflow: ellipsis;
+}
+
+.ox-stagebar__acts {
+    display: flex;
+    flex: none;
+    gap: 8px;
+}
+
+.ox-stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: var(--paper);
+}
+
+.ox-stage > .ox-loading,
+.ox-stage__none {
+    padding: 24px;
+}
+
+.ox-filepage {
+    width: min(100%, 960px);
+    margin: 0 auto;
+    padding: 28px 24px 40px;
+}
+
+/* ── narrow screens ──────────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+    .ox {
+        grid-template-columns: 244px minmax(0, 1fr);
+    }
+
+    .ox-board__head {
+        display: none;
+    }
+
+    .ox-lane {
+        grid-template-columns: minmax(0, 1fr) 130px;
+        grid-template-areas: "who num" "chart chart" "now wait";
+        row-gap: 10px;
+    }
+
+    .ox-lane__who { grid-area: who; }
+    .ox-lane__chart { grid-area: chart; }
+    .ox-lane__num { grid-area: num; }
+    .ox-now { grid-area: now; }
+    .ox-wait { grid-area: wait; }
+
+    .ox-cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ox-xray {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ox-apps--home {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 760px) {
+    /* One column. The sidebar slides over the page from a bar on top. */
+    .ox {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ox-side {
+        position: fixed;
+        inset: 0 auto 0 0;
+        z-index: 30;
+        width: min(300px, 86vw);
+        transform: translateX(-100%);
+        transition: transform 160ms ease;
+    }
+
+    .ox-side--open {
+        transform: none;
+        box-shadow: var(--depth-raise);
+    }
+
+    .ox-navscrim {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: block;
+        padding: 0;
+        border: 0;
+        background: var(--line-2);
+    }
+
+    .ox-topbar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 48px;
+        padding: 0 8px 0 6px;
+        border-bottom: 1px solid var(--line-2);
+        background: var(--paper);
+    }
+
+    .ox-topbar__menu,
+    .ox-topbar__find {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border: 0;
+        border-radius: 8px;
+        background: none;
+        color: var(--ink);
+        cursor: pointer;
+    }
+
+    .ox-topbar__org {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        font-size: 15px;
+        font-weight: 500;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .ox-page {
+        padding: 18px 16px 0;
+    }
+
+    .ox-home {
+        padding-top: 24px;
+    }
+
+    .ox-home__t {
+        font-size: 26px;
+    }
+
+    .ox-apps--home {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ox-cards {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ox-lane {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "who" "num" "chart" "now" "wait";
+        padding: 14px 16px;
+    }
+
+    .ox-row,
+    .ox-row--person {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+
+    .ox-ohead__r {
+        align-items: flex-start;
+    }
+
+    .ox-thread__head {
+        flex-wrap: wrap;
+        padding: 8px 16px;
+    }
+
+    .ox-stagebar {
+        padding: 8px 16px;
+    }
+
+    .ox-queuepane {
+        padding: 16px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ox-side {
+        transition: none;
+    }
+}

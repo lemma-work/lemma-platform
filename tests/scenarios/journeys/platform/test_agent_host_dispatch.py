@@ -74,8 +74,10 @@ def _start_runs(commands: list[dict], *, besides: set[str]) -> list[dict]:
     return list(unique.values())
 
 
-async def _pair_and_publish(alice) -> str:
-    """The user mints a code; the machine spends it for a secret shown once."""
+async def _pair_and_publish(alice) -> tuple[str, str]:
+    """The user mints a code; the machine spends it for a secret shown once.
+
+    Returns the secret and the key of the harness this run published."""
     pairing = await alice.api.post(
         "/me/runtime/agent-host-pairings",
         json={"display_name": "Scenario laptop"},
@@ -93,9 +95,10 @@ async def _pair_and_publish(alice) -> str:
     async with HostLink(alice.api, secret=host_secret) as link:
         welcome = await link.request("hello", {"hello": _HELLO, "capacity": _CAPACITY})
         assert welcome["type"] == "welcome", welcome
-        published = await link.request("harnesses", {"harnesses": [_harness_snapshot()]})
+        snapshot = _harness_snapshot()
+        published = await link.request("harnesses", {"harnesses": [snapshot]})
         assert published["type"] == "harnesses_ok", published
-    return host_secret
+    return host_secret, snapshot["harness_key"]
 
 
 @scenario("A paired host is offered dispatched work once, under one claim")
@@ -111,16 +114,30 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
     organization = alice.organization
     pod = await alice.works_in("company-wide")
 
-    host_secret = await _pair_and_publish(alice)
+    host_secret, harness_key = await _pair_and_publish(alice)
 
     # The profile binds to the harness id, so read back what the host published.
+    # By key, not by position: a standing tenant re-pairs the same installation
+    # every run, and each earlier run's harness is still listed -- DISABLED, as
+    # no longer reported, under the same display name, in no particular order.
+    # Taking the first row bound the profile to one of those on a long-lived
+    # deployment, and the create was refused, 400, "harness is not ready".
     hosts = await alice.api.get("/me/runtime/agent-hosts")
     listed = hosts if isinstance(hosts, list) else hosts.get("items", [])
-    [host] = listed
+    [host] = [
+        h
+        for h in listed
+        if h["installation_id"] == _HELLO["installation_id"] and not h["revoked_at"]
+    ]
     harness_list = await alice.api.get(f"/me/runtime/agent-hosts/{host['id']}/harnesses")
     rows = harness_list if isinstance(harness_list, list) else harness_list["items"]
-    assert rows, "the paired host announces no harnesses"
-    harness_id = rows[0]["id"]
+    [ours] = [row for row in rows if row["harness_key"] == harness_key] or [None]
+    assert ours is not None, (
+        f"the harness this run published ({harness_key}) is not listed on its "
+        f"host: {[(row['harness_key'], row['health']) for row in rows]}"
+    )
+    assert ours["health"] == "READY", ours
+    harness_id = ours["id"]
 
     profile = await alice.api.post(
         f"/organizations/{organization['id']}/agent-runtime/profiles",

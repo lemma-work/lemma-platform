@@ -33,9 +33,7 @@ from app.modules.agent_surfaces.platforms.common import (
     payload_text,
 )
 from app.modules.agent_surfaces.platforms.teams import client
-from app.modules.agent_surfaces.platforms.teams.credentials import (
-    tenant_id_from_credentials,
-)
+from app.modules.agent_surfaces.domain.credentials import TeamsCredentials
 from app.modules.agent_surfaces.platforms.teams.models import (
     TeamsChannelMessageSnapshot,
     TeamsGetRecentMessagesParams,
@@ -169,11 +167,13 @@ def _message_snapshot_from_graph_item(
         return None
 
     sender = payload_section(item, "from")
-    user = payload_section(sender, "user") or payload_section(sender, "application")
+    person = payload_section(sender, "user")
+    user = person or payload_section(sender, "application")
     return TeamsChannelMessageSnapshot(
         message_id=payload_text(item, "id") or None,
         reply_to_id=payload_text(item, "replyToId") or None,
         user_id=payload_text(user, "id") or None,
+        from_application=not person and bool(user),
         display_name=payload_text(user, "displayName") or None,
         text=text,
         attachments=attachments,
@@ -182,6 +182,9 @@ def _message_snapshot_from_graph_item(
 
 class TeamsChannelHistoryMixin:
     """The channel-history half of :class:`TeamsPlatformService`."""
+
+    #: Supplied by `TeamsPlatformService`.
+    credentials: TeamsCredentials
 
     async def get_recent_channel_messages(
         self,
@@ -233,7 +236,7 @@ class TeamsChannelHistoryMixin:
                 "This tool is only available in Teams conversations."
             )
 
-        tenant_id = tenant_id_from_credentials(self.credentials)
+        tenant_id = self.credentials.tenant_id
         if not tenant_id:
             logger.debug(
                 "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic"
@@ -324,7 +327,7 @@ class TeamsChannelHistoryMixin:
     ) -> list[SurfaceContextMessage]:
         """Recent channel/thread messages via Graph for background context on a
         mention. Best-effort: missing tenant/team/token or any error → empty."""
-        tenant_id = tenant_id_from_credentials(self.credentials)
+        tenant_id = self.credentials.tenant_id
         channel_id = event.external_channel_id
         if not tenant_id or not channel_id:
             return []
@@ -366,8 +369,10 @@ class TeamsChannelHistoryMixin:
                 SurfaceContextMessage(
                     author=snapshot.author_label
                     or channel_author_label(snapshot.display_name, snapshot.user_id),
+                    author_external_id=snapshot.user_id,
                     text=text,
                     ts=snapshot.message_id,
+                    from_bot=snapshot.from_application,
                 )
             )
             if len(out) >= limit:

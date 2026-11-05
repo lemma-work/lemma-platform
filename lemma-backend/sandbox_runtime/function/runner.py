@@ -29,6 +29,12 @@ _CACHE_ROOT = Path(
 )
 _MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 _CALLBACK_GRACE_SECONDS = 60
+# Per attempt, and long on purpose. The backend redacts up to megabytes of logs
+# and writes the run before it answers, which takes seconds under load. The
+# handler is not cancelled when the caller gives up, so a short timeout never
+# lost a result -- it re-sent the same payload, and every re-send queued another
+# redaction on a backend that was already behind.
+_CALLBACK_ATTEMPT_TIMEOUT_SECONDS = 30.0
 
 
 class GatewayClient:
@@ -96,7 +102,7 @@ class GatewayClient:
             remaining = (retry_deadline - datetime.now(timezone.utc)).total_seconds()
             if remaining <= 0:
                 raise TimeoutError("terminal callback retry deadline elapsed")
-            request_timeout = min(2.0, remaining)
+            request_timeout = min(_CALLBACK_ATTEMPT_TIMEOUT_SECONDS, remaining)
             retry_after_seconds: float | None = None
             try:
                 response = await self._client.post(

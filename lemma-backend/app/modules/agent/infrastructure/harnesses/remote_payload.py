@@ -16,7 +16,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
 from app.modules.workspace.contracts.host_execution import (
@@ -29,8 +29,7 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
-from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
+from app.modules.agent.domain.run_context_prompt import run_context_for
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ConversationType,
@@ -38,6 +37,9 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
     to_json_value,
+)
+from app.modules.agent.infrastructure.harnesses.turn_messages import (
+    turn_messages,
 )
 from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
@@ -106,24 +108,29 @@ def run_start_payload(
     runtime_instructions: str,
     carries_history: bool,
     resumed_tool_call_id: str | None = None,
-    open_notifications: str | None = None,
+    session_last_run_id: UUID | None = None,
+    session_seen_through: int | None = None,
 ) -> JsonObject:
     """Everything one dispatched run needs, and nothing it does not.
 
-    ``open_notifications`` is what this person still owes an answer to, as the
-    in-process harness's capability renders it. It rides in the turn's prompt,
-    not the system prompt: it changes the moment somebody answers, and the
-    system prompt is delivered once per provider session.
+    The run's context part -- the clock, the task list, memory, the attached
+    doc, what this person still owes an answer to -- rides in the turn's
+    prompt, not the system prompt: it changes from run to run, and the system
+    prompt is delivered once per provider session, re-sent whenever its digest
+    changes.
 
     ``carries_history`` is set when the run is not even going to try to resume a
-    provider session, so the prompt has to bring the conversation with it, and
-    ``resumed_tool_call_id`` names the pausing call this run exists to answer.
-    See :func:`_turn_messages`.
+    provider session, so the prompt has to bring the conversation with it,
+    ``resumed_tool_call_id`` names the pausing call this run exists to answer,
+    ``session_last_run_id`` is the newest run whose prompt the session being
+    resumed holds, and ``session_seen_through`` the newest message of the
+    history that prompt was built from. See :func:`turn_messages`.
 
-    Deliberately does not carry ``runtime_credentials``. They were assembled
-    here and then dropped by the only caller, on the one code path whose
-    destination is a third-party machine — a leak waiting for someone to widen
-    the spec it feeds.
+    Its destination is somebody's laptop, where the host keeps it in its own
+    journal, so it carries the prompt and nothing else. It used to carry the
+    whole agent, the conversation with all of its metadata, and the run
+    context -- connector account ids, surface metadata, the runtime's
+    credentials slot -- none of which the host reads.
     """
     return {
         "agent_run_id": str(agent_run_id),
@@ -131,21 +138,17 @@ def run_start_payload(
         "prompt": _prompt_payload(
             agent=agent,
             conversation=conversation,
-            messages=_turn_messages(
+            messages=turn_messages(
                 messages,
                 carries_history=carries_history,
                 resumed_tool_call_id=resumed_tool_call_id,
                 agent_run_id=agent_run_id,
+                session_last_run_id=session_last_run_id,
+                session_seen_through=session_seen_through,
             ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
-            open_notifications=open_notifications,
         ),
-        "agent": agent.model_dump(mode="json"),
-        "conversation": conversation.model_dump(
-            mode="json", exclude={"messages", "agent_runs"}
-        ),
-        "context": ctx.model_dump(mode="json"),
     }
 
 
@@ -307,7 +310,6 @@ def _prompt_payload(
     messages: Sequence[Message],
     ctx: AgentContext,
     runtime_instructions: str,
-    open_notifications: str | None = None,
 ) -> JsonObject:
     sections: list[str] = []
     instructions = build_agent_instructions(
@@ -328,85 +330,11 @@ def _prompt_payload(
     # spec carries only system_prompt + user_prompt, and the schema reaches the
     # agent as the `lemma_final_answer` tool's inputSchema over MCP.
     history = _render_history(messages)
-    if open_notifications:
-        history = open_notifications + ("\n\n" + history if history else "")
+    run_context = run_context_for(ctx)
     return {
-        "user_prompt": prepend_runtime_notes(history),
+        "user_prompt": run_context + ("\n\n" + history if history else ""),
         "system_prompt": "\n\n".join(section for section in sections if section),
     }
-
-
-def _turn_messages(
-    messages: Sequence[Message],
-    *,
-    carries_history: bool,
-    resumed_tool_call_id: str | None = None,
-    agent_run_id: UUID | None = None,
-) -> list[Message]:
-    """The messages this prompt has to carry.
-
-    Normally just the latest user message. A Lemma conversation maps to one
-    provider session, kept in one working directory, and the agent loads it back
-    on every turn — so the rest is already on the other side and resending it
-    would only duplicate the conversation in its context.
-
-    A run that resumes a pause is the same rule with a different answer. Waking
-    from a ``wait_for`` adds no user message, so "the latest user message" is the
-    request that started the task — and re-sending that to an agent whose
-    session already contains it does not read as "carry on", it reads as the
-    person asking again, so the agent does the work twice. What the session has
-    genuinely not seen is the return Lemma synthesized for the call it paused
-    on, which is exactly what resuming has to deliver.
-
-    The other exception is a run that is not going to try: a harness that never
-    advertised ``loadSession`` has no session to resume, ever. Sending one lone
-    message there leaves the agent answering a follow-up it has never seen the
-    start of. This costs nothing in the usual case, because a resumable harness
-    only lacks a stored session on a conversation's first turn, where there is
-    no history to send.
-
-    And a turn answers every message that is its own, not only the newest: the
-    one that started it, any that arrived before it was dispatched, and -- for
-    a follow-up turn -- everything the person said while the previous turn was
-    working, which the follow-up claims (``steered_into_run``). "The latest
-    user message" alone answered the last of three and dropped the other two on
-    a session that had never seen them.
-    """
-    ordered = sorted(messages, key=lambda item: item.sequence)
-    if carries_history:
-        return ordered
-    if agent_run_id is not None:
-        answering = [
-            message
-            for message in ordered
-            if message.role == MessageRole.USER
-            and (
-                message.agent_run_id == agent_run_id
-                or (message.metadata or {}).get(STEERED_INTO_RUN) == str(agent_run_id)
-            )
-        ]
-        if answering:
-            return answering
-    if resumed_tool_call_id is not None:
-        resumed = [
-            message
-            for message in ordered
-            if message.kind == MessageKind.TOOL_RETURN
-            and message.tool_call_id == resumed_tool_call_id
-        ]
-        if resumed:
-            return resumed
-    for message in reversed(ordered):
-        if message.role == MessageRole.USER:
-            return [message]
-    return ordered[-1:]
-
-
-def _runtime_profile_value[DepsT](
-    options: HarnessOptions[DepsT], key: str
-) -> object | None:
-    profile = options.extra.get("runtime_profile")
-    return profile.get(key) if isinstance(profile, dict) else None
 
 
 def _workspace_cwd(ctx: AgentContext) -> str:
@@ -462,7 +390,7 @@ def _render_history(messages: Sequence[Message]) -> str:
     return "\n\n".join(lines)
 
 
-def _user_turn_text(message: Message) -> str:
+def _user_turn_text(message: Message, *, with_roster: bool = True) -> str:
     """Everything the surface knows about one user message.
 
     A user turn carries more than its text: who sent it, what it quotes, which
@@ -473,7 +401,7 @@ def _user_turn_text(message: Message) -> str:
     reply, and no sign of the files already in the datastore -- reading as though
     the agent had ignored the attachment. One builder now serves both paths.
     """
-    body = user_prompt_text(message)
+    body = user_prompt_text(message, with_roster=with_roster)
     attachments = (message.metadata or {}).get("attachments")
     if isinstance(attachments, list) and attachments:
         body += f"\n\nAttachments: {json.dumps(to_json_value(attachments))}"
@@ -542,7 +470,7 @@ def _message_text(message: Message) -> str:
             f"{_history_tool_result(message.tool_result)}"
         )
     elif message.role == MessageRole.USER:
-        return _user_turn_text(message)
+        return _user_turn_text(message, with_roster=False)
     else:
         body = message.text or ""
     metadata = message.metadata or {}

@@ -320,3 +320,30 @@ async def test_deleted_sandboxes_disappear_from_owner_listings(
         owner_id=user_id,
     )
     assert [sandbox.id for sandbox in owned] == [keep.id]
+
+
+async def test_a_claimed_destroy_times_the_e2b_session_once(
+    sandbox_repository: SandboxRepository,
+) -> None:
+    """The epoch claim ends the READY session, so it is the one that times it."""
+    from app.modules.test_support.metric_capture import metric_reader, total
+
+    metric_reader()
+    sandbox = await _workspace(sandbox_repository)
+    instance = await sandbox_repository.begin_instance(
+        sandbox_id=sandbox.id,
+        provider="e2b",
+        provider_id=f"e2b-{sandbox.id.hex}",
+        provider_volume_id=None,
+        epoch=sandbox.epoch,
+    )
+    await sandbox_repository.mark_instance_ready(instance.id)
+    before = total("lemma.sandbox.session_seconds")
+
+    claimed = await sandbox_repository.claim_for_destroy(
+        sandbox.id, expected_epoch=sandbox.epoch
+    )
+    assert claimed is not None
+    await sandbox_repository.mark_instance_destroyed(instance.id)
+
+    assert total("lemma.sandbox.session_seconds") - before == 1

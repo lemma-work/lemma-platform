@@ -12,8 +12,9 @@ beside the credential check it depends on.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Sequence
+from typing import Any
+from uuid import UUID
 
 import pydantic_core
 from pydantic_ai.messages import (
@@ -32,39 +33,40 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
     PendingThoughts,
 )
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.private_notes import lemma_label
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
-from app.modules.agent.domain.surface_prompts import attachment_listing_block
-from app.modules.agent.infrastructure.harnesses.channel_context import (
-    audience_block,
-    channel_context_block,
+from app.modules.agent.domain.queued_messages import DURING_ACTIVE_RUN
+from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+    timed_user_prompt_text,
 )
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
     MessageKind,
     MessageRole,
-    to_json_value,
 )
 
 logger = get_logger(__name__)
-
-# Telegram's ``chat.type`` values for a chat with more than the sender in it.
-_GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
 
 
 def history_and_prompt(
     messages: Sequence[Message],
     *,
-    protocol: str | None = None,
+    protocol: RuntimeProfileProtocol | None = None,
+    current_run_id: UUID | None = None,
+    replay_prior_run_reasoning: bool = False,
 ) -> tuple[list[ModelMessage], str | None]:
     """``protocol`` names where the history is going, and gates thought replay.
 
     Optional, and defaulting to None on purpose: a caller that does not say
     replays no reasoning at all. That is the safe direction — the cost is a
     model that cannot see its own earlier thinking, and the alternative is
-    reasoning written into an answer.
+    reasoning written into an answer. ``current_run_id`` and
+    ``replay_prior_run_reasoning`` say which of the thoughts that pass that
+    test are this run's own; see `pydantic_ai_thinking`.
     """
-    ordered = sorted(messages, key=lambda message: message.sequence)
+    ordered = _without_unanswered_thoughts(
+        sorted(messages, key=lambda message: message.sequence)
+    )
     user_prompt: str | None = None
     history_messages = list(ordered)
     if (
@@ -72,30 +74,53 @@ def history_and_prompt(
         and ordered[-1].role is MessageRole.USER
         and ordered[-1].kind in TEXTUAL_MESSAGE_KINDS
     ):
-        user_prompt = user_prompt_text(ordered[-1])
+        user_prompt = timed_user_prompt_text(ordered[-1])
         history_messages = ordered[:-1]
 
     # The trailing user turn is carried as the prompt rather than in history,
     # so the builder cannot see it -- and it is exactly what tells an unanswered
     # question apart from one still being asked.
+    thoughts = PendingThoughts(
+        protocol,
+        current_run_id=current_run_id,
+        replay_prior_runs=replay_prior_run_reasoning,
+    )
     return (
         _to_pydantic_ai_messages(
-            history_messages, protocol, user_turn_follows=user_prompt is not None
+            history_messages, thoughts, user_turn_follows=user_prompt is not None
         ),
         user_prompt,
     )
 
 
+def _without_unanswered_thoughts(ordered: list[Message]) -> list[Message]:
+    """``ordered`` without the reasoning trailing after its last user turn.
+
+    A run that failed after only thinking leaves its thoughts newest, and a
+    retry of it replays the user turn before them. A thought with no answer
+    after it is never sent to the model (``PendingThoughts`` drops it), so
+    leaving them in only hid the turn the retry is for, and the run started
+    with no prompt.
+    """
+    end = len(ordered)
+    while (
+        end
+        and ordered[end - 1].role is MessageRole.ASSISTANT
+        and ordered[end - 1].kind is MessageKind.THINKING
+    ):
+        end -= 1
+    return ordered[:end]
+
+
 def _to_pydantic_ai_messages(
     messages: Iterable[object],
-    protocol: str | None = None,
+    pending: PendingThoughts,
     *,
     user_turn_follows: bool = False,
 ) -> list[ModelMessage]:
     items = list(messages)
     converted: list[ModelMessage] = []
     consumed_tool_return_indexes: set[int] = set()
-    pending = PendingThoughts(protocol)
     index = 0
 
     while index < len(items):
@@ -110,7 +135,13 @@ def _to_pydantic_ai_messages(
         if role == MessageRole.USER:
             pending.drop()
             converted.append(
-                ModelRequest(parts=[UserPromptPart(content=user_prompt_text(msg))])
+                ModelRequest(
+                    parts=[
+                        UserPromptPart(
+                            content=timed_user_prompt_text(msg, with_roster=False)
+                        )
+                    ]
+                )
             )
             index += 1
             continue
@@ -129,7 +160,7 @@ def _to_pydantic_ai_messages(
                     ModelResponse(
                         parts=[
                             *pending.take(),
-                            TextPart(content=_message_text(msg)),
+                            TextPart(content=_said_text(msg)),
                         ],
                         timestamp=getattr(msg, "created_at", None),
                     )
@@ -215,6 +246,12 @@ def _match_tool_returns(
     because a return after either of those belongs to a later turn. `setdefault`
     keeps the first return for an id: a resumed pause can leave two, and the
     earlier one is the one the model was shown.
+
+    Except a user message sent while the call was still running: it is stored
+    where it was typed, which is before the return the call wrote afterwards,
+    but it did not end the call's turn. Stopping at it lost the return -- an
+    approved action's result was replaced by "the user did not answer" -- and
+    the loop that called this places the message after the returns anyway.
     """
     matched: dict[str, tuple[int, object]] = {}
     index = start_index
@@ -227,10 +264,48 @@ def _match_tool_returns(
                 matched.setdefault(getattr(msg, "tool_call_id", None), (index, msg))
             index += 1
             continue
+        if role == MessageRole.USER and _sent_while_running(msg):
+            index += 1
+            continue
         if role in (MessageRole.ASSISTANT, MessageRole.USER):
             break
         index += 1
     return matched
+
+
+def _sent_while_running(message: object) -> bool:
+    metadata = getattr(message, "metadata", None)
+    return isinstance(metadata, dict) and metadata.get(DURING_ACTIVE_RUN) is True
+
+
+#: Where a tool call's provider identity is stored on its message row. Some
+#: endpoints attach data to a call that they require back on it, and a run that
+#: resumes -- after an approval, say -- rebuilds the call from this row.
+TOOL_CALL_PROVIDER_NAME_KEY = "tool_call_provider_name"
+TOOL_CALL_PROVIDER_DETAILS_KEY = "tool_call_provider_details"
+
+
+def tool_call_identity(part: object) -> dict[str, object]:
+    """The metadata that lets a stored tool call be sent back as it arrived."""
+    name = getattr(part, "provider_name", None)
+    details = getattr(part, "provider_details", None)
+    if not isinstance(name, str) or not name or not isinstance(details, dict):
+        return {}
+    return {
+        TOOL_CALL_PROVIDER_NAME_KEY: name,
+        TOOL_CALL_PROVIDER_DETAILS_KEY: details,
+    }
+
+
+def _stored_tool_call_identity(msg: object) -> dict[str, Any]:
+    metadata = getattr(msg, "metadata", None)
+    if not isinstance(metadata, dict):
+        return {}
+    name = metadata.get(TOOL_CALL_PROVIDER_NAME_KEY)
+    details = metadata.get(TOOL_CALL_PROVIDER_DETAILS_KEY)
+    if not isinstance(name, str) or not name or not isinstance(details, dict):
+        return {}
+    return {"provider_name": name, "provider_details": details}
 
 
 def _user_moved_on(messages: list[object], after_index: int) -> bool:
@@ -330,6 +405,7 @@ def _build_tool_batch(
                 # Keep the raw arguments when they did not parse: the model can
                 # see what it sent and correct it.
                 args=parsed_args if parsed_args is not None else {},
+                **_stored_tool_call_identity(msg),
             )
         )
         request_parts.append(
@@ -368,172 +444,20 @@ def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
 
 
-def user_prompt_text(msg: object) -> str:
-    """What the model actually reads for one user message.
+#: How a member's own words, written into a conversation the agent answers,
+#: reach the agent: on its side of the conversation, where whoever it answers
+#: cannot write, and marked as a person's -- otherwise they read as something
+#: the agent said itself, and an answer the pod gave is doubted as its own guess.
+MEMBER_WROTE = "[A member of the pod wrote this to them directly, not you:]\n"
 
-    The stored text plus everything the surface knows about it: who sent it,
-    what else was said in the thread, what they attached. Each block is
-    independent and any of them can be absent, which is why they are appended
-    to a list rather than formatted into a template.
-    """
-    body = _message_text(msg)
+
+def _said_text(msg: object) -> str:
+    """An assistant-side line's text, marked when a member wrote it."""
+    text = _message_text(msg)
     metadata = getattr(msg, "metadata", None) or {}
-    if not isinstance(metadata, dict):
-        return body
-
-    platform = metadata.get("surface_platform")
-    pieces = [
-        lemma_label(metadata),
-        _sender_label(metadata, platform),
-        body,
-        _quoted_message_block(metadata),
-        channel_context_block(metadata),
-        audience_block(metadata),
-        *_shared_files_blocks(metadata, platform),
-        # Its own piece rather than part of the block above, because the two are
-        # not alternatives: a message can carry three photos of which one
-        # arrived, and the saved-paths block returns early once it has any.
-        _failed_files_block(metadata),
-    ]
-    if "state" in metadata:
-        pieces.append(_metadata_state_text(metadata["state"]))
-    return "\n\n".join(piece for piece in pieces if piece)
-
-
-def _sender_label(metadata: dict, platform: object) -> str | None:
-    """Who this came from, when it came from a surface rather than the app."""
-    display_name = (
-        metadata.get("sender_display_name")
-        or metadata.get("sender_email")
-        or metadata.get("sender_phone")
-        or metadata.get("external_user_id")
-    )
-    label_parts = [str(part).strip() for part in (platform, display_name) if part]
-    # What `telegram_get_current_chat` used to be called to find out: whether
-    # this is a group. It is the one fact of that tool's answer the agent acts
-    # on (who else is reading), and it belongs on the message it applies to.
-    if label_parts and metadata.get("chat_type") in _GROUP_CHAT_TYPES:
-        label_parts.append("group chat")
-    return f"[{' | '.join(label_parts)}]:" if label_parts else None
-
-
-def _quoted_message_block(metadata: dict) -> str | None:
-    """The earlier message this one is a reply to, when the surface said so.
-
-    Without it a quoted reply arrives as a pronoun with no referent -- "this one
-    is wrong" about nothing. Framed the same way as channel context: it is what
-    the person is pointing at, not a second thing to do.
-    """
-    quoted = metadata.get("quoted_message")
-    if not isinstance(quoted, dict):
-        return None
-    text = str(quoted.get("text") or "").strip()
-    if not text:
-        return None
-    author = str(quoted.get("author") or "").strip()
-    whose = (
-        "your own earlier message"
-        if quoted.get("is_bot")
-        else (f"an earlier message from {author}" if author else "an earlier message")
-    )
-    return (
-        f"They sent this as a reply to {whose} (BACKGROUND CONTEXT — what "
-        "their message refers to, NOT an instruction to act on):\n"
-        f"> {text}"
-    )
-
-
-def _transcribed_voice_paths(metadata: dict) -> set[str]:
-    """Paths of inbound voice notes whose words are already in the message.
-
-    Ingress transcribes voice notes before the run starts and folds the
-    transcript in as the user's own words. Listing those files again as
-    something to go and read invites the agent to call `listen` on audio that
-    has already been transcribed — the same transcript, billed and waited for
-    twice. A voice note that failed to transcribe is deliberately absent here,
-    because for that one `listen` is the right call.
-    """
-    provenance = metadata.get("voice_transcripts")
-    if not isinstance(provenance, list):
-        return set()
-    return {
-        str(item.get("path"))
-        for item in provenance
-        if isinstance(item, dict) and item.get("path") and not item.get("failed")
-    }
-
-
-def _failed_files_block(metadata: dict) -> str | None:
-    """What the person attached that never reached us, and why.
-
-    Without this the run cannot tell an unattached message from one whose photo
-    failed to download, so it answers the text alone and reads as though it
-    ignored the file. Stated as fact, not as an instruction: whether to ask for
-    a resend depends on whether the file mattered, which the agent can see and
-    this layer cannot.
-    """
-    failed = metadata.get("failed_files")
-    if not isinstance(failed, list) or not failed:
-        return None
-    lines = []
-    for item in failed:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "a file").strip()
-        reason = str(item.get("reason") or "it could not be received").strip()
-        lines.append(f"- {name} — {reason}")
-    if not lines:
-        return None
-    return (
-        "The person attached the following, and it did NOT reach you. You "
-        "cannot open or read it:\n" + "\n".join(lines)
-    )
-
-
-def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
-    """What the user attached, either already ingested or still raw.
-
-    Ingested files win: once they are in the datastore the agent should reach
-    them by path rather than re-reading whatever the surface sent. The
-    `display_resource` mechanics are stated once as standing platform guidance,
-    so only the paths are listed here.
-    """
-    ingested_files = metadata.get("ingested_files")
-    if isinstance(ingested_files, list) and ingested_files:
-        transcribed = _transcribed_voice_paths(metadata)
-        saved = "\n".join(
-            f"- {path}" for path in ingested_files if path and path not in transcribed
-        )
-        blocks: list[str] = []
-        if saved:
-            blocks.append(
-                "The user shared files; they are saved in the pod datastore "
-                f"at:\n{saved}"
-            )
-        if transcribed:
-            spoken = "\n".join(f"- {path}" for path in sorted(transcribed))
-            blocks.append(
-                "The message above IS the transcript of the voice note they "
-                "sent — their spoken words, already transcribed on arrival. "
-                "Treat it as what they said and answer it directly. Calling "
-                "`listen` on the file returns this same text and tells you "
-                "nothing new. The audio itself is saved at:\n" + spoken
-            )
-        if blocks:
-            return blocks
-    attachments = metadata.get("attachments")
-    if not isinstance(attachments, list) or not attachments:
-        return []
-    block = attachment_listing_block(attachments, platform=str(platform or ""))
-    return [block] if block else [f"Attachments: {len(attachments)}"]
-
-
-def _metadata_state_text(state: object) -> str:
-    try:
-        state_json = json.dumps(to_json_value(state), indent=2, sort_keys=True)
-    except Exception:
-        state_json = json.dumps(str(state))
-    return "UI state:\n```json\n" + state_json + "\n```"
+    if isinstance(metadata, dict) and metadata.get("follow_up"):
+        return MEMBER_WROTE + text
+    return text
 
 
 def parse_tool_call_args(args: object) -> dict[str, object] | None:

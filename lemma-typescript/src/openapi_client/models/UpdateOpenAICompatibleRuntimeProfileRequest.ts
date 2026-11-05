@@ -10,6 +10,7 @@ export type UpdateOpenAICompatibleRuntimeProfileRequest = {
     model_names?: (Array<string> | null);
     model_settings?: (Record<string, any> | null);
     name?: (string | null);
+    reasoning_model_names?: (Array<string> | null);
     refresh_models?: boolean;
     source?: string;
 };

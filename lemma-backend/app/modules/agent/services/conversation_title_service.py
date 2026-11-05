@@ -27,14 +27,15 @@ from uuid import UUID
 
 from opentelemetry import metrics
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIChatModelSettings
 
 from app.modules.agent.config import agent_settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import ConversationRepository
@@ -45,7 +46,9 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
     title_updated_payload,
 )
+from app.modules.agent.services.generation_settings import unreasoned_model_settings
 from app.modules.agent.services.runtime_model_factory import (
+    provider_model_settings,
     require_pydantic_ai_model_from_runtime_profile,
     usage_limits_for,
 )
@@ -80,21 +83,17 @@ _OUTCOME_FALLBACK = "fallback"
 _OUTCOME_FAILED = "failed"
 
 _MAX_TITLE_LEN = 80
+#: A runaway guard, not a budget. It is checked after the response, so a cap a
+#: finished title can exceed throws the title away: a model that reasons anyway
+#: (it ignored ``none``, or was asked without it) spends hundreds of tokens
+#: before the few words, and 256 discarded every one of those titles.
 _TITLE_USAGE_LIMITS = UsageLimits(
     request_limit=1,
     input_tokens_limit=12_000,
-    output_tokens_limit=256,
-    total_tokens_limit=12_256,
+    output_tokens_limit=4_096,
+    total_tokens_limit=16_096,
     count_tokens_before_request=True,
 )
-
-# The title itself is 3-6 words (well under 20 tokens). Reasoning models spend
-# the rest of the budget above on a hidden chain-of-thought trace nobody
-# reads: verified directly against deepseek-v4-flash-0731 that the exact
-# title prompt used 246 completion tokens with 239 of them reasoning, and the
-# same call with reasoning_effort='none' produced the identical title in 5.
-# Providers that don't recognize this key ignore it.
-_TITLE_MODEL_SETTINGS: OpenAIChatModelSettings = {"openai_reasoning_effort": "none"}
 
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
@@ -129,7 +128,6 @@ class ConversationOpeningReader(Protocol):
         self,
         conversation_id: UUID,
         *,
-        include_messages: bool = False,
         include_runs: bool = False,
     ) -> Conversation | None: ...
 
@@ -213,7 +211,7 @@ class ConversationTitleGenerator:
         resolved = await self._resolve_runtime(
             organization_id=organization_id, user_id=user_id, pod_id=pod_id
         )
-        runtime_profile = resolved.public_snapshot()
+        runtime_profile = resolved.runtime_snapshot().as_payload()
         model = (
             self._model_for_profile or require_pydantic_ai_model_from_runtime_profile
         )(
@@ -231,12 +229,34 @@ class ConversationTitleGenerator:
         agent = (self._llm_agent or PydanticAIAgent)(
             model, system_prompt=_TITLE_SYSTEM_PROMPT
         )
+        prompt = _build_user_prompt(user_text, reply_text)
+        limits = usage_limits_for(model, _TITLE_USAGE_LIMITS)
+        # No reasoning for a few words, asked of every model.
+        asked = unreasoned_model_settings(resolved)
+        plain = unreasoned_model_settings(resolved, ask_no_reasoning=False)
         async with metering_execution(usage_context):
-            result = await agent.run(
-                _build_user_prompt(user_text, reply_text),
-                usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
-                model_settings=_TITLE_MODEL_SETTINGS,
-            )
+            try:
+                result = await agent.run(
+                    prompt,
+                    usage_limits=limits,
+                    model_settings=provider_model_settings(asked),
+                )
+            except ModelHTTPError as error:
+                # A strict endpoint refuses a request field it does not know
+                # (400/422): asked once more without the reasoning field --
+                # only when it was sent. A refusal of anything else, or an
+                # auth or rate-limit answer, is the caller's fallback.
+                if asked == plain or error.status_code not in (400, 422):
+                    raise
+                logger.info(
+                    "agent.conversation_title.reasoning_field_refused",
+                    status_code=error.status_code,
+                )
+                result = await agent.run(
+                    prompt,
+                    usage_limits=limits,
+                    model_settings=provider_model_settings(plain),
+                )
 
         return _sanitize_title(str(result.output))
 
@@ -283,8 +303,10 @@ class ConversationTitleGenerator:
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        except RuntimeError:
-            # Model not in this deployment's catalog — use the profile default.
+        except RuntimeUnavailableError:
+            # The configured title model is not in this deployment's catalog.
+            # A documented fallback for a background helper, not a teammate's
+            # pinned model: a title on the default model is still a title.
             return await service.resolve(
                 runtime=AgentRuntimeConfig(
                     profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,

@@ -3,6 +3,7 @@ from enum import Enum
 from collections.abc import Sequence
 from typing import List, Optional, Dict, Any, Union
 from uuid import UUID
+from app.modules.datastore.domain.write_intent import WriteIntent
 from pydantic import BaseModel, Field, ConfigDict
 from app.modules.datastore.domain.file_entities import SearchMethod
 
@@ -63,6 +64,15 @@ class BulkCreateRecordsRequest(BaseModel):
         ),
         max_length=MAX_BULK_RECORDS,
     )
+    intent: WriteIntent = Field(
+        default=WriteIntent.BULK,
+        description=(
+            "Why these rows are written, as DATASTORE triggers see it: `bulk` "
+            "(the default) or `import` lets each trigger decide by its "
+            "`bulk_writes` / `import_writes` setting (by default, skipped and "
+            "recorded); `normal` fires triggers like single writes do."
+        ),
+    )
     upsert: bool = Field(
         default=False,
         description=(
@@ -83,6 +93,15 @@ class BulkUpdateRecordsRequest(BaseModel):
         ),
         max_length=MAX_BULK_RECORDS,
     )
+    intent: WriteIntent = Field(
+        default=WriteIntent.BULK,
+        description=(
+            "Why these rows are written, as DATASTORE triggers see it: `bulk` "
+            "(the default) or `import` lets each trigger decide by its "
+            "`bulk_writes` / `import_writes` setting (by default, skipped and "
+            "recorded); `normal` fires triggers like single writes do."
+        ),
+    )
 
 
 class BulkDeleteRecordsRequest(BaseModel):
@@ -94,6 +113,15 @@ class BulkDeleteRecordsRequest(BaseModel):
             f"Primary key values to delete. At most {MAX_BULK_RECORDS} per request."
         ),
         max_length=MAX_BULK_RECORDS,
+    )
+    intent: WriteIntent = Field(
+        default=WriteIntent.BULK,
+        description=(
+            "Why these rows are written, as DATASTORE triggers see it: `bulk` "
+            "(the default) or `import` lets each trigger decide by its "
+            "`bulk_writes` / `import_writes` setting (by default, skipped and "
+            "recorded); `normal` fires triggers like single writes do."
+        ),
     )
 
 

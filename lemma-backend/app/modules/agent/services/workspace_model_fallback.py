@@ -42,7 +42,6 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
@@ -50,6 +49,7 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
+    runtime_profile_service_for,
 )
 from app.modules.agent.services.runtime_system_profiles import (
     is_model_not_configured,
@@ -142,12 +142,7 @@ async def resolve_workspace_runtime(
     # Only reads happen inside the session. The model call the caller makes
     # with the result happens after the connection is back in the pool.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        service = AgentRuntimeProfileService(
-            repository=AgentRuntimeProfileRepository(
-                uow, encryption=get_secret_cipher()
-            ),
-            host_repository=AgentHostRepository(uow),
-        )
+        service = runtime_profile_service_for(uow)
         pod_default = (
             PodConfig.from_raw(await pod_config(uow, pod_id)).resolved_default_runtime()
             if pod_id is not None

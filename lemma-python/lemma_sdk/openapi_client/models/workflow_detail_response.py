@@ -43,6 +43,9 @@ class WorkflowDetailResponse:
         edges (list[WorkflowEdge] | Unset):
         icon_url (None | str | Unset):
         is_active (bool | Unset):  Default: True.
+        max_concurrent_runs (int | None | Unset): How many runs of this workflow may be in progress at once. A run
+            started past the limit is not refused: it waits, with a `QUEUED` active wait, and starts when an earlier run
+            finishes. Null means no limit.
         mode (WorkflowMode | Unset): Workflow schedule ownership mode.
         nodes (list[AgentNodeResponse | DecisionNodeResponse | EndNodeResponse | FormNodeResponse | FunctionNodeResponse
             | LoopNodeResponse | WaitUntilNodeResponse] | Unset):
@@ -65,6 +68,7 @@ class WorkflowDetailResponse:
     edges: list[WorkflowEdge] | Unset = UNSET
     icon_url: None | str | Unset = UNSET
     is_active: bool | Unset = True
+    max_concurrent_runs: int | None | Unset = UNSET
     mode: WorkflowMode | Unset = UNSET
     nodes: (
         list[
@@ -146,6 +150,12 @@ class WorkflowDetailResponse:
 
         is_active = self.is_active
 
+        max_concurrent_runs: int | None | Unset
+        if isinstance(self.max_concurrent_runs, Unset):
+            max_concurrent_runs = UNSET
+        else:
+            max_concurrent_runs = self.max_concurrent_runs
+
         mode: str | Unset = UNSET
         if not isinstance(self.mode, Unset):
             mode = self.mode.value
@@ -221,6 +231,8 @@ class WorkflowDetailResponse:
             field_dict["icon_url"] = icon_url
         if is_active is not UNSET:
             field_dict["is_active"] = is_active
+        if max_concurrent_runs is not UNSET:
+            field_dict["max_concurrent_runs"] = max_concurrent_runs
         if mode is not UNSET:
             field_dict["mode"] = mode
         if nodes is not UNSET:
@@ -309,6 +321,17 @@ class WorkflowDetailResponse:
         icon_url = _parse_icon_url(d.pop("icon_url", UNSET))
 
         is_active = d.pop("is_active", UNSET)
+
+        def _parse_max_concurrent_runs(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        max_concurrent_runs = _parse_max_concurrent_runs(
+            d.pop("max_concurrent_runs", UNSET)
+        )
 
         _mode = d.pop("mode", UNSET)
         mode: WorkflowMode | Unset
@@ -492,6 +515,7 @@ class WorkflowDetailResponse:
             edges=edges,
             icon_url=icon_url,
             is_active=is_active,
+            max_concurrent_runs=max_concurrent_runs,
             mode=mode,
             nodes=nodes,
             run_title=run_title,

@@ -22,12 +22,13 @@ import { PodJoinRequestsNamespace } from "./namespaces/pod-join-requests.js";
 import { PodsNamespace } from "./namespaces/pods.js";
 import { PodRolesNamespace } from "./namespaces/pod-roles.js";
 import { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
-import { PodGroupsNamespace } from "./namespaces/pod-groups.js";
+import { PodLinksNamespace } from "./namespaces/pod-links.js";
+import { ChannelsNamespace } from "./namespaces/channels.js";
 import { ContactsNamespace } from "./namespaces/contacts.js";
-import { NotificationsNamespace } from "./namespaces/notifications.js";
 import { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 import { RecordsNamespace } from "./namespaces/records.js";
 import { ResourceAccessNamespace } from "./namespaces/resource-access.js";
+import { CallsNamespace } from "./namespaces/calls.js";
 import { DecisionsNamespace } from "./namespaces/decisions.js";
 import { SchedulesNamespace } from "./namespaces/schedules.js";
 import { TablesNamespace } from "./namespaces/tables.js";
@@ -74,6 +75,7 @@ export class LemmaClient {
   readonly connectors: ConnectorsNamespace;
   readonly resourceAccess: ResourceAccessNamespace;
   readonly schedules: SchedulesNamespace;
+  readonly calls: CallsNamespace;
   readonly decisions: DecisionsNamespace;
   readonly datastore: DatastoreNamespace;
   /** Alias of {@link datastore}, matching the Python SDK's `pod.queries`. */
@@ -89,10 +91,11 @@ export class LemmaClient {
   readonly organizations: OrganizationsNamespace;
   readonly podSurfaces: PodSurfacesNamespace;
   /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
-  readonly podGroups: PodGroupsNamespace;
+  /** The other pods a pod can ask, and the pods connected to ask it. */
+  readonly podLinks: PodLinksNamespace;
+  readonly channels: ChannelsNamespace;
   readonly contacts: ContactsNamespace;
   /** The caller's own surfaces across all pods (grouped by platform). */
-  readonly notifications: NotificationsNamespace;
   readonly userSurfaces: UserSurfacesNamespace;
 
   constructor(
@@ -136,14 +139,14 @@ export class LemmaClient {
     this.agentHost = new AgentHostNamespace(this._generated);
     this.conversations = new ConversationsNamespace(this._http, podIdFn);
     this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
-    this.notifications = new NotificationsNamespace(this._generated, podIdFn);
     this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
     this.workspace = new WorkspaceNamespace(this._http);
     this.webLogins = new WebLoginsNamespace(this._http);
-    this.connectors = new ConnectorsNamespace(this._generated, this._http);
+    this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
     this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
     this.schedules = new SchedulesNamespace(this._generated, podIdFn);
+    this.calls = new CallsNamespace(this._generated, podIdFn);
     this.decisions = new DecisionsNamespace(this._generated, podIdFn);
     this.datastore = new DatastoreNamespace(
       this._generated,
@@ -162,7 +165,8 @@ export class LemmaClient {
     this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
     this.organizations = new OrganizationsNamespace(this._generated, this._http);
     this.podSurfaces = new PodSurfacesNamespace(this._generated);
-    this.podGroups = new PodGroupsNamespace(this._generated);
+    this.podLinks = new PodLinksNamespace(this._generated);
+    this.channels = new ChannelsNamespace(this._generated, this._http);
     this.contacts = new ContactsNamespace(this._generated);
     this.userSurfaces = new UserSurfacesNamespace(this._generated);
   }

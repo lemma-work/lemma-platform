@@ -91,7 +91,7 @@ def test_non_grant_denials_name_the_resource_but_offer_no_grant_fix():
 
 @pytest.mark.asyncio
 async def test_require_raises_with_the_enriched_message():
-    from app.core.authorization.context import ActorType, Context
+    from app.core.authorization.context import Context, Workload, WorkloadKind
 
     resource = ResourceRef.table(uuid4(), uuid4())
 
@@ -102,9 +102,10 @@ async def test_require_raises_with_the_enriched_message():
         async def accessible_resource_ids(self, *args, **kwargs):
             return frozenset()
 
+    workload_id = uuid4()
     ctx = Context(
-        actor_type=ActorType.AGENT,
-        actor_id=uuid4(),
+        actor=Workload(kind=WorkloadKind.AGENT, workload_id=workload_id),
+        actor_id=f"agent:{workload_id}",
         authorizer=_Authorizer(),
     )
     with pytest.raises(DomainError) as excinfo:

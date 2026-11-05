@@ -15,12 +15,13 @@ and the storage phase can share them without an import cycle.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Callable
 from uuid import UUID
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.api.uploads import upload_source_sha256
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
@@ -44,6 +45,9 @@ from app.modules.datastore.domain.ports import (
 from app.modules.datastore.services.files.path_resolver import PathResolver
 from app.modules.datastore.infrastructure.storage_paths import (
     build_datastore_child_container_prefix,
+    content_keys,
+    is_object_layout,
+    object_keys,
 )
 from app.modules.datastore.services.files.projection import FileProjection
 
@@ -140,6 +144,9 @@ def plan_artifact_moves(
         if _file_name(was_at) != _file_name(now_at):
             invalidated.add(entity.id)
             return
+        if is_object_layout(entity):
+            # Keyed by id and digest: nothing about the artifacts' keys moved.
+            return
         moves.append(
             _ArtifactMove(
                 file_id=entity.id,
@@ -190,7 +197,10 @@ def plan_storage_moves(
     if previous_path == file_entity.path or not file_entity.is_folder:
         return moves
     for descendant in descendants:
-        if not descendant.is_file:
+        # A file in the object layout is keyed by id and digest, so moving the
+        # folder above it moves no bytes: that is what makes a rename a
+        # metadata update once the layout is switched on.
+        if not descendant.is_file or is_object_layout(descendant):
             continue
         suffix = descendant.path.removeprefix(previous_path)
         destination_path = f"{file_entity.path}{suffix}"
@@ -228,6 +238,9 @@ class _UpdatePlan:
     #: files a name change voids, and added to by the storage phase when a copy
     #: fails. Mutable on a frozen dataclass the way `file_entity` already is.
     artifacts_to_regenerate: set[UUID] = field(default_factory=set)
+    #: The digest the row held before this update; identical new bytes are
+    #: not reprocessed.
+    previous_sha256: str | None = None
 
 
 class FileStoragePhase:
@@ -266,11 +279,10 @@ class FileStoragePhase:
             plan.file_entity.content_sha256 = await run_blocking(
                 upload_source_sha256, update_entity.content
             )
+            target = self._content_target(plan)
             try:
-                await self.storage.upload_file(
-                    plan.new_storage_key, update_entity.content
-                )
-                stored_size = await self.storage.stat_file(plan.new_storage_key)
+                await self.storage.upload_file(target, update_entity.content)
+                stored_size = await self.storage.stat_file(target)
                 if stored_size != plan.file_entity.size_bytes:
                     raise DatastoreInfrastructureError(
                         "Uploaded object size does not match staged content"
@@ -303,6 +315,17 @@ class FileStoragePhase:
         # tying this to `storage_moves` being non-empty would silently skip a
         # folder whose files all sit deeper than one level.
         await self._carry_artifacts(plan)
+
+    @staticmethod
+    def _content_target(plan: _UpdatePlan) -> str | None:
+        """Where new bytes go: by path, or -- object layout -- by their digest.
+
+        The object key depends on the digest, which is only known once the
+        bytes are hashed, so it is derived here rather than planned.
+        """
+        if is_object_layout(plan.file_entity):
+            return content_keys(plan.file_entity).original
+        return plan.new_storage_key
 
     async def _carry_artifacts(self, plan: _UpdatePlan) -> None:
         """Copy each file's derived container, noting the ones that would not go.
@@ -339,10 +362,11 @@ class FileStoragePhase:
         """Storage + search-index sync after the row is persisted. Holds NO DB
         connection; best-effort throughout (orphans are swept, never torn rows)."""
         # Delete the old blob only now that the row points at the new key.
+        current_key = self._content_target(plan)
         if (
             plan.has_content
             and plan.previous_storage_key
-            and plan.previous_storage_key != plan.new_storage_key
+            and plan.previous_storage_key != current_key
         ):
             with suppress(DatastoreDomainError):
                 await self.storage.delete_file(plan.previous_storage_key)
@@ -374,10 +398,13 @@ class FileStoragePhase:
                     file_id=str(updated_entity.id),
                     exc_info=True,
                 )
-            await self.projection.delete_child_artifacts(
-                updated_entity.pod_id,
-                updated_entity.path,
-            )
+            if is_object_layout(updated_entity):
+                await self._drop_derived(updated_entity, plan.previous_sha256)
+            else:
+                await self.projection.delete_child_artifacts(
+                    updated_entity.pod_id,
+                    updated_entity.path,
+                )
 
         if plan.previous_path != updated_entity.path:
             await self._sync_renamed_paths(plan, updated_entity, search_service)
@@ -403,11 +430,6 @@ class FileStoragePhase:
         before the commit is what left a rolled-back rename without its
         converted output.
         """
-        update_file_path = getattr(search_service, "update_file_path", None)
-
-        # `(entity, where it is now, where it was)`. The descendants in the plan
-        # were read before the rename and still carry their old paths, so the
-        # new one is derived rather than read back.
         renamed = [(updated_entity, updated_entity.path, plan.previous_path)]
         for descendant in plan.renamed_descendants:
             suffix = descendant.path.removeprefix(plan.previous_path)
@@ -415,20 +437,47 @@ class FileStoragePhase:
                 (descendant, f"{updated_entity.path}{suffix}", descendant.path)
             )
 
+        # A folder moves its whole subtree in the index with one statement; a
+        # schema that cannot (still on the previous search version) has every
+        # file repointed instead. Best-effort: the row is right either way and
+        # a reindex repairs the index.
+        per_file = True
+        if updated_entity.is_folder:
+            try:
+                per_file = not await search_service.rename_folder(
+                    plan.previous_path, updated_entity.path
+                )
+            except Exception:
+                logger.warning(
+                    "datastore.storage_phase.search_index_rename.degraded",
+                    file_id=str(updated_entity.id),
+                    exc_info=True,
+                )
+                per_file = True
         for entity, now_at, was_at in renamed:
-            if (
-                entity.is_file
-                and entity.search_enabled
-                and update_file_path is not None
-            ):
+            if per_file and entity.is_file and entity.search_enabled:
                 with suppress(Exception):
-                    await update_file_path(
+                    await search_service.update_file_path(
                         entity.id, now_at, self.paths._parent_path(now_at)
                     )
-            # Folders have no derived container, so there was never anything at
-            # their old path to sweep.
-            if entity.is_file:
+            # Folders have no derived container, and an object-layout file's
+            # did not move, so there is nothing at the old path to sweep.
+            if entity.is_file and not is_object_layout(entity):
                 await self.projection.delete_child_artifacts(entity.pod_id, was_at)
+
+    async def _drop_derived(
+        self, entity: DatastoreFileEntity, previous_sha256: str | None
+    ) -> None:
+        """An unsearchable object-layout file keeps no derived revisions."""
+        if entity.id is None:
+            return
+        for sha in {previous_sha256, entity.indexed_sha256, entity.content_sha256}:
+            if sha is None:
+                continue
+            with suppress(DatastoreDomainError):
+                await self.storage.delete_prefix(
+                    object_keys(entity.pod_id, entity.id, sha).child_prefix
+                )
 
     async def _purge_search_entries(self, search_service, files: Sequence) -> None:
         """Drop a deleted folder's chunks, in one transaction rather than N.
@@ -448,7 +497,8 @@ class FileStoragePhase:
             return
         try:
             await search_service.remove_files(file_ids)
-        except Exception:
+        except Exception as exc:
+            raise_if_database_unavailable(exc)
             logger.error(
                 "datastore.storage_phase.deleted_file_search_purge.failed",
                 file_count=len(file_ids),
@@ -469,13 +519,10 @@ class FileStoragePhase:
 
         The previous key is never touched, so the committed row remains readable.
         """
-        if (
-            plan.has_content
-            and plan.new_storage_key
-            and plan.new_storage_key != plan.previous_storage_key
-        ):
+        written = self._content_target(plan)
+        if plan.has_content and written and written != plan.previous_storage_key:
             try:
-                await self.storage.delete_file(plan.new_storage_key)
+                await self.storage.delete_file(written)
             except DatastoreObjectNotFoundError:
                 return
             except Exception:
@@ -496,6 +543,15 @@ class FileStoragePhase:
                     "datastore.storage_phase.staged_object_delete.degraded",
                     exc_info=True,
                 )
+
+    async def _delete_object_revisions(self, item: Mapping[str, str | None]) -> bool:
+        """Every revision of an object-layout file; False for a path-layout one."""
+        prefix = item.get("object_prefix")
+        if not prefix:
+            return False
+        with suppress(DatastoreDomainError):
+            await self.storage.delete_prefix(prefix)
+        return True
 
     async def cleanup_deleted_paths(
         self,
@@ -519,12 +575,14 @@ class FileStoragePhase:
             for item in files:
                 with suppress(Exception):
                     await self.storage.delete_file(item["storage_key"])
+                await self._delete_object_revisions(item)
             await self._purge_search_entries(search_service, files)
             return
         for item in files:
             with suppress(Exception):
                 await self.storage.delete_file(item["storage_key"])
-            await self.projection.delete_child_artifacts(pod_id, item["path"])
+            if not await self._delete_object_revisions(item):
+                await self.projection.delete_child_artifacts(pod_id, item["path"])
         # Through the same helper as the folder branch: one file is the batch of
         # one, and having a single place that can fail to purge a deleted file's
         # chunks is worth more here than saving a list.

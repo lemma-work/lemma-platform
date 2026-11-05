@@ -169,6 +169,39 @@ class PlatformCapabilities:
     # for it, so its messages go to that pod's surface and no other, whichever
     # pods on the shared number the sender is in.
     bot_creates_groups: bool = False
+    # Can a private chat keep being the same chat while the address it is
+    # delivered on changes? True only for WhatsApp, where the channel and thread
+    # ids embed the pooled number the message arrived on, and a reassigned
+    # number must not cut a person off from their conversation. Everywhere else
+    # a new address is a new thread on purpose -- each top-level Slack DM has
+    # its own `ts` -- and adopting the person's last link there collapsed every
+    # DM thread into one and moved replies between them.
+    dm_address_may_move: bool = False
+    # Can a failure notice carry a "Try again" control that re-runs the failed
+    # request (``retry_action`` in the message metadata)? Where it cannot, the
+    # notice asks for a typed "retry", which works on every platform.
+    supports_native_retry: bool = False
+    # Is being in a group the authorization to answer there? True for Telegram,
+    # where somebody added the bot, and WhatsApp, whose bot only ever is in a
+    # group it created. Elsewhere a channel is answered only once it is
+    # configured as a route.
+    group_membership_authorizes: bool = False
+    # How often the platform's "working on it" indicator is refreshed while a
+    # run is going, in seconds; None where there is no indicator to keep alive.
+    # Each platform's indicator expires on its own clock. WhatsApp couples
+    # mark-as-read and the typing bubble into one call that the ingress path
+    # makes once; the bubble expires after about 25 s, so on anything longer
+    # than a quick answer it went dark exactly where it was the only sign of
+    # life.
+    typing_refresh_seconds: float | None = None
+    # Does the platform deliver the bot's own posts back to it as inbound
+    # events, keyed on the bot's own user id? True for Slack, whose Events API
+    # sends a ``message`` for everything in a channel the app is in, including
+    # what the app itself wrote. Where it does, an event whose sender is the
+    # surface's own identity is the agent hearing itself and is dropped, or a
+    # reply would answer the reply. Email has the same echo, keyed on the
+    # address instead (``SenderResolver.is_self_addressed``).
+    echoes_own_messages: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -268,9 +301,12 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_SLACK_FORMATTING,
         soft_char_limit=3000,
         progress_style=ProgressStyle.STREAM,
+        supports_native_retry=True,
+        echoes_own_messages=True,
     ),
     "TEAMS": PlatformCapabilities(
         platform="TEAMS",
+        typing_refresh_seconds=10.0,
         display_name="Microsoft Teams",
         supports_native_choices=True,
         # False, and not an oversight: `TeamsSurfaceAdapter` never overrides
@@ -286,9 +322,11 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_TEAMS_FORMATTING,
         soft_char_limit=4000,
         progress_style=ProgressStyle.EDIT,
+        supports_native_retry=True,
     ),
     "WHATSAPP": PlatformCapabilities(
         platform="WHATSAPP",
+        typing_refresh_seconds=20.0,
         display_name="WhatsApp",
         # Native interactive replies: ≤3 options as buttons, 4–10 as a list.
         # Multi-select / >10 options fall back to formatted text.
@@ -299,6 +337,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # ``domain/addressing``).
         is_channel_capable=True,
         bot_creates_groups=True,
+        group_membership_authorizes=True,
         markdown_mode="whatsapp",
         formatting_style=_WHATSAPP_FORMATTING,
         soft_char_limit=1500,
@@ -307,6 +346,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # in the person's chat. Rationed hard by the observer: a plan when the
         # agent has one, otherwise a single "still going" on a long run.
         progress_style=ProgressStyle.POST,
+        supports_native_retry=True,
         # Meta closes free-form messaging 24h after the person's last message.
         # A notification past that window needs an approved template, which we
         # do not have, so delivery falls through to the next channel.
@@ -330,9 +370,11 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # holding none is back on the single number in settings, where the old
         # once-per-organization rule is exactly right. See the field.
         system_identity_may_be_absent=True,
+        dm_address_may_move=True,
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
+        typing_refresh_seconds=4.0,
         display_name="Telegram",
         # Native inline-keyboard ask_user; option taps resolve via a Redis
         # short-token store (64-byte callback_data limit). Multi-select falls
@@ -348,12 +390,14 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # so being wrong here withheld the channel-context section from the one
         # chat platform whose group history is actually fetched and injected.
         is_channel_capable=True,
+        group_membership_authorizes=True,
         markdown_mode="markdownv2_converted",
         formatting_style=_TELEGRAM_FORMATTING,
         soft_char_limit=3500,
         has_shared_system_bot=True,
         supports_native_voice=True,
         progress_style=ProgressStyle.EDIT,
+        supports_native_retry=True,
         # A DM's live update is a thinking chip — one line, newlines collapsed.
         # A group's is a plain edited message, which would hold a checklist, but
         # a platform showing two different shapes of the same update is worth
@@ -390,6 +434,18 @@ def bot_creates_groups_on(platform: str | None) -> bool:
     """Is every group this platform's bot is in one it created? (WhatsApp)"""
     capabilities = get_platform_capabilities(platform)
     return capabilities is not None and capabilities.bot_creates_groups
+
+
+def echoes_own_messages(platform: str | None) -> bool:
+    """Does the platform hand the bot its own posts back as inbound events?"""
+    capabilities = get_platform_capabilities(platform)
+    return capabilities is not None and capabilities.echoes_own_messages
+
+
+def dm_address_may_move(platform: str | None) -> bool:
+    """May a private chat here continue at a new delivery address?"""
+    capabilities = get_platform_capabilities(platform)
+    return capabilities is not None and capabilities.dm_address_may_move
 
 
 def has_shared_system_bot(platform: str | None) -> bool:

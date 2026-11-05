@@ -67,7 +67,6 @@ def _load_model_registry() -> None:
     """
 
     for module_name in (
-        "app.core.infrastructure.events.models",
         "app.modules.datastore.infrastructure.models",
         "app.modules.identity.infrastructure.models",
         "app.modules.pod.infrastructure.models",

@@ -17,7 +17,7 @@ secret, and this one has no business carrying an executor's spec.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -55,3 +55,22 @@ class ResolvedAuthInstall:
     # also how an install is disconnected and deleted, and those have to keep
     # working on an install whose toolkit Composio stopped managing.
     composio_managed_auth: bool = True
+
+    def without_authorize_params(self, names: frozenset[str]) -> ResolvedAuthInstall:
+        """This install, asking the provider's consent page for less.
+
+        For a flow that wants only part of what the catalog asks for -- Lemma's
+        Slack app installed into a workspace wants its bot, not the installer's
+        own messages, which Slack asks for as ``user_scope``. The names are the
+        provider's own authorize parameters; nothing else changes.
+        """
+        if not names or self.oauth2 is None:
+            return self
+        kept = {
+            key: value
+            for key, value in self.oauth2.extra_params.items()
+            if key not in names
+        }
+        return replace(
+            self, oauth2=self.oauth2.model_copy(update={"extra_params": kept})
+        )

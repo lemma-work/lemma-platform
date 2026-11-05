@@ -6,9 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
+from app.modules.agent_surfaces.tests.fakes import platform_http
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TeamsSurfaceEventMetadata,
 )
@@ -189,7 +192,7 @@ async def test_teams_get_recent_channel_messages_resolves_graph_team_id(
             external_thread_id="thread-1",
             surface_metadata=TeamsSurfaceEventMetadata(
                 team_id="19:team@thread.tacv2",
-                service_url="https://smba.example.test/teams",
+                service_url="https://smba.trafficmanager.net/teams",
             ),
         )
     )
@@ -271,7 +274,7 @@ async def test_teams_fetch_recent_context_maps_graph_messages(monkeypatch):
         message_text="@lemma help",
         metadata={
             "team_id": "19:team@thread.tacv2",
-            "service_url": "https://smba.example.test/teams",
+            "service_url": "https://smba.trafficmanager.net/teams",
         },
     )
 
@@ -279,6 +282,10 @@ async def test_teams_fetch_recent_context_maps_graph_messages(monkeypatch):
     texts = {m.text for m in messages}
     assert "First message" in texts and "Second message" in texts
     assert all(m.author for m in messages)
+    # The sender's Graph id is kept beside the name it is shown under: a Teams
+    # channel names who spoke, and the roster asks the pod whether they hold
+    # access by that id.
+    assert {m.author_external_id for m in messages} == {"u1", "u2"}
 
 
 @pytest.mark.asyncio
@@ -347,7 +354,7 @@ async def test_teams_get_recent_thread_messages_include_files(
             external_thread_id="thread-1",
             surface_metadata=TeamsSurfaceEventMetadata(
                 team_id="19:team@thread.tacv2",
-                service_url="https://smba.example.test/teams",
+                service_url="https://smba.trafficmanager.net/teams",
             ),
         )
     )
@@ -442,55 +449,8 @@ async def test_teams_download_attachment_returns_none_without_tokens(monkeypatch
     assert result is None
 
 
-class _ChunkedBody:
-    """aiohttp's `response.content`, enough of it to stream from."""
-
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-
-    async def iter_chunked(self, size: int):
-        for start in range(0, len(self._body), size):
-            yield self._body[start : start + size]
-
-
-class _DownloadResponse:
-    def __init__(self, status: int, headers=None, body: bytes = b""):
-        self.status = status
-        self.headers = headers or {}
-        self._body = body
-        # The download reads chunk by chunk under the attachment cap rather
-        # than calling `read()`, so the fake has to offer the same shape.
-        self.content = _ChunkedBody(body)
-
-    async def read(self) -> bytes:
-        return self._body
-
-    async def text(self) -> str:
-        return self._body.decode()
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-
-class _RecordingSession:
-    """Records each request so a test can assert what the credential saw."""
-
-    def __init__(self, responses):
-        self._responses = list(responses)
-        self.calls: list[dict] = []
-
-    def get(self, url, headers=None, allow_redirects=True):
-        self.calls.append(
-            {
-                "url": url,
-                "headers": dict(headers or {}),
-                "allow_redirects": allow_redirects,
-            }
-        )
-        return self._responses.pop(0)
+def _no_request_expected(request: httpx.Request) -> httpx.Response:
+    raise AssertionError(f"unexpected {request.method} {request.url}")
 
 
 @pytest.mark.asyncio
@@ -505,12 +465,14 @@ async def test_teams_download_refuses_bot_token_for_untrusted_host(monkeypatch):
     )
     service = TeamsPlatformService(credentials={})
 
-    plan = await service._resolve_download_plan(
-        session=_RecordingSession([]),
-        tenant_id=None,
-        download_url="https://attacker.test/v3/attachments/x",
-        content_type="text/plain",
-    )
+    with platform_http(_no_request_expected):
+        async with outbound_http(5.0) as http:
+            plan = await service._resolve_download_plan(
+                http=http,
+                tenant_id=None,
+                download_url="https://attacker.test/v3/attachments/x",
+                content_type="text/plain",
+            )
 
     assert plan is None
     get_bot_token.assert_not_awaited()
@@ -528,12 +490,14 @@ async def test_teams_download_still_uses_bot_token_for_real_attachment_host(
     )
     service = TeamsPlatformService(credentials={})
 
-    plan = await service._resolve_download_plan(
-        session=_RecordingSession([]),
-        tenant_id=None,
-        download_url="https://smba.trafficmanager.net/amer/v3/attachments/abc",
-        content_type="text/plain",
-    )
+    with platform_http(_no_request_expected):
+        async with outbound_http(5.0) as http:
+            plan = await service._resolve_download_plan(
+                http=http,
+                tenant_id=None,
+                download_url="https://smba.trafficmanager.net/amer/v3/attachments/abc",
+                content_type="text/plain",
+            )
 
     assert plan == {
         "mode": "bot",
@@ -547,26 +511,28 @@ async def test_teams_download_drops_credential_across_redirect():
     """Graph redirects `/content` to a pre-signed URL; the token must not follow."""
     from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformService
 
+    def graph(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "graph.microsoft.com":
+            return httpx.Response(
+                302, headers={"Location": "https://cdn.attacker.test/blob"}
+            )
+        return httpx.Response(200, content=b"payload")
+
     service = TeamsPlatformService(credentials={})
-    session = _RecordingSession(
-        [
-            _DownloadResponse(302, {"Location": "https://cdn.attacker.test/blob"}),
-            _DownloadResponse(200, body=b"payload"),
-        ]
-    )
+    with platform_http(graph) as recorded:
+        async with outbound_http(5.0) as http:
+            content = await service._fetch_content(
+                http=http,
+                url="https://graph.microsoft.com/v1.0/drives/d/items/i/content",
+                headers={"Authorization": "Bearer graph-token"},
+                mode="graph",
+            )
 
-    content = await service._fetch_content(
-        session=session,
-        url="https://graph.microsoft.com/v1.0/drives/d/items/i/content",
-        headers={"Authorization": "Bearer graph-token"},
-        mode="graph",
-    )
-
+    first, second = recorded.requests
     assert content == b"payload"
-    assert session.calls[0]["headers"]["Authorization"] == "Bearer graph-token"
-    assert session.calls[1]["url"] == "https://cdn.attacker.test/blob"
-    assert "Authorization" not in session.calls[1]["headers"]
-    assert all(call["allow_redirects"] is False for call in session.calls)
+    assert first.headers["Authorization"] == "Bearer graph-token"
+    assert str(second.url) == "https://cdn.attacker.test/blob"
+    assert "Authorization" not in second.headers
 
 
 @pytest.mark.asyncio
@@ -581,13 +547,12 @@ async def test_a_lookalike_sharepoint_host_is_not_treated_as_sharepoint():
     """
     from app.modules.agent_surfaces.platforms.teams import service as teams_service
 
-    async def _fail(**_kwargs):
-        raise AssertionError("a lookalike host must never reach site resolution")
-
-    resolved = await teams_service._resolve_sharepoint_file_content_url(
-        session=SimpleNamespace(get=_fail),
-        token="graph-token",
-        url="https://sharepoint.com.example.net/sites/Engineering/Documents/x.pdf",
-    )
+    with platform_http(_no_request_expected):
+        async with outbound_http(5.0) as http:
+            resolved = await teams_service._resolve_sharepoint_file_content_url(
+                http=http,
+                token="graph-token",
+                url="https://sharepoint.com.example.net/sites/Engineering/Documents/x.pdf",
+            )
 
     assert resolved is None

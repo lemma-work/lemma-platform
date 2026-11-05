@@ -46,8 +46,15 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
 from app.modules.pod.infrastructure.models.pod_models import Pod
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 
 async def _number(session, *, phone_number_id: str, token: str) -> None:
@@ -123,12 +130,12 @@ async def test_a_surface_answers_as_the_number_it_holds(
         uow=SqlAlchemyUnitOfWork(db_session)
     ).for_surface(surface.to_entity())
 
-    assert credentials["access_token"] == "the-pools-token", (
+    assert credentials.access_token.get_secret_value() == "the-pools-token", (
         "a surface holding a pooled number sent with the deployment's token, so "
         "every organisation would reply from the same number"
     )
-    assert credentials["phone_number_id"] == "pool-a"
-    assert credentials["waba_id"] == "waba-pool-a"
+    assert credentials.phone_number_id == "pool-a"
+    assert credentials.waba_id == "waba-pool-a"
 
 
 async def test_a_surface_holding_nothing_still_answers_from_settings(
@@ -151,8 +158,8 @@ async def test_a_surface_holding_nothing_still_answers_from_settings(
         uow=SqlAlchemyUnitOfWork(db_session)
     ).for_surface(surface.to_entity())
 
-    assert credentials["access_token"] == "deployment-token"
-    assert credentials["phone_number_id"] == "deployment-pn"
+    assert credentials.access_token.get_secret_value() == "deployment-token"
+    assert credentials.phone_number_id == "deployment-pn"
 
 
 async def test_the_worker_acts_on_a_message_with_the_number_it_arrived_on(
@@ -171,15 +178,15 @@ async def test_the_worker_acts_on_a_message_with_the_number_it_arrived_on(
     resolver = SurfaceCredentialResolver(uow=SqlAlchemyUnitOfWork(db_session))
 
     pooled = await resolver.for_platform(
-        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="pool-w"
+        SurfacePlatform.WHATSAPP, surface=None, arrived_on="pool-w"
     )
     unpooled = await resolver.for_platform(
-        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="deployment-pn"
+        SurfacePlatform.WHATSAPP, surface=None, arrived_on="deployment-pn"
     )
 
-    assert pooled["access_token"] == "the-pools-token"
-    assert pooled["phone_number_id"] == "pool-w"
-    assert unpooled["access_token"] == "deployment-token"
+    assert pooled.access_token.get_secret_value() == "the-pools-token"
+    assert pooled.phone_number_id == "pool-w"
+    assert unpooled.access_token.get_secret_value() == "deployment-token"
 
 
 async def test_a_number_whose_row_was_removed_keeps_the_surface_on_the_air(
@@ -202,7 +209,7 @@ async def test_a_number_whose_row_was_removed_keeps_the_surface_on_the_air(
         uow=SqlAlchemyUnitOfWork(db_session)
     ).for_surface(surface.to_entity())
 
-    assert credentials["access_token"] == "deployment-token"
+    assert credentials.access_token.get_secret_value() == "deployment-token"
 
 
 async def test_a_message_reaches_the_surface_holding_the_number_it_arrived_on(
@@ -608,11 +615,11 @@ async def test_a_stranger_can_sign_up_on_a_pooled_number_and_is_answered_from_it
         "a stranger messaging a pooled number reached no signup flow at all, so "
         "the number answers nobody it does not already know"
     )
-    assert transport.credentials["access_token"] == "the-pools-token", (
+    assert transport.credentials.access_token.get_secret_value() == "the-pools-token", (
         "the signup would have replied from the settings number rather than the "
         "one the person actually wrote to"
     )
-    assert transport.credentials["phone_number_id"] == "pooled-signup"
+    assert transport.credentials.phone_number_id == "pooled-signup"
 
 
 async def test_creating_a_surface_through_the_api_takes_a_number(

@@ -20,17 +20,24 @@ never hand the provider an oversized prompt.
 from __future__ import annotations
 
 
-from collections.abc import Sequence
+import dataclasses
+from collections.abc import Callable, Sequence
 
+from pydantic_ai.capabilities import AbstractCapability, ProcessHistory
 from pydantic_ai.messages import ModelMessage
-from pydantic_ai.models import Model
-from pydantic_ai._history_processor import HistoryProcessor
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.infrastructure.pydantic_ai_compat import HistoryProcessor
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.infrastructure.harnesses.context_window import (
+    ContextFootprint,
+    FitReplyToWindow,
+    MeasureRequestFootprint,
+)
 from app.modules.agent.services.history_tokens import count_model_message_tokens
+from app.modules.agent.services.summarization_model import SummarizationModel
 
 logger = get_logger(__name__)
 
@@ -39,10 +46,23 @@ logger = get_logger(__name__)
 _MIN_TAIL_MESSAGES = 4
 
 
+def is_tool_result_part(part: object) -> bool:
+    """A part that answers a tool call, and so needs that call before it.
+
+    Two kinds, and the second is the easy one to miss: a `ToolReturnPart`, and
+    a `RetryPromptPart` that names a tool -- pydantic-ai's reply to a call whose
+    arguments failed validation. A provider reads both as a tool message, so a
+    cut that keeps either without its call has orphaned a result.
+    """
+    name = type(part).__name__
+    if name == "ToolReturnPart":
+        return True
+    return name == "RetryPromptPart" and bool(getattr(part, "tool_name", None))
+
+
 def _starts_with_tool_returns(message: object) -> bool:
     return any(
-        type(part).__name__ == "ToolReturnPart"
-        for part in getattr(message, "parts", ()) or ()
+        is_tool_result_part(part) for part in getattr(message, "parts", ()) or ()
     )
 
 
@@ -122,8 +142,56 @@ def find_safe_cutoff(messages: Sequence[ModelMessage], start: int) -> int:
     return index
 
 
+def drop_orphan_tool_results(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+    """The history without any tool result whose call is not in it.
+
+    Every cut above moves forward past results so as not to leave one behind,
+    but a history arrives here from several hands -- replayed runs, compaction,
+    the ceiling guard -- and the cost of one orphan is a provider rejecting the
+    whole request. This is the last word on it: a result is kept only if a
+    response before it made the call.
+
+    An interior request emptied this way is dropped; the last message is kept
+    even when emptied, because the history must still end on a request.
+    """
+    seen: set[str] = set()
+    kept: list[ModelMessage] = []
+    changed = False
+    for index, message in enumerate(messages):
+        parts: list[object] = list(getattr(message, "parts", ()) or ())
+        if type(message).__name__ == "ModelResponse":
+            seen.update(
+                str(getattr(part, "tool_call_id", ""))
+                for part in parts
+                if type(part).__name__ == "ToolCallPart"
+            )
+            kept.append(message)
+            continue
+        survivors = [
+            part
+            for part in parts
+            if not is_tool_result_part(part)
+            or str(getattr(part, "tool_call_id", "")) in seen
+        ]
+        if len(survivors) == len(parts):
+            kept.append(message)
+            continue
+        changed = True
+        if survivors or index == len(messages) - 1:
+            kept.append(_with_parts(message, survivors))
+    return kept if changed else list(messages)
+
+
+def _with_parts(message: ModelMessage, parts: list[object]) -> ModelMessage:
+    return dataclasses.replace(message, parts=parts)  # type: ignore[arg-type]
+
+
 def enforce_token_ceiling(
-    messages: Sequence[ModelMessage], *, ceiling: int, known_size: int | None = None
+    messages: Sequence[ModelMessage],
+    *,
+    ceiling: int,
+    known_size: int | None = None,
+    count: Callable[[Sequence[ModelMessage]], int] = count_model_message_tokens,
 ) -> list[ModelMessage]:
     """Bring a history under the ceiling, and say so when it could not.
 
@@ -132,19 +200,24 @@ def enforce_token_ceiling(
     worse, and that is the only alternative.
 
     `known_size` lets a caller that has already measured `messages` skip the
-    first re-tokenisation, which is the most expensive thing on the request path.
+    first re-tokenisation, and `count` lets a run's memoized counter stand in
+    for re-tokenising every candidate from scratch.
     """
     working = list(messages)
-    size = known_size if known_size is not None else count_model_message_tokens(working)
+    size = known_size if known_size is not None else count(working)
     if ceiling <= 0 or size <= ceiling:
         return working
 
-    trimmed = _fit_within(working, ceiling)
+    trimmed = _fit_within(working, ceiling, count)
     dropped = len(working) - len(trimmed)
     return _with_drop_notice(trimmed, dropped=dropped) if dropped > 0 else trimmed
 
 
-def _fit_within(working: list[ModelMessage], ceiling: int) -> list[ModelMessage]:
+def _fit_within(
+    working: list[ModelMessage],
+    ceiling: int,
+    count: Callable[[Sequence[ModelMessage]], int],
+) -> list[ModelMessage]:
     """The largest suffix that fits, giving up the least valuable thing first.
 
     Three stages, in order of what they cost. Cut the unpinned middle; then give
@@ -161,13 +234,13 @@ def _fit_within(working: list[ModelMessage], ceiling: int) -> list[ModelMessage]
     cut = max(1, len(working) // 2)
     while cut < floor:
         candidate = _with_pinned(working, find_safe_cutoff(working, cut))
-        if count_model_message_tokens(candidate) <= ceiling:
+        if count(candidate) <= ceiling:
             return candidate
         cut += max(1, (floor - cut) // 2)
 
     tail_start = find_safe_cutoff(working, floor)
     candidate = _with_pinned(working, tail_start)
-    if count_model_message_tokens(candidate) <= ceiling:
+    if count(candidate) <= ceiling:
         return candidate
 
     # The pinned turns do not fit together. Give them up oldest-first, but never
@@ -177,14 +250,14 @@ def _fit_within(working: list[ModelMessage], ceiling: int) -> list[ModelMessage]
     while len(pins) > 1:
         pins = [pins[0], *pins[2:]]
         candidate = [*pins, *tail]
-        if count_model_message_tokens(candidate) <= ceiling:
+        if count(candidate) <= ceiling:
             return candidate
 
     # Even the request plus the newest few is too much. Shrink the tail. A single
     # message larger than the whole window cannot be fixed here -- `_trim_to_ceiling`
     # reports that rather than pretending otherwise.
     candidate = [*pins, *tail]
-    while len(tail) > 1 and count_model_message_tokens(candidate) > ceiling:
+    while len(tail) > 1 and count(candidate) > ceiling:
         tail = tail[find_safe_cutoff(tail, 1) :]
         candidate = [*pins, *tail]
     return candidate
@@ -232,7 +305,9 @@ def _with_drop_notice(
 
 
 def _trim_to_ceiling(
-    messages: Sequence[ModelMessage], ceiling: int
+    messages: Sequence[ModelMessage],
+    ceiling: int,
+    count: Callable[[Sequence[ModelMessage]], int] = count_model_message_tokens,
 ) -> tuple[int, list[ModelMessage] | None, int]:
     """``(size_before, trimmed, size_after)``; ``trimmed`` is None when nothing
     was needed.
@@ -241,20 +316,53 @@ def _trim_to_ceiling(
     worker thread rather than several -- the after-count included, which the log
     line below used to take on the event loop itself.
     """
-    before = count_model_message_tokens(messages)
+    before = count(messages)
     if before <= ceiling:
         return before, None, before
-    trimmed = enforce_token_ceiling(messages, ceiling=ceiling, known_size=before)
-    return before, trimmed, count_model_message_tokens(trimmed)
+    trimmed = enforce_token_ceiling(
+        messages, ceiling=ceiling, known_size=before, count=count
+    )
+    return before, trimmed, count(trimmed)
+
+
+def history_capabilities[DepsT](
+    options: HarnessOptions[DepsT],
+    *,
+    summarization_model: SummarizationModel,
+) -> list[AbstractCapability[DepsT]]:
+    """Measure the request, fit its history, then fit its reply -- in that order.
+
+    The measurement has to come first, because the processors budget the
+    history against what it found; and the reply has to be fitted last, to the
+    history the processors actually left.
+    """
+    footprint = ContextFootprint()
+    processors = build_history_processors(
+        options, summarization_model=summarization_model, footprint=footprint
+    )
+    return [
+        MeasureRequestFootprint(footprint),
+        *(ProcessHistory(processor) for processor in processors),
+        FitReplyToWindow(footprint, window=options.context_window),
+    ]  # type: ignore[list-item]
 
 
 def build_history_processors[DepsT](
     options: HarnessOptions[DepsT],
     *,
-    summarization_model: Model | str,
+    summarization_model: SummarizationModel,
+    footprint: ContextFootprint | None = None,
 ) -> list[HistoryProcessor[DepsT]]:
-    """The history processors this run should apply, in order."""
+    """The history processors this run should apply, in order.
+
+    `footprint` is what each request carries besides its history -- the
+    instructions and tool schemas -- measured by `MeasureRequestFootprint` just
+    before these run. Both the compaction trigger and the hard ceiling are taken
+    as limits on the *whole* request, so the history is held to what is left of
+    them. Without one, the history is measured alone.
+    """
     processors: list[HistoryProcessor[DepsT]] = []
+    footprint = footprint if footprint is not None else ContextFootprint()
     ceiling = options.history_hard_token_ceiling
 
     # First: detach images the model has already had several turns to read.
@@ -270,6 +378,20 @@ def build_history_processors[DepsT](
         return strip_stale_images(list(messages))
 
     processors.append(_detach_stale_images)
+
+    # Then: shrink tool output the model has long since read. A large result is
+    # re-sent on every request for the rest of the run; past a few steps, its
+    # head and tail and a way back to the rest are what is worth carrying.
+    from app.modules.agent.infrastructure.harnesses.stale_tool_output import (
+        clip_stale_tool_returns,
+    )
+
+    async def _clip_stale_tool_output(
+        messages: Sequence[ModelMessage],
+    ) -> list[ModelMessage]:
+        return clip_stale_tool_returns(list(messages))
+
+    processors.append(_clip_stale_tool_output)
 
     if (
         options.history_summarization_enabled
@@ -288,6 +410,9 @@ def build_history_processors[DepsT](
                 keep_messages=options.history_summarization_keep_messages,
                 notices=options.notices,
                 warn_at=agent_settings.agent_run_warn_at,
+                hard_ceiling_tokens=ceiling,
+                timeout_seconds=agent_settings.agent_history_compaction_timeout_seconds,
+                footprint=footprint,
             )
         )
 
@@ -344,14 +469,17 @@ def build_history_processors[DepsT](
             # The whole check runs on a worker thread: the halving loop below
             # re-tokenizes on each pass, so this is the most CPU-hungry thing on
             # the request path and the last place it should hold the event loop.
+            # The ceiling holds the whole request; the history gets what the
+            # instructions and tools leave of it.
+            limit = footprint.within(ceiling)
             before, trimmed, after = await run_blocking(
-                _trim_to_ceiling, messages, ceiling
+                _trim_to_ceiling, messages, limit, footprint.counter.count
             )
             if trimmed is None:
                 return list(messages)
             # Field names avoid "token"/"message", which the logging contract
             # reserves for things that could carry secrets or user text.
-            if after > ceiling:
+            if after > limit:
                 # Say so. The previous version logged enforcement it had not
                 # achieved, so a request 43% over the window looked in the logs
                 # exactly like one brought safely under it.
@@ -359,7 +487,7 @@ def build_history_processors[DepsT](
                     "agent.history.token_ceiling_unenforceable.failed",
                     size_before=before,
                     size_after=after,
-                    ceiling=ceiling,
+                    ceiling=limit,
                     dropped_count=len(messages) - len(trimmed),
                 )
             else:
@@ -373,6 +501,13 @@ def build_history_processors[DepsT](
 
         processors.append(_ceiling_guard)
 
+    async def _drop_orphan_tool_results(
+        messages: Sequence[ModelMessage],
+    ) -> list[ModelMessage]:
+        return drop_orphan_tool_results(messages)
+
+    # After every stage that cuts, so no cut can leave a result without its call.
+    processors.append(_drop_orphan_tool_results)
     # Last, so it sees whatever the stages above produced.
     processors.append(_ensure_leading_user_message)
     return processors

@@ -97,25 +97,10 @@ class RecordValidator:
             elif column.system and not self.allows_creation_override(column):
                 errors.append(f"Cannot provide value for system-managed column '{key}'")
                 error_details.append({"field": key, "reason": "system_managed"})
-            elif (
-                column.type == DatastoreDataType.ENUM
-                and column.options
-                and value is not None
-                and value not in column.options
-            ):
-                allowed = ", ".join(column.options)
-                errors.append(
-                    f"Value '{value}' is not allowed for column '{key}'. "
-                    f"Allowed values: {allowed}"
-                )
-                error_details.append(
-                    {
-                        "field": key,
-                        "reason": "enum",
-                        "value": value,
-                        "allowed_values": column.options,
-                    }
-                )
+            else:
+                for message, detail in value_problems(key, column, value):
+                    errors.append(message)
+                    error_details.append(detail)
 
         size_messages, size_details = configured_size_errors(data)
         errors.extend(size_messages)
@@ -190,29 +175,62 @@ class RecordValidator:
                 errors.append(f"Column '{key}' cannot be null")
                 details.append({"field": key, "reason": "not_null"})
 
-            if (
-                col is not None
-                and col.type == DatastoreDataType.ENUM
-                and col.options
-                and value is not None
-                and value not in col.options
-            ):
-                allowed = ", ".join(col.options)
-                errors.append(
-                    f"Value '{value}' is not allowed for column '{key}'. "
-                    f"Allowed values: {allowed}"
-                )
-                details.append(
-                    {
-                        "field": key,
-                        "reason": "enum",
-                        "value": value,
-                        "allowed_values": col.options,
-                    }
-                )
+            if col is not None:
+                for message, detail in value_problems(key, col, value):
+                    errors.append(message)
+                    details.append(detail)
 
         size_messages, size_details = configured_size_errors(data)
         errors.extend(size_messages)
         details.extend(size_details)
 
         return (len(errors) == 0, errors, details)
+
+
+def value_problems(
+    key: str, column: ColumnSchema, value: object
+) -> list[tuple[str, dict[str, Any]]]:
+    """What is wrong with one value for one column, named by the column.
+
+    The length is checked here, not left to the database: `VARCHAR(n)` refuses
+    a longer value with an error that names no column, so the writer was told
+    "value too long" and had to guess which field.
+    """
+    if value is None:
+        return []
+    if (
+        column.type == DatastoreDataType.ENUM
+        and column.options
+        and value not in column.options
+    ):
+        allowed = ", ".join(column.options)
+        return [
+            (
+                (
+                    f"Value '{value}' is not allowed for column '{key}'. "
+                    f"Allowed values: {allowed}"
+                ),
+                {
+                    "field": key,
+                    "reason": "enum",
+                    "value": value,
+                    "allowed_values": column.options,
+                },
+            )
+        ]
+    if column.max_length and isinstance(value, str) and len(value) > column.max_length:
+        return [
+            (
+                (
+                    f"Value for column '{key}' is {len(value)} characters; the "
+                    f"column holds at most {column.max_length}. Shorten it."
+                ),
+                {
+                    "field": key,
+                    "reason": "max_length",
+                    "max_length": column.max_length,
+                    "length": len(value),
+                },
+            )
+        ]
+    return []

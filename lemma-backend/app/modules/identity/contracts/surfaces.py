@@ -1,14 +1,14 @@
 """Who a message on a chat surface is from, and what they chose to answer on.
 
-Six operations, not the `UserRepository` the composition root
+Five operations, not the `UserRepository` the composition root
 published. The port beside them on `contracts/__init__` would have been no
 better: `UserRepositoryPort` carries `create` and `update`, so handing it to a
 chat surface hands it the ability to make a user.
 
-The three lookups are one question asked three ways -- *which live person is
+The lookups are one question asked more than one way -- *which live person is
 this sender?* -- and "live" is the load-bearing word. Each one excludes
 deactivated and deleted rows, because a match here is what an agent run then
-executes as, and a departed colleague's address or handle was once still an
+executes as, and a departed colleague's address or number was once still an
 authority grant. That rule belongs to identity, and the only way to keep it
 there is for the answer to come from here.
 
@@ -29,11 +29,6 @@ async def live_user_id_by_email(uow, email: str) -> UUID | None:
     return await UserRepository(uow).get_id_by_email_insensitive(email)
 
 
-async def live_user_id_by_telegram_username(uow, username: str) -> UUID | None:
-    """The live user holding this telegram handle, lower-cased by the caller."""
-    return await UserRepository(uow).get_live_id_by_telegram_lower(username)
-
-
 async def live_user_ids_by_mobile_numbers(
     uow, numbers: list[str], *, verified: bool
 ) -> list[UUID]:
@@ -51,7 +46,7 @@ async def live_user_ids_by_mobile_numbers(
 async def live_user_id(uow, user_id: UUID) -> UUID | None:
     """This id back, if it still names a live person; otherwise nobody.
 
-    The same question as the three lookups above, asked of an id the surfaces
+    The same question as the lookups above, asked of an id the surfaces
     module already holds because it cached the answer once. A cached
     ``resolved_user_id`` is a resolution nobody re-derived, so without this it
     is the one path into an agent run that no liveness filter covers.
@@ -77,7 +72,6 @@ async def set_user_preferences(
 __all__ = [
     "live_user_id",
     "live_user_id_by_email",
-    "live_user_id_by_telegram_username",
     "live_user_ids_by_mobile_numbers",
     "set_user_preferences",
     "user_preferences",

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { diffLines, hostOf, parseToolCard, restLength, waitEnding, type WaitFor } from "../src/thread/tool-cards.ts";
+import { askCardView, diffLines, hostOf, parseToolCard, restLength, waitEnding, type WaitFor } from "../src/thread/tool-cards.ts";
 import { toolKey, toolLabel } from "../src/thread/tool-name.ts";
 import { argSummary, buildTurns, commentOf, liveNote, openSignIn, type RawMessage } from "../src/thread/turns.ts";
 
@@ -402,10 +402,10 @@ test("a search with no query is not a card", () => {
 
 /* ── run_connector_operation ───────────────────────────────────────── */
 
-test("a connector call names the install and the operation", () => {
+test("a connector call names the pod connector and the operation", () => {
     const card = call(
         "run_connector_operation",
-        { auth_config: "gmail", operation: "GMAIL_SEND_EMAIL", arguments: { to: "a@b.co", body: { html: "…" } } },
+        { connector: "gmail", operation: "GMAIL_SEND_EMAIL", payload: { to: "a@b.co", body: { html: "…" } } },
         { result: { id: "m1" } },
     );
     assert.equal(card?.kind, "connector");
@@ -423,15 +423,35 @@ test("a connector call names the install and the operation", () => {
 test("a connector failure is a dictionary, not an exception", () => {
     const card = call(
         "run_connector_operation",
-        { auth_config: "outlook", operation: "OUTLOOK_SEND" },
+        { connector: "outlook", operation: "OUTLOOK_SEND" },
         { error: "invalid_arguments", message: "The arguments do not match this operation's input schema." },
     );
     assert.equal(card && card.kind === "connector" && card.failed, true);
     assert.match(card && card.kind === "connector" ? card.error : "", /input schema/);
+    assert.equal(card && card.kind === "connector" ? card.connectUrl : "x", "", "a failure with nowhere to fix it names nowhere");
+});
+
+test("a connector that needs your account carries the link to connect it", () => {
+    const card = call(
+        "run_connector_operation",
+        { connector: "github", operation: "GITHUB_LIST_ISSUES" },
+        {
+            success: false,
+            code: "CONNECTION_REQUIRED",
+            error: "Connect your github account to use 'github' in this pod.",
+            pod_connector: "github",
+            connect_url: "https://app.example.invalid/pods/p1/connections?connector=github",
+        },
+    );
+    const run = card && card.kind === "connector" ? card : null;
+    assert.equal(run?.failed, true);
+    assert.equal(run?.code, "CONNECTION_REQUIRED");
+    assert.equal(run?.connectUrl, "https://app.example.invalid/pods/p1/connections?connector=github");
+    assert.equal("account" in (run ?? {}), false, "the connector decided whose account; the card names none");
 });
 
 test("a connector call missing either name is not a card", () => {
-    assert.equal(call("run_connector_operation", { auth_config: "gmail" }), null);
+    assert.equal(call("run_connector_operation", { connector: "gmail" }), null);
 });
 
 /* ── view_image ────────────────────────────────────────────────────── */
@@ -920,4 +940,102 @@ test("the pod agent's richer web shapes still read as before", () => {
     assert.equal(search?.kind === "sources" && search.sources.length, 1);
     const fetch = call("web_fetch", { urls: ["https://a.example"] }, { pages: [{ url: "https://a.example", success: true, files: { markdown: "/w/a.md" } }] });
     assert.equal(fetch?.kind === "sources" && fetch.sources[0]?.savedAs, "/w/a.md");
+});
+
+/* ── a request put to another teammate ───────────────────────────────── */
+
+test("an ask reads what was asked, and what came back", () => {
+    const args = { teammate: "Billing", request: "Why did invoice 42 fail?", wait_seconds: 20 };
+    const asking = call("ask_teammate", args);
+    assert.equal(asking?.kind, "ask");
+    assert.equal(asking && asking.kind === "ask" && asking.pending, true);
+
+    const answered = call("ask_teammate", args, {
+        success: true,
+        teammate: "pod-b",
+        teammate_name: "Billing",
+        conversation_id: "conv-b",
+        status: "ANSWERED",
+        asked_as: "AS_PERSON",
+        answer: "The card expired.",
+    });
+    assert.ok(answered && answered.kind === "ask");
+    assert.equal(answered.answer, "The card expired.");
+    assert.equal(answered.podId, "pod-b");
+    assert.equal(answered.conversationId, "conv-b");
+    assert.equal(answered.askedAs, "AS_PERSON");
+    assert.equal(answered.failed, false);
+    assert.deepEqual(askCardView(answered), { status: "answered", tone: "ok", line: "", linkable: true });
+});
+
+test("an ask over a connection never links to the other side", () => {
+    const card = call("ask_teammate", { teammate: "Billing", request: "Anything overdue?" }, {
+        success: true, teammate: "pod-b", teammate_name: "Billing", conversation_id: "conv-b",
+        status: "ANSWERED", asked_as: "LINK", answer: "Two invoices.",
+    });
+    assert.ok(card && card.kind === "ask");
+    assert.equal(card.askedAs, "LINK");
+    assert.equal(askCardView(card).linkable, false);
+    // Nor does one whose way of asking went unsaid.
+    const unsaid = call("ask_teammate", { teammate: "Billing", request: "Anything overdue?" }, {
+        success: true, teammate: "pod-b", conversation_id: "conv-b", status: "ANSWERED", answer: "Two.",
+    });
+    assert.ok(unsaid && unsaid.kind === "ask");
+    assert.equal(unsaid.askedAs, "");
+    assert.equal(askCardView(unsaid).linkable, false);
+});
+
+test("each way an ask stands reads in the app's words, not the tool's message", () => {
+    const told = "Billing is working on it. End your turn: its answer arrives in this conversation as a new message.";
+    const view = (status: string, asked_as = "AS_PERSON", answer?: string) => {
+        const card = call("ask_teammate", { teammate: "Billing", request: "Anything overdue?" }, {
+            success: true, teammate: "pod-b", teammate_name: "Billing", conversation_id: "conv-b",
+            status, asked_as, message: told, ...(answer ? { answer } : {}),
+        });
+        assert.ok(card && card.kind === "ask");
+        return askCardView(card);
+    };
+    const cases: [ReturnType<typeof view>, string][] = [
+        [view("WORKING"), "working"],
+        [view("WAITING"), "waiting on you"],
+        [view("WAITING", "LINK"), "waiting"],
+        [view("UNFINISHED"), "couldn’t finish"],
+        [view("DISCONNECTED", "LINK"), "disconnected"],
+        // A run that wrote nothing comes back ANSWERED with no answer.
+        [view("ANSWERED"), "no answer"],
+    ];
+    for (const [seen, status] of cases) {
+        assert.equal(seen.status, status);
+        assert.ok(seen.line.startsWith("Billing"), status + ": " + seen.line);
+        assert.ok(!seen.line.includes("End your turn"));
+    }
+    assert.equal(view("DISCONNECTED").linkable, false);
+    assert.equal(view("UNFINISHED").tone, "bad");
+});
+
+test("an ask waiting on the person's OK is not a failure", () => {
+    const card = call(
+        "ask_teammate",
+        { teammate: "Billing", request: "Anything overdue?" },
+        { success: false, needs_approval: true, error: "Asking Billing needs the person's OK first." },
+    );
+    assert.ok(card && card.kind === "ask");
+    assert.equal(card.needsApproval, true);
+    assert.equal(card.failed, false);
+    assert.equal(card.error, "");
+});
+
+test("an ask reads a return that arrived serialised", () => {
+    const card = call(
+        "ask_teammate",
+        { teammate: "Billing", request: "Anything overdue?" },
+        JSON.stringify({ success: true, teammate_name: "Billing", status: "WORKING", message: "It is working on it." }),
+    );
+    assert.ok(card && card.kind === "ask");
+    assert.equal(card.status, "WORKING");
+    assert.equal(askCardView(card).status, "working");
+});
+
+test("an ask with no request falls back to the plain step", () => {
+    assert.equal(call("ask_teammate", { teammate: "Billing" }), null);
 });

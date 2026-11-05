@@ -44,6 +44,23 @@ def test_prompt_frames_liteparse_as_local_file_fallback():
     )
 
 
+def test_the_fragment_says_the_pod_already_has_its_surfaces():
+    """Asked to set a pod up to send email, a run offered to create an address.
+
+    Surfaces have no `pod_*` tool and no other fragment mentions them, so this
+    cookbook is the only place a run can learn the capability exists at all --
+    and the connector line right below it is where the wrong answer came from.
+    """
+    prompt = load_workspace_cli_prompt()
+    assert "lemma surfaces list" in prompt
+    assert "lemma surfaces get resend-assistant" in prompt
+    # The point is not the command list: the address is already there, so
+    # minting one is the wrong answer, not a first step.
+    assert "they already" in prompt
+    assert "minted an email\naddress when it is created" in prompt
+    assert "Never\npropose creating an address" in prompt
+
+
 def test_a_run_on_the_mac_is_told_about_the_mac_not_the_vm():
     """Host execution: no persistent home, no preinstalled libraries, no `lit`.
 

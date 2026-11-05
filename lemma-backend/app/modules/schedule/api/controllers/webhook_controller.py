@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
+from app.core.api.request_body import BodyTooLargeError, read_body_limited
 from app.core.log.log import get_logger
 from app.modules.schedule.api.dependencies import (
     WebhookHandlerDep,
@@ -20,11 +21,13 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-# A delivery larger than this is refused before it is read. Nothing legitimate
-# comes close -- GitHub caps its own payloads at 25 MB and the largest real one
-# is a `push` with a long `commits[]` -- and without a cap the body flows into
+# A delivery larger than this is refused as it arrives, before any of it is
+# verified -- and before any of it is read when its declared length already
+# says so. GitHub allows payloads of up to 25 MB, and a `push` listing many
+# commits can pass this one; it is refused on purpose. The body flows into
 # schedule matching, `schedule_runs`, the outbox and Redis on a path whose rate
-# an unauthenticated sender chooses.
+# an unauthenticated sender chooses, and a ceiling sized for the rarest push
+# would be the ceiling every forged delivery gets too.
 MAX_WEBHOOK_BODY_BYTES = 1_048_576
 
 
@@ -58,20 +61,24 @@ async def handle_webhook(
             detail="Unsupported or unverified webhook source",
         )
 
-    raw_body = await request.body()
-    if len(raw_body) > MAX_WEBHOOK_BODY_BYTES:
+    try:
+        raw_body = await read_body_limited(request, max_bytes=MAX_WEBHOOK_BODY_BYTES)
+    except BodyTooLargeError as refused:
+        # Logged here because nothing else will: a 4xx domain error reaches the
+        # request log as a status on a route template, without the source. The
+        # size is what arrived, not what the sender declared.
         logger.warning(
             "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
             source=source,
-            size=len(raw_body),
+            size=refused.received,
         )
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Webhook payload is too large",
-        )
+        raise
 
     delivery = WebhookDelivery(
-        source=source, raw_body=raw_body, headers=dict(request.headers)
+        source=source,
+        raw_body=raw_body,
+        headers=dict(request.headers),
+        query=dict(request.query_params),
     )
     try:
         verified = await plugin.verify(delivery)
@@ -90,6 +97,10 @@ async def handle_webhook(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid webhook signature",
         )
+
+    if verified.reply is not None:
+        # A handshake the source asked to have answered, not an event.
+        return verified.reply
 
     # State the delivery changes about the source itself -- an App uninstalled,
     # repositories removed from one. Deliberately not wrapped: retirement is

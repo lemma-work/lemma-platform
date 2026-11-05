@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.models import ProgressHandle
+
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from typing import Any
 
 from app.core.config import settings
@@ -17,7 +21,19 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
+from app.modules.agent_surfaces.domain.decision_card import (
+    CardRetirement,
+    DecisionCardHandle,
+)
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppClient
+from app.modules.agent_surfaces.platforms.whatsapp.decision_cards import (
+    retire_whatsapp_card,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.reengage import (
+    send_reengage_template,
+)
+from app.modules.agent_surfaces.domain.surface_config import ReengageTemplate
 from app.modules.agent_surfaces.platforms.whatsapp.group_updates import (
     whatsapp_group_updates,
 )
@@ -50,26 +66,26 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         return self._parser.parse(payload, headers)
 
     async def fetch_sender_profile(
-        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
     ) -> SurfaceSenderProfile | None:
         return await WhatsAppPlatformService(credentials).fetch_sender_profile(event)
 
     async def send_message(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await WhatsAppPlatformService(credentials).send_message(
+    ) -> str | None:
+        return await WhatsAppPlatformService(credentials).send_message(
             event, message, metadata
         )
 
     async def _render_resource(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -83,7 +99,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_choices(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -95,7 +111,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_decision(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
@@ -104,10 +120,30 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             event, approval_plan, metadata
         )
 
+    async def reopen_reply_window(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        template: ReengageTemplate,
+    ) -> None:
+        await send_reengage_template(credentials, event, template)
+
+    async def retire_decision_card(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        handle: DecisionCardHandle,
+        reason: CardRetirement = CardRetirement.SUPERSEDED,
+    ) -> None:
+        await retire_whatsapp_card(
+            WhatsAppClient.from_credentials(credentials), handle, reason
+        )
+
     async def acknowledge_interaction(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         interaction: ParsedSurfaceInteraction,
         text: str | None = None,
         show_alert: bool = False,
@@ -128,12 +164,12 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     async def stream_progress(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
+        progress_handle: ProgressHandle | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> ProgressHandle | None:
         """Post a progress update as a new message.
 
         Returns ``None`` deliberately: a handle is a reference to a live message
@@ -148,7 +184,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     async def add_processing_indicator(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -194,7 +230,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     async def download_attachment(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
@@ -205,7 +241,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     async def _render_file(
         self,
         *,
-        credentials: dict[str, Any],
+        credentials: SurfaceCredentials,
         event: ParsedInboundSurfaceEvent,
         file_name: str,
         file_bytes: bytes,

@@ -7,8 +7,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.identity.events.identity_work import stage_identity_work
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
 from app.modules.identity.domain.ports import UserRepositoryPort
@@ -35,18 +35,16 @@ class UserRepository(UserRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
-    def _collect_events(self, entity: UserEntity) -> None:
+    async def _collect_events(self, entity: UserEntity) -> None:
         if hasattr(entity, "collect_events"):
             events = entity.collect_events()
             if events:
                 self.uow.collect_events(events)
+                await stage_identity_work(self.uow, events)
 
     async def create(self, entity: UserEntity) -> UserEntity:
         digits = normalize_mobile_digits(entity.mobile_number)
@@ -68,7 +66,7 @@ class UserRepository(UserRepositoryPort):
             if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[UserEntity]:
@@ -175,62 +173,10 @@ class UserRepository(UserRepositoryPort):
         )
         return await self.session.scalar(stmt)
 
-    async def get_id_by_telegram_lower(self, username_lower: str) -> Optional[UUID]:
-        """Any owner of this telegram username, compared case-insensitively.
-
-        The "is it taken" question, with the same reasoning as
-        ``get_id_by_mobile_digits`` above. Resolving an inbound sender asks
-        ``get_live_id_by_telegram_lower`` instead.
-        """
-        stmt = select(User.id).where(
-            func.lower(User.telegram_username) == username_lower
-        )
-        return await self.session.scalar(stmt)
-
-    async def get_live_id_by_telegram_lower(
-        self, username_lower: str
-    ) -> Optional[UUID]:
-        """The live user holding this telegram username, if there is one.
-
-        Split from the lookup above rather than given a flag, because the two
-        callers are asking different questions and only one of them may see a
-        departed colleague. This one resolves an inbound surface sender into the
-        identity an agent run then executes as -- a match here is an authority
-        grant, exactly as in ``get_id_by_email_insensitive``, and it is the
-        *first* branch tried, so it decides before the filtered email path is
-        reached.
-
-        Deliberately *not* ``is_verified``, and it was added here once and taken
-        back out. The reasoning for adding it was sound in isolation -- a
-        ``telegram_username`` is free text on a profile that nobody confirms, so
-        it is a claim and not a proof, and it is the first branch tried. What
-        the reasoning missed is where the claim is spent. This lookup answers
-        "who is this sender", which decides routing and an access refusal; it
-        does not decide whether a permanent binding may be written. That second
-        question is asked on the `require_proven_identity` path, and
-        `SurfaceIdentityResolutionService._cache_is_attested` already refuses a
-        resolution a Telegram handle is the only support for.
-
-        Requiring it here cost two things and bought neither back. It made this
-        stricter than ``get_id_by_email_insensitive`` directly beside it, which
-        does not ask -- so the same unverified person resolved by email and not
-        by handle. And it turned a clear refusal into a loop: an unverified
-        sender stopped resolving, so ordinary ingestion asked them to share a
-        phone number instead of telling them how to get access, and chat signup
-        then refuses them anyway because `active_chat_user` does require
-        ``is_verified``. Six product scenarios failed on exactly that.
-        """
-        stmt = select(User.id).where(
-            func.lower(User.telegram_username) == username_lower,
-            User.is_active.is_(True),
-            User.is_deleted.is_(False),
-        )
-        return await self.session.scalar(stmt)
-
     async def get_live_id(self, user_id: UUID) -> Optional[UUID]:
         """This id, if it still names somebody who is here.
 
-        The by-id spelling of the three sender lookups above, for re-checking an
+        The by-id spelling of the sender lookups above, for re-checking an
         answer that was cached rather than derived. The surfaces module keeps an
         external-user row per platform sender holding the Lemma user it resolved
         to, and a cache hit used to be returned without asking identity
@@ -239,7 +185,7 @@ class UserRepository(UserRepositoryPort):
         access running.
 
         ``is_active`` and ``is_deleted``, and deliberately not ``is_verified``:
-        this is the *weakest* of what the three fresh lookups require. A cache
+        this is the *weakest* of what the fresh lookups require. A cache
         entry must never be refused where a fresh resolution would have
         succeeded, or a sender matched by email -- which does not ask for
         ``is_verified`` -- would work on their first message and be turned away
@@ -285,7 +231,7 @@ class UserRepository(UserRepositoryPort):
             if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def set_preferences(

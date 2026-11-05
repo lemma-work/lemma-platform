@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import field_validator, BaseModel, Field
 
 from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from app.modules.agent.domain.value_objects import (
@@ -37,6 +37,10 @@ class DisplayResourceType(str, Enum):
             if member.value == normalized:
                 return member
         return None
+
+
+#: Fits WhatsApp's 1024-character interactive body with the title and link.
+FALLBACK_MAX_CHARS = 600
 
 
 class DisplayResourceRequest(BaseModel):
@@ -81,6 +85,22 @@ class DisplayResourceRequest(BaseModel):
         default_factory=list,
         max_length=4,
         description="Messages shown while a WIDGET renders.",
+    )
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def _data_written_as_text(cls, value: object) -> object:
+        return widget_data(value)
+
+    fallback: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=FALLBACK_MAX_CHARS,
+        description=(
+            "What this shows, as plain text, for chat apps that cannot draw it "
+            "(Slack, WhatsApp, Teams, email): one or two lines carrying the "
+            "names and numbers that matter. Write one for every WIDGET."
+        ),
     )
     filters: list[RecordFilter] | None = Field(
         default=None,
@@ -237,6 +257,24 @@ def _check_widget(request: "DisplayResourceRequest") -> str | None:
 #: written into the page on every view, so it is one record's worth -- an email
 #: thread, an invite -- and not a table; a widget that needs rows queries them.
 WIDGET_DATA_MAX_BYTES = 64 * 1024
+
+
+def widget_data(value: object) -> object:
+    """``data`` as the object it was meant to be.
+
+    Models often pass an object as its JSON text -- ``"{\"mermaid\": ...}"``
+    -- and a widget reading that string as ``lemma.data`` finds none of its
+    fields and draws nothing. Text that parses to an object or a list is taken
+    as that; any other value, a string included, is left as it was.
+    """
+    if isinstance(value, str) and value.lstrip()[:1] in ("{", "["):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return value
+        if isinstance(parsed, dict | list):
+            return parsed
+    return value
 
 
 def _check_widget_data(data: object) -> str | None:

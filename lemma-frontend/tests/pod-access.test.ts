@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { podAccess, readLastPods, rememberPod } from "../src/shell/pod-access.ts";
 import type { Pod } from "../src/data/types.ts";
 
-const pod: Pod = { id: "linked", orgId: "other-org", name: "Teammate", iconUrl: null, teammate: { name: "Teammate", initials: "T" }, subtitle: "", members: [], waiting: "" };
+const pod: Pod = { id: "linked", orgId: "other-org", name: "Teammate", iconUrl: null, teammate: { name: "Teammate", initials: "T", iconUrl: null }, subtitle: "", members: [], waiting: "" };
 
 test("a linked pod omitted from a stale or different organization's list still opens", () => {
     assert.deepEqual(podAccess(pod.id, [], { status: "success", isFetching: false, data: pod }), { state: "ready", pod });

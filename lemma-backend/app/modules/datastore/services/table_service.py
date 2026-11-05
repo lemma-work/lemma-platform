@@ -8,11 +8,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.log.log import get_logger
 from app.core.authorization.context import (
-    ActorType,
     Context,
     ResourceVisibility,
     normalize_resource_visibility,
 )
+from app.modules.datastore.domain.column_description import column_name_problem
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreTableEntity,
@@ -109,8 +109,10 @@ class TableService:
         # names a table the caller cannot find, and by then a row exists.
         ensure_identifier_fits(table_name, kind="Table name")
         ensure_identifier_fits(primary_key_column, kind="Column name")
+        _ensure_queryable_column_name(primary_key_column)
         for declared in columns:
             ensure_identifier_fits(declared.name, kind="Column name")
+            _ensure_queryable_column_name(declared.name)
         entity_data: dict = {
             "pod_id": pod_id,
             "table_name": table_name,
@@ -386,30 +388,17 @@ class TableService:
         if not table:
             raise DatastoreTableNotFoundError("Table not found")
 
-        # A human deleting a table they created is fine via the owner shortcut.
-        # A delegated workload must ALWAYS route through authz, even for a table
-        # its delegating user created — table.delete is destructive and gated
-        # (needs an explicit workload grant or a session approval), so the owner
-        # shortcut must not let a workload bypass that.
-        is_delegated = ctx is not None and (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        # Always through the authorizer: its owner rule lets a creator delete
+        # what they made -- while they are still in the pod. A shortcut here
+        # that skipped it for the creator let someone removed from the pod
+        # delete their old tables, and let nothing gate a workload but itself.
+        await self.authz.require_table_delete(
+            user_id=requester_user_id,
+            pod_id=pod_id,
+            table_id=table.id,
+            table_name=table.table_name,
+            **({"ctx": ctx} if ctx is not None else {}),
         )
-        if ctx is not None:
-            if is_delegated or table.user_id != requester_user_id:
-                await self.authz.require_table_delete(
-                    user_id=requester_user_id,
-                    pod_id=pod_id,
-                    table_id=table.id,
-                    table_name=table.table_name,
-                    ctx=ctx,
-                )
-        elif table.user_id != requester_user_id:
-            await self.authz.require_table_delete(
-                user_id=requester_user_id,
-                pod_id=pod_id,
-                table_id=table.id,
-                table_name=table.table_name,
-            )
 
         # Physical table first, then the row — the ordering rule on this class
         # read in the destroying direction. Removing the row first would leave
@@ -437,6 +426,7 @@ class TableService:
         ctx: Context,
     ) -> DatastoreTableEntity:
         ensure_identifier_fits(column.name, kind="Column name")
+        _ensure_queryable_column_name(column.name)
         requester_user_id = ctx.user_id
         table = await self.table_repository.get_by_datastore_and_name(
             pod_id,
@@ -552,3 +542,17 @@ class TableService:
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
         return normalize_resource_visibility(value) or ResourceVisibility.POD
+
+
+def _ensure_queryable_column_name(name: str) -> None:
+    """Refuse a new column name that hand-written SQL cannot use unquoted.
+
+    The platform's own SQL quotes every name, so `check` or `Order` work for
+    record writes -- and then break every query an agent or a person writes
+    without quotes, as a syntax error or a column that "does not exist". Only
+    at creation: an existing table keeps its names, and its describe marks the
+    ones that need quoting.
+    """
+    problem = column_name_problem(name)
+    if problem is not None:
+        raise DatastoreValidationError(f"Column name {problem}")

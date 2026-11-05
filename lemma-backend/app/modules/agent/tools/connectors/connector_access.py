@@ -6,10 +6,10 @@ an HTTP hop, and was unavailable to any agent without the workspace toolset.
 
 This binds the same services the HTTP route uses to the agent's delegated
 authorization context, built exactly as the pod toolset builds it. The point is
-that ``AccountResolutionService`` still makes every authorization decision --
-``connector.use`` for the connector, ``connector_account.use`` to borrow someone
-else's account -- so there is one implementation of those rules, not a second
-one that can drift.
+that ``PodConnectorResolver`` still makes every authorization decision --
+``connector.use`` on the pod connector, and for a shared one
+``connector_account.use`` on the account its owner shared -- so there is one
+implementation of those rules, not a second one that can drift.
 """
 
 from __future__ import annotations
@@ -29,12 +29,18 @@ from app.modules.agent.tools.context import BaseAgentContext
 
 @dataclass(slots=True)
 class ConnectorServices:
-    connector: object
+    #: The pod's connectors: which ones this agent may use.
+    pod_connectors: object
+    #: The person's own installations the pod declares nothing for yet,
+    #: declared as their own connector on first use (``InstallationReach``).
+    reach: object
     operations: object
     ctx: Context
     uow: SqlAlchemyUnitOfWork
     #: Reads an attachment and lands a download, as this agent in its pod.
     files: object
+    #: The organization's installs and sign-ins: where a connect link comes from.
+    connectors: object
 
 
 def _connector_dependencies():
@@ -91,13 +97,15 @@ async def connector_services(
         token = set_current_context(auth_ctx)
         try:
             yield ConnectorServices(
-                connector=dependencies.get_connector_service(uow),
+                pod_connectors=dependencies.get_pod_connector_service(uow),
+                reach=dependencies.build_installation_reach(uow),
                 operations=dependencies.build_connector_operation_service(uow),
                 ctx=auth_ctx,
                 uow=uow,
                 files=dependencies.build_operation_files(
                     uow, pod_id=deps.pod_id, ctx=auth_ctx
                 ),
+                connectors=dependencies.get_connector_service(uow),
             )
             await uow.commit()
         finally:

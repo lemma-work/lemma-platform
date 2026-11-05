@@ -19,8 +19,15 @@ from fastapi import status
 from httpx import AsyncClient
 
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 FILES = "/pods/{pod_id}/datastore/files"
 
@@ -217,11 +224,19 @@ class TestSignedUrlServing:
             assert ok.status_code == status.HTTP_200_OK, ok.text
             assert ok.content == content
 
-        # One past the cap → 410 Gone (and the link is burned)…
-        gone = await async_client.get(f"/public/s/{code}")
-        assert gone.status_code == status.HTTP_410_GONE
+        # One past the cap → 410 Gone (and the link is burned), and it keeps
+        # saying so while what the last open embeds may still load…
+        for _ in range(2):
+            gone = await async_client.get(f"/public/s/{code}")
+            assert gone.status_code == status.HTTP_410_GONE
 
-        # …then the burned code is simply unknown → 404.
+        # …then, once that entry lapses, the burned code is simply unknown → 404.
+        from app.modules.datastore.services.files.signed_url import (
+            get_signed_url_store,
+        )
+
+        store = get_signed_url_store()
+        await (await store._get_redis()).delete(store._key(code))
         after = await async_client.get(f"/public/s/{code}")
         assert after.status_code == status.HTTP_404_NOT_FOUND
 

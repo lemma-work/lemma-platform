@@ -47,6 +47,7 @@ from app.modules.function.infrastructure.models import (
     FunctionRunModel,
 )
 
+
 from app.modules.test_support.e2e.waiters import eventually
 
 
@@ -256,6 +257,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             runtime_http_client_factory=runtime_http_clients.get,
             organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+            max_running_per_pod=1_000,
         )
 
         api_result = await dispatcher.execute(
@@ -365,6 +367,7 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
             runtime_http_client_factory=runtime_http_clients.get,
             organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+            max_running_per_pod=1_000,
         )
 
         warm_run_id = await _create_run(

@@ -15,6 +15,7 @@ involved, so this is hermetic and runs in CI alongside the other e2e tests.
 from __future__ import annotations
 
 import asyncio
+import json
 from urllib.parse import urlsplit
 
 import os
@@ -62,7 +63,7 @@ def _tenant_db_name(worker_id: str) -> str:
     """Namespace the tenant database per xdist worker.
 
     The e2e stack now shares one Postgres server across all xdist workers
-    (see ``shared_postgres`` in test_utils.py) rather than giving each
+    (see ``shared_postgres`` in test_shared_containers.py) rather than giving each
     worker its own container. A fixed name here would let two workers'
     concurrent DROP DATABASE/CREATE DATABASE calls race on the same
     database -- exactly what happened before this fix, surfacing as
@@ -112,6 +113,18 @@ async def tenant_database(test_database_url, worker_id):
                 "  customer text NOT NULL,"
                 "  amount_cents integer NOT NULL,"
                 "  paid boolean NOT NULL DEFAULT false)"
+            )
+        )
+        await conn.execute(
+            text("CREATE TYPE ticket_state AS ENUM ('draft', 'sent', 'paid')")
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE tickets ("
+                "  id integer PRIMARY KEY,"
+                "  title varchar(500) NOT NULL,"
+                "  state ticket_state NOT NULL DEFAULT 'draft',"
+                "  priority integer CHECK (priority BETWEEN 1 AND 5))"
             )
         )
         await conn.execute(text("CREATE SCHEMA reporting"))
@@ -219,6 +232,31 @@ class TestReadPath:
         assert columns["amount_cents"]["data_type"] == "integer"
         assert columns["customer"]["is_nullable"] == "NO"
         assert columns["paid"]["column_default"] == "false"
+
+    async def test_describe_table_says_what_each_column_will_accept(
+        self, connection_config, credentials
+    ):
+        """A length, an enum's labels and a CHECK were all invisible: the
+        agent learned each rule from the error the database raised."""
+        result = await _run(
+            SqlExecutor(),
+            "describe_table",
+            {"table": "tickets", "schema": "public"},
+            connection_config,
+            credentials,
+        )
+        columns = {row["column_name"]: row for row in result["rows"]}
+
+        assert columns["title"]["character_maximum_length"] == 500
+        assert columns["state"]["data_type"] == "ticket_state"
+        # JSON text, as every non-scalar the connector returns is text.
+        assert json.loads(columns["state"]["enum_labels"]) == ["draft", "sent", "paid"]
+        assert any(
+            "priority" in clause
+            for clause in json.loads(columns["priority"]["check_constraints"])
+        )
+        # NOT NULL is reported once, as `is_nullable`, not again as a check.
+        assert columns["title"]["check_constraints"] is None
 
     async def test_row_cap_truncates_and_says_so(self, connection_config, credentials):
         capped = {**connection_config, "row_cap": 10}

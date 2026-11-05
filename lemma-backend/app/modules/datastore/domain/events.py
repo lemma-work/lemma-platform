@@ -26,8 +26,9 @@ class RecordOrigin(str, Enum):
     """Whose hand a row change came from."""
 
     MEMBER = "MEMBER"
-    #: Somebody outside the pod, through a table opened to them. The write ran
-    #: as the member who opened it; the content is the outsider's.
+    #: Somebody outside the pod, through a table opened to them or a function
+    #: they called. The write ran as the member who opened the table, or as the
+    #: function; the content is the outsider's.
     OUTSIDE = "OUTSIDE"
 
 
@@ -96,6 +97,8 @@ class DatastoreFileCreatedEvent(DatastoreDomainEvent):
     file_id: UUID
     path: str | None = None
     metadata: dict | None = None
+    #: The stored content's size. ``None`` on events from before it was carried.
+    size_bytes: int | None = None
 
 
 class DatastoreFileUpdatedEvent(DatastoreDomainEvent):
@@ -138,14 +141,6 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
     # rows without a database read: a ``None`` owner fans out to every member
     # who can read the table, while a set owner is delivered only to that user.
     owner_user_id: UUID | None = None
-    # Set when the body was too large to carry and was dropped. The row is
-    # still in Postgres, so a consumer that needs it reads it; what it must not
-    # do is assume an absent body means an empty row. Carrying the body
-    # unconditionally is how one table column put 3.4MB entries into a Redis
-    # stream capped by entry count, and how the API event loop came to spend
-    # seconds decoding them.
-    payload_truncated: bool = False
-    previous_truncated: bool = False
     # Who wrote the row's content. An OUTSIDE row carries no ``actor_id`` -- it
     # was not the member's doing -- and names the outsider in ``outside_actor``
     # (``visitor:{session}`` or ``contact:{id}``), so a subscriber can refuse,
@@ -166,8 +161,6 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
         previous: dict | None = None,
         actor_id: UUID | None = None,
         owner_user_id: UUID | None = None,
-        payload_truncated: bool = False,
-        previous_truncated: bool = False,
         outside_actor: str | None = None,
     ) -> "DatastoreRecordEvent":
         return cls(
@@ -183,8 +176,6 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
             previous=previous,
             actor_id=None if outside_actor else actor_id,
             owner_user_id=owner_user_id,
-            payload_truncated=payload_truncated,
-            previous_truncated=previous_truncated,
             origin=RecordOrigin.OUTSIDE if outside_actor else RecordOrigin.MEMBER,
             outside_actor=outside_actor,
         )

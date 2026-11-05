@@ -19,7 +19,7 @@ bug nobody connects to the rename.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import hex_digest_signature_matches
@@ -45,47 +45,168 @@ SUPPORTED_EVENTS = frozenset(
     {
         "push",
         "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
         "issues",
         "issue_comment",
         "workflow_run",
         "check_suite",
+        "check_run",
         "release",
     }
 )
 
+# Events whose subject is one pull request, and so whose branch is its head.
+_PULL_REQUEST_EVENTS = frozenset(
+    {"pull_request", "pull_request_review", "pull_request_review_comment"}
+)
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    """Treat malformed nested webhook objects as absent, not as exceptions."""
+    return value if isinstance(value, dict) else {}
+
+
+def _required_text(value: object) -> str | None:
+    """Return a nonblank string identity component without coercing other types."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _required_id(value: object) -> str | None:
+    """Accept GitHub's integer IDs (or nonblank string forms), never bool/None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value) if value > 0 else None
+    return _required_text(value)
+
 
 def _push_key(payload: WebhookPayload) -> str | None:
-    # `after` is the commit the ref now points at: the same push redelivered
-    # names the same commit, and a force-push to a different one is a different
-    # event that should fire again.
-    return payload.get("after")
+    # A push is a ref transition, not just a commit. Two branches can point at
+    # the same `after` SHA, and the same ref can reach that SHA from different
+    # prior tips. Include all three required GitHub fields so distinct pushes
+    # remain distinct while a redelivery of one transition stays idempotent.
+    ref = _required_text(payload.get("ref"))
+    before = _required_text(payload.get("before"))
+    after = _required_text(payload.get("after"))
+    if not all((ref, before, after)):
+        return None
+    return f"{ref}:{before}:{after}"
 
 
 def _pull_request_key(payload: WebhookPayload) -> str | None:
-    pull_request = payload.get("pull_request") or {}
-    head_sha = (pull_request.get("head") or {}).get("sha")
-    return f"{pull_request.get('id')}:{payload.get('action')}:{head_sha}"
+    pull_request = _mapping(payload.get("pull_request"))
+    head = _mapping(pull_request.get("head"))
+    pull_request_id = _required_id(pull_request.get("id"))
+    action = _required_text(payload.get("action"))
+    head_sha = _required_text(head.get("sha"))
+    if not all((pull_request_id, action, head_sha)):
+        return None
+    return f"{pull_request_id}:{action}:{head_sha}"
+
+
+def _review_key(payload: WebhookPayload) -> str | None:
+    # A review is submitted once and dismissed once, but its body can be edited
+    # any number of times, and the body is the only thing an edit changes -- a
+    # review carries no `updated_at`. Without it the second edit would collapse
+    # onto the first and never fire.
+    review = _mapping(payload.get("review"))
+    review_id = _required_id(review.get("id"))
+    action = _required_text(payload.get("action"))
+    state = _required_text(review.get("state"))
+    body = review.get("body")
+    if not all((review_id, action, state)) or (
+        body is not None and not isinstance(body, str)
+    ):
+        return None
+    return f"{review_id}:{action}:{state}:{body}"
+
+
+def _review_comment_key(payload: WebhookPayload) -> str | None:
+    # `updated_at` moves on every edit, so each edit is its own event, while a
+    # redelivery -- the same payload, byte for byte -- names the same instant.
+    comment = _mapping(payload.get("comment"))
+    comment_id = _required_id(comment.get("id"))
+    action = _required_text(payload.get("action"))
+    updated_at = _required_text(comment.get("updated_at"))
+    if not all((comment_id, action, updated_at)):
+        return None
+    return f"{comment_id}:{action}:{updated_at}"
 
 
 def _issue_key(payload: WebhookPayload) -> str | None:
-    # `issue_comment` carries both; the comment is the thing that happened.
-    subject = payload.get("comment") or payload.get("issue") or {}
-    return f"{subject.get('id')}:{payload.get('action')}"
+    issue = _mapping(payload.get("issue"))
+    issue_id = _required_id(issue.get("id"))
+    action = _required_text(payload.get("action"))
+    if not issue_id or not action:
+        return None
+    return f"{issue_id}:{action}"
+
+
+def _issue_comment_key(payload: WebhookPayload) -> str | None:
+    comment = _mapping(payload.get("comment"))
+    comment_id = _required_id(comment.get("id"))
+    action = _required_text(payload.get("action"))
+    if not comment_id or not action:
+        return None
+    return f"{comment_id}:{action}"
 
 
 def _workflow_run_key(payload: WebhookPayload) -> str | None:
-    run = payload.get("workflow_run") or {}
-    return f"{run.get('id')}:{run.get('status')}"
+    # "Re-run jobs" keeps the run's id and walks it through requested,
+    # in_progress and completed again; `run_attempt` is what tells the second
+    # completion from a redelivery of the first.
+    run = _mapping(payload.get("workflow_run"))
+    run_id = _required_id(run.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(run.get("status"))
+    if not all((run_id, action, status)):
+        return None
+    return f"{run_id}:{run.get('run_attempt')}:{action}:{status}"
 
 
 def _check_suite_key(payload: WebhookPayload) -> str | None:
-    suite = payload.get("check_suite") or {}
-    return f"{suite.get('id')}:{suite.get('status')}"
+    suite = _mapping(payload.get("check_suite"))
+    suite_id = _required_id(suite.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(suite.get("status"))
+    updated_at = _required_text(suite.get("updated_at"))
+    if not all((suite_id, action, status, updated_at)):
+        return None
+    # A GitHub App can receive requested/rerequested check_suite actions. A
+    # rerequest resets status to queued on the same suite id; updated_at moves
+    # for each new request, while a redelivery carries the same timestamp.
+    return f"{suite_id}:{action}:{status}:{suite.get('conclusion')}:{updated_at}"
+
+
+def _check_run_key(payload: WebhookPayload) -> str | None:
+    # Unlike a suite, a run's status is not enough on its own: `rerequested`
+    # and `requested_action` arrive for a run that has already completed, with
+    # the same status and conclusion as the `completed` delivery before them,
+    # and two different buttons on one run differ only by their identifier.
+    # An App may also re-run a check in place, and it can finish with the
+    # conclusion it had before; `completed_at` is what tells that second
+    # completion from a redelivery of the first.
+    run = _mapping(payload.get("check_run"))
+    run_id = _required_id(run.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(run.get("status"))
+    if not all((run_id, action, status)):
+        return None
+    button = _mapping(payload.get("requested_action")).get("identifier")
+    return (
+        f"{run_id}:{action}:{status}"
+        f":{run.get('conclusion')}:{run.get('completed_at')}:{button}"
+    )
 
 
 def _release_key(payload: WebhookPayload) -> str | None:
-    release = payload.get("release") or {}
-    return f"{release.get('id')}:{payload.get('action')}"
+    release = _mapping(payload.get("release"))
+    release_id = _required_id(release.get("id"))
+    action = _required_text(payload.get("action"))
+    if not release_id or not action:
+        return None
+    return f"{release_id}:{action}"
 
 
 # Dict dispatch rather than a chain of `if event == ...`: one function per event
@@ -94,10 +215,13 @@ def _release_key(payload: WebhookPayload) -> str | None:
 _EVENT_KEYS: dict[str, Callable[[WebhookPayload], str | None]] = {
     "push": _push_key,
     "pull_request": _pull_request_key,
+    "pull_request_review": _review_key,
+    "pull_request_review_comment": _review_comment_key,
     "issues": _issue_key,
-    "issue_comment": _issue_key,
+    "issue_comment": _issue_comment_key,
     "workflow_run": _workflow_run_key,
     "check_suite": _check_suite_key,
+    "check_run": _check_run_key,
     "release": _release_key,
 }
 
@@ -122,10 +246,16 @@ def source_event_id(
     key = _EVENT_KEYS.get(event)
     if key is None:
         return None
+    normalized_installation = _required_id(installation_id)
+    normalized_repository = _required_id(repository_id)
+    if not normalized_installation or not normalized_repository:
+        return None
     event_key = key(payload)
     if not event_key:
         return None
-    material = f"github:{event}:{installation_id}:{repository_id}:{event_key}"
+    material = (
+        f"github:{event}:{normalized_installation}:{normalized_repository}:{event_key}"
+    )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -161,6 +291,16 @@ class GitHubWebhookSource:
 
     source = "github"
 
+    def __init__(
+        self,
+        bound_organization: Callable[[WebhookPayload], Awaitable[str | None]]
+        | None = None,
+    ) -> None:
+        """``bound_organization`` finds which Lemma organization a delivery's
+        installation is bound to; the binding table unless a caller says
+        otherwise."""
+        self._bound_organization = bound_organization or _bound_organization
+
     async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
         import json
 
@@ -182,7 +322,11 @@ class GitHubWebhookSource:
             raise WebhookNotVerified from exc
         if not isinstance(payload, dict):
             raise WebhookNotVerified
-        return VerifiedDelivery(delivery=delivery, payload=payload)
+        return VerifiedDelivery(
+            delivery=delivery,
+            payload=payload,
+            organization_id=await self._bound_organization(payload),
+        )
 
     async def observe(self, verified: VerifiedDelivery) -> None:
         """Retire what an uninstalled App leaves behind.
@@ -224,6 +368,20 @@ class GitHubWebhookSource:
             )
             return None
 
+        if verified.organization_id is None:
+            # Bound to no Lemma organization, so no schedule anywhere is its
+            # schedule (audit H4). Acknowledged rather than refused: a non-2xx
+            # answer has GitHub retry and then disable the hook for everyone.
+            # Named, so a count of what is being dropped -- and for which
+            # installation, whose accounts show "Install" in the app until a
+            # GitHub admin of it claims it -- is one log query.
+            logger.warning(
+                "schedule.webhook_sources.github.unbound_installation_dropped.denied",
+                github_event=event,
+                installation_id=str(installation_id),
+            )
+            return None
+
         repository = payload.get("repository") or {}
         repository_id = repository.get("id")
         event_id = source_event_id(event, str(installation_id), repository_id, payload)
@@ -241,19 +399,28 @@ class GitHubWebhookSource:
             match=match,
             refine=_narrower(repository_id, payload.get("action")),
             context=_repo_context(payload, event),
+            organization_id=verified.organization_id,
         )
 
 
 def _ref_for(payload: WebhookPayload, event: str) -> str | None:
     """The branch the agent should be standing on.
 
-    A pull request event is about its *head*: an agent asked to review one and
-    dropped on `main` is looking at the wrong code. Everything else is about
-    wherever the repository's default branch is, which is what a clone gives you
-    without asking.
+    A pull request event -- including a review or a comment on its diff -- is
+    about its *head*: an agent asked to review one and dropped on `main` is
+    looking at the wrong code. Everything else is about wherever the
+    repository's default branch is, which is what a clone gives you without
+    asking.
+
+    A pull request from a fork binds no branch. Its head lives in the fork,
+    and the checkout clones the base repository: `--branch` with the fork's
+    branch either fails the clone outright or, when the base happens to have a
+    branch of the same name -- a fork's `main` -- silently checks out the
+    wrong code. The default branch is at least the right repository, and
+    `gh pr checkout` gets the head from there.
     """
-    if event == "pull_request":
-        return ((payload.get("pull_request") or {}).get("head") or {}).get("ref")
+    if event in _PULL_REQUEST_EVENTS:
+        return _head_ref(payload.get("pull_request"), payload.get("repository"))
     if event == "push":
         # `refs/heads/topic` -> `topic`. A tag push gives `refs/tags/...`, which
         # this deliberately does not turn into a branch name.
@@ -261,7 +428,45 @@ def _ref_for(payload: WebhookPayload, event: str) -> str | None:
         return (
             ref.removeprefix("refs/heads/") if ref.startswith("refs/heads/") else None
         )
+    if event == "check_run":
+        return _check_run_ref(payload)
     return None
+
+
+def _check_run_ref(payload: WebhookPayload) -> str | None:
+    """The branch holding the commit the run checked.
+
+    An agent asked why a check failed needs the code that failed it. The
+    suite's `head_branch` names that branch, and where it is null a pull
+    request the run is attached to is the only other name for it. GitHub
+    documents both as missing for a push to a fork, which binds no branch and
+    leaves the clone on the default one.
+    """
+    run = payload.get("check_run") or {}
+    branch = (run.get("check_suite") or {}).get("head_branch")
+    if branch:
+        return str(branch)
+    pull_requests = run.get("pull_requests") or []
+    if not pull_requests:
+        return None
+    return _head_ref(pull_requests[0], payload.get("repository"))
+
+
+def _head_ref(pull_request: object, repository: object) -> str | None:
+    """A pull request's head branch, if it lives in the repository cloned.
+
+    A head with no repository is a fork that has since been deleted, which is
+    no more cloneable than a live one.
+    """
+    if not isinstance(pull_request, dict) or not isinstance(repository, dict):
+        return None
+    head = pull_request.get("head") or {}
+    head_repository = head.get("repo") or {}
+    if head_repository.get("id") is None or head_repository.get("id") != repository.get(
+        "id"
+    ):
+        return None
+    return head.get("ref")
 
 
 def _repo_context(payload: WebhookPayload, event: str) -> WebhookPayload:
@@ -312,6 +517,27 @@ def _narrower(
     return accepts
 
 
+async def _bound_organization(payload: WebhookPayload) -> str | None:
+    """The Lemma organization this delivery's installation is bound to.
+
+    Looked up rather than inferred from whichever schedules carry the id: the
+    binding is the one place an installation's owner is written down, and a
+    schedule's routing key is only a copy of it.
+    """
+    installation_id = (payload.get("installation") or {}).get("id")
+    if installation_id is None:
+        return None
+    from app.core.api.dependencies import get_uow_factory
+    from app.core.authorization.scope import uow_scope
+    from app.modules.connectors.services.auth.github_bindings import (
+        bound_organization,
+    )
+
+    async with uow_scope(get_uow_factory()) as uow:
+        organization_id = await bound_organization(uow.session, str(installation_id))
+    return str(organization_id) if organization_id is not None else None
+
+
 async def _retire_installation(installation_id: str, *, action: str) -> None:
     """Stand down what an uninstalled App leaves behind.
 
@@ -323,6 +549,9 @@ async def _retire_installation(installation_id: str, *, action: str) -> None:
     from app.core.authorization.scope import uow_scope
     from app.modules.connectors.contracts.retirement import (
         retire_accounts_for_tenant,
+    )
+    from app.modules.connectors.services.auth.github_bindings import (
+        release_installation,
     )
     from app.modules.schedule.contracts.retirement import (
         deactivate_matching_schedules,
@@ -337,6 +566,8 @@ async def _retire_installation(installation_id: str, *, action: str) -> None:
             criteria={"source": "github", "installation_id": installation_id},
             reason=f"github_installation_{action}",
         )
+        if action == "deleted":
+            await release_installation(uow.session, installation_id)
         await uow.commit()
 
     logger.warning(

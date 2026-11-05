@@ -94,3 +94,25 @@ async def test_a_running_process_with_no_output_still_waits() -> None:
 
     assert asyncio.get_running_loop().time() - started >= 0.3
     assert buffer.reads > 1, "it must keep looking while the process is alive"
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_process_is_polled_less_often_the_longer_it_stays_quiet() -> None:
+    """A fixed 100 ms poll cost one Redis round trip per tenth of a second for
+    as long as a build was quiet; the interval backs off instead."""
+    buffer = _Buffer(ProcessState.RUNNING)
+    ops = _Ops(buffer)
+
+    started = asyncio.get_running_loop().time()
+    await ops.read_process_output(
+        object(),  # type: ignore[arg-type]
+        process_id="op-1",
+        after_sequence=5,
+        wait_seconds=2.0,
+        deadline_at=None,  # type: ignore[arg-type]
+    )
+
+    assert asyncio.get_running_loop().time() - started >= 1.9
+    # 0.1 + 0.2 + 0.4 + 0.8 + the remainder, plus the first read: six. A fixed
+    # 100 ms interval reads twenty times.
+    assert buffer.reads <= 8

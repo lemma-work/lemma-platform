@@ -102,7 +102,7 @@ from colliding on the same metric series.
 
 Lemma uses two Postgres databases: the application database and a separate
 datastore database holding pod data, which is queried under row-level security
-by a lower-privilege role. Redis carries the event streams and caches.
+by a lower-privilege role. Redis carries caches, realtime pub/sub and short-lived locks; background work lives in PostgreSQL (`work_items`).
 
 ```dotenv
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
@@ -113,7 +113,6 @@ REDIS_URL=redis://localhost:6379
 # there is no overflow — so a process opens at most DB_POOL_SIZE connections per
 # engine and cluster capacity stays predictable when replicas autoscale.
 DB_POOL_SIZE=10
-WORKER_CONCURRENCY=50
 ```
 
 ### Sizing the pool
@@ -124,13 +123,16 @@ gives it back before any LLM call, HTTP request, sandbox operation or thread
 offload — `make lint-session-scope` fails the build if that stops being true.
 So the steady-state demand is roughly `queries_per_second × seconds_per_query`.
 An agent run spends 95%+ of its wall clock outside the database, which is why a
-worker at `WORKER_CONCURRENCY=50` still needs single-digit connections in
+worker running dozens of turns still needs single-digit connections in
 steady state. The pool is there to absorb the burst at task start and finish.
+(The work runtime opens its own small pool, sized from its slots
+(`WORK_DB_SLOTS_JSON`, `WORK_DB_CONTROL_SLOTS`), so a busy handler never waits on
+the request pool.)
 
 Raise it in response to measurement, not anticipation: the backend reports a
 `database_pool_capacity` incident when checkout saturation is sustained, and
-`pg_stat_activity` shows what the server actually sees. `WORKER_CONCURRENCY` is
-a RAM and CPU budget for the pod, unrelated to the pool.
+`pg_stat_activity` shows what the server actually sees. The work classes' slots
+(`WORK_SLOTS_JSON`) are a RAM and CPU budget for the pod, unrelated to the pool.
 
 ### Enforcing the cluster-wide ceiling
 
@@ -212,10 +214,11 @@ FUNCTION_IMAGE=ghcr.io/lemma-work/lemma-function@sha256:...
 # bytes. Required for any provider that runs a workspace runtime.
 WORKSPACE_RUNTIME_CREDENTIAL_KEY=...
 
-# Release an idle workspace after this long. The sweep that enforces it runs on
-# WORKSPACE_SWEEP_CRON. Releasing keeps the files; it stops the compute.
+# Release an idle workspace after this long. The sweep that enforces it runs
+# every WORKSPACE_SWEEP_INTERVAL_SECONDS (a periodic work item). Releasing keeps
+# the files; it stops the compute.
 WORKSPACE_IDLE_RELEASE_SECONDS=900
-WORKSPACE_SWEEP_CRON=*/5 * * * *
+WORKSPACE_SWEEP_INTERVAL_SECONDS=300
 ```
 
 ### Making a new sandbox image take effect
@@ -285,16 +288,21 @@ E2B_METADATA_NAMESPACE=
 # Only for a deployment whose plans sell workspace sizes. JSON, keyed
 # `{cpu}x{memory_mb}`, one template per size.
 E2B_WORKSPACE_SIZE_TEMPLATES=
+# The size E2B_WORKSPACE_TEMPLATE was built at; the builder's default.
+E2B_WORKSPACE_TEMPLATE_SIZE=1x2048
 ```
 
-These six are the whole backend-side E2B surface. In particular:
+These seven are the whole backend-side E2B surface. In particular:
 
 - **A workspace size is a template.** E2B fixes CPU and memory when a template
   is built, so a deployment whose plans size workspaces builds one workspace
-  template per size — `build_templates.py --name-suffix -4x8192` with
-  `E2B_WORKSPACE_CPU_COUNT=4` and `E2B_WORKSPACE_MEMORY_MB=8192` — and maps
-  the sizes here, e.g. `{"4x8192": "lemma-workspace-4x8192"}`. A size with no
-  entry is served from `E2B_WORKSPACE_TEMPLATE`, and logged. Without a plan
+  template per size — `build_templates.py --target workspace --size 4x8192`,
+  which names it `lemma-workspace-4x8192` — and maps the sizes here, e.g.
+  `{"4x8192": "lemma-workspace-4x8192"}`. The size the default template was
+  built at needs no entry: `E2B_WORKSPACE_TEMPLATE_SIZE` says what it is
+  (`1x2048`, what the builder makes with no size given), and a plan selling it
+  is served from `E2B_WORKSPACE_TEMPLATE`. Any other size with no entry is
+  served from `E2B_WORKSPACE_TEMPLATE` too, and logged. Without a plan
   provider nothing asks for a size and this is never read. A workspace that
   already exists keeps the template it was created on: here the sandbox is its
   disk, so it cannot be rebuilt at a new size without carrying its files across.
@@ -431,7 +439,7 @@ APP_RELEASE_RETENTION_ENABLED=true
 APP_RELEASE_KEEP_LAST=10      # floor: never prune the newest N, whatever their age
 APP_RELEASE_KEEP_DAYS=30      # keep anything younger than this, up to the ceiling
 APP_RELEASE_MAX_KEEP=20       # ceiling: must be >= KEEP_LAST or startup refuses
-APP_RELEASE_RETENTION_CRON="20 4 * * *"
+APP_RELEASE_RETENTION_INTERVAL_SECONDS=86400  # a periodic work item; no wall-clock alignment
 # Apps per round trip. The sweep pages until the candidate set is drained, so
 # this bounds one query rather than deciding which apps ever get swept.
 APP_RELEASE_RETENTION_BATCH=200
@@ -443,7 +451,7 @@ FUNCTION_REVISION_RETENTION_ENABLED=true
 FUNCTION_REVISION_KEEP_LAST=10
 FUNCTION_REVISION_KEEP_DAYS=30
 FUNCTION_REVISION_MAX_KEEP=20
-FUNCTION_REVISION_RETENTION_CRON="40 4 * * *"
+FUNCTION_REVISION_RETENTION_INTERVAL_SECONDS=86400  # a periodic work item; no wall-clock alignment
 FUNCTION_REVISION_RETENTION_BATCH=200
 FUNCTION_REVISION_RETENTION_BUDGET_SECONDS=60
 ```
@@ -671,15 +679,15 @@ fixed-window:
 
 | Limit | Scope | Default |
 | --- | --- | --- |
-| Notifications | per pod, per recipient, per hour | 20 |
+| Pushes to a member outside the app | per pod, per recipient, per hour | 20 |
 | Outbound emails | per pod, per day | 200 |
 
 The second is the one that matters for a shared domain: an agent messaging five
 hundred different people once each never trips the first. Both fail *open* if
 Redis is unreachable — "nobody can be told anything while Redis is down" is the
-wrong way for a notification system to fail. Over the email budget the
-notification is still created and still in the recipient's Lemma inbox; only the
-mail is declined.
+wrong way for a ceiling on a runaway loop to fail. Either way the line is
+already in the recipient's channel in Lemma; past a limit only the push or the
+mail is declined, and its delivery says why.
 
 ## Storage
 
@@ -728,6 +736,11 @@ LEMMA_OPENAI_DEFAULT_MODEL=
 # Comma-separated. The vision list marks which of them accept images.
 LEMMA_OPENAI_MODEL_NAMES=
 LEMMA_OPENAI_VISION_MODEL_NAMES=
+# Default reasoning effort for reasoning models: none | minimal | low | medium | high.
+# Empty keeps the provider's default. Sent only to the models in the reasoning
+# list -- every configured model when that list is empty and an effort is set.
+LEMMA_OPENAI_REASONING_EFFORT=
+LEMMA_OPENAI_REASONING_MODEL_NAMES=
 
 LEMMA_ANTHROPIC_API_KEY=
 LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
@@ -737,11 +750,33 @@ LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
 EMBEDDING_PROVIDER=auto       # auto | local | openai_compat
 EMBEDDING_DIMENSION=768
 RERANKER_MODE=off             # off | local | openai_compat
+# The provider's exact model id; on Fireworks that is the full
+# `accounts/fireworks/models/...` form. A rerank slower than the timeout, or
+# one that fails, leaves search in first-stage order and logs
+# `datastore.reranker.openai_compat_failed.degraded`.
+OPENAI_COMPAT_RERANKER_MODEL=qwen3-reranker-8b
+RERANKER_TIMEOUT_SECONDS=5
 
 WEB_SEARCH_PROVIDER=auto      # auto | duckduckgo | searxng | brave
 BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
 ```
+
+### Generation settings
+
+Reasoning effort, output cap, temperature, `top_p` and an Anthropic thinking
+budget are set in four places, each overriding the one before: the model's
+catalog entry (`default_model_settings`; for the system profile, the reasoning
+variables above), the runtime profile's `model_settings`, the agent
+(`agent_runtime.settings`), and a workflow agent step (`generation`). A field a
+layer leaves unset is inherited. The output cap is still clamped to the room
+the context window leaves.
+
+Reasoning effort is sent to an OpenAI-compatible model, and a thinking budget to
+an Anthropic-compatible one, only when the model's catalog entry declares the
+`REASONING` capability -- `reasoning_model_names` when a provider is added in
+Settings -> Models. A model that does not reason rejects the field. Agent Host
+runs drive their own model loop and ignore these settings.
 
 ### Decisions
 
@@ -757,7 +792,8 @@ DECISION_PROVIDER=model       # model | typesafe
 DECISION_MODEL=
 
 # Typesafe System One, a classifier built for this. Opt-in: nothing is sent to
-# it unless DECISION_PROVIDER=typesafe.
+# it unless DECISION_PROVIDER=typesafe. Chosen without its key, the `model`
+# provider answers instead (with a warning), so decisions keep working.
 TYPESAFE_API_KEY=
 TYPESAFE_MODEL=jev-latest
 # Set so its calls count toward the spend limits below.
@@ -765,11 +801,72 @@ TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD=
 
 DECISION_INTERACTIVE_TIMEOUT_SECONDS=8
 DECISION_BACKGROUND_TIMEOUT_SECONDS=25
-DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization; 0 for none
+DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 ```
 
 Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
 wherever your deployment names the processors its users' data reaches.
+
+Live voice calls ask one decision of this API per finished turn, with
+`priority: interactive`: whether it is conversation for the voice alone or
+work for the agents. Anything short of a confident "conversation" is treated
+as work, so a slow or unavailable provider costs a call an extra agent step,
+never a dropped request.
+
+### Calls
+
+A voice call talks through one of three engines; a server offers the ones it
+has keys for. The agents behind every call are the pod's own, on the models
+configured above.
+
+```dotenv
+CALL_VOICE_ENGINE=gemini_live      # gemini_live | openai_realtime | cascade
+
+# gemini_live: one native-audio session, with a Gemini API key or through
+# Vertex AI as this server's own service account (no key; see below).
+GEMINI_API_KEY=
+GEMINI_VERTEX_PROJECT=                   # set it to use Vertex AI instead of the key
+GEMINI_VERTEX_LOCATION=us-central1       # or global
+GEMINI_LIVE_MODEL=gemini-3.8-live
+GEMINI_LIVE_VOICE=
+
+# openai_realtime: OpenAI's realtime model; the mini one, because the voice
+# only talks and the agents do the thinking.
+OPENAI_API_KEY=
+OPENAI_REALTIME_MODEL=gpt-realtime-2.1-mini
+OPENAI_REALTIME_VOICE=marin
+
+# cascade: Deepgram listens and speaks, a Lemma model answers.
+DEEPGRAM_API_KEY=
+CASCADE_STT_MODEL=flux-general-en        # flux-general-multi for other languages
+CASCADE_EAGER_EOT_THRESHOLD=0.5          # empty waits for the confirmed end of turn
+CASCADE_TTS_VOICE=aura-2-thalia-en
+CASCADE_TALKER_MODEL=                    # public name; empty: the default model
+CASCADE_TALKER_REASONING_EFFORT=none
+
+# The model a call's coordinator and its sub-agents run on, by public name.
+# Empty: the agent's own. Their turns are many and short, so a fast one fits.
+CALL_COORDINATOR_MODEL=
+
+CALL_MAX_MINUTES=60
+CALLS_PER_USER=2
+CALL_QUIET_WINDOW_MS=700
+```
+
+With `GEMINI_VERTEX_PROJECT` set, `gemini_live` connects to Vertex AI's Live
+API with the token of the service account the server runs as, read from the
+metadata server GKE (Workload Identity) and Compute Engine provide; nothing is
+stored, and it takes the place of `GEMINI_API_KEY`. Grant that account
+`roles/aiplatform.user` in the project, and set `GEMINI_LIVE_MODEL` to a Live
+model Vertex AI serves in that location, which is not always named as the
+Gemini API names it. Outside Google Cloud there is no metadata server, so use
+the key.
+
+The cascade talker answers every turn, so pick a model that can answer without
+reasoning first: a thinking-only model spends the caller's silence on tokens
+nobody hears. Every engine sends the caller's audio to its provider, and the
+cascade sends the transcript to the talker's; list them wherever your
+deployment names the processors its users' data reaches.
 
 ## Spend limits
 
@@ -807,6 +904,10 @@ the default does not apply to them.
 ```dotenv
 # USD a month. Unset (empty) means no default ceiling.
 USAGE_CONTACTS_MONTHLY_DEFAULT_USD=50
+# How many contacts the organization's bots may answer at all -- people an
+# agent has replied to, not everybody in a group. Unset (empty) means no
+# default ceiling.
+USAGE_CONTACTS_MAX_DEFAULT=500
 ```
 
 ### When the cost of the work cannot be established
@@ -926,32 +1027,39 @@ Three things govern it:
 ### Ingestion throughput and fairness
 
 ```dotenv
-WORKER_LANES=                  # empty = all lanes; or interactive | bulk
-WORKER_BULK_CONCURRENCY=2      # concurrent document extractions
-DATASTORE_PER_POD_MAX_INFLIGHT=4
-DATASTORE_DISPATCH_GLOBAL_BATCH=50
+WORK_CLASSES=                          # empty = every class; e.g. ingestion
+WORK_SLOTS_JSON={"ingestion": 4}       # per-class slots per process
+WORK_MAX_RUNNING_JSON={"ingestion": 4} # per-class cap per pod
 ```
 
-Document processing runs on the **bulk** worker lane, a separate Redis queue from
-the **interactive** lane that serves agent runs, surface messages and workflow
-resumes. A large upload therefore cannot occupy the slots interactive work needs.
-`WORKER_BULK_CONCURRENCY` is the real cap on concurrent extractions and the main
-lever on worker peak RAM.
+Document processing is a `file.process` work item in the **ingestion** class,
+which has its own slots, separate from the **interactive** class that serves
+agent turns and surface messages. A large upload therefore cannot occupy the
+slots interactive work needs. Ingestion's slots (4 per process by default) are
+the real cap on concurrent extractions and the main lever on worker peak RAM.
 
-Uploads beyond `DATASTORE_PER_POD_MAX_INFLIGHT` are intentionally not enqueued;
-their rows stay `PENDING` in Postgres, which is the durable backlog, and a
-per-minute dispatcher drains it round-robin across pods. So one tenant uploading
-a thousand documents cannot monopolise ingestion, Redis depth stays bounded, and
-every file is still processed eventually.
+Every class claims fairly across pods, under a per-pod cap (4 running
+extractions per pod by default, as the old per-pod in-flight gate allowed). So one tenant uploading a thousand documents
+waits behind itself, not in front of everyone else, and every file is still
+processed eventually: the backlog is the `work_items` table.
+`WORK_LIMIT_OVERRIDES_JSON` raises the cap for one organization or pod.
 
-Leaving `WORKER_LANES` empty runs both lanes in one process. The local stack,
-desktop and `make dev` embed the worker inside the API process and run *every*
-lane unconditionally, ignoring `WORKER_LANES` — that process is the whole
-deployment, so there is no second one a lane could be delegated to, and honouring
-the variable there would let it silently leave a queue unconsumed. Split
-deployments (a separate `python -m app.worker`) set `WORKER_LANES=interactive` on
-one worker and `WORKER_LANES=bulk` on another; the interactive lane owns
-process-wide startup, so at least one process must run it.
+Leaving `WORK_CLASSES` empty runs every class in one process. The local stack,
+desktop and `make dev` embed the worker inside the API process and always run
+every class — that process is the whole deployment. Split deployments run
+several `python -m app.worker` processes, for example `WORK_CLASSES=ingestion`
+on a memory-heavy one and the rest on another; every class must run somewhere.
+
+### Worker shutdown
+
+`python -m app.worker` drains on SIGTERM: claiming stops at once, running jobs
+are handed back uncharged at their next safe point, and each class waits at most
+its own grace before releasing what is left. `interactive` has 90 seconds built
+in; every other class gets `WORK_SHUTDOWN_GRACE_SECONDS` (default 20);
+`WORK_SHUTDOWN_GRACE_JSON` overrides any class, for example
+`{"interactive": 120}`. Then the process exits 0. Set the platform's termination
+grace above the longest class grace plus teardown (120 seconds for the
+defaults). See [reliability operations](../lemma-backend/docs/operators/reliability.md).
 
 ## Observability
 
@@ -963,10 +1071,9 @@ OBSERVABILITY_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
 OTEL_SERVICE_NAME=lemma-backend
 OTEL_TRACES_SAMPLER_ARG=0.05
-# How often the worker samples queue depth and pending event rows. Matching the
-# metric export interval is the useful floor; sampling faster only costs
-# queries. Zero disables the backlog gauges.
-BACKLOG_GAUGE_INTERVAL_SECONDS=60
+# How often the worker samples work-queue depth and the oldest ready item per
+# class (lemma.work.* gauges).
+WORK_GAUGE_INTERVAL_SECONDS=15
 ```
 
 Set `LEMMA_RELEASE_SHA` too — see [Release identity](#release-identity). Without
@@ -998,6 +1105,8 @@ TELEGRAM_WEBHOOK_SECRET=
 ENABLE_TELEGRAM_POLLING_MODE=false
 
 WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_REENGAGE_TEMPLATE=   # approved template sent once the 24h window closes
+WHATSAPP_REENGAGE_TEMPLATE_LANGUAGE=en_US
 MICROSOFT_BOT_APP_ID=
 ```
 
@@ -1034,12 +1143,13 @@ authoritative answer for anything this document does not name.
 | Agents | `lemma-backend/app/modules/agent/config.py` |
 | Chat surfaces | `lemma-backend/app/modules/agent_surfaces/config.py` |
 | Connectors | `lemma-backend/app/modules/connectors/config.py` |
+| Contacts: phone region, daily lines to a contact | `lemma-backend/app/modules/contacts/config.py` |
 | Datastore and document processing | `lemma-backend/app/modules/datastore/config.py` |
 | Pod bundles | `lemma-backend/app/modules/pod_bundle/config.py` |
 | Apps, icons, schedules | `app/modules/{apps,icon,schedule}/config.py` |
 | Outside MCP clients | `lemma-backend/app/modules/mcp_access/config.py` |
 | Decisions | `lemma-backend/app/modules/decisions/config.py` |
-| Event transport | `lemma-backend/app/core/infrastructure/events/config.py` |
+| Work runtime | `lemma-backend/app/core/infrastructure/work/config.py` |
 
 Settings whose description begins with `TEST HOOK ONLY` exist for the end-to-end
 suite and should never be set in a real deployment.

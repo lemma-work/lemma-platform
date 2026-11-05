@@ -15,13 +15,13 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import AgentRun, Conversation
-from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationStatus,
 )
 from app.modules.agent.services.conversation_turns import TurnCoordinator
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
 
 def _runtime() -> AgentRuntimeConfig:
@@ -63,11 +63,11 @@ def _coordinator(
     created = _run(conversation.id)
     waiting = {finished.id: (queued, notes), **(queues or {})}
 
-    async def count(run_id, *, notes=None):
+    async def count(run_id, *, notes=None, after_sequence=None):
         total, of_notes = waiting.get(run_id, (0, 0))
         return total if notes is None else of_notes if notes else total - of_notes
 
-    async def earliest(run_id):
+    async def earliest(run_id, *, after_sequence=None):
         total, of_notes = waiting.get(run_id, (0, 0))
         return None if not total else bool(of_notes)
 
@@ -80,7 +80,9 @@ def _coordinator(
         create_agent_run=AsyncMock(return_value=created),
         claim_queued_user_messages=AsyncMock(return_value=[]),
     )
-    uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
+    uow = SimpleNamespace(
+        collect_events=MagicMock(), commit=AsyncMock(), session=RecordingWorkSession()
+    )
     coordinator = TurnCoordinator(
         uow=uow,
         conversation_repository=repository,
@@ -88,7 +90,7 @@ def _coordinator(
         approvals=SimpleNamespace(
             supersede_stale_pending_interactions=AsyncMock(return_value=[])
         ),
-        pauses=SimpleNamespace(),
+        pauses=SimpleNamespace(resume_if_already_answered=AsyncMock(return_value=None)),
         usage_service=None,
     )
     return coordinator, conversation, repository, uow, finished, created
@@ -115,10 +117,10 @@ async def test_a_message_queued_behind_a_busy_run_gets_its_own_turn() -> None:
         "source": "queued_messages",
         "queued_behind_agent_run_id": str(finished.id),
     }
-    [event] = uow.collect_events.call_args.args[0]
-    assert isinstance(event, AgentRunStartedEvent)
-    assert event.conversation_id == conversation.id
-    assert event.agent_run_id == created.id
+    # The turn is written in the same transaction as the run it executes.
+    turn = uow.session.item("agent.turn")
+    assert turn["dedup_key"] == f"agent-run:{created.id}"
+    assert turn["concurrency_key"] == f"conversation:{conversation.id}"
     uow.commit.assert_awaited_once()
 
 
@@ -145,7 +147,11 @@ async def test_the_followup_claims_the_queue_it_answers() -> None:
     assert frames == claimed
     call = repository.claim_queued_user_messages.await_args
     assert call.args == (finished.id,)
-    assert call.kwargs == {"into_run_id": created.id, "notes": False}
+    assert call.kwargs == {
+        "into_run_id": created.id,
+        "notes": False,
+        "after_sequence": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -222,25 +228,24 @@ async def test_someone_typing_first_takes_the_turn_instead() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_stopped_run_does_not_start_the_next_one() -> None:
-    """Stop means stop, whatever is sitting behind it."""
-    from app.modules.agent.events.queued_followup import (
-        start_followup_run_for_queued_messages,
+async def test_a_stop_that_marked_no_boundary_starts_nothing() -> None:
+    """Stop means stop for everything said before it. A stopped run that did
+    not record where Stop fell -- one stopped before the mark existed -- has no
+    "after", so nothing behind it starts a turn. What was said after a marked
+    Stop is answered; that half needs real sequences and is in the e2e suite
+    (`test_conversation_lifecycle_races_e2e`)."""
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=2
     )
-    from app.modules.agent.domain.events import AgentRunCompletedEvent
+    finished.status = AgentRunStatus.STOPPED
 
-    factory = MagicMock(side_effect=AssertionError("must not open a transaction"))
-    result = await start_followup_run_for_queued_messages(
-        AgentRunCompletedEvent(
-            conversation_id=uuid4(),
-            agent_run_id=uuid4(),
-            status=AgentRunStatus.STOPPED,
-        ),
-        uow_factory=factory,
+    assert (
+        await coordinator.start_queued_followup(
+            conversation=conversation, completed_run_id=finished.id
+        )
+        is None
     )
-
-    assert result is None
-    factory.assert_not_called()
+    repository.create_agent_run.assert_not_awaited()
 
 
 @pytest.mark.asyncio

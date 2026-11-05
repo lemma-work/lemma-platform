@@ -27,6 +27,11 @@ Use an existing table or design one with `lemma-builder` (`references/tables.md`
 - Types a person can fill: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, ENUM.
   Use ENUM with `options` for a choice. Add a status column with a default
   (`new`) for triage; it stays closed and is filled by the table's default.
+- For an attachment (a CV, a photo, an invoice) add a **FILE_PATH** column. The
+  form asks for it with a file picker; the file is stored in the pod under
+  `/forms/{table}/`, as the member who opened the table, and the row holds its
+  path. Up to 10 MB a file, 25 MB a response. Read it like any pod file
+  (`lemma-user`). The chat beside the form can't attach one for the person.
 - The table must be shared (`enable_rls: false`). A per-member table can't be opened.
 - Make it **contact-owned** when you will reply to people or show them their own
   rows later: a confirmed person's row then carries their `contact_id`.
@@ -62,8 +67,8 @@ Each widget has `page_url` and `embed`.
   `data-lemma-thanks`, `data-lemma-color`.
 - **Their own design:** build an HTML app (`lemma-builder` → `references/apps.md`)
   from `assets/form-app.html`. Mark the form `<form method="post" data-lemma-table="signups">`
-  with inputs named after the open columns, or call `Lemma.addRow(table, values)`
-  yourself. If the widget lists `allowed_origins`, add the app's origin to it
+  with inputs named after the open columns (`<input type="file" name="cv">` for a
+  FILE_PATH column), or call `Lemma.addRow(table, values)` yourself. If the widget lists `allowed_origins`, add the app's origin to it
   (`https://host[:port]`, no path; `http://` only for `localhost`).
   The page holds only the widget's public key. The script keeps the visitor's
   session for itself and sends a short-lived token with every call, so never
@@ -73,8 +78,11 @@ The script gives the page:
 
 | Call | Does |
 |---|---|
-| `Lemma.addRow(table, values)` | Adds one row. Rejects with `error.code`: `bad_answer` (message names the field), `needs_contact`, `table_closed`, `rate_limited` |
-| `Lemma.describeTable(table)` | The open columns (`name`, `type`, `required`, `options`, `description`) and `contacts_only` |
+| `Lemma.addRow(table, values)` | Adds one row. A FILE_PATH column's value is a `File` (`input.files[0]`). Rejects with `error.code`: `bad_answer` (message names the field), `too_large` (a file over the cap), `needs_contact`, `not_a_contact` (the widget answers only known customers), `table_closed`, `rate_limited` |
+| `Lemma.describeTable(table)` | The open columns (`name`, `type`, `required`, `options`, `description`, `input`: the control to ask with, `file` for an attachment) and `contacts_only` |
+| `Lemma.readRows(table, {orderBy, desc})` | Every row of a table the pod marked **Public** (at most 500): `{columns, rows}`. Rejects `table_closed` (not Public, per-member, or missing), `bad_order`, `rate_limited` |
+| `Lemma.sendCode(email)` / `Lemma.verifyCode(email, code)` | Confirm the visitor's email on your own form, before a contacts-only table takes their row |
+| `Lemma.isContact()` | Whether this visitor has confirmed an email |
 | `Lemma.onFill(cb)` | The chat filled fields: `cb({table, values})`. `data-lemma-table` forms are filled for you |
 | `Lemma.openChat()` | Opens the chat, e.g. for "Questions?" |
 

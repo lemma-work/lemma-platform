@@ -120,6 +120,8 @@ async def test_an_mcp_tool_error_reaches_the_caller_with_what_the_tool_said(
     assert error.details["upstream_message"] == 'project key "FOO" does not exist'
     assert error.details["operation_name"] == "create_issue"
     assert error.details["reason"] == "tool_error"
+    # The agent's connector tool shows the model the message, not the details.
+    assert 'project key "FOO" does not exist' in str(error)
 
 
 @pytest.mark.asyncio

@@ -154,3 +154,36 @@
         --rls-ink: #6ecf9c;
     }
 }
+
+/* The outcome frame (`/o`). Violet marks only what Lemma itself did, and
+   amber only what is behind; everything else stays on the neutral ground, so
+   colour is never decoration there. */
+:root,
+:root[data-accent] {
+    --lemma: #5a3fd4;
+    --lemma-ink: #4b33c4;
+    --lemma-wash: #efebfc;
+    --behind-ink: #7a4f00;
+    --behind-wash: #fbf0d9;
+    --person-mark: #0e0e10;
+}
+:root[data-theme="dark"],
+:root[data-theme="dark"][data-accent] {
+    --lemma: #8b7af5;
+    --lemma-ink: #b9adff;
+    --lemma-wash: rgb(139 122 245 / 0.18);
+    --behind-ink: #e4bd78;
+    --behind-wash: rgb(228 189 120 / 0.16);
+    --person-mark: #ececec;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]),
+    :root:not([data-theme="light"])[data-accent] {
+        --lemma: #8b7af5;
+        --lemma-ink: #b9adff;
+        --lemma-wash: rgb(139 122 245 / 0.18);
+        --behind-ink: #e4bd78;
+        --behind-wash: rgb(228 189 120 / 0.16);
+        --person-mark: #ececec;
+    }
+}

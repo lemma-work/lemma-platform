@@ -11,6 +11,7 @@ from app.modules.datastore.domain.errors import (
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
 from app.modules.datastore.services.files.path_resolver import PathResolver
+from app.modules.datastore.services.files.paths import numbered_name
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
 
@@ -105,6 +106,41 @@ class FileLookup:
                 ctx=ctx,
             )
         return directory
+
+    async def available_path(
+        self,
+        pod_id: UUID,
+        *,
+        directory_path: str,
+        name: str,
+    ) -> tuple[str, str]:
+        """The first name and path free in this directory, numbering a clash.
+
+        A name is not a place a file can be refused: two screenshots pasted from
+        a clipboard are both ``image.png``, and a file picked from disk is often
+        one the folder already has. The upload takes the next number instead
+        (``report (1).pdf``), which is what every file manager does and what
+        keeps the second copy reachable by a name the person recognises.
+
+        Returns the name and its path, so the caller stores exactly what the
+        person will read back. Both the name and the path stay normalized the
+        same way every other write normalizes them.
+
+        Two uploads of one name into one folder would otherwise both find the
+        same number free, and the unique path index would refuse the second.
+        The directory's lock holds until the caller's transaction ends, which
+        is after it inserts the row for the path returned here.
+        """
+        await self.file_repository.acquire_path_lock(pod_id, directory_path)
+        candidate = name
+        index = 0
+        while True:
+            path = self.paths._join_child_path(directory_path, candidate)
+            existing = await self.file_repository.get_by_path(pod_id=pod_id, path=path)
+            if existing is None:
+                return candidate, path
+            index += 1
+            candidate = numbered_name(name, index)
 
     async def ensure_path_available(
         self,

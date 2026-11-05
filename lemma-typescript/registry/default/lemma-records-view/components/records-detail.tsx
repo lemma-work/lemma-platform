@@ -1146,7 +1146,7 @@ function resolveForeignKeyReference(value: unknown): { id: string | null; label?
     return { id: null }
   }
 
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+  if (typeof value === "object" && !Array.isArray(value)) {
     const objectValue = value as Record<string, unknown>
     const label = objectValue.name ?? objectValue.title ?? objectValue.label
     return {

@@ -27,6 +27,10 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import DisplayResourceRequest
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+from app.modules.agent_surfaces.services.private_message import (
+    PrivateMessage,
+    PrivateSend,
+)
 
 logger = get_logger(__name__)
 
@@ -86,16 +90,17 @@ async def deliver_surface_message_to_surface(
     *,
     conversation_id: UUID,
     message: str,
-) -> bool:
-    """Deliver a plain message to the conversation's chat surface now.
+) -> PrivateSend:
+    """Deliver a plain message to the current conversation's user now.
 
     Backs the current-user ``surface_send_message`` agent tool. Best-effort:
-    returns False (never raises) when there is no active surface egress target.
+    never raises. ``NO_PRIVATE_CHAT`` when the conversation is a group and the
+    person it is for has no private chat with the bot to receive it in;
+    ``NOT_DELIVERED`` for anything else that kept it from going out.
     """
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            service = build_egress(uow)
-            return await service.send_agent_message_for_conversation(
+            return await PrivateMessage(egress=build_egress(uow)).send(
                 conversation_id=conversation_id,
                 message=message,
             )
@@ -105,7 +110,7 @@ async def deliver_surface_message_to_surface(
             conversation_id=conversation_id,
             exc_info=True,
         )
-        return False
+        return PrivateSend.NOT_DELIVERED
 
 
 async def deliver_voice_note_to_surface(

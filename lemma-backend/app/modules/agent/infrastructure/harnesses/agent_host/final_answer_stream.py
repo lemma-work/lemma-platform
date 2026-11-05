@@ -1,11 +1,12 @@
 """Recognising a structured final answer inside an Agent Host event stream.
 
 The answer is recognised by the marker the tool stamps into its own result,
-not by the call's name. The host does name every call now, but the marker was
-always the stronger signal: it rides in both the text block and the
-structuredContent of the MCP result, so it survives whichever half an adapter
-echoes back, and it cannot be claimed by a native tool that happens to share
-the name.
+and only in the result of Lemma's own ``final_answer`` call: the host says
+whose tool every call is (``tool_events.is_lemma_final_answer``). The marker
+alone was never enough, because it is plain JSON anyone can write -- a page an
+agent fetched, a file it read, another MCP server's reply -- and it rides in
+both the text block and the structuredContent of the MCP result, so it
+survives whichever half an adapter echoes back.
 
 The text fallback here is a deliberate last resort for an agent that never
 called the tool. It is fenced hard, because guessing wrong invents a structured

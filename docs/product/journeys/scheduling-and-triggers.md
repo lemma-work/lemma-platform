@@ -28,7 +28,10 @@ about it when it eventually cannot.
 - If a person creates a schedule whose timing cannot be interpreted, then the
   system shall refuse at creation rather than accepting it and never firing.
 - The system shall interpret a schedule's timing in a time zone the person
-  chose, and shall keep firing correctly across daylight-saving changes.
+  chose, and shall keep firing correctly across daylight-saving changes. A
+  timing given without a time zone is read in UTC.
+- When a schedule is created, the system shall say when it will next fire, in
+  UTC and in the schedule's own time zone.
 
 **Contracts:** `schedule.create`, `schedule.get`, `schedule.created`
 
@@ -38,7 +41,8 @@ about it when it eventually cannot.
 - When a person deactivates a schedule, the system shall stop firing it and
   shall keep its definition and history.
 - When a person reactivates a schedule, the system shall resume firing from that
-  point and shall not replay the occurrences it missed while paused.
+  point and shall not replay the occurrences it missed while paused. Failures
+  from before the pause shall not count toward pausing it again.
 - When a person changes a schedule's timing, the system shall apply the new
   timing to the next occurrence.
 
@@ -51,6 +55,9 @@ about it when it eventually cannot.
   in whatever component actually holds the timer.
 - When a pod is deleted, the system shall stop every schedule in it.
 - The system shall leave no timer running for a schedule that no longer exists.
+- When an agent deletes a schedule it created, acting for the same person, the
+  system shall not ask that person to approve it; deleting any other schedule
+  still needs their approval or a standing grant.
 
 **Contracts:** `schedule.delete`, `pod.delete`
 
@@ -79,11 +86,56 @@ about it when it eventually cannot.
   the system shall fire that schedule.
 - The system shall carry the changed record to whatever the schedule triggers,
   so the work does not have to go looking for it.
-- The system shall run the triggered work with the authority of the person who
-  owns the changed row, so that a data-triggered action sees exactly what that
-  person would see.
+- When a change to a row someone in the pod owns fires a schedule, the system
+  shall run the work as that person, bounded by what its target may do, so it
+  sees exactly what they would see -- unless the schedule is set to run as its
+  owner.
+- The system shall let only someone who may edit the target create or change a
+  schedule that runs as the owners of changed rows, so nobody can write
+  instructions that run with other people's access.
+- The system shall run changes to rows nobody in the pod owns, changes from
+  outside the pod, and batched changes as the schedule's owner.
+- When someone changes what a schedule does, the system shall make them its
+  owner, and shall refuse the change if they could not have created it.
+- If the person a run is for is no longer in the pod, or may not run the
+  target, then the system shall skip the run and say why, rather than run it as
+  anyone else.
 
 **Contracts:** `schedule.create`, `record.create`, `record.update`, `record.delete`
+
+### PS-SCHED-013 — Work starts on an event from a server a person connected
+**Status:** planned
+
+- When a person has connected an MCP server that offers events, the system
+  shall offer those events as something standing work can start on, with a
+  field for each argument the event takes.
+- When the server reports one of those events, the system shall start the work
+  once, carrying what the server sent.
+- If the server reports the same event again, then the system shall not start
+  the work a second time.
+- The system shall listen to the server through the pod connector the work
+  names, as the person the work runs as: their own account for a per-member
+  connector, the account its owner shared for a shared one, and no one else's.
+- If someone other than that person changes what the work listens for, then
+  the system shall listen as them from then on, or refuse the change when they
+  may not use the connector.
+- If a report claims to come from the server but cannot prove it, then the
+  system shall ignore it.
+- If a report names a listener in another pod, then the system shall not start
+  work in this one.
+- While the server keeps the work's subscription, the system shall keep it
+  renewed without the person doing anything.
+- If the server stops accepting the subscription, then the system shall show
+  the work as no longer hearing from it.
+- If the server stops accepting the subscription for good, then the system
+  shall turn the work off and tell its author why.
+- If the person who set the work up leaves the pod, then the system shall turn
+  the work off and tell them why.
+- If the connector no longer reaches the account the work was listening on,
+  then the system shall turn the work off and tell its author why.
+- When the work is deleted, the system shall stop listening to the server.
+
+**Contracts:** `schedule.event.list`, `schedule.create`, `schedule.update`, `schedule.get`, `schedule.delete`
 
 ### PS-SCHED-012 — A person can narrow what actually triggers
 **Status:** covered
@@ -92,8 +144,14 @@ about it when it eventually cannot.
   triggering the work and shall skip the trigger when it does not hold.
 - The system shall record a skipped trigger as skipped, distinctly from one that
   never arrived and one that failed, so a person can tell the three apart.
+- When the condition is a judgement about the event rather than a rule, the
+  system shall keep the answer that decided a skip, so a person can see why.
+- The system shall let a person see a schedule's history with or without its
+  skipped triggers.
 - If evaluating the condition fails, then the system shall treat the trigger as
-  failed rather than silently skipping it.
+  failed rather than silently skipping it, and shall not start the work.
+- If a time schedule is given a condition, then the system shall refuse it,
+  because no event would ever reach it to be judged.
 
 **Contracts:** `schedule.create`, `schedule.run.list`
 
@@ -146,14 +204,30 @@ about it when it eventually cannot.
   for the pod, and shall say why.
 - The system shall never deactivate a schedule silently.
 
-**Contracts:** `schedule.get`, `schedule.list`, `notification.send`
+**Contracts:** `schedule.get`, `schedule.list`
+
+### PS-SCHED-024 — A schedule can be held to a number of runs at once
+**Status:** covered
+
+- Where a schedule sets how many of its runs may be in flight at once, when it
+  fires while that many are in flight, the system shall skip the firing and
+  start nothing.
+- The system shall record a skipped firing in the schedule's history, saying
+  it was skipped because the schedule was full.
+- The system shall not count a firing skipped this way as a failure.
+- When a run in flight finishes, the system shall let the schedule's next
+  firing start work again.
+- If a person sets the number below one or above the most a schedule allows,
+  then the system shall refuse it.
+
+**Contracts:** `schedule.create`, `schedule.update`, `schedule.run.list`, `record.create`
 
 ---
 
 ## Capability: Choose what the trigger does
 
 ### PS-SCHED-030 — A schedule can drive an agent, a workflow, or a message
-**Status:** covered
+**Status:** gap
 
 - When a schedule fires at an agent, the system shall start a conversation with
   it carrying whatever triggered the schedule.
@@ -164,6 +238,9 @@ about it when it eventually cannot.
 - If a schedule's target no longer exists, then the system shall record the
   firing as failed and shall say the target is missing, rather than failing
   silently.
+
+> **Gap:** a schedule can target an agent or a workflow only; firing at a
+> surface was removed with the polled email surfaces. See DEV-SCHED-001.
 
 **Contracts:** `schedule.create`, `workflow.run.create`, `agent.conversation.create`, `agent.surface.send`
 

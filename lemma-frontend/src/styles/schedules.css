@@ -270,6 +270,12 @@
     white-space: nowrap;
 }
 
+/* The filter's verdict on a skipped event: a sentence, so not set as code. */
+.sched-run__error--why {
+    font-family: inherit;
+    font-size: 11.5px;
+}
+
 .sched-run__at {
     font-family: var(--mono);
     font-size: 10.5px;

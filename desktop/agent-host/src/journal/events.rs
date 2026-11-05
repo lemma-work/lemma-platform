@@ -4,6 +4,7 @@ use super::{
     DateTime, Event, EventAck, EventBatch, EventType, Journal, JournalError, JsonMap,
     OptionalExtension, RunState, TransactionBehavior, Utc, Uuid, enum_parse, params,
 };
+use crate::link::protocol::EVENT_BATCH_MAX_BYTES;
 
 impl Journal {
     pub fn append_event(
@@ -126,27 +127,38 @@ impl Journal {
             )?
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
-            .map(|encoded| serde_json::from_str::<Event>(&encoded))
+            .map(|encoded| {
+                serde_json::from_str::<Event>(&encoded).map(|event| (encoded.len(), event))
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut batches = Vec::<EventBatch>::new();
-        for event in events {
-            if let Some(batch) = batches.last_mut()
+        // Bounded by bytes as well as count: Lemma reads no frame past 1 MiB,
+        // and 256 events of streamed output can be far more than that. A
+        // single event larger than the bound is a batch of its own, cut to
+        // fit before it is sent (`runtime::event_payloads`).
+        let mut batches = Vec::<(EventBatch, usize)>::new();
+        for (bytes, event) in events {
+            if let Some((batch, batch_bytes)) = batches.last_mut()
                 && batch.events.first().is_some_and(|first| {
                     first.run_id == event.run_id
                         && first.lease_epoch == event.lease_epoch
                         && first.sequence + u64::try_from(batch.events.len()).unwrap_or(0)
                             == event.sequence
                         && batch.events.len() < 256
+                        && *batch_bytes + bytes <= EVENT_BATCH_MAX_BYTES
                 })
             {
                 batch.events.push(event);
+                *batch_bytes += bytes;
             } else {
-                batches.push(EventBatch {
-                    events: vec![event],
-                });
+                batches.push((
+                    EventBatch {
+                        events: vec![event],
+                    },
+                    bytes,
+                ));
             }
         }
-        Ok(batches)
+        Ok(batches.into_iter().map(|(batch, _)| batch).collect())
     }
 
     /// Record the backend's watermark, keeping the acknowledged events until

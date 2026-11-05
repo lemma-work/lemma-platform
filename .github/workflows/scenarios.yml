@@ -9,11 +9,12 @@ name: Product scenarios
 #
 # Two speeds, and they are triggered differently on purpose.
 #
-# The two gate jobs cost seconds, need no Docker, and run on every pull request.
-# They are also the only place the specification-honesty gates run at all: CI's
-# `lemma-backend quality gates` job runs the individual gate targets rather than
-# `make quality`, so without them here a promise could be marked covered with no
-# test and nothing would notice.
+# The two gate jobs cost seconds and need no Docker. On an unlabelled pull
+# request they do not run here, so a backend pull request no longer starts
+# three scenario jobs it cannot affect: the traceability gate is part of
+# `make quality`, which CI's `lemma-backend quality gates` job runs on every
+# pull request, and CI's "Repo tooling and .github gates" job runs the suite
+# guards whenever `tests/` changes.
 #
 # The lanes that boot a stack take minutes and run nightly, or on request. They
 # are not a required check. Putting them on every pull request would mean a
@@ -30,6 +31,8 @@ on:
 
 permissions:
   contents: read
+  # Pulling from the GHCR image mirror (.github/actions/pull-images).
+  packages: read
 
 concurrency:
   # Keyed by event as well as branch, so the two speeds do not cancel each
@@ -46,6 +49,11 @@ jobs:
   guards:
     timeout-minutes: 10
     name: scenario suite guards
+    # On a pull request only with the run-scenarios label: unlabelled, CI's
+    # "Repo tooling and .github gates" job runs these when their inputs change.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -72,6 +80,11 @@ jobs:
   traceability:
     timeout-minutes: 10
     name: spec traceability
+    # On a pull request only with the run-scenarios label: unlabelled, CI's
+    # "Repo tooling and .github gates" job runs these when their inputs change.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -146,6 +159,16 @@ jobs:
       - name: Sync scenario suite
         working-directory: tests/scenarios
         run: uv sync
+      # The stack `docker run`s these; pulled first, through the GHCR mirror
+      # with retries, so a registry hiccup is a retry rather than a red journey.
+      - name: Resolve the stack's service images
+        id: images
+        # The sandbox images (`:scenarios`) are built locally, not pulled.
+        run: echo "list=$(grep -oE '^[A-Z_]+_IMAGE = "[^"]+"' tests/scenarios/harness/stack.py | cut -d'"' -f2 | grep -v ':scenarios$' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+      - name: Pull the stack's service images
+        uses: ./.github/actions/pull-images
+        with:
+          images: ${{ steps.images.outputs.list }}
       - name: Run journey
         working-directory: tests/scenarios
         run: uv run pytest ${{ matrix.journey.path }} -q --junitxml=results.xml
@@ -209,6 +232,16 @@ jobs:
       - name: Sync scenario suite
         working-directory: tests/scenarios
         run: uv sync
+      # The stack `docker run`s these; pulled first, through the GHCR mirror
+      # with retries, so a registry hiccup is a retry rather than a red journey.
+      - name: Resolve the stack's service images
+        id: images
+        # The sandbox images (`:scenarios`) are built locally, not pulled.
+        run: echo "list=$(grep -oE '^[A-Z_]+_IMAGE = "[^"]+"' tests/scenarios/harness/stack.py | cut -d'"' -f2 | grep -v ':scenarios$' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+      - name: Pull the stack's service images
+        uses: ./.github/actions/pull-images
+        with:
+          images: ${{ steps.images.outputs.list }}
       - name: Build the sandbox images
         run: make scenarios-images
       - name: Run the sandbox lane
@@ -435,6 +468,11 @@ jobs:
 
   public-website:
     name: Public website
+    # On a pull request only with the run-scenarios label: unlabelled, CI's
+    # frontend job runs this journey when the frontend changes.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

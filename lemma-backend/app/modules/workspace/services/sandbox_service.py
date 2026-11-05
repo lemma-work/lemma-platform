@@ -134,38 +134,11 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             return await SandboxRepository(uow).get(sandbox_id)
 
     async def describe(self, sandbox_id: UUID):
-        """Current state without provisioning anything.
+        """Current state without provisioning anything; see `describe_sandbox`."""
+        from app.modules.workspace.services.sandbox_describe import describe_sandbox
 
-        Returns the legacy ``SandboxInfo`` shape so callers that only want to
-        know whether an ensure is needed do not start a container by asking.
-        """
-        from app.modules.workspace.contracts import SandboxInfo
-
-        async with self._uow_factory() as uow:
-            repository = SandboxRepository(uow)
-            sandbox = await repository.get(sandbox_id)
-            if sandbox is None:
-                return None
-            instance = await repository.current_instance(sandbox_id)
-
-        running = False
-        if instance is not None and instance.provider_id:
-            found = await self._provider.inspect(
-                instance.provider_id,
-                deadline_at=datetime.now(timezone.utc) + timedelta(seconds=15),
-            )
-            running = found is not None and found.running
-
-        return SandboxInfo(
-            sandbox_id=str(sandbox.id),
-            name=instance.provider_id if instance else str(sandbox.id),
-            status="RUNNING" if running else "STOPPED",
-            image="",
-            created_at=None,
-            endpoint=f"sandbox://{sandbox.id}",
-            allocation_id=str(sandbox.id),
-            allocation_epoch=sandbox.epoch,
-            storage_generation=sandbox.storage_generation,
+        return await describe_sandbox(
+            sandbox_id, uow_factory=self._uow_factory, provider=self._provider
         )
 
     # Ensure
@@ -435,10 +408,14 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             host_loopback=await self._host_loopback(sandbox),
         )
         try:
-            created = await self._provider.create(spec)
-            await self._provider.wait_ready(
-                created, kind=sandbox.kind, deadline_at=deadline_at
-            )
+            # Two spans, so a slow first use says whether the provider was slow
+            # to boot the machine or the agent inside it was slow to answer.
+            with tracer.start_as_current_span("lemma.sandbox.provider_create"):
+                created = await self._provider.create(spec)
+            with tracer.start_as_current_span("lemma.sandbox.wait_ready"):
+                await self._provider.wait_ready(
+                    created, kind=sandbox.kind, deadline_at=deadline_at
+                )
         except ProviderNotReady as exc:
             await self._fail(instance.id, str(exc))
             raise SandboxNotReady(str(exc), retry_after_ms=exc.retry_after_ms) from exc
@@ -527,15 +504,28 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             await repository.set_desired_state(sandbox_id, SandboxDesiredState.RELEASED)
             await uow.commit()
 
-    async def destroy(self, sandbox_id: UUID, *, delete_storage: bool = False) -> None:
+    async def destroy(
+        self,
+        sandbox_id: UUID,
+        *,
+        delete_storage: bool = False,
+        expected_epoch: int | None = None,
+    ) -> bool:
+        """Returns False, destroying nothing, once past ``expected_epoch``.
+
+        See `SandboxRepository.claim_for_destroy`.
+        """
         self.forget(sandbox_id)
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
             sandbox = await repository.get(sandbox_id)
-            instance = await repository.current_instance(sandbox_id)
-        if sandbox is None:
-            return
+            instance = await repository.claim_for_destroy(
+                sandbox_id, expected_epoch=expected_epoch
+            )
+            await uow.commit()
+        if sandbox is None or (instance is None and expected_epoch is not None):
+            return False
 
         if instance is not None and instance.provider_id:
             await self._provider.destroy(instance.provider_id, deadline_at=deadline_at)
@@ -550,6 +540,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
                 await repository.mark_instance_destroyed(instance.id)
             await repository.set_desired_state(sandbox_id, SandboxDesiredState.DELETED)
             await uow.commit()
+        return True
 
     # ------------------------------------------------------------------
     # Helpers

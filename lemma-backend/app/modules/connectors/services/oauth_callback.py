@@ -28,11 +28,13 @@ operation rows and commits before executing any of them.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.work import facts
 from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import (
     AccountEntity,
@@ -44,8 +46,10 @@ from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
     ConnectRequestStatus,
 )
+from app.modules.connectors.contracts.facts import ConnectorAccountConnected
 from app.modules.connectors.domain.connector import ConnectorEntity
 from app.modules.connectors.domain.errors import (
+    ConnectRequestBrowserMismatchError,
     ConnectRequestIdentityMismatchError,
     AccountAlreadyConnectedError,
     ConnectRequestNotFoundError,
@@ -64,12 +68,17 @@ from app.modules.connectors.services.account_identity import (
     resolve_account_identity,
 )
 from app.modules.connectors.services.auth.github_installation import (
-    bound_external_ref,
+    proved_external_ref,
+)
+from app.modules.connectors.services.github_callback_binding import (
+    bind_or_leave_for_an_admin,
+    closed_attributes,
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
     followup_account_id,
     followup_identity,
     oldest_claimable_connect_request,
+    purpose_of,
     stored_code_verifier,
     stored_provider_state,
     without_spent_secrets,
@@ -117,10 +126,20 @@ async def handle_oauth_callback(
     *,
     redirect_uri: str,
     state: str | None = None,
+    browser_user_id: UUID | None = None,
 ) -> AccountEntity:
-    """Turn a provider's redirect into a connected account."""
+    """Turn a provider's redirect into a connected account.
+
+    ``browser_user_id`` is whose Lemma session the returning browser carried,
+    if any. It must be the person the request was made for (audit H2): a link
+    minted by one person and completed in somebody else's browser would put the
+    second person's provider account on the first one's Lemma account. A link
+    an agent or the CLI minted keeps working when its person opens it in their
+    own signed-in browser, which is the only place it was ever meant to go.
+    """
     if not state:
         raise ConnectRequestStateRequiredError()
+    await _refuse_a_different_browser(service, state, browser_user_id)
 
     # Claimed, not merely read: the status check and the write that spends it
     # used to be separated by the whole provider exchange, so two callbacks
@@ -183,6 +202,21 @@ async def handle_oauth_callback(
     return account
 
 
+async def _refuse_a_different_browser(
+    service: OAuthCallbackSeam, state: str, browser_user_id: UUID | None
+) -> None:
+    """Refuse before the ``state`` is claimed or the code exchanged.
+
+    Before, not after: the provider's code is still unspent, so the right person
+    can sign in and open the same link again rather than start over.
+    """
+    pending = await service.connect_request_repository.get_by_state(state)
+    if pending is None:
+        return  # the claim below reports it, with its own error
+    if browser_user_id is None or browser_user_id != pending.user_id:
+        raise ConnectRequestBrowserMismatchError(signed_in=browser_user_id is not None)
+
+
 @dataclass(frozen=True)
 class _ConnectedIdentity:
     """What the provider round trips told us about the person connecting.
@@ -196,6 +230,8 @@ class _ConnectedIdentity:
     email: str | None
     display_name: str | None
     external_ref: str | None
+    #: GitHub says this person controls `external_ref` (audit H4).
+    installation_administered: bool = False
 
 
 async def _exchange(
@@ -294,13 +330,16 @@ async def _resolve_identity(
     # another workspace or installation, and a stale key keeps sending it
     # someone else's events. A GitHub App install names it on the callback and
     # only then, so a reconnect asks GitHub which one the token is for.
-    external_ref = await bound_external_ref(connector.id, credentials, redirect_uri)
+    external_ref, administered = await proved_external_ref(
+        connector.id, credentials, redirect_uri
+    )
     return _ConnectedIdentity(
         credentials=credentials,
         provider_account_id=provider_account_id,
         email=email,
         display_name=display_name,
         external_ref=external_ref,
+        installation_administered=administered,
     )
 
 
@@ -375,6 +414,15 @@ async def _record_installation(
         # `_persist_account` exists to make.
         raise ConnectRequestNotFoundError()
 
+    # Audit H4: the installation this leg came back with is the account's
+    # organization's, or nobody's yet -- never another one's.
+    identity, needs_admin = await bind_or_leave_for_an_admin(
+        service.uow.session,
+        identity,
+        connector_id=account.connector_id,
+        organization_id=account.organization_id,
+        user_id=account.user_id,
+    )
     account.credentials = identity.credentials
     if identity.external_ref:
         account.external_ref = identity.external_ref
@@ -382,7 +430,9 @@ async def _record_installation(
     account = await service.account_repository.update(account)
 
     pending_request.status = ConnectRequestStatus.SUCCESS
-    pending_request.attributes = without_spent_secrets(pending_request)
+    pending_request.attributes = closed_attributes(
+        pending_request, needs_admin=needs_admin
+    )
     await service.connect_request_repository.update(pending_request)
     await service.uow.commit()
     logger.info(
@@ -390,6 +440,47 @@ async def _record_installation(
         connector_id=account.connector_id,
     )
     return account
+
+
+def _renewed_credentials(
+    account: AccountEntity,
+    pending_request: ConnectRequestEntity,
+    fresh: OAuthCredentials,
+) -> OAuthCredentials:
+    """What an account holds after a grant came back for it.
+
+    A reconnect replaces the grant. A renewal another module started for a
+    purpose, over an account still connected, is not the person asking to
+    reconnect: the fresh grant wins, and what only the earlier one carried is
+    kept. Lemma's Slack app added to a workspace asks for the bot alone, while
+    the person's own Slack connect also holds their user token
+    (``authed_user``), which a bot-only grant does not return and must not
+    erase.
+    """
+    earlier = account.credentials
+    if (
+        account.status != AccountStatus.CONNECTED
+        or purpose_of(pending_request) is None
+        or not isinstance(earlier, OAuthCredentials)
+        or not earlier.raw_response
+    ):
+        return fresh
+    raw = _kept_under(earlier.raw_response, fresh.raw_response or {})
+    return fresh.model_copy(update={"raw_response": raw})
+
+
+def _kept_under(
+    earlier: Mapping[str, object], fresh: Mapping[str, object]
+) -> dict[str, object]:
+    """``fresh`` over ``earlier``, key by key into nested objects."""
+    merged = dict(earlier)
+    for key, value in fresh.items():
+        prior = merged.get(key)
+        if isinstance(prior, Mapping) and isinstance(value, Mapping):
+            merged[key] = _kept_under(prior, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 async def _persist_account(
@@ -400,9 +491,23 @@ async def _persist_account(
     connector: ConnectorEntity,
     identity: _ConnectedIdentity,
 ) -> AccountEntity:
-    """The second short unit of work: store the outcome and close the request."""
+    """The second short unit of work: store the outcome and close the request.
+
+    Announces ``ConnectorAccountConnected`` in the same transaction, for a new
+    account and for one granted again alike.
+    """
     user_id = pending_request.user_id
     provider_account_id = identity.provider_account_id
+    # Audit H4. The organization and person are the connect request's -- the
+    # state this callback came back under -- so an installation another
+    # organization holds is refused here, before any account carries it.
+    identity, needs_admin = await bind_or_leave_for_an_admin(
+        service.uow.session,
+        identity,
+        connector_id=connector.id,
+        organization_id=pending_request.organization_id,
+        user_id=user_id,
+    )
 
     # Match the re-authing identity to an existing account:
     #  - provider account id known → the account with exactly that id. A new
@@ -418,8 +523,16 @@ async def _persist_account(
             user_id, auth_config.id, provider_account_id
         )
         # A healthy account for this identity blocks a duplicate connect; an
-        # unhealthy one is updated in place below (a genuine reconnect).
-        if account is not None and account.status == AccountStatus.CONNECTED:
+        # unhealthy one is updated in place below (a genuine reconnect). A
+        # request another module started for a purpose is renewed in place
+        # either way: its starter asked for a fresh grant -- Lemma's Slack app
+        # added to a workspace by someone who already connected Slack -- and
+        # "already connected" would end the flow it started.
+        if (
+            account is not None
+            and account.status == AccountStatus.CONNECTED
+            and purpose_of(pending_request) is None
+        ):
             raise AccountAlreadyConnectedError(connector.id)
     else:
         account = await service.account_repository.get_by_user_and_auth_config(
@@ -427,7 +540,9 @@ async def _persist_account(
         )
 
     if account:
-        account.credentials = identity.credentials
+        account.credentials = _renewed_credentials(
+            account, pending_request, identity.credentials
+        )
         account.external_ref = identity.external_ref
         if provider_account_id:
             account.provider_account_id = provider_account_id
@@ -438,6 +553,7 @@ async def _persist_account(
         # A successful (re-)auth restores the account to a usable state.
         account.status = AccountStatus.CONNECTED
         account = await service.account_repository.update(account)
+        renewed = True
     else:
         # A new identity is the default only if the user has no account yet.
         has_existing = await service.account_repository.get_by_user_and_auth_config(
@@ -457,9 +573,24 @@ async def _persist_account(
                 display_name=identity.display_name,
             )
         )
+        renewed = False
 
     pending_request.status = ConnectRequestStatus.SUCCESS
-    pending_request.attributes = without_spent_secrets(pending_request)
+    pending_request.attributes = closed_attributes(
+        pending_request, needs_admin=needs_admin
+    )
     await service.connect_request_repository.update(pending_request)
+    await facts.emit(
+        service.uow,
+        ConnectorAccountConnected(
+            account_id=account.id,
+            auth_config_id=auth_config.id,
+            connector_id=connector.id,
+            organization_id=pending_request.organization_id,
+            user_id=user_id,
+            purpose=purpose_of(pending_request),
+            renewed=renewed,
+        ),
+    )
     await service.uow.commit()
     return account

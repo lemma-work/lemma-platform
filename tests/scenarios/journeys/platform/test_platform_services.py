@@ -8,10 +8,13 @@ turned the feature on.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from harness import capability, covers, journey, proves, scenario, stack_lane
-from harness.agent_host_link import PROTOCOL_VERSION, HostLink
+from harness.agent_host_link import PROTOCOL_VERSION, HostLink, pair_machine
+from harness.drivers.api import items_of
 
 pytestmark = [journey("Operating a deployment"), capability("Platform services")]
 
@@ -109,22 +112,44 @@ async def test_web_search_says_when_it_is_unavailable(person):
 @scenario("A person pairs a machine, lists it, and revokes it")
 @proves("PS-AGENT-040")
 @covers("agent.host.pairing.create", "agent.host.list", "agent.host.revoke")
-async def test_an_agent_host_can_be_paired_and_revoked(person):
-    pairing = await person.api.post(
-        "/me/runtime/agent-host-pairings", json={"display_name": "Alice's laptop"}
+async def test_an_agent_host_can_be_paired_and_revoked(world):
+    # Not the colleague the dispatch journey pairs: a revoked machine stays in
+    # its owner's list, and that journey reads the list as holding one host.
+    owner = await world.person("wei")
+    hello = {
+        # Its own installation every run: a revoked installation is refused a
+        # second pairing unless it asks to be re-enabled.
+        "installation_id": f"scenarios-pairing-{uuid4().hex[:12]}",
+        "host_release": "scenarios-1.0.0",
+        "protocol_version": PROTOCOL_VERSION,
+    }
+    pairing = await owner.api.post(
+        "/me/runtime/agent-host-pairings", json={"display_name": "Wei's laptop"}
+    )
+    paired = await pair_machine(
+        owner.api,
+        pairing_code=pairing["pairing_code"],
+        display_name="Wei's laptop",
+        hello=hello,
+    )
+    host_id = str(paired["host_id"])
+
+    listed = items_of(await owner.api.get("/me/runtime/agent-hosts"))
+    assert any(str(h["id"]) == host_id for h in listed), (
+        f"the machine just paired is not in its owner's list: {listed}"
     )
 
-    assert pairing, pairing
-    hosts = await person.api.get("/me/runtime/agent-hosts")
-    listed = hosts if isinstance(hosts, list) else hosts.get("items", [])
-    assert isinstance(listed, list), hosts
+    await owner.api.delete(f"/me/runtime/agent-hosts/{host_id}")
 
-    host_id = pairing.get("host_id") or pairing.get("id")
-    if host_id and any(str(h.get("id")) == str(host_id) for h in listed):
-        await person.api.delete(f"/me/runtime/agent-hosts/{host_id}")
-        after = await person.api.get("/me/runtime/agent-hosts")
-        remaining = after if isinstance(after, list) else after.get("items", [])
-        assert not any(str(h.get("id")) == str(host_id) for h in remaining), remaining
+    after = items_of(await owner.api.get("/me/runtime/agent-hosts"))
+    [revoked] = [h for h in after if str(h["id"]) == host_id]
+    assert revoked["status"] == "REVOKED" and revoked["revoked_at"], revoked
+    # Revoked means the machine's secret no longer opens a link.
+    async with HostLink(owner.api, secret=str(paired["host_secret"])) as link:
+        await link.send("hello", {"hello": hello})
+        assert await link.closed() == 4401, (
+            "a revoked machine's secret still opened a link"
+        )
 
 
 @scenario("An unpaired machine cannot open a link for work")
@@ -211,7 +236,7 @@ async def test_an_embed_token_needs_a_real_result(person):
         f"/pods/{pod['id']}/widgets/{conversation['id']}/no-such-tool-call/embed-token",
     )
 
-    assert response.status_code >= 400, (
+    assert response.status_code == 404, (
         f"a token for a result that was never produced must be refused "
         f"({response.status_code})"
     )
@@ -237,7 +262,7 @@ async def test_promoting_a_missing_result_is_refused(person):
         },
     )
 
-    assert response.status_code >= 400, response.status_code
+    assert response.status_code == 404, response.status_code
 
 
 @scenario("An unpaired machine cannot complete a pairing or publish harnesses")
@@ -290,7 +315,7 @@ async def test_harnesses_of_an_unknown_host_are_refused(person):
         "GET", f"/me/runtime/agent-hosts/{someone_elses}/harnesses"
     )
 
-    assert response.status_code >= 400, (
+    assert response.status_code == 404, (
         f"a host that is not yours must not report what it can run "
         f"({response.status_code})"
     )

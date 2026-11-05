@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 171 |
-| `gap` | 2 |
-| `manual` | 23 |
-| `planned` | 18 |
+| `covered` | 176 |
+| `gap` | 4 |
+| `manual` | 24 |
+| `planned` | 24 |
 | `withdrawn` | 0 |
-| **total** | **214** |
+| **total** | **228** |
 
-Scenario tests declaring a promise: 428.
+Scenario tests declaring a promise: 454.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 244 | 304 |
+| OpenAPI operations | 259 | 373 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -69,16 +69,20 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-015` A person can add to what the agent is already doing | `covered` | `test_a_message_sent_mid_run_is_answered` |
-| `PS-AGENT-016` Everyday requests finish while the person waits | `covered` | `test_a_question_about_data`, `test_a_record_is_added`, `test_a_doc_is_edited_in_place`, `test_a_csv_is_exported`, `test_a_pdf_report_is_made`, `test_a_word_document_is_made`, `test_a_research_memo`, `test_a_web_lookup`, `test_something_is_remembered`, `test_a_widget_is_shown`, `test_a_widget_of_its_own_design` |
+| `PS-AGENT-016` Everyday requests finish while the person waits | `covered` | `test_a_question_about_data`, `test_a_record_is_added`, `test_a_doc_is_edited_in_place`, `test_a_csv_is_exported`, `test_a_pdf_report_is_made`, `test_a_word_document_is_made`, `test_a_research_memo`, `test_a_web_lookup`, `test_something_is_remembered`, `test_something_mentioned_in_passing_is_remembered_after_the_answer`, `test_a_widget_is_shown`, `test_a_widget_of_its_own_design` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
 | `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
 | `PS-AGENT-023` A run can wait for something without occupying a turn | `covered` | `test_a_waiting_agent_ends_its_turn_and_returns`, `test_stopping_a_waiting_conversation_ends_the_wait` |
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent`, `test_an_image_is_understood` |
-| `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
+| `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_a_widget_opens_only_through_the_link_its_owner_was_given`, `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
 | `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_dispatched_work_is_claimed_exactly_once`, `test_an_unpaired_host_is_refused` |
+| `PS-AGENT-042` A pod's assistant asks another pod as the person it works for | `planned` | `test_an_assistant_asks_another_pod_as_the_person` |
+| `PS-AGENT-043` A person can see which other pods a pod can ask | `planned` | `test_a_pod_lists_only_the_pods_it_can_ask` |
+| `PS-AGENT-044` Another pod's answer comes back as information, with how the ask ended | `planned` | — |
+| `PS-ACCESS-045` An admin lets another pod ask theirs, sharing only what they choose | `planned` | `test_an_admin_connects_a_pod_sharing_one_table`, `test_a_connection_refuses_to_share_more_than_reading`, `test_only_an_admin_in_both_pods_can_connect`, `test_disconnecting_ends_the_connection` |
 
 ## [Automating work](journeys/automating-work.md)
 
@@ -98,6 +102,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_a_waiting_run_is_held`, `test_a_person_who_was_not_asked_cannot_answer`, `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
 | `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_live_run_stops_it`, `test_cancelling_a_finished_run_is_refused` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_a_step_beyond_the_runs_authority_is_refused_readably` |
+| `PS-FLOW-015` A workflow can branch on a judgement | `covered` | `test_a_run_takes_the_branch_its_answer_names`, `test_an_unrouted_answer_is_refused_at_save` |
+| `PS-FLOW-016` A failed run can be retried from the step that failed | `covered` | `test_a_retry_starts_at_the_failed_step`, `test_only_a_failed_run_can_be_retried`, `test_a_retry_after_a_fix_finishes_the_run` |
+| `PS-FLOW-017` A workflow can be held to a number of runs at once | `covered` | `test_a_run_past_the_limit_is_queued_not_refused`, `test_a_limit_below_one_is_refused` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
 | `PS-FUNC-020` A closed question about some evidence gets one allowed answer per question | `covered` | `test_every_question_gets_an_allowed_answer`, `test_an_open_question_is_refused`, `test_an_outsider_is_refused` |
 
@@ -133,13 +140,14 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
 | `PS-CONN-013` An app the catalog has never heard of can still be connected | `covered` | `test_installing_discovers_operations` |
 | `PS-CONN-014` A connector the platform cannot sign in to asks for credentials instead of offering to connect | `manual` | — |
-| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account`, `test_connecting_slack_identifies_the_workspace` |
+| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_a_shared_connector_runs_as_the_shared_account`, `test_connecting_github_identifies_the_account`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
-| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_an_issue_is_created_and_closed`, `test_a_message_is_posted_and_taken_back` |
-| `PS-CONN-031` An operation runs as the identity its connector is bound to | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
+| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_a_pod_connector_offers_its_installations_operations`, `test_an_issue_is_created_and_closed`, `test_a_message_is_posted_and_taken_back` |
+| `PS-CONN-031` An operation runs as the identity its pod connector is bound to | `covered` | `test_an_account_is_not_shared`, `test_a_shared_connector_runs_as_the_shared_account`, `test_an_operation_reaches_the_provider` |
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `covered` | `test_a_failing_provider_is_reported_not_swallowed`, `test_a_failing_provider_does_not_take_the_pod_with_it`, `test_a_hanging_provider_is_given_up_on` |
-| `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
+| `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector`, `test_an_agent_granted_a_connector_reaches_it` |
+| `PS-CONN-034` A pod declares the connectors it runs, and whose account each uses | `covered` | `test_a_member_cannot_declare_a_connector`, `test_a_shared_connector_runs_as_the_shared_account` |
 | `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_a_trigger_reads_back`, `test_triggers_are_listable` |
 
 ## [Getting started](journeys/getting-started.md)
@@ -219,12 +227,14 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire`, `test_the_schedule_outlives_its_deleted_target` |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
-| `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused` |
+| `PS-SCHED-013` Work starts on an event from a server a person connected | `planned` | — |
+| `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused`, `test_a_judged_skip_keeps_the_answer_that_decided_it`, `test_a_time_schedule_refuses_a_condition` |
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `covered` | `test_repeated_failure_stops_a_schedule`, `test_a_stopped_schedule_explains_itself`, `test_a_stopped_schedule_can_be_restarted` |
-| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow`, `test_the_schedule_outlives_its_deleted_target`, `test_a_firing_starts_a_conversation_with_the_assistant` |
+| `PS-SCHED-024` A schedule can be held to a number of runs at once | `covered` | `test_a_full_schedule_skips_the_firing`, `test_a_finished_run_makes_room`, `test_an_unusable_limit_is_refused` |
+| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `gap` | `test_a_schedule_can_target_a_workflow`, `test_the_schedule_outlives_its_deleted_target`, `test_a_firing_starts_a_conversation_with_the_assistant` |
 | `PS-SCHED-031` A schedule says what the work is, not just when it happens | `covered` | `test_a_schedule_keeps_its_instruction`, `test_the_instruction_and_the_condition_are_both_kept`, `test_the_instruction_can_be_edited` |
 | `PS-SCHED-032` The pod's own assistant can be put on a schedule | `covered` | `test_the_default_assistant_is_a_schedulable_target`, `test_the_assistant_needs_an_instruction`, `test_retargeting_to_the_assistant_replaces_the_agent`, `test_a_firing_starts_a_conversation_with_the_assistant` |
 
@@ -244,6 +254,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ACCESS-023` Revoking a person's access revokes their software's too | `covered` | `test_removing_a_person_stops_their_delegations` |
 | `PS-ACCESS-040` A person connects an outside AI tool to one pod, and it acts as them | `manual` | — |
 | `PS-ACCESS-041` A person sees what they have connected, and disconnecting takes effect at once | `manual` | — |
+| `PS-ACCESS-044` A connected tool is told about new rows only when the person says so | `manual` | — |
 | `PS-ACCESS-042` A connected tool shows a pod's records as a table the person can work in | `manual` | — |
 | `PS-ACCESS-043` A connected tool opens a pod's app, and the person uses it there as themselves | `manual` | — |
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
@@ -274,8 +285,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-007` The owner of a Desktop install chats with the shared Telegram bot by sharing their contact | `manual` | — |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
-| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_sender_is_the_same_person_on_every_message` |
-| `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
+| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_members_handle_alone_does_not_let_anybody_in`, `test_a_sender_is_the_same_person_on_every_message` |
+| `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_another_chat_from_the_same_person_continues_their_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-015` Somebody outside the pod is answered in a group opened to them | `planned` | — |
 | `PS-SURF-016` The bot remembers what was said in a group | `planned` | — |
@@ -286,22 +297,24 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
 | `PS-SURF-023` A person reachable from several pods is reached by the right one | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
-| `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
-| `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
-| `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_notification_can_be_answered`, `test_a_notification_can_be_acknowledged` |
+| `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_what_names_a_person_arrives_in_their_inbox`, `test_a_line_for_one_person_is_in_their_own_channel`, `test_an_outsider_sees_no_inbox`, `test_removal_closes_the_inbox_it_left_behind` |
+| `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_what_is_new`, `test_read_state_is_personal` |
+| `PS-SURF-032` A person can answer from their inbox | `covered` | `test_a_question_is_answered_from_the_inbox`, `test_an_answered_question_refuses_a_second_answer` |
 | `PS-SURF-033` What is meant for one person is not said in a group | `planned` | — |
 | `PS-SURF-040` A pod sees every group its bots are in | `planned` | — |
-| `PS-SURF-041` The member answering for a group sees what its people are waiting on | `planned` | — |
+| `PS-SURF-041` A member steps in for somebody outside the pod the bot cannot help | `planned` | — |
 | `PS-SURF-042` A member adds the pod's Telegram bot to a group from Lemma | `planned` | — |
 | `PS-SURF-043` A Slack channel shared with another company answers that company for the pod | `planned` | — |
 | `PS-SURF-044` People in a group ask the bot by the name they see | `planned` | — |
 | `PS-SURF-045` A stranger writing to the pod's own bot is answered as a contact | `planned` | — |
 | `PS-SURF-046` Email nobody vouched for is never answered | `planned` | — |
 | `PS-SURF-048` A contact sees what is theirs, and only that | `planned` | — |
-| `PS-SURF-049` A web widget answers visitors on the pod's behalf | `planned` | — |
+| `PS-SURF-049` A web widget answers visitors on the pod's behalf | `gap` | — |
 | `PS-SURF-050` A member writes first to a contact only where the contact wants it | `planned` | — |
 | `PS-SURF-051` People outside the pod add rows to a table it opened to them | `planned` | — |
 | `PS-SURF-047` Contacts cost the organization, never a member | `planned` | — |
+| `PS-SURF-052` Lemma's own Slack app sets a workspace's teammates up, and answers nobody | `planned` | — |
+| `PS-SURF-053` A Slack workspace the organization holds: its people are contacts | `planned` | — |
 
 ## [Working with data](journeys/working-with-data.md)
 
@@ -327,4 +340,5 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-DATA-042` One person's bulk upload does not stall everyone else | `covered` | `test_backpressure_is_legible`, `test_a_declined_upload_can_be_retried`, `test_a_burst_does_not_starve_another_pod`, `test_every_accepted_upload_survives` |
 | `PS-DATA-043` A person searches what is in their documents | `covered` | `test_documents_are_searchable` |
 | `PS-DATA-050` A person gets a link to a file that works and then stops | `covered` | `test_a_file_has_a_link`, `test_a_signed_link_is_issued` |
+| `PS-DATA-051` A shared page is live and carries what it shows | `covered` | `test_a_shared_page_is_live_and_carries_its_pictures` |
 | `PS-DATA-060` A person sees records change as they change | `covered` | `test_a_new_record_arrives_live`, `test_updates_and_deletions_arrive`, `test_a_stranger_is_sent_nothing`, `test_a_reconnecting_watcher_resumes` |

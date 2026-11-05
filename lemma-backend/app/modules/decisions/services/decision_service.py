@@ -14,6 +14,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.decisions.config import DecisionsSettings, decisions_settings
 from app.modules.decisions.domain.answers import (
@@ -63,7 +64,9 @@ class DecisionService:
         self, request: DecisionRequest, caller: DecisionCaller
     ) -> DecisionResult:
         task = build_task(request)
-        retry_after = await self._rate_limiter().retry_after(_rate_key(caller))
+        retry_after = await self._rate_limiter().retry_after(
+            _rate_key(caller, request.priority)
+        )
         if retry_after is not None:
             raise DecisionLimitedError(retry_after)
         provider = self._build_provider()
@@ -100,6 +103,7 @@ class DecisionService:
                         task, caller=caller, timeout_seconds=timeout
                     )
         except TimeoutError as exc:
+            raise_if_database_unavailable(exc)
             raise DecisionUnavailableError("timeout") from exc
         except DomainError as exc:
             # A 429 (a spend limit) and a 4xx are the caller's to see as they
@@ -119,6 +123,10 @@ class DecisionService:
             # the caller must not retry into; anything else is retryable.
             if group.subgroup(asyncio.CancelledError) is not None:
                 raise
+            # Lemma's database (the usage checkpoint), not the provider: the
+            # caller's work item retries it as unavailability, and it is never
+            # counted as the provider failing to answer.
+            raise_if_database_unavailable(group)
             spent = group.subgroup(UsageLimitExceededError)
             if spent is not None:
                 raise _first(spent) from group
@@ -175,10 +183,17 @@ def _first(group: BaseExceptionGroup[BaseException]) -> BaseException:
     return _first(leaf) if isinstance(leaf, BaseExceptionGroup) else leaf
 
 
-def _rate_key(caller: DecisionCaller) -> str:
+def _rate_key(caller: DecisionCaller, priority: str) -> str:
+    """Per organization, and per priority within it.
+
+    Someone on a live call is waiting on every interactive decision. Counted
+    together, a schedule's burst of background filter decisions would spend the
+    minute's allowance and leave the call unrouted until the window turned, so
+    each priority gets an allowance of its own.
+    """
     if caller.organization_id is not None:
-        return f"org:{caller.organization_id}"
-    return f"user:{caller.user_id}"
+        return f"org:{caller.organization_id}:{priority}"
+    return f"user:{caller.user_id}:{priority}"
 
 
 def _checked(task: DecisionTask, result: DecisionResult) -> DecisionResult:

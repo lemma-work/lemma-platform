@@ -149,13 +149,18 @@ def button_press(
     sender: str = SENDER_ID,
     message_ts: str = "1700000000.700700",
     action_ts: str = "1700000000.700800",
+    thread_ts: str | None = None,
 ) -> dict[str, Any]:
     """A `block_actions` submission tapping one rendered button.
 
     `value` is the callback token the agent put on the button, and `action_id`
     is what it called the control; both are read back out of the message the
-    fake Slack received rather than written again here.
+    fake Slack received rather than written again here. `thread_ts` is the
+    thread the tapped message sits in, which Slack sends for a threaded reply.
     """
+    message: dict[str, Any] = {"ts": message_ts}
+    if thread_ts:
+        message["thread_ts"] = thread_ts
     return {
         "type": "block_actions",
         "api_app_id": APP_ID,
@@ -163,7 +168,7 @@ def button_press(
         "team": {"id": TEAM_ID},
         "channel": {"id": channel},
         "container": {"message_ts": message_ts},
-        "message": {"ts": message_ts},
+        "message": message,
         "actions": [
             {"action_id": action_id, "value": value, "action_ts": action_ts},
         ],

@@ -61,6 +61,7 @@ def _provider(
         name=name,
         default_model_name=entries[0].name,
         model_catalog=list(entries),
+        config={"base_url": "https://models.example.test/v1"},
     )
 
 
@@ -75,6 +76,7 @@ def _harness() -> AgentRuntimeProfile:
         protocol=RuntimeProfileProtocol.AGENT_HOST,
         name="A coding agent",
         model_catalog=[_entry("agent-model", _SEES)],
+        config={"harness_snapshot_revision": "rev-1"},
     )
 
 

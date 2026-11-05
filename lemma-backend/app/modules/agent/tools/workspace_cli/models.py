@@ -43,16 +43,20 @@ class ExecCommandRequest(BaseModel):
     )
     yield_time_ms: Optional[int] = Field(
         default=None,
-        description="Milliseconds to wait for output before returning.",
+        description=(
+            "Return after this many milliseconds even if the command is still "
+            "running (you get its `process_id`). Defaults to 30000; when you "
+            "set `timeout_seconds` instead, the call waits that long."
+        ),
     )
     timeout_seconds: Optional[int] = Field(
         default=None,
         ge=10,
-        le=300,
+        le=600,
         description=(
-            "How long to wait for the command before returning, instead of the "
-            "default 30s. This is THIS CALL'S patience, not a limit on the "
-            "command: if the command is still running when the wait is up you "
+            "How long to wait for the command before returning, up to 600s, "
+            "instead of the default 60s. This is THIS CALL'S patience, not a "
+            "limit on the command: if the command is still running when the wait is up you "
             "get `completed: false` and a `process_id`, and the command keeps "
             "running in the background. Hand that id to `wait_for` rather than "
             "raising this — waiting there costs nothing and costs no model "

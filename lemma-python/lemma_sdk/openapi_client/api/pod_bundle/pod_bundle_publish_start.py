@@ -73,8 +73,10 @@ def sync_detailed(
 ) -> Response[ErrorResponse | PublishStatusResponse]:
     """Publish Pod To GitHub
 
-     Publish the pod as a bundle to a new GitHub repository. Returns 202 with a publish_id; poll the
-    status endpoint for the repo URL.
+     Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector
+    resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with
+    `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll
+    the status endpoint for the repo URL.
 
     Args:
         pod_id (UUID):
@@ -108,8 +110,10 @@ def sync(
 ) -> ErrorResponse | PublishStatusResponse | None:
     """Publish Pod To GitHub
 
-     Publish the pod as a bundle to a new GitHub repository. Returns 202 with a publish_id; poll the
-    status endpoint for the repo URL.
+     Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector
+    resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with
+    `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll
+    the status endpoint for the repo URL.
 
     Args:
         pod_id (UUID):
@@ -138,8 +142,10 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | PublishStatusResponse]:
     """Publish Pod To GitHub
 
-     Publish the pod as a bundle to a new GitHub repository. Returns 202 with a publish_id; poll the
-    status endpoint for the repo URL.
+     Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector
+    resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with
+    `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll
+    the status endpoint for the repo URL.
 
     Args:
         pod_id (UUID):
@@ -171,8 +177,10 @@ async def asyncio(
 ) -> ErrorResponse | PublishStatusResponse | None:
     """Publish Pod To GitHub
 
-     Publish the pod as a bundle to a new GitHub repository. Returns 202 with a publish_id; poll the
-    status endpoint for the repo URL.
+     Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector
+    resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with
+    `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll
+    the status endpoint for the repo URL.
 
     Args:
         pod_id (UUID):

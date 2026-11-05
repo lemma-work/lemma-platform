@@ -1,11 +1,12 @@
-import { AppsIcon, FileIcon, TableIcon, AgentIcon, CodeIcon, WorkflowIcon, ClockIcon, ExternalIcon } from "@/ui/icons";
+import { useEffect, useState } from "react";
+import { AppsIcon, FileIcon, TableIcon, AgentIcon, CodeIcon, WorkflowIcon, ClockIcon, ExternalIcon, GlobeIcon } from "@/ui/icons";
 import { siteUrl } from "@/session/client";
 import { FileView } from "./file-view";
 import { DataView } from "./data-view";
 import { WidgetView } from "./widget-view";
-import { resourceHref, resourceLabel, type DisplayResource } from "./display-resource";
+import { liveEnded, resourceHref, resourceLabel, type DisplayResource } from "./display-resource";
 
-const RESOURCE_ICONS = { WIDGET: AppsIcon, FILE: FileIcon, TABLE: TableIcon, APP: AppsIcon, AGENT: AgentIcon, FUNCTION: CodeIcon, WORKFLOW: WorkflowIcon, SCHEDULE: ClockIcon };
+const RESOURCE_ICONS = { BROWSER: GlobeIcon, WIDGET: AppsIcon, FILE: FileIcon, TABLE: TableIcon, APP: AppsIcon, AGENT: AgentIcon, FUNCTION: CodeIcon, WORKFLOW: WorkflowIcon, SCHEDULE: ClockIcon };
 
 /** What the agent put on screen.
  *
@@ -33,6 +34,16 @@ export function ResourceCard({
 }) {
     const label = resourceLabel(resource);
     const ResourceIcon = RESOURCE_ICONS[resource.type];
+    /* A card left on screen re-renders when its browser address expires, so
+       it says Ended rather than keeping a Watch link that no longer works. */
+    const [, tick] = useState(0);
+    useEffect(() => {
+        if (resource.type !== "BROWSER" || !resource.liveUntil) return;
+        const wait = Date.parse(resource.liveUntil) - Date.now();
+        if (!Number.isFinite(wait) || wait <= 0) return;
+        const timer = setTimeout(() => tick((n) => n + 1), Math.min(wait + 50, 2 ** 31 - 1));
+        return () => clearTimeout(timer);
+    }, [resource.type, resource.liveUntil]);
 
     if (resource.type === "WIDGET") {
         return (
@@ -82,13 +93,21 @@ export function ResourceCard({
 
     const href = resourceHref(siteUrl(), podId, resource);
     if (!href) {
-        return <div className="resource">{common}</div>;
+        return (
+            <div className="resource">
+                {common}
+                {liveEnded(resource) && <span className="resource__go">Ended</span>}
+            </div>
+        );
     }
 
+    /* A live browser is somewhere else; everything else is a place in this
+       app, and opening it in a second window would be two of the same app. */
+    const elsewhere = resource.type === "BROWSER";
     return (
-        <a className="resource resource--link" href={href} target="_blank" rel="noreferrer">
+        <a className="resource resource--link" href={href} {...(elsewhere ? { target: "_blank", rel: "noreferrer" } : {})}>
             {common}
-            <span className="resource__go">Open <ExternalIcon size={14} /></span>
+            <span className="resource__go">{elsewhere ? <>Watch <ExternalIcon size={14} /></> : "Open"}</span>
         </a>
     );
 }

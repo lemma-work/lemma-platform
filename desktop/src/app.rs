@@ -157,6 +157,9 @@ fn setup(
         // rejected by an ACL that has never heard of it.
         app.add_capability(capability)?;
     }
+    if let Some(server) = configured_hosted_server(&read_config()) {
+        grant_hosted_workspace_capability(&handle, &server);
+    }
 
     let resume = resume_attempt(mode);
     if let Some(target) = resume.as_ref() {
@@ -170,6 +173,8 @@ fn setup(
         cold: resume.is_none(),
     });
 
+    // Before any window exists, so none is ever ordered in as a tab.
+    disallow_window_tabbing();
     build_main_window(&handle, mode, initial_url(mode, resume.as_ref()), true)?;
     launch_trace("window shown");
 

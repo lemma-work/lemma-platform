@@ -61,3 +61,50 @@ async def test_unknown_tool_raises():
             name="does_not_exist",
             arguments={},
         )
+
+
+class _RecordingToolset(FunctionToolset[BaseAgentContext]):
+    """Records being opened, which is the cost a call should not pay twice."""
+
+    def __init__(self, *args, opened: list[str], label: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._opened = opened
+        self._label = label
+
+    async def __aenter__(self):
+        self._opened.append(self._label)
+        return await super().__aenter__()
+
+
+async def other_tool(ctx: RunContext[BaseAgentContext]) -> str:
+    """A tool nobody calls here."""
+    return "unused"
+
+
+@pytest.mark.asyncio
+async def test_a_call_opens_only_the_toolsets_up_to_the_one_that_owns_it():
+    """Every MCP `tools/call` used to enter every toolset of the run to invoke
+    one tool. The walk now stops at the owner."""
+    opened: list[str] = []
+    first = _RecordingToolset(tools=[echo_tool], opened=opened, label="first")
+    second = _RecordingToolset(tools=[other_tool], opened=opened, label="second")
+    dispatcher = AgentToolDispatcher(uow_factory=object())
+
+    await dispatcher.call_tool(
+        ctx=_ctx(), toolsets=[first, second], name="echo_tool", arguments={"value": 1}
+    )
+
+    assert opened == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_listing_still_opens_every_toolset():
+    opened: list[str] = []
+    first = _RecordingToolset(tools=[echo_tool], opened=opened, label="first")
+    second = _RecordingToolset(tools=[other_tool], opened=opened, label="second")
+    dispatcher = AgentToolDispatcher(uow_factory=object())
+
+    tools = await dispatcher.list_tools(ctx=_ctx(), toolsets=[first, second])
+
+    assert opened == ["first", "second"]
+    assert {tool.name for tool in tools} == {"echo_tool", "other_tool"}

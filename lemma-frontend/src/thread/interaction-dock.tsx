@@ -32,6 +32,7 @@ export function InteractionDock({
     teammate,
     onResolve,
     runEnded,
+    resumesOnAnswer,
     signIn,
     conversationId,
     crowded,
@@ -42,6 +43,8 @@ export function InteractionDock({
     onResolve?: Resolve;
     /** The run is not going any more; see `InteractionCard`. */
     runEnded?: boolean;
+    /** An answer resumes a new run; see `InteractionCard`. */
+    resumesOnAnswer?: boolean;
     /** A sign-in the run is stopped on. Docked too, as one line: it was the
      *  one pause left in the transcript, a tall card that scrolled out of
      *  sight and left only a grey note under the composer to say the run was
@@ -86,6 +89,7 @@ export function InteractionDock({
                     teammate={teammate}
                     onResolve={onResolve}
                     runEnded={runEnded}
+                    resumesOnAnswer={resumesOnAnswer}
                     docked
                     folded={folded}
                     onFold={(next) => setFoldedFor((was) => ({ ...was, [interaction.id]: next }))}

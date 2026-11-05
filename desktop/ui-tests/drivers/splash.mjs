@@ -97,7 +97,7 @@ export async function launchSplash(browser, t, {
     }
   });
   await page.addInitScript(({ initialState, defaultState, deferState, logs, recoveryOptions }) => {
-    window.__fixture = { calls: [], rejectInstall: false, rejectOpen: false, rejectReset: false };
+    window.__fixture = { calls: [], rejectInstall: false, rejectOpen: false, rejectReset: false, rejectServer: false };
     window.__TAURI__ = {
       event: {
         listen: async (name, listener) => {
@@ -134,6 +134,9 @@ export async function launchSplash(browser, t, {
             && window.__fixture.rejectReset
           ) {
             throw new Error('the runtime is still holding local data');
+          }
+          if (command === 'set_connection_mode' && args?.server && window.__fixture.rejectServer) {
+            throw new Error(`https://${args.server} doesn't look like a Lemma server.`);
           }
           if (command === 'set_connection_mode' && window.__fixture.rejectInstall) {
             throw new Error('Not enough disk space for the local runtime. Free space and retry.');

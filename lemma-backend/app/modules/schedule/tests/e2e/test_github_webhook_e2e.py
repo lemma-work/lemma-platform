@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -63,7 +64,11 @@ def _payload(
             "id": 279147437,
             "number": 42,
             "title": "Teach the parser about trailing commas",
-            "head": {"sha": head_sha, "ref": "feature/commas"},
+            "head": {
+                "sha": head_sha,
+                "ref": "feature/commas",
+                "repo": {"id": REPOSITORY_ID},
+            },
             "base": {"ref": "main"},
         },
         "repository": {
@@ -125,16 +130,82 @@ async def _wait_for_run_count(
 TRIGGER_ID = "github:http:pull_request"
 
 
+async def _declare_github_connector(
+    client: AsyncClient, pod_id: str, auth_config_id: str
+) -> str:
+    """The pod's `github` connector, per member: each person's own account."""
+    response = await client.post(
+        f"/pods/{pod_id}/connectors",
+        json={"slug": "github", "auth_config_id": auth_config_id, "mode": "PER_MEMBER"},
+    )
+    assert response.status_code == 201, response.text
+    return "github"
+
+
+async def _github_account(db_session: AsyncSession, org_id: str, user_id: str) -> str:
+    """The installation the App install redirected back with, by the account
+    carrying it; returns that account's install (auth config) id. The routing
+    key comes from the account, never from the author."""
+    from app.modules.connectors.infrastructure.models.account import Account
+    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+
+    auth_config = AuthConfig(
+        organization_id=org_id,
+        connector_id="github",
+        kind="http",
+        name=f"github-{INSTALLATION_ID}-{uuid4().hex[:8]}",
+    )
+    db_session.add(auth_config)
+    await db_session.flush()
+    account = Account(
+        user_id=user_id,
+        organization_id=org_id,
+        connector_id="github",
+        auth_config_id=auth_config.id,
+        external_ref=INSTALLATION_ID,
+        credentials={"access_token": "gho_x"},
+    )
+    db_session.add(account)
+    await db_session.flush()
+    # The installation is this organization's: a delivery routes only to
+    # schedules in the organization its installation is bound to (audit H4).
+    from app.modules.connectors.services.auth.github_bindings import (
+        claim_installation,
+    )
+
+    await claim_installation(
+        db_session,
+        installation_id=INSTALLATION_ID,
+        organization_id=UUID(str(org_id)),
+        user_id=UUID(str(user_id)),
+        administered=True,
+    )
+    await db_session.commit()
+    return str(auth_config.id)
+
+
 async def _github_schedule(
-    client: AsyncClient, db_session: AsyncSession, org_id: str, *, config: dict
+    client: AsyncClient,
+    db_session: AsyncSession,
+    org_id: str,
+    *,
+    config: dict,
+    user_id: str,
 ) -> tuple[str, str]:
+    """A workflow on GitHub's pull requests, listening through the pod's
+    `github` connector.
+
+    `config` may still name `installation_id`: it is dropped, as anything an
+    author types there is, and bound again from the account."""
     await _seed_connector_trigger(
         db_session,
         connector_id="github",
         trigger_id=TRIGGER_ID,
         event_type="pull_request",
     )
+    auth_config_id = await _github_account(db_session, org_id, user_id)
     pod_id = await _create_pod(client, org_id)
+    connector = await _declare_github_connector(client, pod_id, auth_config_id)
     workflow = await _create_workflow(
         client,
         pod_id,
@@ -153,6 +224,7 @@ async def _github_schedule(
         pod_id,
         schedule_type=ScheduleType.WEBHOOK.value,
         workflow_name=workflow["name"],
+        pod_connector=connector,
         config=config,
     )
     return pod_id, schedule["id"]
@@ -160,13 +232,18 @@ async def _github_schedule(
 
 @pytest.mark.asyncio
 async def test_a_signed_pull_request_delivery_starts_one_run(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession, worker
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
 ):
     _ = worker
     _, schedule_id = await _github_schedule(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -182,8 +259,101 @@ async def test_a_signed_pull_request_delivery_starts_one_run(
 
 
 @pytest.mark.asyncio
+async def test_a_schedule_stops_firing_once_its_connector_no_longer_reaches_an_account(
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
+):
+    """The schedule names the pod's `github` connector, not an account. Its
+    owner taking their account out of the pod leaves the routing key intact
+    and the connector resolving to nothing -- and the next delivery runs
+    nothing."""
+    _ = worker
+    pod_id, schedule_id = await _github_schedule(
+        authenticated_client,
+        db_session,
+        fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
+        config={"source": "github", "event": "pull_request"},
+    )
+    first = await _deliver(authenticated_client, _payload(), delivery_id="before")
+    assert first.status_code == 200, first.text
+    await _wait_for_run_count(db_session, schedule_id, count=1)
+
+    listed = await authenticated_client.get(f"/pods/{pod_id}/connector-accounts")
+    assert listed.status_code == 200, listed.text
+    [mine] = listed.json()["items"]
+    removed = await authenticated_client.delete(
+        f"/pods/{pod_id}/connector-accounts/{mine['id']}"
+    )
+    assert removed.status_code == 204, removed.text
+
+    second = await _deliver(
+        authenticated_client, _payload(head_sha="f" * 7), delivery_id="after"
+    )
+    assert second.status_code == 200, second.text
+    assert len(await _runs_for(db_session, schedule_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_on_a_connector_its_author_cannot_use_says_how_to_connect(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session: AsyncSession,
+):
+    """Creating the schedule is the author's own use of the connector: with no
+    account of theirs on its installation they get CONNECTION_REQUIRED and the
+    link to connect one, and nothing is subscribed or stored."""
+    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+
+    await _seed_connector_trigger(
+        db_session,
+        connector_id="github",
+        trigger_id=TRIGGER_ID,
+        event_type="pull_request",
+    )
+    auth_config = AuthConfig(
+        organization_id=fixed_test_org["id"],
+        connector_id="github",
+        kind="http",
+        name=f"github-unconnected-{uuid4().hex[:8]}",
+    )
+    db_session.add(auth_config)
+    await db_session.commit()
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    agent = await _create_agent(authenticated_client, pod_id)
+    connector = await _declare_github_connector(
+        authenticated_client, pod_id, str(auth_config.id)
+    )
+
+    refused = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": ScheduleType.WEBHOOK.value,
+            "agent_name": agent["name"],
+            "pod_connector": connector,
+            "connector_trigger_id": TRIGGER_ID,
+            "config": {},
+        },
+    )
+
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    assert body["code"] == "CONNECTION_REQUIRED", body
+    assert f"/pods/{pod_id}/connections?connector={connector}" in str(body)
+    listed = await authenticated_client.get(f"/pods/{pod_id}/schedules")
+    assert listed.json()["items"] == []
+
+
+@pytest.mark.asyncio
 async def test_a_redelivery_does_not_run_the_schedule_twice(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession, worker
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
 ):
     """GitHub reissues the delivery id, so it cannot be the idempotency key.
 
@@ -195,6 +365,7 @@ async def test_a_redelivery_does_not_run_the_schedule_twice(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -243,12 +414,16 @@ async def test_a_redelivery_does_not_run_the_schedule_twice(
 
 @pytest.mark.asyncio
 async def test_an_unsigned_delivery_is_refused_and_stores_nothing(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     _, schedule_id = await _github_schedule(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -263,7 +438,10 @@ async def test_an_unsigned_delivery_is_refused_and_stores_nothing(
 
 @pytest.mark.asyncio
 async def test_another_installations_events_do_not_match(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     """The routing key is tenant-scoped, and this is why.
 
@@ -275,6 +453,7 @@ async def test_another_installations_events_do_not_match(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -311,7 +490,11 @@ async def test_another_installations_events_do_not_match(
 
 @pytest.mark.asyncio
 async def test_a_schedule_scoped_to_actions_ignores_the_others(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession, worker
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
 ):
     """`actions` cannot live in the routing key.
 
@@ -324,6 +507,7 @@ async def test_a_schedule_scoped_to_actions_ignores_the_others(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -382,7 +566,10 @@ async def test_an_unknown_source_is_still_refused(authenticated_client: AsyncCli
 
 @pytest.mark.asyncio
 async def test_uninstalling_the_app_stands_its_schedules_down(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     """An uninstall invalidates everything at once, and silently.
 
@@ -398,6 +585,7 @@ async def test_uninstalling_the_app_stands_its_schedules_down(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -428,7 +616,10 @@ async def test_uninstalling_the_app_stands_its_schedules_down(
 
 @pytest.mark.asyncio
 async def test_another_installations_uninstall_leaves_this_one_alone(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     from sqlalchemy import select
 
@@ -438,6 +629,7 @@ async def test_another_installations_uninstall_leaves_this_one_alone(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -461,17 +653,17 @@ async def test_another_installations_uninstall_leaves_this_one_alone(
 
 
 @pytest.mark.asyncio
-async def test_picking_a_trigger_and_an_account_binds_the_routing_key(
+async def test_picking_a_trigger_and_a_connector_binds_the_routing_key(
     authenticated_client: AsyncClient,
     fixed_test_org,
     fixed_test_user,
     db_session: AsyncSession,
     worker,
 ):
-    """The path a person actually takes: choose the event, choose the account.
+    """The path a person actually takes: choose the event, choose the connector.
 
-    Nobody types `installation_id`. It comes from the account the App install
-    redirected back with, and this is the only test that runs the two halves
+    Nobody types `installation_id`. It comes from the account the connector
+    resolves to for them -- the one the App install redirected back with -- and this is the only test that runs the two halves
     together -- the key `_github_binding` stores when the schedule is created,
     and the key `GitHubWebhookSource` derives when a delivery arrives. They live
     in different modules, and if they disagreed by so much as the type of the
@@ -508,16 +700,31 @@ async def test_picking_a_trigger_and_an_account_binds_the_routing_key(
         credentials={"access_token": "gho_x"},
     )
     db_session.add(account)
+    await db_session.flush()
+    from app.modules.connectors.services.auth.github_bindings import (
+        claim_installation,
+    )
+
+    await claim_installation(
+        db_session,
+        installation_id=INSTALLATION_ID,
+        organization_id=UUID(str(fixed_test_org["id"])),
+        user_id=UUID(str(fixed_test_user["id"])),
+        administered=True,
+    )
     await db_session.commit()
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     agent = await _create_agent(authenticated_client, pod_id)
+    connector = await _declare_github_connector(
+        authenticated_client, pod_id, str(auth_config.id)
+    )
     schedule = await _create_schedule(
         authenticated_client,
         pod_id,
         schedule_type=ScheduleType.WEBHOOK.value,
         agent_name=agent["name"],
-        account_id=str(account.id),
+        pod_connector=connector,
         connector_trigger_id=TRIGGER_ID,
         # Only the narrowing the person chose. The routing key is not theirs to
         # type.

@@ -91,6 +91,15 @@ async def organization_slug(uow, organization_id: UUID) -> str | None:
     ).scalar_one_or_none()
 
 
+async def organization_name(uow, organization_id: UUID) -> str | None:
+    """What the organization is called, or ``None`` if it no longer exists."""
+    return (
+        await uow.session.execute(
+            select(Organization.name).where(Organization.id == organization_id)
+        )
+    ).scalar_one_or_none()
+
+
 async def organization_member_role(
     uow, *, user_id: UUID, organization_id: UUID
 ) -> OrganizationRole | None:
@@ -129,6 +138,7 @@ __all__ = [
     "organization_exists",
     "organization_member_count",
     "organization_member_role",
+    "organization_name",
     "organization_slug",
 ]
 

@@ -35,6 +35,8 @@ from app.modules.agent.contracts import (
     MessageKind,
 )
 from app.modules.agent.contracts.progress_tools import todo_plan_from_tool_return
+from app.modules.agent_surfaces.domain.display_redaction import redact_secrets_in_text
+from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 
 _DONE_MARK = "✅"
 _ACTIVE_MARK = "⏳"
@@ -181,7 +183,11 @@ def _body_lines(plan: SurfacePlan) -> list[str]:
 
 
 def _clip(text: str) -> str:
-    collapsed = " ".join(text.split())
+    # Model-written, like the activity line, and shown to the same people: the
+    # same reasoning strip and credential mask, before the cut can split one.
+    collapsed = " ".join(
+        redact_secrets_in_text(sanitize_user_visible_text(text)).split()
+    )
     if len(collapsed) <= _MAX_ITEM_CHARS:
         return collapsed
     return collapsed[: _MAX_ITEM_CHARS - 1].rstrip() + "…"

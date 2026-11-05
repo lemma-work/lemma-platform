@@ -11,7 +11,10 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
-from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceChatContext,
+    SurfaceConnectorRef,
+)
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -28,6 +31,7 @@ def build_chat_context(
     conversation_id: UUID,
     created_conversation_title: str | None,
     audience: Audience = Audience(),
+    source_id: UUID | None = None,
 ) -> SurfaceChatContext:
     """The run to start for a bound conversation, as the worker will read it.
 
@@ -37,6 +41,7 @@ def build_chat_context(
     """
     return SurfaceChatContext(
         audience=audience,
+        source_id=source_id,
         created_conversation_title=created_conversation_title,
         platform=surface.surface_type,
         pod_id=surface.pod_id,
@@ -45,7 +50,7 @@ def build_chat_context(
         user_id=user_id,
         surface_id=surface.id,
         surface_name=surface.name,
-        surface_account_id=surface.account_id,
+        surface_connector=SurfaceConnectorRef.of(surface),
         surface_config=surface.config,
         agent_display_name=route.agent_display_name,
         message_text=parsed.message_text,

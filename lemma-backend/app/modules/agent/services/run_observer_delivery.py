@@ -5,6 +5,10 @@ run onto Slack or Teams. If that fails the run itself is still valid and its
 result still has to be persisted, so every notification here is best-effort and
 logged rather than raised.
 
+Logged at warning with the traceback, not at debug: what fails here is the
+person's answer not reaching the platform they asked on, and at debug that
+happened with no trace at all in production.
+
 All four notifications had this shape written out at their call sites, four
 `try/await/except Exception/logger.debug` blocks that differed only in the event
 name. Collapsing them is worth more than the repetition: `AgentRunnerService`
@@ -15,88 +19,103 @@ count and failed the gate for a reason that has nothing to do with the split.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.agent.contracts.run_observer import RunObserver
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.value_objects import AgentEvent
+from app.modules.agent.tools.context import ConversationContext
 
 logger = get_logger(__name__)
 
 
-async def _deliver(notify: Any, on_failure: Any) -> bool:
+async def _deliver(
+    notify: Callable[[], Awaitable[None]], on_failure: Callable[[Exception], None]
+) -> bool:
     """Await one observer callback. True when it landed.
 
     `on_failure` does the logging rather than this taking an event name,
     because the logging contract is checked statically and requires the event
     to be a literal at the `logger` call — a name threaded through a parameter
     is invisible to it, and an event nothing can see is an event nobody will
-    find when it fires.
+    find when it fires. It is handed the exception so the traceback is logged.
     """
     try:
         await notify()
-    except Exception:
-        on_failure()
+    except Exception as exc:
+        on_failure(exc)
         return False
     return True
 
 
 async def notify_run_started(
-    observer: Any,
-    conversation: Any,
-    ctx: Any,
-    agent_run_id: Any,
+    observer: RunObserver | None,
+    conversation: Conversation,
+    ctx: ConversationContext,
+    agent_run_id: UUID,
 ) -> bool:
-    """True when the observer accepted the start, so the finish is owed to it."""
+    """True when the observer accepted the start.
+
+    The finish is owed to the observer either way: a start that failed (a typing
+    bubble, a stream that would not open) leaves the run's answer still to be
+    delivered, and it used to be skipped along with the start.
+    """
     if observer is None:
         return False
     return await _deliver(
         lambda: observer.on_run_started(conversation, ctx),
-        lambda: logger.debug(
-            "agent.agent_runner_service.agent_run_observer_start_run.diagnostic",
+        lambda exc: logger.warning(
+            "agent.run_observer.start_delivery.degraded",
             agent_run_id=agent_run_id,
+            exc_info=exc,
         ),
     )
 
 
 async def notify_event(
-    observer: Any,
-    event: Any,
-    conversation: Any,
-    ctx: Any,
-    agent_run_id: Any,
+    observer: RunObserver | None,
+    event: AgentEvent,
+    conversation: Conversation,
+    ctx: ConversationContext,
+    agent_run_id: UUID,
 ) -> None:
     if observer is None:
         return
     await _deliver(
         lambda: observer.on_event(event, conversation, ctx),
-        lambda: logger.debug(
-            "agent.agent_runner_service.agent_run_observer_run_s.diagnostic",
+        lambda exc: logger.warning(
+            "agent.run_observer.event_delivery.degraded",
             agent_run_id=agent_run_id,
+            exc_info=exc,
         ),
     )
 
 
 async def notify_run_finished(
-    observer: Any,
-    conversation: Any,
-    ctx: Any,
-    agent_run_id: Any,
+    observer: RunObserver | None,
+    conversation: Conversation,
+    ctx: ConversationContext,
+    agent_run_id: UUID,
 ) -> None:
     if observer is None:
         return
     await _deliver(
         lambda: observer.on_run_finished(conversation, ctx),
-        lambda: logger.debug(
-            "agent.agent_runner_service.agent_run_observer_finish_run.diagnostic",
+        lambda exc: logger.warning(
+            "agent.run_observer.finish_delivery.degraded",
             agent_run_id=agent_run_id,
+            exc_info=exc,
         ),
     )
 
 
 async def notify_run_failed(
-    observer: Any,
-    conversation: Any,
+    observer: RunObserver | None,
+    conversation: Conversation,
     error: BaseException,
-    agent_run_id: Any,
+    agent_run_id: UUID,
 ) -> None:
     # A cancellation is not a failure the observer needs to hear about, and it
     # is a BaseException rather than an Exception — hence the isinstance rather
@@ -105,8 +124,9 @@ async def notify_run_failed(
         return
     await _deliver(
         lambda: observer.on_run_failed(conversation, error),
-        lambda: logger.debug(
-            "agent.agent_runner_service.agent_run_observer_failure_delivery.diagnostic",
+        lambda exc: logger.warning(
+            "agent.run_observer.failure_delivery.degraded",
             agent_run_id=agent_run_id,
+            exc_info=exc,
         ),
     )

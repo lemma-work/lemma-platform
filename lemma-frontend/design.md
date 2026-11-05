@@ -4,7 +4,8 @@
 - Use shared tokens in `src/styles/tokens.css` and `accents.css` for both themes.
   Keep the page neutral; concentrate identity color in teammate cards and marks.
 - Schibsted Grotesk for UI, Newsreader for documents, DM Mono for code and
-  metadata. Font weight stays at or below 500 except documented allowances.
+  metadata. Font weight stays at or below 500 except documented allowances:
+  the badge wordmark, and bold inside a page's prose.
 - Pair fills with their ink tokens: `--field-ink`, `--on-accent`, `--on-ok`,
   `--on-bad`. Measure contrast in both themes; never assume white text works.
 - The Lemma mark is the three rising bars of `app/icon.svg`, in
@@ -102,9 +103,27 @@ you talk to, the space is what you share. The app has two altitudes.
   its face, its job (the pod's `description`), one line of news (what is
   waiting on you, or its latest conversation) and the people in its space.
   Those that need you come first; there are never more than two groups.
-- About is long, so a row of jumps (People, Channels, Taught, Remembers,
-  Standing work, Hands work to, Runs on) stays at the top while it scrolls
-  and marks the section in view.
+- About opens on an overview that fits one screen: the face, name and job,
+  then ten tiles in two columns (Default model, Skills / Memory, Agents /
+  Connections, Standing work / Channels, MCP / People, Teammates), named with
+  plain nouns — "Agents", not "Hands work to". Each tile carries one live
+  line of what is true there and a dot when it waits on a person. A tile
+  opens its part as a page of its own, `/t/{pod}/about/{part}`, so Back
+  steps out and a link can name it.
+- A part's page uses the width it has. Nothing on it is a compact widget
+  carried over from a long page: the default model is the full list of the
+  organization's models, one row each, with a link to Settings → Models;
+  skills wrap in a grid rather than travelling in a carousel; channels are
+  the whole channel manager, not a strip of chips with a sheet behind it.
+  Connections (`/t/{pod}/about/connections`, which the server's
+  `/pods/{pod}/connections?connector=` links redirect to) is the pod's own
+  connectors: each with its purpose, whose account it runs as ("Your
+  account", or "Shared · support@ · by Alice"), my standing with Connect or
+  Reconnect; editors add, point and remove them. Below, my accounts in the
+  pod, which only I can share or withdraw. A pod that requires a per-member
+  connector I have not connected says so in a line over the pod and its
+  apps. The organization's installations, models and usage stay in
+  Settings.
 - Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
   sidebar and open About (`/t/{pod}/about`), which holds everything about how
   it works — people, channels, skills, standing work, the agents it hands work
@@ -128,8 +147,8 @@ March by Priya", on About, from the pod's `created_at` and `user_id`),
 reliability (run history on standing work, never called learning), and
 learning (what it wrote down).
 
-- About has "What Kit remembers" beside "What Kit has been taught". Taught is
-  skills, which people write; remembers is memory, which the teammate writes
+- About has Memory beside Skills. Skills are what people write; memory is
+  what the teammate writes
   under `/memory`, `/memory/agents/pod-default` and, privately,
   `/me/agents/pod-default`. One line a note, indexes (`AGENTS.md`) left out,
   a filled dot for a note changed this week. Shared and Personal are two
@@ -144,8 +163,11 @@ learning (what it wrote down).
   memory has a revision history that records who changed what.
 
 "Needs you" is one queue in two parts: workflow forms, and conversations
-paused on a question or an approval (scheduled runs included). The rail
-badge, the Teammates page and Home all read both. An ask left for more than a
+paused on a question, an approval or an Agent Host permission request
+(scheduled runs and sub-agents included). The rail badge, the Teammates page,
+Home and the Waiting on you inbox all read both; a conversation row in the
+history says "Needs you" in place of its time. Nothing is pushed or repeated —
+a pause never expires, so the queue is where it waits. An ask left for more than a
 week goes quiet: it stops counting on the rail and the Teammates page, and
 Home folds it behind "N older". Any ask can be dismissed from Home, which
 archives the conversation — the same put-away the chat list offers, so it
@@ -155,40 +177,44 @@ Memory folders are found by walking down from ones that exist (`/`, then
 `/memory`, then `agents`…; `/me` for private notes). Listing a folder nobody
 created is a 400, not an empty list, so paths are never asked for blind.
 
-## Groups
+## Channels
 
-A space's group chats are a place in it: `/t/{pod}/groups`, and one group at
-`/t/{pod}/group/{id}`. Every WhatsApp group, Telegram group and Slack channel
-any of its bots is in, from `podGroups`.
+A space's channels are a place in it: `/t/{pod}/channels`, and one channel at
+`/t/{pod}/channel/{id}`, behind the flag Groups had (`groups`). A channel is one
+shared timeline, fed by outside places — a WhatsApp or Telegram group, a Slack
+channel, an email thread, a web chat — or by none. `/groups` and `/group/{id}`
+still open the list. Styles in `src/styles/channels.css`; words and readers in
+`src/channels/model.ts`, `sources.ts` and `mentions.ts`.
 
-- A row says the platform, the agent when it is not the space's own, who has
-  spoken there, who answers people outside the space, and when it last moved.
-  Questions waiting on you sit above the list; their count is the sidebar's
-  badge beside Groups.
-- New group offers only what the space can do. A platform its own bot is not
-  connected to is offered as connecting it, never as a dead option. Each
-  platform lets the bot in its own way — WhatsApp's number makes the group
-  and you share the link, Telegram adds it through a one-use link, Slack is
-  `/invite` — and each sheet waits, visibly, for the group to arrive.
-- A group's page answers what is waiting through the notification it came
-  as, and the bot relays the answer. People are In the space, Not in it (a
-  Lemma account; Invite opens Share), or Not recognised — which offers
-  nothing, because linking somebody else's chat account would hand them its
-  owner's access. Slack keeps its own history, so its page links there.
-- Every member reads every group, except what the bot said to one member
-  with that member's own access: the others see whom it answered, never what
-  it said.
-- Only the member who answers for a group's outsiders, or an admin of the
-  space, switches the group or takes it over; anybody else is told who can,
-  in place of the controls. An admin's change is told to that member. A bot
-  also has its own switch, "Answer people outside {space}", in its channel
-  settings; off, it closes every group the bot is in, and a group's page says
-  so and links there.
-- The composer in a conversation that lives on a chat platform starts on
-  Reply in the person's own DM or email thread, and on Note anywhere others
-  read along. The last choice is kept per conversation, in this browser.
-- Only the sample's Marketing has groups; every other sample space opens on
-  the first run.
+- The list is cut three ways: your own channel with the space (another
+  member's is never listed), the groups, and — for an editor — each contact's.
+  A row says where it is fed from, its last line, and what is new for you:
+  a count, an @ for a mention, a dot for a question only you can answer. A
+  contact asking for a person says "Needs a person". The sidebar's badge is
+  the inbox's: questions first, then mentions, then channels with news.
+- New channel makes one in Lemma with people of the space. Add to a group
+  offers only what the space can do. A platform its own bot is not connected
+  to is offered as connecting it. WhatsApp's number makes the group and you
+  share the link, Telegram adds the bot through a one-use link, Slack is
+  `/invite` — and each sheet waits, visibly, for the group's channel to arrive.
+- A channel's page reads oldest to newest and keeps your place while you read
+  back. A line says who said it — an agent's says whom it acted for, "Lem,
+  for Priya" — where, and when. A note to members is set apart; an answer
+  made with another member's access says whom it answered and that only they
+  can read it; a deleted line keeps its place, empty. A question waiting on
+  you is answered on the line, as the bell answers it; anyone else's says
+  whom it waits on.
+- An agent answers when @mentioned; in your own channel the space answers
+  every line. Where something outside hears the channel, a line can be a
+  note to members only; where several places do, it can go to one of them.
+- About this channel: what it is, how you hear of it, who is in it, and its
+  places. A group's places carry their settings — who answers people outside
+  the space, from what is Public, and the invite link. Only the member who
+  answers for its outsiders, or an admin of the space, switches it or takes
+  it over; anybody else is told who can. A contact's channel offers who it
+  is assigned to, its status, when it is handed back to the agent, and an
+  "Agent answers" switch.
+- The sample answers from `SAMPLE_CHANNELS`, one of each thing a page draws.
 
 ## Contacts
 
@@ -239,7 +265,8 @@ for every place, as one set; `SpaceEmpty` draws them.
   finishes them, or sends them. The run that follows refreshes the space's
   lists as it ends, so what it made appears where the empty state was.
 - Files take files: the empty state and the list accept a drop, and New has
-  Upload files.
+  Upload files and New folder. A folder dropped from the desktop is read, not
+  refused: its folders are made and what is inside them is uploaded.
 
 ## The tour
 
@@ -280,7 +307,7 @@ somebody standing in it (`src/tour/guides.ts`, drawn by `PlaceGuide`).
   by being one, made from its template the first time; other guides put a
   whole-sentence ask in the chat box, unsent.
 - A place that already explains each of its parts gets no card: About has a
-  note under every section.
+  line on every tile and a note atop every part.
 
 ## Desktop
 

@@ -71,6 +71,16 @@ def migrations_state(reported: str) -> ComponentState:
     return ComponentState(reported, reported != _SCHEMA_PENDING)
 
 
+def reported_only(reported: str | None) -> ComponentState | None:
+    """A row that is reported and never refuses work.
+
+    For a component whose failure breaks one feature rather than the process
+    -- the datastore role unable to create pods' query roles -- where taking
+    every replica out of rotation would turn that into an outage.
+    """
+    return ComponentState(reported, True) if reported else None
+
+
 def build_readiness_report(
     *,
     components: Mapping[str, ComponentState | None],

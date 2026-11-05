@@ -23,6 +23,7 @@ from app.modules.agent.infrastructure.transport_errors import (
 from app.modules.agent.services.context_budget import (
     catalog_metadata_for,
 )
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
@@ -120,7 +121,7 @@ def _provider_model_catalog(
             order.append(name)
             vision_by_name[name] = False
     if not order:
-        raise ValueError(catalog_unreadable_message(provider_name))
+        raise RuntimeProfileValidationError(catalog_unreadable_message(provider_name))
     catalog: list[RuntimeModelCatalogEntry] = []
     for name in order:
         supports_vision = default_vision or vision_by_name[name] or name in explicit
@@ -154,7 +155,9 @@ def _select_provider_default_model(
     normalized = requested_model_name.strip()
     catalog_names = {model.name for model in catalog}
     if normalized not in catalog_names:
-        raise ValueError("default_model_name must be one of the provider model names")
+        raise RuntimeProfileValidationError(
+            "default_model_name must be one of the provider model names"
+        )
     return normalized
 
 
@@ -289,7 +292,7 @@ def _loopback_allowed_for(parsed: ParseResult) -> bool:
     try:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
     except ValueError as exc:
-        raise ValueError(_PUBLIC_URL_ERROR) from exc
+        raise RuntimeProfileValidationError(_PUBLIC_URL_ERROR) from exc
     return port not in lemma_service_ports()
 
 
@@ -308,7 +311,7 @@ def _refuse_loopback_while_shared(
         and settings.is_local_mode()
         and exposure_settings.installation_shared
     ):
-        raise ValueError(_SHARED_LOOPBACK_ERROR)
+        raise RuntimeProfileValidationError(_SHARED_LOOPBACK_ERROR)
 
 
 def _unresolvable_host_allowed() -> bool:
@@ -343,7 +346,7 @@ async def _addresses_of(host: str) -> list[str] | None:
     except OSError as exc:
         if _unresolvable_host_allowed():
             return None
-        raise ValueError(_PUBLIC_URL_ERROR) from exc
+        raise RuntimeProfileValidationError(_PUBLIC_URL_ERROR) from exc
     return [str(info[4][0]) for info in infos]
 
 
@@ -362,19 +365,19 @@ async def _validate_public_base_url(url: str) -> None:
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError(_PUBLIC_URL_ERROR)
+        raise RuntimeProfileValidationError(_PUBLIC_URL_ERROR)
     host = parsed.hostname
     allow_loopback = _loopback_allowed_for(parsed)
     candidates = await _addresses_of(host)
     if candidates is None:
         return
     if not candidates:
-        raise ValueError(_PUBLIC_URL_ERROR)
+        raise RuntimeProfileValidationError(_PUBLIC_URL_ERROR)
     for addr in candidates:
         try:
             ip = ipaddress.ip_address(addr)
         except ValueError as exc:
-            raise ValueError(_PUBLIC_URL_ERROR) from exc
+            raise RuntimeProfileValidationError(_PUBLIC_URL_ERROR) from exc
         if ip.is_loopback and allow_loopback:
             continue
         _refuse_loopback_while_shared(ip)
@@ -386,7 +389,7 @@ async def _validate_public_base_url(url: str) -> None:
             or ip.is_multicast
             or ip.is_unspecified
         ):
-            raise ValueError(_PUBLIC_URL_ERROR)
+            raise RuntimeProfileValidationError(_PUBLIC_URL_ERROR)
 
 
 async def _discover_models(request: _ListingRequest) -> list[DiscoveredModel]:

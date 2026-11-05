@@ -22,10 +22,14 @@ class SendMessageRequest:
     """
     Attributes:
         content (str):
+        client_message_id (None | str | Unset): The sender's own id for this send, generated once per message the person
+            sends and reused on every retry of it. A second send with an id already used in this conversation stores nothing
+            and returns the first send's run, with deduplicated=true.
         metadata (None | SendMessageRequestMetadataType0 | Unset):
     """
 
     content: str
+    client_message_id: None | str | Unset = UNSET
     metadata: None | SendMessageRequestMetadataType0 | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -35,6 +39,12 @@ class SendMessageRequest:
         )
 
         content = self.content
+
+        client_message_id: None | str | Unset
+        if isinstance(self.client_message_id, Unset):
+            client_message_id = UNSET
+        else:
+            client_message_id = self.client_message_id
 
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
@@ -51,6 +61,8 @@ class SendMessageRequest:
                 "content": content,
             }
         )
+        if client_message_id is not UNSET:
+            field_dict["client_message_id"] = client_message_id
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
 
@@ -64,6 +76,15 @@ class SendMessageRequest:
 
         d = dict(src_dict)
         content = d.pop("content")
+
+        def _parse_client_message_id(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        client_message_id = _parse_client_message_id(d.pop("client_message_id", UNSET))
 
         def _parse_metadata(
             data: object,
@@ -86,6 +107,7 @@ class SendMessageRequest:
 
         send_message_request = cls(
             content=content,
+            client_message_id=client_message_id,
             metadata=metadata,
         )
 

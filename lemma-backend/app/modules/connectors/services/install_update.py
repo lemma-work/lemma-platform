@@ -30,14 +30,18 @@ credential is actually bound to:
 
 from __future__ import annotations
 
+from app.core.authorization.permissions import Permissions
+
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.connectors.domain.auth_config import (
+    APP_MADE_BY_LEMMA,
     AuthConfigEntity,
     AuthConfigStatus,
+    app_made_by_lemma,
 )
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
 from app.modules.connectors.services.auth.mcp_install_authorization import (
@@ -51,6 +55,7 @@ from app.modules.connectors.services.install_provisioning import (
 from app.modules.connectors.services.install_service_seam import (
     InstallServiceSeam,
 )
+from app.modules.connectors.services.reauth_recovery import TARGET_FIELDS
 
 logger = get_logger(__name__)
 
@@ -58,14 +63,6 @@ logger = get_logger(__name__)
 #: `oauth` block the system writes. Tenant-shaped, so the values are only known
 #: once something reads a named one.
 InstallConfig = dict[str, object]
-
-# Config keys that name where we connect to, per kind. A change to any of them
-# means the credential now points at a different system.
-_TARGET_FIELDS: dict[ConnectorKind, tuple[str, ...]] = {
-    ConnectorKind.MCP: ("server_url",),
-    ConnectorKind.HTTP: ("server_url",),
-    ConnectorKind.SQL: ("host", "port", "database"),
-}
 
 # Config keys that decide what operations exist. Changing one means the stored
 # operation set describes a server we are no longer talking to.
@@ -88,7 +85,7 @@ def _origin(url: str) -> tuple[str, str, int | None]:
 def _target_changed(
     kind: ConnectorKind, before: dict[str, Any], after: dict[str, Any]
 ) -> bool:
-    fields = _TARGET_FIELDS.get(kind)
+    fields = TARGET_FIELDS.get(kind)
     if not fields:
         return False
     for field in fields:
@@ -157,6 +154,16 @@ def apply_updates(
     if name is not None:
         auth_config.name = name
     if config is not None:
+        if (config or None) != auth_config.config and app_made_by_lemma(
+            auth_config.metadata
+        ):
+            # Whoever replaced it chose these credentials, not Lemma: the
+            # signing secret may be theirs now.
+            auth_config.metadata = {
+                key: value
+                for key, value in (auth_config.metadata or {}).items()
+                if key != APP_MADE_BY_LEMMA
+            }
         # Already merged by the caller, which needs the merged shape to decide
         # what the change invalidates.
         auth_config.config = config or None
@@ -324,7 +331,7 @@ async def update_install(
     await service._require_org_member(
         user_id=user_id,
         organization_id=organization_id,
-        allowed_roles=["ORG_OWNER", "ORG_EDITOR"],
+        permission=Permissions.ORG_INSTALLATION_MANAGE,
     )
     auth_config = await service._resolve_auth_config(
         organization_id=organization_id, auth_config_name=auth_config_name

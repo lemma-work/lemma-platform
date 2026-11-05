@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-import logging
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
 from app.modules.datastore.domain.file_entities import DatastoreFileSearchResult
+from app.modules.datastore.infrastructure import reranker as reranker_module
+from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.infrastructure.reranker import NoopReranker
-from app.modules.datastore.infrastructure.schema_manager import (
-    SchemaManager,
-)
+from app.modules.datastore.services.search import postgres_search_service
 from app.modules.datastore.services.search.postgres_search_service import (
     PostgresSearchService,
 )
@@ -56,44 +55,6 @@ def _obj(file_id, chunk_index: int, score: float = 1.0) -> DatastoreFileSearchRe
         metadata={},
         score=score,
     )
-
-
-class _Transaction:
-    def __init__(self, connection):
-        self.connection = connection
-
-    async def __aenter__(self):
-        return self.connection
-
-    async def __aexit__(self, exc_type, exc, traceback):
-        return False
-
-
-class _Engine:
-    def __init__(self, connection):
-        self.connection = connection
-
-    def begin(self):
-        return _Transaction(self.connection)
-
-
-@pytest.mark.asyncio
-async def test_ensure_schema_does_not_recreate_installed_vector_extension():
-    connection = AsyncMock()
-    connection.scalar.return_value = True
-    service = PostgresSearchService(
-        uuid4(),
-        engine=_Engine(connection),
-        session_factory=object(),
-        embedder=_FakeEmbedder(),
-        reranker=NoopReranker(),
-    )
-
-    await service.ensure_schema()
-
-    statements = [str(call.args[0]) for call in connection.execute.await_args_list]
-    assert not any(statement.startswith("CREATE EXTENSION") for statement in statements)
-    connection.scalar.assert_awaited_once()
 
 
 def test_merge_ranked_results_combines_text_and_vector_ranks():
@@ -166,6 +127,107 @@ async def test_noop_reranker_keeps_first_stage_order():
     assert [r.file_id for r in out] == [a, b]
 
 
+class _RecordingReranker:
+    def __init__(self) -> None:
+        self.sent: list[int] = []
+
+    async def rerank(self, query, results, *, top_n):
+        self.sent.append(len(results))
+        return list(reversed(results))[:top_n]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_sends_the_reranker_the_pool_not_the_whole_fusion(
+    monkeypatch,
+):
+    """The searcher's overshoot makes `per_side` three times a 50-chunk limit,
+    so fusion handed the hosted reranker up to 300 chunks per search, and its
+    cost grows with every one. Only the pool, the fused order's best, is sent."""
+    monkeypatch.setattr(
+        postgres_search_service.datastore_settings, "reranker_mode", "openai_compat"
+    )
+    monkeypatch.setattr(
+        postgres_search_service.datastore_settings, "reranker_retrieve_n", 50
+    )
+    reranker = _RecordingReranker()
+    service = _search_service()
+    service.reranker = reranker
+    service.schema_version = AsyncMock(return_value=2)
+    files = [uuid4() for _ in range(150)]
+    service.chunk_repo.vector_search = AsyncMock(
+        return_value=[_result(f, 0, 0.9) for f in files]
+    )
+    service.chunk_repo.text_search = AsyncMock(
+        return_value=[_result(f, 1, 0.5) for f in files]
+    )
+
+    results = await service.search(
+        "budget", limit=50, file_scope=SearchFileScope.post_filtered()
+    )
+
+    assert service.chunk_repo.vector_search.await_args.kwargs["limit"] == 150
+    assert reranker.sent == [50]
+    assert len(results) == 50
+
+
+@pytest.mark.asyncio
+async def test_hosted_reranker_keeps_first_stage_order_past_its_deadline(monkeypatch):
+    """A slow reranker used to hold a search for its 60-second client timeout,
+    on a connection opened afresh for every call. It now uses the process's
+    warm client, under the configured deadline, and a timeout falls back."""
+    seen: dict[str, object] = {}
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions["timeout"]["read"]
+        raise httpx.ReadTimeout("slow", request=request)
+
+    monkeypatch.setattr(
+        reranker_module.settings, "lemma_openai_api_key", SecretStr("test-key")
+    )
+    monkeypatch.setattr(
+        reranker_module.datastore_settings, "reranker_timeout_seconds", 3.0
+    )
+    a, b = uuid4(), uuid4()
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(slow)) as client:
+        out = await reranker_module.OpenAICompatReranker(client=client).rerank(
+            "q", [_obj(a, 0), _obj(b, 0)], top_n=2
+        )
+
+    assert [r.file_id for r in out] == [a, b]
+    assert seen["timeout"] == 3.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["data", "results"])
+async def test_hosted_reranker_reads_either_response_shape(monkeypatch, shape):
+    """Fireworks answers `{"data": [...]}`; only `results` was read, so every
+    successful rerank there kept the first-stage order."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                shape: [
+                    {"index": 0, "relevance_score": 0.1},
+                    {"index": 1, "relevance_score": 0.9},
+                ]
+            },
+        )
+
+    monkeypatch.setattr(
+        reranker_module.settings, "lemma_openai_api_key", SecretStr("test-key")
+    )
+    a, b = uuid4(), uuid4()
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+        out = await reranker_module.OpenAICompatReranker(client=client).rerank(
+            "q", [_obj(a, 0), _obj(b, 0)], top_n=2
+        )
+
+    assert [r.file_id for r in out] == [b, a]
+
+
 @pytest.mark.asyncio
 async def test_index_failure_keeps_prior_search_revision():
     class FailingEmbedder(_FakeEmbedder):
@@ -230,136 +292,6 @@ async def test_index_reports_zero_work_for_empty_chunk_set():
     assert result.chunk_count == 0
     assert result.embedding_seconds == 0
     assert result.persistence_seconds == 0
-    service.chunk_repo.add_chunks.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_ensure_schema_locks_the_same_key_as_the_pod_schema_provisioner():
-    """Both creators of one pod schema must serialise on the SAME key.
-
-    ``CREATE SCHEMA IF NOT EXISTS`` is not atomic in PostgreSQL. Two callers
-    holding *different* advisory locks exclude nobody: both can observe the
-    namespace as absent, and the loser fails the ``pg_namespace.nspname``
-    unique index. That is not hypothetical -- it is what broke the datastore
-    e2e shard:
-
-        duplicate key value violates unique constraint
-        "pg_namespace_nspname_index"
-        DETAIL:  Key (nspname)=(pod_01a0289d_...) already exists.
-        [SQL: CREATE SCHEMA IF NOT EXISTS "pod_01a0289d_..."]
-
-    ``ensure_schema`` used to take only the global ``_ENSURE_SCHEMA_LOCK_KEY``,
-    which serialises the database-wide catalogs and nothing about this pod,
-    while ``SchemaManager`` took ``hashtext(schema_name)``.
-    """
-    pod_id = uuid4()
-    connection = AsyncMock()
-    connection.scalar.return_value = True
-    service = PostgresSearchService(
-        pod_id,
-        engine=_Engine(connection),
-        session_factory=object(),
-        embedder=_FakeEmbedder(),
-        reranker=NoopReranker(),
-    )
-
-    # Each module builds the schema name with its own f-string. Identical lock
-    # SQL would still exclude nobody if those two ever drifted apart, so the
-    # names are part of the invariant, not an incidental detail.
-    manager = SchemaManager.__new__(SchemaManager)
-    assert manager.get_schema_name(pod_id) == service.schema_name
-
-    await service.ensure_schema()
-
-    calls = connection.execute.await_args_list
-    statements = [str(call.args[0]) for call in calls]
-    per_schema_locks = [
-        index
-        for index, statement in enumerate(statements)
-        if "pg_advisory_xact_lock(hashtext(" in statement
-    ]
-    assert per_schema_locks, (
-        "ensure_schema() never locked this pod's schema; the global key alone "
-        "does not exclude SchemaManager"
-    )
-    lock_index = per_schema_locks[0]
-    create_index = next(
-        index
-        for index, statement in enumerate(statements)
-        if statement.startswith("CREATE SCHEMA")
-    )
-    assert lock_index < create_index, "the lock must be held before CREATE SCHEMA"
-    assert calls[lock_index].args[1] == {"schema_name": service.schema_name}
-
-    # The lock is worthless unless it is byte-for-byte the provisioner's key.
-    provisioner_connection = AsyncMock()
-    await SchemaManager._lock_schema_bootstrap(
-        provisioner_connection, service.schema_name
-    )
-    provisioner_statement = str(provisioner_connection.execute.await_args.args[0])
-    assert provisioner_statement == statements[lock_index]
-
-
-class TestAFailedIndexBuildIsVisible:
-    """Production runs at LOG_LEVEL=INFO, so a caught failure logged at debug is
-    the same as one that was never logged. A pod whose vector index never built
-    keeps answering searches by sequential scan and simply gets slower as it
-    grows -- until `guard_query_plan`'s cost ceiling starts refusing unrelated
-    queries in the same schema.
-    """
-
-    def _engine_that_fails(self, message: str):
-        @asynccontextmanager
-        async def _begin():
-            raise RuntimeError(message)
-            yield  # pragma: no cover - makes this an async generator
-
-        return SimpleNamespace(begin=_begin)
-
-    async def _warnings(self, caplog, message: str) -> tuple[list[dict], str]:
-        service = _search_service()
-        service.engine = self._engine_that_fails(message)
-        with caplog.at_level(logging.DEBUG):
-            await service._ensure_vector_index()
-        return [
-            record.msg
-            for record in caplog.records
-            if record.levelno >= logging.WARNING and isinstance(record.msg, dict)
-        ], service.schema_name
-
-    @pytest.mark.asyncio
-    async def test_a_refused_build_is_reported_at_warning(self, caplog) -> None:
-        warnings, _ = await self._warnings(caplog, "permission denied for schema")
-
-        assert "datastore.postgres_search_service.vector_index_build.degraded" in [
-            warning["event"] for warning in warnings
-        ]
-
-    @pytest.mark.asyncio
-    async def test_the_report_names_the_schema_that_lost_its_index(
-        self, caplog
-    ) -> None:
-        """Without it the line says a build failed somewhere in the install."""
-        warnings, schema_name = await self._warnings(
-            caplog, "permission denied for schema"
-        )
-
-        build = next(
-            warning
-            for warning in warnings
-            if warning["event"].endswith("vector_index_build.degraded")
-        )
-        assert build["schema_name"] == schema_name
-        assert "permission denied for schema" in build["error_traceback"]
-
-    @pytest.mark.asyncio
-    async def test_a_missing_extension_stays_quiet(self, caplog) -> None:
-        """An install without pgvector is a deployment choice, not a fault, and
-        it would otherwise warn once per pod on every process."""
-        warnings, _ = await self._warnings(caplog, 'extension "vector" does not exist')
-
-        assert not [
-            warning
-            for warning in warnings
-            if warning["event"].endswith("vector_index_build.degraded")
-        ]
+    # Still a replacement: a revision with no text must not leave the previous
+    # revision's chunks answering for it.
+    assert service.chunk_repo.add_chunks.await_args.args[1:3] == ([], [])

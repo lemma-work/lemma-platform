@@ -105,6 +105,9 @@ class _FakeBriefRepo:
     async def get_user_profile(self, user_id):
         return UserProfile(email="a@b.co")
 
+    async def list_askable_pods(self, *, pod_id, user_id):
+        return []
+
     async def get_agent_grants(self, **kwargs):
         return []
 
@@ -241,7 +244,13 @@ def _pod_default_agent():
 
 
 def _conversation(is_pod_assistant: bool):
-    return SimpleNamespace(id=uuid4(), is_pod_assistant=is_pod_assistant)
+    return SimpleNamespace(
+        id=uuid4(),
+        is_pod_assistant=is_pod_assistant,
+        user_id=None,
+        type=None,
+        metadata={},
+    )
 
 
 async def test_named_agent_brief_never_overlaps_uows(stubbed):
@@ -253,7 +262,7 @@ async def test_named_agent_brief_never_overlaps_uows(stubbed):
         user_id=uuid4(),
         pod_id=uuid4(),
     )
-    assert "# Runtime Context" in brief
+    assert "# Runtime Context" in brief.stable
     assert factory.opened >= 1
     assert factory.max_concurrent == 1
 
@@ -385,7 +394,7 @@ async def test_the_memory_section_is_absent_without_the_memory_toolset(stubbed):
         toolsets=[AgentToolset.POD],
     )
 
-    assert "## Your Memory" not in brief
+    assert "## Your Memory" not in brief.per_run
 
 
 async def test_the_memory_section_is_absent_without_a_way_to_reach_pod_files(
@@ -401,7 +410,7 @@ async def test_the_memory_section_is_absent_without_a_way_to_reach_pod_files(
         toolsets=[AgentToolset.MEMORY, AgentToolset.WEB_SEARCH],
     )
 
-    assert "## Your Memory" not in brief
+    assert "## Your Memory" not in brief.per_run
 
 
 @pytest.mark.parametrize("file_toolset", [AgentToolset.WORKSPACE_CLI, AgentToolset.POD])
@@ -415,7 +424,7 @@ async def test_memory_appears_once_the_agent_can_write_a_file(stubbed, file_tool
         toolsets=[AgentToolset.MEMORY, file_toolset],
     )
 
-    assert "## Your Memory" in brief
+    assert "## Your Memory" in brief.per_run
 
 
 async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatch):
@@ -450,14 +459,17 @@ async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatc
         "toolsets": [AgentToolset.MEMORY, AgentToolset.POD],
     }
     first = await builder.build(**kwargs)
-    assert "MEMORY-BEFORE" in first
+    assert "MEMORY-BEFORE" in first.per_run
 
     # Second run: the inventory is served from cache, the memory is rebuilt.
     rendered[0] = "\n## Your Memory\nMEMORY-AFTER"
     second = await builder.build(**kwargs)
 
-    assert "MEMORY-AFTER" in second
-    assert "MEMORY-BEFORE" not in second
+    assert "MEMORY-AFTER" in second.per_run
+    assert "MEMORY-BEFORE" not in second.per_run
+    # Nor in the half that goes in the system prompt, where a memory write
+    # would re-read the whole history on the next run.
+    assert "MEMORY" not in second.stable
 
 
 class TestEveryCapSaysWhatItLeftOut:
@@ -499,12 +511,16 @@ class TestEveryCapSaysWhatItLeftOut:
             MAX_COLUMNS as _MAX_COLUMNS,
             table_line as _table_line,
         )
+        from app.modules.datastore.domain.datastore_entities import (
+            ColumnSchema,
+            DatastoreDataType,
+        )
 
         table = SimpleNamespace(
             table_name="orders",
             primary_key_column="id",
             columns=[
-                SimpleNamespace(name=f"c{index}", type="TEXT")
+                ColumnSchema(name=f"c{index}", type=DatastoreDataType.TEXT)
                 for index in range(_MAX_COLUMNS + 7)
             ],
         )
@@ -517,11 +533,15 @@ class TestEveryCapSaysWhatItLeftOut:
         from types import SimpleNamespace
 
         from app.modules.agent.services.brief_lines import table_line as _table_line
+        from app.modules.datastore.domain.datastore_entities import (
+            ColumnSchema,
+            DatastoreDataType,
+        )
 
         table = SimpleNamespace(
             table_name="orders",
             primary_key_column="id",
-            columns=[SimpleNamespace(name="id", type="UUID")],
+            columns=[ColumnSchema(name="id", type=DatastoreDataType.UUID)],
         )
 
         assert "more columns" not in _table_line(table)
@@ -619,12 +639,12 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=agent.pod_id,
         )
 
-        assert "## You" in brief
-        assert "**Acme**" in brief
-        assert "Lem" not in brief
-        assert "default agent for this pod" in brief
-        assert "Here since 2026-03-04" in brief
-        assert "What this pod is for: Where support lives." in brief
+        assert "## You" in brief.stable
+        assert "**Acme**" in brief.stable
+        assert "Lem" not in brief.stable
+        assert "default agent for this pod" in brief.stable
+        assert "Here since 2026-03-04" in brief.stable
+        assert "What this pod is for: Where support lives." in brief.stable
 
     async def test_a_named_agent_is_named_as_one(self, stubbed):
         agent = _named_agent()
@@ -636,8 +656,8 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=uuid4(),
         )
 
-        assert "a named agent in this pod" in brief
-        assert "default agent for this pod" not in brief
+        assert "a named agent in this pod" in brief.stable
+        assert "default agent for this pod" not in brief.stable
 
     async def test_schedules_separate_yours_from_everyone_elses(
         self, stubbed, monkeypatch
@@ -674,10 +694,10 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=agent.pod_id,
         )
 
-        assert "Schedules configured to start you:" in brief
-        assert "morning-sweep" in brief
-        assert "Other schedules in this pod:" in brief
-        assert "reindex" in brief
+        assert "Schedules configured to start you:" in brief.stable
+        assert "morning-sweep" in brief.stable
+        assert "Other schedules in this pod:" in brief.stable
+        assert "reindex" in brief.stable
 
     async def test_a_failed_self_read_still_renders_the_rest(
         self, stubbed, monkeypatch
@@ -697,5 +717,35 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=agent.pod_id,
         )
 
-        assert "# Runtime Context" in brief
-        assert "## You" in brief
+        assert "# Runtime Context" in brief.stable
+        assert "## You" in brief.stable
+
+
+async def test_the_file_listing_rides_with_the_run_not_the_system_prompt(
+    stubbed, monkeypatch
+):
+    """Ordinary work changes the top-level files -- an upload, a saved report.
+
+    In the system prompt, each such change made the next run re-read the whole
+    conversation; the listing goes in the run's context part instead, and the
+    half that stays in the system prompt holds only what changes when somebody
+    reshapes the pod.
+    """
+
+    class _FilesHere(_FakeFileService):
+        async def get_directory_tree(self, *args, **kwargs):
+            return {"children": [{"path": "/reports", "kind": "folder"}]}
+
+    monkeypatch.setattr(brief_mod, "build_file_service", lambda uow: _FilesHere())
+    agent = _pod_default_agent()
+
+    brief = await _builder().build(
+        agent=agent,
+        conversation=_conversation(True),
+        user_id=uuid4(),
+        pod_id=agent.pod_id,
+    )
+
+    assert "/reports [folder]" in brief.per_run
+    assert "/reports" not in brief.stable
+    assert "# Runtime Context" in brief.stable

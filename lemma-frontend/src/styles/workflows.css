@@ -105,6 +105,8 @@
     transition: background .14s ease;
 }
 .wf-wait__open:hover { background: var(--chrome); }
+/* A conversation waiting on you is a link to it, not a button that unfolds. */
+a.wf-wait__open { text-decoration: none; }
 .wf-wait__open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .wf-wait__body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .wf-wait__body strong { font-size: 13px; font-weight: 500; color: var(--ink); }

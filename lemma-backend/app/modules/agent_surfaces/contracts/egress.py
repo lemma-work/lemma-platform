@@ -2,7 +2,7 @@
 
 Six operations, replacing `app/composition/agent_surface_runtime.py`. That file
 existed because `agent` importing `agent_surfaces` would have closed a loop; the
-loop is cut (see `contracts/notifications.py`), so this is an ordinary contract
+loop is cut, so this is an ordinary contract
 and can say what it takes and returns. Every signature on the shim was `object`
 or `list[object]` -- not because the types were unknown, but because naming them
 in the composition root would have put a third module's paths into `agent`'s
@@ -30,10 +30,13 @@ from pydantic_ai.toolsets import AbstractToolset
 from app.modules.agent.contracts import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.contracts import Conversation, DisplayResourceRequest
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,
 )
+
+logger = get_logger(__name__)
 
 
 async def hold_display_for_one_reply(
@@ -111,6 +114,75 @@ async def deliver_voice_note(*, conversation_id: UUID, file_path: str) -> bool:
     )
 
 
+#: Said when the worker job carrying out an approved action failed. It may have
+#: got partway, so the person is asked to look before asking again rather than
+#: being invited to approve it a second time.
+APPROVED_ACTION_FAILED_NOTICE = (
+    "Something went wrong while carrying out what you approved, so it may not "
+    "have happened. Check before asking me to try again."
+)
+
+
+async def report_approved_action_failed(
+    *, uow_factory: UnitOfWorkFactory, conversation_id: UUID
+) -> bool:
+    """Tell the conversation's platform that an approved action may not have run.
+
+    The tap that approved it was already answered "Approved — running it now",
+    so a job failing afterwards is otherwise a promise nobody hears broken.
+    False when the conversation is not on a platform, or the notice could not
+    be sent. Never raises: the caller is already handling a failure, and this
+    must not replace it with its own.
+    """
+    from redis.exceptions import RedisError
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.modules.agent_surfaces.composition import build_surface_egress
+    from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+
+    try:
+        async with uow_factory() as uow:
+            return await build_surface_egress(uow).send_agent_message_for_conversation(
+                conversation_id=conversation_id,
+                message=APPROVED_ACTION_FAILED_NOTICE,
+            )
+    except (SQLAlchemyError, RedisError, *platform_transport_errors()):
+        logger.warning(
+            "agent_surfaces.egress.approval_failure_notice_failed.degraded",
+            conversation_id=str(conversation_id),
+            exc_info=True,
+        )
+        return False
+
+
+async def retire_cards_answered_in_lemma(
+    *,
+    conversation_id: UUID,
+    tool_call_id: str,
+    uow_factory: UnitOfWorkFactory | None = None,
+) -> None:
+    """Take the buttons off the platform cards of a pause answered in Lemma.
+
+    For the web app's decision endpoint, once the decision has committed: a
+    tap and a typed reply retire their own cards, and an answer given in the
+    web app reaches neither path. The cards then read "Answered." Nothing for
+    a conversation that is not on a platform. Never raises.
+    """
+    from app.core.infrastructure.db.session import get_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent_surfaces.composition import build_surface_egress
+    from app.modules.agent_surfaces.services.card_retirement import (
+        retire_cards_answered_in_lemma as retire,
+    )
+
+    await retire(
+        uow_factory=uow_factory or SessionUnitOfWorkFactory(get_session_maker()),
+        egress_factory=build_surface_egress,
+        conversation_id=conversation_id,
+        tool_call_ids=[tool_call_id],
+    )
+
+
 def build_progress_observer(
     *, uow_factory: UnitOfWorkFactory
 ) -> SurfaceAgentRunProgressObserver:
@@ -138,11 +210,49 @@ def build_progress_observer(
     )
 
 
+def conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
+    """Where a person opens this conversation in Lemma, from anywhere else."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_conversation_url,
+    )
+
+    return build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
+
+
+def workflow_run_url(*, pod_id: UUID, run_id: UUID) -> str:
+    """Where a person opens one workflow run in Lemma, with the form it waits on.
+
+    The page reads the run, so it opens only for someone who may read its
+    workflow; a form assigned on one they may not is answered from the pod's
+    waiting list instead (``space_url``).
+    """
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_workflow_run_url,
+    )
+
+    return build_workflow_run_url(pod_id=pod_id, run_id=run_id)
+
+
+def space_url(*, pod_id: UUID) -> str:
+    """Where a person opens the pod itself in Lemma."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_space_url,
+    )
+
+    return build_space_url(pod_id=pod_id)
+
+
 __all__ = [
+    "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
     "build_surface_toolsets",
+    "conversation_url",
     "deliver_display_resource",
     "deliver_voice_note",
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
+    "report_approved_action_failed",
+    "retire_cards_answered_in_lemma",
+    "space_url",
+    "workflow_run_url",
 ]

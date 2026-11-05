@@ -40,6 +40,10 @@ class ConversationResponse:
             and where its files land, so it is the directory a file pane should be showing.
         agent_id (None | Unset | UUID):
         agent_runtime (AgentRuntimeConfig | None | Unset):
+        channel_id (None | Unset | UUID):
+        has_pending_interaction (bool | Unset): A question, approval or Agent Host permission request here is waiting on
+            the conversation's owner. Not implied by status: a WAITING conversation may be waiting on a timer, and a
+            permission request waits inside a RUNNING one. Default: False.
         instructions (None | str | Unset):
         is_archived (bool | Unset):  Default: False.
         last_run_error (None | str | Unset):
@@ -55,6 +59,9 @@ class ConversationResponse:
         status (ConversationStatus | None | Unset):
         title (None | str | Unset):
         type_ (ConversationType | Unset): User-visible conversation behavior.
+        waiting_on_work (bool | Unset): WAITING on the agent's own work -- a sub-agent, a process or a timer -- rather
+            than on a person: a run will start when it ends, so a viewer can follow the conversation to it. Set when one
+            conversation is read, false in lists. Default: False.
     """
 
     created_at: datetime.datetime
@@ -67,6 +74,8 @@ class ConversationResponse:
     workspace_cwd: str
     agent_id: None | Unset | UUID = UNSET
     agent_runtime: AgentRuntimeConfig | None | Unset = UNSET
+    channel_id: None | Unset | UUID = UNSET
+    has_pending_interaction: bool | Unset = False
     instructions: None | str | Unset = UNSET
     is_archived: bool | Unset = False
     last_run_error: None | str | Unset = UNSET
@@ -82,6 +91,7 @@ class ConversationResponse:
     status: ConversationStatus | None | Unset = UNSET
     title: None | str | Unset = UNSET
     type_: ConversationType | Unset = UNSET
+    waiting_on_work: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,6 +131,16 @@ class ConversationResponse:
             agent_runtime = self.agent_runtime.to_dict()
         else:
             agent_runtime = self.agent_runtime
+
+        channel_id: None | str | Unset
+        if isinstance(self.channel_id, Unset):
+            channel_id = UNSET
+        elif isinstance(self.channel_id, UUID):
+            channel_id = str(self.channel_id)
+        else:
+            channel_id = self.channel_id
+
+        has_pending_interaction = self.has_pending_interaction
 
         instructions: None | str | Unset
         if isinstance(self.instructions, Unset):
@@ -214,6 +234,8 @@ class ConversationResponse:
         if not isinstance(self.type_, Unset):
             type_ = self.type_.value
 
+        waiting_on_work = self.waiting_on_work
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -232,6 +254,10 @@ class ConversationResponse:
             field_dict["agent_id"] = agent_id
         if agent_runtime is not UNSET:
             field_dict["agent_runtime"] = agent_runtime
+        if channel_id is not UNSET:
+            field_dict["channel_id"] = channel_id
+        if has_pending_interaction is not UNSET:
+            field_dict["has_pending_interaction"] = has_pending_interaction
         if instructions is not UNSET:
             field_dict["instructions"] = instructions
         if is_archived is not UNSET:
@@ -262,6 +288,8 @@ class ConversationResponse:
             field_dict["title"] = title
         if type_ is not UNSET:
             field_dict["type"] = type_
+        if waiting_on_work is not UNSET:
+            field_dict["waiting_on_work"] = waiting_on_work
 
         return field_dict
 
@@ -322,6 +350,25 @@ class ConversationResponse:
             return cast(AgentRuntimeConfig | None | Unset, data)
 
         agent_runtime = _parse_agent_runtime(d.pop("agent_runtime", UNSET))
+
+        def _parse_channel_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                channel_id_type_0 = UUID(data)
+
+                return channel_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        channel_id = _parse_channel_id(d.pop("channel_id", UNSET))
+
+        has_pending_interaction = d.pop("has_pending_interaction", UNSET)
 
         def _parse_instructions(data: object) -> None | str | Unset:
             if data is None:
@@ -500,6 +547,8 @@ class ConversationResponse:
         else:
             type_ = ConversationType(_type_)
 
+        waiting_on_work = d.pop("waiting_on_work", UNSET)
+
         conversation_response = cls(
             created_at=created_at,
             id=id,
@@ -511,6 +560,8 @@ class ConversationResponse:
             workspace_cwd=workspace_cwd,
             agent_id=agent_id,
             agent_runtime=agent_runtime,
+            channel_id=channel_id,
+            has_pending_interaction=has_pending_interaction,
             instructions=instructions,
             is_archived=is_archived,
             last_run_error=last_run_error,
@@ -526,6 +577,7 @@ class ConversationResponse:
             status=status,
             title=title,
             type_=type_,
+            waiting_on_work=waiting_on_work,
         )
 
         conversation_response.additional_properties = d

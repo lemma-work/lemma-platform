@@ -37,6 +37,10 @@ CONTRACT_METADATA_FIELDS = {
     "job_id",
     "level",
     "logger",
+    # Cloud Logging's native trace fields (``app.core.log.cloud_trace``).
+    "logging.googleapis.com/spanId",
+    "logging.googleapis.com/trace",
+    "logging.googleapis.com/trace_sampled",
     "release.sha",
     "request_id",
     "service.name",

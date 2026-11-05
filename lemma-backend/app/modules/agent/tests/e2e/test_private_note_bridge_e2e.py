@@ -40,7 +40,12 @@ async def test_the_tool_bridge_knows_a_notes_answer_stays_in_lemma(
     db_session.add(run)
     await db_session.commit()
 
-    _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
+    (
+        _agent,
+        _conversation,
+        ctx,
+        _grants,
+    ) = await ConversationMCPService()._load_agent_context(
         conversation_id=run.conversation_id, agent_run_id=run.id
     )
 

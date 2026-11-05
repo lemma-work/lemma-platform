@@ -12,7 +12,12 @@
 #
 # /tmp, like git's credential file: a session-scoped credential must not
 # survive on the durable root.
-GH_CONFIG_DIR=/tmp/lemma-gh
+#
+# Kept when already set. Every agent session in the sandbox has a directory of
+# its own, named in that session's environment, and commands run in a login
+# shell that reads this file -- so overwriting it here would hand every session
+# the same `gh` login again.
+GH_CONFIG_DIR="${GH_CONFIG_DIR:-/tmp/lemma-gh}"
 export GH_CONFIG_DIR
 
 # An agent's shell is not a terminal anyone is watching: a background version

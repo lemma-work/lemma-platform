@@ -42,11 +42,11 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileKind,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
+    SYSTEM_LEMMA_PROFILE_ID as SYSTEM_LEMMA_PROFILE_ID,
 )
 
 logger = get_logger(__name__)
 
-SYSTEM_LEMMA_PROFILE_ID = "system:lemma"
 DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
 
 SystemOpenAICatalogCustomizer = Callable[
@@ -87,25 +87,60 @@ def _load_runtime_env() -> None:
                 os.environ.setdefault(key, value)
 
 
-_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high"})
+_runtime_env_loaded = False
 
 
-def _reasoning_effort_setting() -> dict[str, str]:
-    """The deployment's chosen reasoning effort, when it chose one.
+def _ensure_runtime_env_loaded() -> None:
+    """Read the ``.env`` files once per process, not once per profile build.
 
-    A thinking model left at its provider default thinks at length before every
-    step of a turn, and a turn is many steps: the time a person waits is
-    mostly that. Unset keeps the provider default.
+    The system profile is built for every run and every listing; reading two
+    files from disk each time bought nothing, since a running process does not
+    pick up an edited ``.env`` anywhere else either.
     """
-    effort = (os.getenv("LEMMA_OPENAI_REASONING_EFFORT") or "").strip().lower()
-    if not effort:
-        return {}
-    if effort not in _REASONING_EFFORTS:
-        raise DomainError(
-            "LEMMA_OPENAI_REASONING_EFFORT must be one of "
-            + ", ".join(sorted(_REASONING_EFFORTS))
+    global _runtime_env_loaded
+    if _runtime_env_loaded:
+        return
+    _load_runtime_env()
+    _runtime_env_loaded = True
+
+
+def _declare_reasoning_models(
+    catalog: list[RuntimeModelCatalogEntry],
+) -> list[RuntimeModelCatalogEntry]:
+    """Mark the deployment's reasoning models, and give them its effort.
+
+    Applied after the customizer, so a customizer that rebuilds entries cannot
+    quietly drop what the operator configured. The effort becomes each model's
+    catalog default -- the lowest layer, which a profile, agent or step
+    overrides -- and is sent only to a model marked here, because an
+    OpenAI-compatible endpoint rejects the field on one that does not reason.
+    """
+    effort = agent_settings.lemma_openai_reasoning_effort
+    named = set(
+        _csv_setting_or_empty(agent_settings.lemma_openai_reasoning_model_names)
+    )
+    if not named and effort is None:
+        return catalog
+    declared: list[RuntimeModelCatalogEntry] = []
+    for entry in catalog:
+        if named and entry.name not in named:
+            declared.append(entry)
+            continue
+        capabilities = list(entry.capabilities)
+        if RuntimeModelCapability.REASONING not in capabilities:
+            capabilities.append(RuntimeModelCapability.REASONING)
+        defaults = dict(entry.default_model_settings)
+        if effort is not None:
+            defaults.setdefault("reasoning_effort", effort.value)
+        declared.append(
+            entry.model_copy(
+                update={
+                    "capabilities": capabilities,
+                    "default_model_settings": defaults,
+                }
+            )
         )
-    return {"openai_reasoning_effort": effort}
+    return declared
 
 
 def _openai_compat_vision_model_names() -> set[str]:
@@ -144,7 +179,7 @@ def _build_system_openai_catalog(
     *, require_models: bool = True
 ) -> list[RuntimeModelCatalogEntry]:
     """Build the configured system OpenAI catalog, then customize it."""
-    _load_runtime_env()
+    _ensure_runtime_env_loaded()
     raw_model_names = (
         os.getenv("LEMMA_OPENAI_MODEL_NAMES") or agent_settings.lemma_openai_model_names
     )
@@ -183,7 +218,7 @@ def _build_system_openai_catalog(
     ]
     if _system_openai_catalog_customizer is not None:
         catalog = _system_openai_catalog_customizer(catalog)
-    return catalog
+    return _declare_reasoning_models(catalog)
 
 
 def system_lemma_openai_catalog_model_names() -> list[tuple[str, str | None]]:
@@ -205,7 +240,7 @@ def _openai_compat_model_capabilities(
 
 
 def system_lemma_profile() -> AgentRuntimeProfile | None:
-    _load_runtime_env()
+    _ensure_runtime_env_loaded()
     model_type = (
         os.getenv("LEMMA_DEFAULT_MODEL_TYPE") or agent_settings.lemma_default_model_type
     ).strip()
@@ -252,10 +287,10 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
             # which a strict endpoint rejects outright.
             # `_UsageOnlyStreamOptionsChatModel` keeps that half off the wire --
             # see its docstring for why the two halves have to be separated.
-            model_settings={
-                "openai_continuous_usage_stats": True,
-                **_reasoning_effort_setting(),
-            },
+            # The deployment's reasoning effort is not here: it is a catalog
+            # default on the models that reason, see
+            # `_declare_reasoning_models`.
+            model_settings={"openai_continuous_usage_stats": True},
         ),
         credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )

@@ -34,7 +34,14 @@ AGENT_HOST_PERMISSION_KEY = "agent_host_permission"
 
 _ALLOW_ONCE = "allowonce"
 _ALLOW_ALWAYS = "allowalways"
-_REJECT_KINDS = {"rejectonce", "rejectalways"}
+# The kinds a decision may select. ACP defines four, and an agent may one day
+# offer a fifth: nothing in a new kind's name says what it grants, so it is
+# never selected on anyone's behalf -- an approval for once that read a new
+# ``allow_forever`` as "not a reject" granted a standing permission. An option
+# with no kind at all is the one exception: it is the only choice such an
+# agent offers, and refusing it made the approval unanswerable.
+_UNLABELLED = ""
+_ALLOW_KINDS = (_ALLOW_ONCE, _ALLOW_ALWAYS, _UNLABELLED)
 
 
 def _normalized_kind(value: object) -> str:
@@ -68,24 +75,44 @@ class AgentHostPermissionRequest:
         ACP agent expects when a request goes unapproved. APPROVE_FOR_SESSION
         maps to the agent's own "always" option when it offered one, so the
         agent stops asking for that action for the rest of its session.
+
+        A one-time approval never selects "always". The host caches that
+        answer for the rest of the session, so picking it when the agent
+        offered nothing narrower turned a single yes into a standing one; it
+        denies instead (``refuses_a_one_time_approval``).
         """
         if decision == AgentRunApprovalDecision.DENY:
             return None
-        allowed = [
-            option for option in self.options if option.kind not in _REJECT_KINDS
-        ]
+        allowed = [option for option in self.options if option.kind in _ALLOW_KINDS]
+        if decision != AgentRunApprovalDecision.APPROVE_FOR_SESSION:
+            allowed = [option for option in allowed if option.kind != _ALLOW_ALWAYS]
         if not allowed:
             return None
         preferred = (
             (_ALLOW_ALWAYS, _ALLOW_ONCE)
             if decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION
-            else (_ALLOW_ONCE, _ALLOW_ALWAYS)
+            else (_ALLOW_ONCE,)
         )
-        for kind in preferred:
+        for kind in (*preferred, _UNLABELLED):
             for option in allowed:
                 if option.kind == kind:
                     return option.option_id
-        return allowed[0].option_id
+        return None
+
+    def refuses_a_one_time_approval(self, decision: AgentRunApprovalDecision) -> bool:
+        """An approval for once that was denied because only "always" was offered."""
+        return (
+            decision == AgentRunApprovalDecision.APPROVE_ONCE
+            and self.option_for(decision) is None
+            and any(option.kind == _ALLOW_ALWAYS for option in self.options)
+        )
+
+
+_PERMISSION_APPROVAL_PREFIX = "agent-host-permission:"
+
+#: On a permission payload from the host: the request was answered by an
+#: approval the person gave on an earlier turn, named by its ``approval_id``.
+PRE_APPROVED_KEY = "pre_approved"
 
 
 def permission_approval_tool_call_id(request_id: str) -> str:
@@ -96,7 +123,12 @@ def permission_approval_tool_call_id(request_id: str) -> str:
     ``tool_call_id`` address two different calls, so the approval gets a
     prefixed id and carries the raw request id in its arguments.
     """
-    return f"agent-host-permission:{request_id}"
+    return f"{_PERMISSION_APPROVAL_PREFIX}{request_id}"
+
+
+def is_permission_approval_tool_call_id(tool_call_id: str) -> bool:
+    """Whether this call id is an Agent Host permission request's approval."""
+    return tool_call_id.startswith(_PERMISSION_APPROVAL_PREFIX)
 
 
 def permission_approval_tool_args(
@@ -194,6 +226,73 @@ def permission_approval_events(
                 "detail": payload,
                 **metadata,
             },
+            agent_run_id=agent_run_id,
+            sequence=sequence,
+        ),
+    ]
+
+
+def pre_approved_by(payload: JsonObject) -> str | None:
+    """The earlier approval the host answered this request with, if it did."""
+    marker = payload.get(PRE_APPROVED_KEY)
+    approval_id = marker.get("approval_id") if isinstance(marker, dict) else None
+    return approval_id if isinstance(approval_id, str) and approval_id else None
+
+
+def pre_approved_events(
+    *,
+    agent_run_id: UUID,
+    request_id: str,
+    approval_id: str,
+    sequence: int,
+    payload: JsonObject,
+    metadata: JsonObject,
+    tool_name: str | None = None,
+) -> list[AgentEvent]:
+    """A permission request the host answered itself, from an earlier approval.
+
+    Recorded as an approval that is already resolved -- the call and its
+    return together -- so the transcript says why the agent was allowed
+    without anybody being asked. No STATUS event: that is what makes a surface
+    post buttons, and there is nothing left to decide.
+    """
+    tool_call_id = permission_approval_tool_call_id(request_id)
+    tool_args = permission_approval_tool_args(
+        payload, request_id=request_id, tool_name=tool_name
+    )
+    marker = tool_args[AGENT_HOST_PERMISSION_KEY]
+    if isinstance(marker, dict):
+        marker[PRE_APPROVED_KEY] = {"approval_id": approval_id}
+    return [
+        AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_call(
+                tool_name="request_approval",
+                tool_call_id=tool_call_id,
+                tool_args=tool_args,
+                metadata=metadata,
+            ),
+            agent_run_id=agent_run_id,
+            sequence=sequence,
+        ),
+        AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_return(
+                tool_call_id=tool_call_id,
+                tool_name="request_approval",
+                tool_result={
+                    "success": True,
+                    "message": (
+                        "Allowed without asking again: the person approved "
+                        "this exact action earlier, after the turn that asked "
+                        "for it had ended."
+                    ),
+                    "decision": AgentRunApprovalDecision.APPROVE_ONCE.value,
+                    "executed": False,
+                    "response": {"approved_earlier": approval_id},
+                },
+                metadata=metadata,
+            ),
             agent_run_id=agent_run_id,
             sequence=sequence,
         ),

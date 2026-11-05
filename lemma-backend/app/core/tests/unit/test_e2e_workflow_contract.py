@@ -251,12 +251,15 @@ def test_coverage_is_combined_inside_the_e2e_run() -> None:
 
     assert not (_REPO_ROOT / ".github/workflows/backend-coverage.yml").exists()
     assert "backend-unit" in jobs
-    assert {"backend-unit", "backend-e2e"} <= set(jobs["coverage"]["needs"])
-    # The required check has to see the floor, or it is advisory again.
-    assert {"backend-unit", "coverage"} <= set(jobs["e2e-passed"]["needs"])
+    # The required check combines coverage itself, so it has to see every
+    # producer -- or the floor is advisory again.
+    assert {"backend-unit", "backend-e2e", "backend-e2e-sandbox"} <= set(
+        jobs["e2e-passed"]["needs"]
+    )
+    assert "coverage" not in jobs
 
-    # Every producer and the coverage job check out the same commit.
-    for name in ("backend-unit", "backend-e2e", "coverage"):
+    # Every producer and the job that combines them check out the same commit.
+    for name in ("backend-unit", "backend-e2e", "backend-e2e-sandbox", "e2e-passed"):
         checkout = next(
             step
             for step in jobs[name]["steps"]
@@ -479,6 +482,49 @@ def test_the_non_shard_lanes_match_their_workflows() -> None:
     assert f"FUNCTION_BENCH_TEST = {planner.BENCHMARK_PATH}" in backend_makefile, (
         "the benchmark target no longer runs plan_e2e_shards.BENCHMARK_PATH"
     )
+
+
+def test_the_protected_shards_run_every_file_once_and_feed_one_verdict() -> None:
+    """The split protected lane must still be one lane, judged as one.
+
+    Every Desktop DMG waits on this workflow's run conclusion for the exact
+    commit (`require-backend-protected-e2e`), so the layout must run every test
+    file exactly once, the matrix must come from the generated layout rather
+    than a hand-written list, every shard must hand the fixtures the prebuilt
+    images, and one job must both publish the commit-linked evidence and refuse
+    a run in which any shard did not succeed.
+    """
+    planner = _load_planner()
+    assert planner.verify_protected() == 0
+
+    workflow = yaml.safe_load(
+        (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
+    )
+    jobs = workflow["jobs"]
+    text = (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
+    assert "jq -c '.shards' .github/protected-e2e-shards.json" in text
+    shard_job = jobs["protected-runtime"]
+    assert shard_job["strategy"]["fail-fast"] is False
+    assert shard_job["environment"] == "backend-protected-e2e"
+    assert "sandbox-images" in shard_job["needs"]
+    steps = {step.get("name"): step for step in shard_job["steps"]}
+    assert "WORKSPACE_E2E_IMAGE" in steps["Resolve sandbox image tags"]["run"]
+    run = steps["Run protected suite"]
+    assert "-o timeout=300" in run["run"]
+    assert set(run["env"]) >= {
+        "E2E_REAL",
+        "E2E_LLM_MODE",
+        "LEMMA_E2E_OAUTH_CREDENTIALS",
+    }
+
+    verdict = jobs["protected-e2e-passed"]
+    assert set(verdict["needs"]) == set(jobs) - {"protected-e2e-passed"}
+    published = [
+        step
+        for step in verdict["steps"]
+        if step.get("with", {}).get("name") == "backend-protected-e2e-${{ github.sha }}"
+    ]
+    assert published, "the commit-linked evidence artifact is no longer published"
 
 
 #: Markers declared in `pytest.ini` that no test carries, and why that is

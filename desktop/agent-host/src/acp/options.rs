@@ -24,20 +24,7 @@ pub(crate) fn convert_config_option(
         .and_then(Value::as_str)
         .map(str::to_owned);
     let mut current_value = object.get("currentValue").cloned().unwrap_or(Value::Null);
-    let raw_options = object
-        .get("options")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|value| {
-            value.as_object().map(|object| {
-                object
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect()
-            })
-        })
-        .collect::<Vec<JsonMap>>();
+    let raw_options = flat_choices(object.get("options"));
     let mut metadata = JsonMap::new();
     if let Some(kind) = object.get("type") {
         metadata.insert("type".to_owned(), kind.clone());
@@ -76,6 +63,46 @@ pub(crate) fn convert_config_option(
         options,
         metadata,
     })
+}
+
+/// A select option's choices as one flat list.
+///
+/// ACP lets an agent group its choices (`[{group, name, options: [...]}]`) as
+/// well as list them. A group was copied through as though it were a choice:
+/// it has no `value`, so membership checks found nothing to match and the
+/// list read as "no enumeration" -- any value at all accepted, and the policy
+/// filter below unable to see the values inside it. Each grouped choice keeps
+/// its group's name, for display.
+fn flat_choices(options: Option<&Value>) -> Vec<JsonMap> {
+    let mut flat = Vec::new();
+    for item in options.and_then(Value::as_array).into_iter().flatten() {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        let grouped = object.get("options").and_then(Value::as_array);
+        match grouped {
+            Some(choices) if !object.contains_key("value") => {
+                let group = object.get("name").or_else(|| object.get("group")).cloned();
+                for choice in choices.iter().filter_map(Value::as_object) {
+                    let mut choice: JsonMap = choice
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect();
+                    if let Some(group) = &group {
+                        choice.entry("group".to_owned()).or_insert(group.clone());
+                    }
+                    flat.push(choice);
+                }
+            }
+            _ => flat.push(
+                object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            ),
+        }
+    }
+    flat
 }
 
 /// Whether an option decides what an agent is allowed to do.

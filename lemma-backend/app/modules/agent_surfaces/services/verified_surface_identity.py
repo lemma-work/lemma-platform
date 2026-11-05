@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (
+    VerifiedSurfaceIdentityRepository,
+)
+
 from uuid import UUID
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfacePlatform,
-)
-from app.modules.agent_surfaces.infrastructure.onboarding_models import (
-    VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     has_shared_system_bot,
@@ -35,11 +35,8 @@ async def resolve_shared_verified_identity(
         or event.platform.is_email
     ):
         return None
-    identity = await uow.session.scalar(
-        select(VerifiedSurfaceIdentity).where(
-            VerifiedSurfaceIdentity.binding_key
-            == platform_binding_key(event, installation_id)
-        )
+    identity = await VerifiedSurfaceIdentityRepository(uow).by_binding_key(
+        platform_binding_key(event, installation_id)
     )
     if identity is None:
         return None
@@ -48,7 +45,20 @@ async def resolve_shared_verified_identity(
         identity.revoked_at is not None
         or user is None
         or (
+            # A shared bot's binding stands on the number the platform
+            # attested. One made through an org's own app stands on the mailbox
+            # code alone: that app's numbers are its secret holder's word, so
+            # none was recorded. A Telegram account its owner proved from a
+            # signed-in Lemma session stands on that, with no number at all --
+            # Telegram attests the account id on every bot, so the proof holds
+            # wherever it arrives. Never WhatsApp: on an org's own number the
+            # sender is its secret holder's word.
             has_shared_system_bot(event.platform)
+            and installation_id is None
+            and not (
+                event.platform is SurfacePlatform.TELEGRAM
+                and identity.session_proved_at is not None
+            )
             and (
                 not identity.verified_phone
                 or identity.verified_phone != user.mobile_number

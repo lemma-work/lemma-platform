@@ -36,7 +36,7 @@ def _schedule(**overrides) -> ScheduleResponse:
         "agent_id": None,
         "workflow_id": None,
         "config": {},
-        "account_id": None,
+        "pod_connector_slug": None,
         "connector_trigger_id": None,
         "filter_instruction": None,
         "filter_output_schema": None,

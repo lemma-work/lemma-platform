@@ -10,14 +10,18 @@ import asyncio
 import re
 import time
 import uuid
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
+from opentelemetry.trace import SpanKind
 from fastapi.responses import JSONResponse
+from starlette.routing import BaseRoute, Match, Route
 
+from app.core.api.exception_handlers import ERROR_REQUEST_ID
 from app.core.domain.errors import PayloadTooLargeError
 from starlette.types import Scope
 
 from app.core.config import settings
 from app.version import API_VERSION
+from app.core.observability.edge import annotate_server_span
 from app.core.origin import origin_for_path, origin_scope, resolve_client_identity
 from app.core.log.log import get_logger
 
@@ -129,11 +133,15 @@ class RequestObserverMiddleware:
             request_id = uuid.uuid4().hex
 
         correlation_id = uuid.uuid7()
+        # Set on the scope the server handed in, not only on the copy below: an
+        # unhandled exception becomes its 500 in Starlette's outermost layer,
+        # which reads that scope -- so the id this layer chose is otherwise
+        # invisible to the one error response that most needs it.
+        scope.setdefault("state", {})[ERROR_REQUEST_ID] = request_id
         scope = dict(scope)
         scope["headers"] = [
             (key, value) for key, value in headers if key.lower() != self.HEADER
         ] + [(self.HEADER, request_id.encode("ascii"))]
-        scope.setdefault("state", {})
 
         started_at = time.perf_counter()
         response_started_at: float | None = None
@@ -195,6 +203,12 @@ class RequestObserverMiddleware:
                 finished_at = time.perf_counter()
                 duration_ms = round((finished_at - started_at) * 1000, 1)
                 route = self._route_template(scope)
+                _name_server_span_route(route)
+                annotate_server_span(
+                    trace.get_current_span(),
+                    scope,
+                    headers=headers,
+                )
                 attributes = {
                     "http.request.method": str(scope.get("method", "UNKNOWN")),
                     "http.route": route,
@@ -307,7 +321,95 @@ class RequestObserverMiddleware:
     def _route_template(scope: Scope) -> str:
         route = scope.get("route")
         value = getattr(route, "path_format", None) or getattr(route, "path", None)
-        return value if isinstance(value, str) else _UNMATCHED_ROUTE
+        if isinstance(value, str):
+            return value
+        return _template_for_unrouted(scope)
+
+
+def _template_for_unrouted(scope: Scope) -> str:
+    """The route a request was headed for, when it never reached the router.
+
+    A request refused before routing -- a 401 from an auth middleware, a 413
+    from the body limit -- has no ``scope["route"]``, so it was counted, logged
+    and traced as ``unmatched`` even though its path names a real endpoint.
+    Matching the path against the app's routes recovers the template, which is
+    as bounded as any other route label. Only plain routes are tried: a
+    mount's template is its prefix, which would name the wrong thing. A path
+    nothing matches stays ``unmatched``.
+
+    Only the routes sharing the path's first segment are tried, from an index
+    built once per route table: these are the cheapest requests to send, and
+    a scan of every route on each would add work exactly where it is least
+    affordable.
+    """
+    router = getattr(scope.get("app"), "router", None)
+    routes = getattr(router, "routes", None)
+    if not routes:
+        return _UNMATCHED_ROUTE
+    by_segment = _routes_by_first_segment(routes)
+    first = _first_segment(str(scope.get("path") or ""))
+    partial: str | None = None
+    # Back in registration order across both buckets: the router takes the
+    # first route that matches, so a `/{account}` registered before `/health`
+    # is what `/health` reaches, and the label has to agree.
+    candidates = sorted(
+        (*by_segment.get(first, ()), *by_segment.get(None, ())),
+        key=lambda entry: entry[0],
+    )
+    for _, candidate in candidates:
+        match, _ = candidate.matches(scope)
+        if match is Match.FULL:
+            return candidate.path_format
+        if match is Match.PARTIAL and partial is None:
+            partial = candidate.path_format
+    return partial or _UNMATCHED_ROUTE
+
+
+#: Route index per route table, keyed by the list's identity and length so a
+#: route added after start-up rebuilds it.
+_ROUTE_INDEX: dict[
+    tuple[int, int], dict[str | None, list[tuple[int, Route]]]
+] = {}  # memory: bounded cleared to one route table on every rebuild
+
+
+def _first_segment(path: str) -> str:
+    return path.lstrip("/").split("/", 1)[0]
+
+
+def _routes_by_first_segment(
+    routes: list[BaseRoute],
+) -> dict[str | None, list[tuple[int, Route]]]:
+    """Plain routes, with their registration position, by their literal first
+    segment; ``None`` for a parameter."""
+    key = (id(routes), len(routes))
+    index = _ROUTE_INDEX.get(key)
+    if index is None:
+        index = {}
+        for position, route in enumerate(routes):
+            if not isinstance(route, Route):
+                continue
+            first = _first_segment(route.path_format)
+            index.setdefault(None if first.startswith("{") else first, []).append(
+                (position, route)
+            )
+        _ROUTE_INDEX.clear()
+        _ROUTE_INDEX[key] = index
+    return index
+
+
+def _name_server_span_route(route: str) -> None:
+    """Give the request's server span an ``http.route`` if it has none.
+
+    The span is named ``{METHOD} {route}`` at export (see the span sanitizer),
+    so a span without a route is named for nothing. The instrumentation's own
+    value wins when it found one.
+    """
+    span = trace.get_current_span()
+    if not span.is_recording() or getattr(span, "kind", None) is not SpanKind.SERVER:
+        return
+    if "http.route" in (getattr(span, "attributes", None) or {}):
+        return
+    span.set_attribute("http.route", route)
 
 
 # Compatibility name retained for imports and generated SDK tests.

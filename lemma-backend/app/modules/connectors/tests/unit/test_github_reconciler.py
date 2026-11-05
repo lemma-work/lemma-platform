@@ -73,6 +73,39 @@ def _account(**overrides):
     return SimpleNamespace(**{**base, **overrides})
 
 
+class _Bindings:
+    """The binding table, as the reconciler is handed it: nothing is bound to
+    anybody yet unless a test says so. Its refusals are covered end to end
+    against Postgres."""
+
+    def __init__(self, owners: dict[str, object] | None = None) -> None:
+        self.owners = dict(owners or {})
+        self.claimed: list[tuple[str, bool]] = []
+
+    async def owner(self, installation_id: str):
+        return self.owners.get(installation_id)
+
+    async def claimable_by(self, organization_id, installation_ids):
+        return {
+            one
+            for one in installation_ids
+            if self.owners.get(one) in (None, organization_id)
+        }
+
+    async def claim(self, account, installation_id: str, *, administered: bool):
+        self.claimed.append((installation_id, administered))
+
+
+async def _administered(_token: str, _installation_id: str) -> bool:
+    return True
+
+
+def _reconciler(service, cache, *, bindings=None, prove=_administered):
+    return GithubInstallationReconciler(
+        service, cache, bindings=bindings or _Bindings(), prove=prove
+    )
+
+
 @pytest.fixture
 def answers(monkeypatch):
     """Whatever GitHub is pretending to say, and how often it was asked."""
@@ -100,7 +133,7 @@ async def test_an_installation_made_out_of_band_is_picked_up(answers):
     setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
     service, account = _Service(), _account()
 
-    outcome = await GithubInstallationReconciler(service, _Cache()).outcome(account)
+    outcome = await _reconciler(service, _Cache()).outcome(account)
 
     assert outcome.state is InstallState.READY
     assert account.external_ref == "158040062"
@@ -115,7 +148,7 @@ async def test_a_bound_account_costs_nothing(answers):
     setter(InstallationOutcome(InstallState.INSTALL_REQUIRED))
     account = _account(external_ref="158040062")
 
-    outcome = await GithubInstallationReconciler(_Service(), _Cache()).outcome(account)
+    outcome = await _reconciler(_Service(), _Cache()).outcome(account)
 
     assert outcome.installation_id == "158040062"
     assert calls == []
@@ -127,7 +160,7 @@ async def test_refresh_asks_again_even_when_bound(answers):
     account = _account(external_ref="158040062")
     service = _Service()
 
-    await GithubInstallationReconciler(service, _Cache()).outcome(account, force=True)
+    await _reconciler(service, _Cache()).outcome(account, force=True)
 
     assert calls == ["gho_token"]
     assert account.external_ref == "200000001"
@@ -138,7 +171,7 @@ async def test_repeated_reads_of_an_unbound_account_ask_once(answers):
     spend one GitHub call per render."""
     setter, calls = answers
     setter(InstallationOutcome(InstallState.INSTALL_REQUIRED))
-    reconciler = GithubInstallationReconciler(_Service(), _Cache())
+    reconciler = _reconciler(_Service(), _Cache())
     account = _account()
 
     first = await reconciler.outcome(account)
@@ -152,7 +185,7 @@ async def test_invalidating_makes_the_next_read_ask(answers):
     setter, calls = answers
     setter(InstallationOutcome(InstallState.INSTALL_REQUIRED))
     cache = _Cache()
-    reconciler = GithubInstallationReconciler(_Service(), cache)
+    reconciler = _reconciler(_Service(), cache)
     account = _account()
 
     await reconciler.outcome(account)
@@ -174,7 +207,7 @@ async def test_several_installations_survive_the_cache(answers):
             ),
         )
     )
-    reconciler = GithubInstallationReconciler(_Service(), _Cache())
+    reconciler = _reconciler(_Service(), _Cache())
     account = _account()
 
     await reconciler.outcome(account)
@@ -192,7 +225,7 @@ async def test_an_ambiguous_answer_binds_nothing(answers):
     setter(InstallationOutcome(InstallState.CHOOSE_INSTALL, choices=()))
     service, account = _Service(), _account()
 
-    await GithubInstallationReconciler(service, _Cache()).outcome(account)
+    await _reconciler(service, _Cache()).outcome(account)
 
     assert account.external_ref is None
     assert service.account_repository.updated == []
@@ -205,7 +238,7 @@ async def test_a_credential_with_no_token_is_not_a_missing_installation(answers)
     setter(InstallationOutcome(InstallState.READY, installation_id="1"))
     account = _account(credentials={})
 
-    outcome = await GithubInstallationReconciler(_Service(), _Cache()).outcome(account)
+    outcome = await _reconciler(_Service(), _Cache()).outcome(account)
 
     assert outcome.state is InstallState.INSTALL_REQUIRED
     assert calls == []
@@ -216,7 +249,7 @@ async def test_other_connectors_are_never_asked_about_installations(answers):
     setter(InstallationOutcome(InstallState.INSTALL_REQUIRED))
     account = _account(connector_id="slack")
 
-    outcome = await GithubInstallationReconciler(_Service(), _Cache()).outcome(account)
+    outcome = await _reconciler(_Service(), _Cache()).outcome(account)
 
     assert outcome.state is InstallState.READY
     assert calls == []
@@ -256,9 +289,7 @@ class TestTheCacheCannotBreakAnything:
     async def test_a_failing_read_is_a_miss_and_github_is_asked(self, answers, caplog):
         setter, calls = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="1"))
-        reconciler = GithubInstallationReconciler(
-            _Service(), self._BrokenCache(failing="get")
-        )
+        reconciler = _reconciler(_Service(), self._BrokenCache(failing="get"))
 
         with caplog.at_level("WARNING"):
             outcome = await reconciler.outcome(_account())
@@ -271,9 +302,7 @@ class TestTheCacheCannotBreakAnything:
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="1"))
         service = _Service()
-        reconciler = GithubInstallationReconciler(
-            service, self._BrokenCache(failing="set")
-        )
+        reconciler = _reconciler(service, self._BrokenCache(failing="set"))
         account = _account()
 
         with caplog.at_level("WARNING"):
@@ -288,11 +317,118 @@ class TestTheCacheCannotBreakAnything:
         """The one with a committed write behind it."""
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="1"))
-        reconciler = GithubInstallationReconciler(
-            _Service(), self._BrokenCache(failing="delete")
-        )
+        reconciler = _reconciler(_Service(), self._BrokenCache(failing="delete"))
 
         with caplog.at_level("WARNING"):
             await reconciler.invalidate("some-account")
 
         assert "connectors.github_reconciler.cache_unavailable.degraded" in caplog.text
+
+
+class TestNoClaimWithoutProof:
+    """Audit H4: an installation nobody holds yet is bound only by its owner
+    on GitHub's side. Seeing it is not enough."""
+
+    async def test_an_unproven_claimant_binds_nothing_and_waits_on_an_owner(
+        self, answers
+    ):
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+        service, account, bindings = _Service(), _account(), _Bindings()
+        asked: list[tuple[str, str]] = []
+
+        async def _not_theirs(token: str, installation_id: str) -> bool:
+            asked.append((token, installation_id))
+            return False
+
+        outcome = await _reconciler(
+            service, _Cache(), bindings=bindings, prove=_not_theirs
+        ).outcome(account)
+
+        assert asked == [("gho_token", "158040062")]
+        assert outcome.state is InstallState.PENDING_APPROVAL
+        assert account.external_ref is None
+        assert bindings.claimed == []
+        assert service.account_repository.updated == []
+
+    async def test_one_the_organization_already_holds_needs_no_proof(self, answers):
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+        account = _account()
+        bindings = _Bindings({"158040062": account.organization_id})
+
+        async def _never(_token: str, _installation_id: str) -> bool:
+            raise AssertionError("asked GitHub for proof it did not need")
+
+        outcome = await _reconciler(
+            _Service(), _Cache(), bindings=bindings, prove=_never
+        ).outcome(account)
+
+        assert outcome.state is InstallState.READY
+        assert account.external_ref == "158040062"
+
+
+class TestTheStateIsWhatTheClaimMadeTrue:
+    """Review of #1039: the outcome was cached READY before the claim ran, so
+    a refusal left a READY with nothing bound and no token to mint."""
+
+    class _Refusing(_Bindings):
+        def __init__(self, refusal: Exception) -> None:
+            super().__init__()
+            self.refusal = refusal
+
+        async def claim(self, account, installation_id: str, *, administered: bool):
+            self.claimed.append((installation_id, administered))
+            raise self.refusal
+
+    async def test_a_github_admin_lemma_will_not_let_install_waits_on_one_who_may(
+        self, answers
+    ):
+        from app.modules.connectors.domain.github_installation_errors import (
+            InstallationClaimNotPermittedError,
+        )
+
+        setter, calls = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+        service, account, cache = _Service(), _account(), _Cache()
+        bindings = self._Refusing(InstallationClaimNotPermittedError())
+        reconciler = _reconciler(service, cache, bindings=bindings)
+
+        first = await reconciler.outcome(account)
+        cached = await reconciler.outcome(account)
+
+        assert first.state is InstallState.PENDING_APPROVAL
+        assert cached.state is InstallState.PENDING_APPROVAL
+        assert calls == ["gho_token"], "the second read was not the cached one"
+        assert account.external_ref is None
+        assert service.account_repository.updated == []
+
+    async def test_one_lost_to_another_org_is_not_ready_either(self, answers):
+        from app.modules.connectors.domain.github_installation_errors import (
+            GithubInstallationBoundElsewhereError,
+        )
+
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+        bindings = self._Refusing(GithubInstallationBoundElsewhereError())
+
+        outcome = await _reconciler(_Service(), _Cache(), bindings=bindings).outcome(
+            _account()
+        )
+
+        assert outcome.state is InstallState.INSTALL_REQUIRED
+
+    async def test_the_claim_carries_whether_github_vouched(self, answers):
+        """A binding this organization holds needs no proof, so none is asked
+        for -- and the claim must not be told there was one, or it would
+        stamp a binding migration 0063 derived as proven."""
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+        account = _account()
+        held = _Bindings({"158040062": account.organization_id})
+        await _reconciler(_Service(), _Cache(), bindings=held).outcome(account)
+        unbound = _Bindings()
+        await _reconciler(_Service(), _Cache(), bindings=unbound).outcome(_account())
+
+        assert held.claimed == [("158040062", False)]
+        assert unbound.claimed == [("158040062", True)]

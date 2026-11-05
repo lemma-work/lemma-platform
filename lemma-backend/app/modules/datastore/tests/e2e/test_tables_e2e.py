@@ -226,7 +226,6 @@ class TestReservedTablesHidden:
         from uuid import UUID
 
         from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-        from app.core.infrastructure.events.message_bus import get_message_bus
         from app.modules.datastore.domain.datastore_entities import (
             ColumnSchema,
             DatastoreDataType,
@@ -252,7 +251,7 @@ class TestReservedTablesHidden:
         # so we go through the repository, mirroring the old member-sync path.
         uow_factory = SessionUnitOfWorkFactory(db_manager.session_factory)
         async with uow_factory() as uow:
-            repo = DatastoreTableRepository(uow, message_bus=get_message_bus())
+            repo = DatastoreTableRepository(uow)
             await repo.create(
                 DatastoreTableEntity(
                     pod_id=pod_uuid,

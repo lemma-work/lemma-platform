@@ -113,11 +113,6 @@ def test_real_provider_classes_are_classified_correctly() -> None:
     "module_path, attribute, routed_through",
     [
         (
-            "app.modules.schedule.infrastructure.adapters.system_model_filter",
-            "FILTER_USAGE_LIMITS",
-            "resolve_system_runtime",
-        ),
-        (
             "app.modules.agent.services.conversation_title_service",
             "_TITLE_USAGE_LIMITS",
             "usage_limits_for",

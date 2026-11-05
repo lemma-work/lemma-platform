@@ -8,14 +8,22 @@ from uuid import UUID
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.services.surface_connector import (
+    bound_account_id,
+    installation_identity,
+)
+from app.modules.connectors.contracts.pod_connectors import PodConnectorRefusal
 from app.modules.agent.contracts.provisioning import pod_default_agent_exists
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
-from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.domain.personal_route import PersonalRouteUnavailable
+from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceChatContext,
+    SurfaceConnectorRef,
+)
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -26,6 +34,7 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.services.conversation_binder import BoundThread
 from app.modules.agent_surfaces.services.onboarding_transport import (
     platform_binding_key,
 )
@@ -33,10 +42,6 @@ from app.modules.agent_surfaces.services.surface_route_types import ResolvedSurf
 from app.modules.connectors.contracts.surfaces import account
 from app.modules.identity.contracts.onboarding import active_chat_user
 from app.modules.pod.contracts.agent_access import live_pod_organization_id
-
-
-class PersonalRouteUnavailable(ValueError):
-    pass
 
 
 async def validate_personal_dm_route(
@@ -79,9 +84,13 @@ async def _require_usable_installation(
     surface = await SurfaceRepository(uow).get(surface_id)
     if surface is None:
         raise PersonalRouteUnavailable("The installation is unavailable")
-    if route.binding_key != platform_binding_key(
-        event, surface.account_id or surface.id
-    ):
+    try:
+        installation_id = await installation_identity(uow, surface)
+    except PodConnectorRefusal as refused:
+        raise PersonalRouteUnavailable(
+            "The installation credentials are unavailable"
+        ) from refused
+    if route.binding_key != platform_binding_key(event, installation_id):
         raise PersonalRouteUnavailable(
             "The sender does not own this personal conversation"
         )
@@ -141,7 +150,7 @@ class ConversationLinker(Protocol):
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
-    ) -> tuple[AgentSurfaceConversationLink, str | None]: ...
+    ) -> BoundThread: ...
 
 
 async def prepare_personal_dm_context(
@@ -179,7 +188,7 @@ async def prepare_personal_dm_context(
         conversation_kind="DM",
         route_key=f"personal:{route.id}",
     )
-    link, title = await linker.bind_conversation(
+    bound = await linker.bind_conversation(
         surface=installation, parsed=event, resolved_user=resolved, route=assistant
     )
     return SurfaceChatContext(
@@ -187,12 +196,13 @@ async def prepare_personal_dm_context(
         platform=installation.surface_type,
         surface_id=installation.id,
         surface_name=installation.name,
-        surface_account_id=installation.account_id,
+        surface_connector=SurfaceConnectorRef.of(installation),
         surface_config=installation.config,
         pod_id=route.pod_id,
         agent_name=DEFAULT_POD_AGENT_NAME,
         agent_display_name="Assistant",
-        conversation_id=link.conversation_id,
+        conversation_id=bound.conversation_id,
+        source_id=bound.source_id,
         user_id=user.id,
         message_text=event.message_text,
         message_user_id=user.id,
@@ -205,7 +215,7 @@ async def prepare_personal_dm_context(
             event_metadata=event.metadata,
         ),
         event=event,
-        created_conversation_title=title,
+        created_conversation_title=bound.created_title,
     )
 
 
@@ -216,8 +226,9 @@ async def _require_installation_organization(
     target_org = await live_pod_organization_id(uow, pod_id)
     if installation_org is None or installation_org != target_org:
         raise PersonalRouteUnavailable("The personal pod is outside this installation")
-    if surface.account_id is not None:
-        connected = await account(uow, surface.account_id)
+    account_id = await bound_account_id(uow, surface)
+    if account_id is not None:
+        connected = await account(uow, account_id)
         if (
             connected is None
             or connected.organization_id != installation_org

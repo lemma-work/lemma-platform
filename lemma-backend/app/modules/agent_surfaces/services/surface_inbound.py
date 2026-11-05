@@ -7,6 +7,8 @@ a voice note to transcribe, recent channel history for a group mention.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
+
 from uuid import UUID
 
 
@@ -23,18 +25,14 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.services.surface_candidates import (
     admitted_surfaces,
     fan_in_candidates,
 )
-from app.modules.agent_surfaces.services.delivery_claims import (
-    hand_back_delivery_claim,
-    take_delivery_claim,
-)
 from app.modules.agent_surfaces.services.created_groups import created_group_surfaces
+from app.modules.agent_surfaces.services.customer_held_secrets import (
+    signed_with_a_customer_secret,
+)
 from app.modules.agent_surfaces.services.group_ingress import (
     logged_and_addressed,
     own_bot_group_message,
@@ -88,33 +86,6 @@ logger = get_logger(__name__)
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
-async def release_ingress_claim(
-    context: AgentSurfaceContext,
-    *,
-    event_dedup_store: SurfaceEventDedupStorePort,
-) -> None:
-    """Give back the delivery claim ``prepare_ingress`` took for this context.
-
-    The claim is spent inside preparation but the work it guards -- the queued
-    run -- is dispatched afterwards, so a caller that fails to dispatch has to
-    hand the claim back. Otherwise the inbox's retry re-enters preparation, is
-    told the message is already claimed, and drops it: the delivery is gone
-    for good.
-
-    Keyed off the context rather than the parsed event the claim was taken
-    from, because that is what the dispatcher still holds -- and the two carry
-    the same ids by construction (``context.event`` *is* the parsed event, and
-    ``surface_id`` is the installation the claim named).
-    """
-    await event_dedup_store.release_message(
-        surface_installation_id=context.surface_id,
-        platform=context.platform.value,
-        external_channel_id=context.event.external_channel_id,
-        external_thread_id=context.event.external_thread_id,
-        external_message_id=context.event.external_message_id,
-    )
-
-
 class SurfaceInboundMixin:
     #: Supplied by `AgentSurfaceIngressService`, which composes these mixins.
     #: Not optional any more: the worker's factory mode went to
@@ -137,7 +108,6 @@ class SurfaceInboundMixin:
     #: bare annotation binds no value -- and turns the baseline into something
     #: that would notice an actual mistake.
     surface_repository: SurfaceInstallationRepositoryPort
-    conversation_link_repository: SurfaceConversationLinkRepository
     credential_resolver: SurfaceCredentialResolver
     adapter_registry: SurfacePlatformAdapterRegistry
     event_dedup_store: SurfaceEventDedupStorePort
@@ -180,7 +150,7 @@ class SurfaceInboundMixin:
         surfaces: list[AgentSurfaceEntity] = []
         resolved_user: ResolvedSurfaceUser | None = None
         user_pod_ids: set[UUID] | None = None
-        if fan_in and parsed.is_dm:
+        if fan_in:
             surfaces, resolved_user, user_pod_ids = await fan_in_candidates(
                 platform=platform,
                 parsed=parsed,
@@ -198,25 +168,22 @@ class SurfaceInboundMixin:
         if created == []:
             return None  # a group the bot created, but not for any pod here
         surfaces = created or surfaces
-        if not surfaces:
+        if not surfaces and not fan_in:
             surfaces = await self.surface_repository.list_active_for_routing(
-                platform,
-                surface_ids=receiver_surface_ids,
-                system_credentials_only=fan_in,
+                platform, surface_ids=receiver_surface_ids
             )
         if receiver_surface_ids is not None and not surfaces:
             return None
         parsed = await logged_and_addressed(
             self.uow,
-            router=self.router,
+            adapter=adapter,
+            credential_resolver=self.credential_resolver,
+            seats=self.router.seats,
             surfaces=surfaces,
             parsed=parsed,
-            platform=platform,
         )
 
-        candidates = await admitted_surfaces(
-            surfaces, parsed, links=self.conversation_link_repository
-        )
+        candidates = await admitted_surfaces(surfaces, parsed, seats=self.router.seats)
         if not candidates:
             return await self._prepare_unrouted_platform_context(
                 platform=platform,
@@ -264,7 +231,14 @@ class SurfaceInboundMixin:
                 credentials=await self.credential_resolver.for_surface(
                     identity_surface, arrived_on=arrival_number(parsed)
                 ),
-                installation_id=identity_surface.account_id or identity_surface.id,
+                installation_id=await self.credential_resolver.installation_identity(
+                    identity_surface
+                ),
+                # Every candidate verified against one app's secret, so the
+                # first speaks for all of them.
+                customer_held_secret=await signed_with_a_customer_secret(
+                    self.uow, identity_surface
+                ),
             )
         )
         matched_surface = await self.router.select_surface(
@@ -321,9 +295,10 @@ class SurfaceInboundMixin:
         if parsed is not None and not parsed.is_dm:
             parsed = await own_bot_group_message(
                 self.uow,
-                router=self.router,
+                adapter=adapter,
+                credential_resolver=self.credential_resolver,
                 surface_repository=self.surface_repository,
-                links=self.conversation_link_repository,
+                seats=self.router.seats,
                 surface=surface,
                 parsed=parsed,
             )
@@ -350,8 +325,6 @@ class SurfaceInboundMixin:
         if surface is not None:
             if self.router.is_self_addressed(surface=surface, parsed=parsed):
                 return None
-            if surface.should_ignore_sender(parsed.sender_external_user_id):
-                return None
         if resolved_user is None:
             credentials = (
                 await self.credential_resolver.for_surface(
@@ -360,19 +333,26 @@ class SurfaceInboundMixin:
                 if surface is not None
                 # No surface on this path by definition: the event matched none.
                 else await self.credential_resolver.for_platform(
-                    platform, None, surface=None, arrived_on=arrival_number(parsed)
+                    platform, surface=None, arrived_on=arrival_number(parsed)
                 )
             )
             resolved_user = await self.router.resolve_sender(
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
-                installation_id=(surface.account_id or surface.id) if surface else None,
+                installation_id=(
+                    await self.credential_resolver.installation_identity(surface)
+                    if surface
+                    else None
+                ),
+                customer_held_secret=await signed_with_a_customer_secret(
+                    self.uow, surface
+                ),
             )
         display_name = agent_display_name(
             (await agent_name_for_surface(self.uow, surface)) if surface else None
         )
-        # `prepare_unrouted_context` opens with a Redis dedup claim, and
+        # `prepare_unrouted_context` opens with a message claim, and
         # `resolve_sender` above has flushed an external-user upsert --
         # so `connection_released` would decline and hand nothing back. Commit
         # instead: what has been written by here is a durable fact about the
@@ -400,9 +380,6 @@ class SurfaceInboundMixin:
         claim_delivery: bool = True,
     ) -> AgentSurfaceContext | None:
         if self.router.is_self_addressed(surface=surface, parsed=parsed):
-            return None
-
-        if surface.should_ignore_sender(parsed.sender_external_user_id):
             return None
 
         credentials = await self.credential_resolver.for_surface(
@@ -436,34 +413,33 @@ class SurfaceInboundMixin:
         ):
             return None
 
-        if claim_delivery and not await take_delivery_claim(
-            self.uow, self.event_dedup_store, surface, parsed
+        # The message-level claim (Slack sends `message` and `app_mention` for
+        # one message): on this session, so it commits with what preparation
+        # writes and goes away with it if preparation fails -- nothing to hand
+        # back. Owned by the inbound row being ingested, whose own retry finds
+        # it its own. A replay took its claim already, and asks for none.
+        if claim_delivery and not await self.event_dedup_store.claim_message(
+            surface_installation_id=surface.id,
+            platform=surface.surface_type,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_message_id=parsed.external_message_id,
         ):
+            logger.info(
+                "agent_surfaces.ingress_service.duplicate_message_dropped.observed",
+                surface_type=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
+            )
             return None
 
-        # The claim is spent, and everything from here can still fail (sender
-        # resolution, routing, the binder, the commit after). Left spent, the
-        # inbox's retry reads a "duplicate" and drops the message, and a
-        # `DomainError` is terminal and never retried. So it is kept only once
-        # preparation has returned -- a `finally`, so cancellation counts too.
-        # A replay took no claim, so it has none to give back.
-        prepared = False
-        try:
-            context = await self._prepare_claimed_surface_context(
-                surface=surface,
-                parsed=parsed,
-                adapter=adapter,
-                credentials=credentials,
-                resolved_user=resolved_user,
-                fallback_agent_display_name=fallback_agent_display_name,
-            )
-            prepared = True
-            return context
-        finally:
-            if claim_delivery and not prepared:
-                await hand_back_delivery_claim(
-                    self.uow, self.event_dedup_store, surface, parsed
-                )
+        return await self._prepare_claimed_surface_context(
+            surface=surface,
+            parsed=parsed,
+            adapter=adapter,
+            credentials=credentials,
+            resolved_user=resolved_user,
+            fallback_agent_display_name=fallback_agent_display_name,
+        )
 
     async def _prepare_claimed_surface_context(
         self,
@@ -471,7 +447,7 @@ class SurfaceInboundMixin:
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
         adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, object],
+        credentials: SurfaceCredentials,
         resolved_user: ResolvedSurfaceUser | None,
         fallback_agent_display_name: str,
     ) -> AgentSurfaceContext | None:
@@ -487,7 +463,12 @@ class SurfaceInboundMixin:
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
-                installation_id=surface.account_id or surface.id,
+                installation_id=await self.credential_resolver.installation_identity(
+                    surface
+                ),
+                customer_held_secret=await signed_with_a_customer_secret(
+                    self.uow, surface
+                ),
             )
         outside = await answer_outside_the_pod(
             uow=self.uow,
@@ -520,7 +501,7 @@ class SurfaceInboundMixin:
                 agent_display_name=fallback_agent_display_name,
             )
 
-        link, created_conversation_title = await self.binder.bind_conversation(
+        bound = await self.binder.bind_conversation(
             surface=surface,
             parsed=parsed,
             resolved_user=resolved_user,
@@ -532,8 +513,9 @@ class SurfaceInboundMixin:
             resolved_user=resolved_user,
             user_id=user_id,
             route=route,
-            conversation_id=link.conversation_id,
-            created_conversation_title=created_conversation_title,
+            conversation_id=bound.conversation_id,
+            source_id=bound.source_id,
+            created_conversation_title=bound.created_title,
         )
 
     def _outsiders(self) -> OutsiderDoor:

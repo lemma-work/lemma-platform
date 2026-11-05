@@ -7,7 +7,6 @@ from fastapi import APIRouter, Query
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AccountCreateSchema,
@@ -21,7 +20,12 @@ from app.modules.connectors.api.schemas import (
 )
 from app.modules.connectors.contracts.github import install_state_for
 from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.services.auth.github_bindings import (
+    claim_for_account,
+    held_proven_by,
+)
 from app.modules.connectors.services.auth.github_installation import (
+    administers,
     verify_installation,
 )
 from app.modules.connectors.services.auth.github_reconciler import (
@@ -171,7 +175,6 @@ async def get_account(
     summary="Delete Account",
     description="Delete a connected account and revoke the connection",
     status_code=200,
-    dependencies=[reject_delegated_workload("delete a connected account")],
 )
 async def delete_account(
     user: CurrentUser,
@@ -265,16 +268,30 @@ async def bind_account_installation(
     reveal = getattr(token, "get_secret_value", None)
     if callable(reveal):
         token = reveal()
-    proved = False
+    session = connector_service.uow.session
+    # Not this organization's on a proven claim: binding it -- or taking over,
+    # or stamping, a binding migration 0063 derived -- needs proof this person
+    # controls it on GitHub's side, not only that they can see it (audit H4).
+    needs_proof = not await held_proven_by(
+        session, data.installation_id, organization_id
+    )
+    proved = administered = False
     if token:
-        # The write below wants the session back, so only the round trip to
-        # GitHub happens without a pooled connection held.
-        async with connection_released(getattr(connector_service.uow, "session", None)):
+        # The write below wants the session back, so only the round trips to
+        # GitHub happen without a pooled connection held.
+        async with connection_released(session):
             proved = await verify_installation(str(token), data.installation_id)
+            if proved and needs_proof:
+                administered = await administers(str(token), data.installation_id)
     if not proved:
         raise ConnectorValidationError(
             "That installation is not one this account can reach."
         )
+    # Reaching it is not owning it (audit H4): one another organization holds
+    # is refused, and one nobody holds needs its GitHub owner.
+    await claim_for_account(
+        session, account, data.installation_id, administered=administered
+    )
     account.external_ref = data.installation_id
     await connector_service.account_repository.update(account)
     await connector_service.uow.commit()

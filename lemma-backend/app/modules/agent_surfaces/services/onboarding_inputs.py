@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.infrastructure.repositories.onboarding_repository import (
+    ChatOnboardingRepository,
+)
+
 import hashlib
 import secrets
 from dataclasses import dataclass
@@ -9,7 +13,6 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic import JsonValue
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.config import surface_settings
@@ -71,17 +74,11 @@ async def require_input(
     if not token or not actor:
         raise PrivateDeliveryUnavailable("This setup form is no longer available")
     async with uows() as uow:
-        handle = await uow.session.scalar(
-            select(OnboardingInputToken).where(
-                OnboardingInputToken.token_hash
-                == hashlib.sha256(token.encode()).hexdigest()
-            )
+        onboarding = ChatOnboardingRepository(uow)
+        handle = await onboarding.input_token_by_hash(
+            hashlib.sha256(token.encode()).hexdigest()
         )
-        pending = (
-            await uow.session.get(PendingChatOnboarding, handle.pending_id)
-            if handle
-            else None
-        )
+        pending = await onboarding.pending_by_id(handle.pending_id) if handle else None
         pending = _require_current_handle(handle, pending)
         destination = ParsedInboundSurfaceEvent.model_validate(pending.destination)
         if (
@@ -154,10 +151,8 @@ async def native_prompt_metadata(
     ):
         return {}
     async with uows() as uow:
-        pending = await uow.session.scalar(
-            select(PendingChatOnboarding).where(
-                PendingChatOnboarding.binding_key == binding_key
-            )
+        pending = await ChatOnboardingRepository(uow).pending_by_binding_key(
+            binding_key
         )
         if pending is None or pending.step not in (
             OnboardingStep.AWAITING_EMAIL,

@@ -460,8 +460,6 @@ class ModelRequestStreamer:
                                 "if you need to look at it."
                             ),
                         }
-                    elif hasattr(tool_output, "model_dump"):
-                        tool_output = to_json_value(tool_output)
                     else:
                         tool_output = to_json_value(tool_output)
 

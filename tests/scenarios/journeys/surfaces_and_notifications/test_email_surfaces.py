@@ -271,9 +271,9 @@ async def test_an_unsigned_email_is_refused(mailbox):
         json={"type": "email.received", "data": {"from": alice.email, "to": [address]}},
     )
 
-    assert refused.status_code >= 400, (
-        f"an unsigned email was accepted ({refused.status_code}); anyone who "
-        f"knows the address could start an agent"
+    assert refused.status_code == 401, (
+        f"an unsigned email was not refused as unauthenticated "
+        f"({refused.status_code}); anyone who knows the address could start an agent"
     )
 
 

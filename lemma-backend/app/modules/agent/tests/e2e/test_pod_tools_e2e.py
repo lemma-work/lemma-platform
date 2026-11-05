@@ -253,6 +253,13 @@ async def _create_enum_table(
                     "required": True,
                     "options": ["pass", "fail", "friction"],
                 },
+                {
+                    "name": "summary",
+                    "type": "TEXT",
+                    "max_length": 500,
+                    "default": "pending",
+                    "unique": True,
+                },
             ],
         },
     )
@@ -319,6 +326,12 @@ async def test_pod_tables_describe_surfaces_enum_options(
     assert columns["result"]["options"] == ["pass", "fail", "friction"]
     # A non-enum column carries no options key.
     assert "options" not in columns["title"]
+    # What the database will refuse, said up front: VARCHAR(500) was described
+    # as TEXT, so a longer value was only learned from the failed write.
+    assert columns["summary"]["sql_type"] == "VARCHAR(500)"
+    assert columns["summary"]["max_length"] == 500
+    assert columns["summary"]["default"] == "pending"
+    assert columns["summary"]["unique"] is True
 
 
 @pytest.mark.asyncio
@@ -471,3 +484,82 @@ async def test_named_agent_create_record_gated_by_grant(
         ),
     )
     assert allowed["success"] is True, allowed
+
+
+async def _delete_record(ctx, table: str, record_id: str) -> dict:
+    return await pod_write_record(
+        ctx,
+        PodWriteRecordRequest(action="delete", table_name=table, record_id=record_id),
+    )
+
+
+async def _titles(ctx, table: str) -> list:
+    listed = await pod_get_records(ctx, PodGetRecordsRequest(table_name=table))
+    assert listed["success"] is True, listed
+    return [r.get("title") for r in listed["records"]]
+
+
+@pytest.mark.asyncio
+async def test_the_assistants_record_delete_pauses_for_approval(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """H14 / PS-ACCESS-021: a record delete is destructive. The assistant acts
+    with its person's permissions, and its person may delete the row -- but the
+    assistant asks first, and the row stays until someone says yes."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    table = f"notes_{uuid4().hex[:8]}"
+    await _create_table(authenticated_client, pod_id, table)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=pod_id,
+        agent_name="pod_default",
+    )
+    created = await pod_write_record(
+        ctx,
+        PodWriteRecordRequest(action="create", table_name=table, data={"title": "x"}),
+    )
+    assert created["success"] is True, created
+
+    paused = await _delete_record(ctx, table, str(created["record"]["id"]))
+
+    assert paused["success"] is False, paused
+    assert paused["needs_approval"] is True
+    assert paused["code"] == "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL"
+    assert paused["approval"]["permission_ids"] == ["datastore.record.delete"]
+    assert await _titles(ctx, table) == ["x"]
+
+
+@pytest.mark.asyncio
+async def test_a_named_agent_granted_record_write_asks_to_delete(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """H14: ``record.write`` used to carry deletes. A named agent holding it
+    writes, and is asked about -- and only about -- the delete."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    table = f"orders_{uuid4().hex[:8]}"
+    await _create_table(authenticated_client, pod_id, table)
+    agent_name = f"writer_{uuid4().hex[:8]}"
+    agent = await _create_agent(authenticated_client, pod_id, agent_name)
+    await _grant(authenticated_client, pod_id, agent_name, table)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=agent["id"],
+        agent_name=agent_name,
+    )
+    created = await pod_write_record(
+        ctx,
+        PodWriteRecordRequest(action="create", table_name=table, data={"title": "y"}),
+    )
+    assert created["success"] is True, created
+
+    paused = await _delete_record(ctx, table, str(created["record"]["id"]))
+
+    assert paused["needs_approval"] is True, paused
+    assert paused["approval"]["permission_ids"] == ["datastore.record.delete"]
+    assert await _titles(ctx, table) == ["y"]

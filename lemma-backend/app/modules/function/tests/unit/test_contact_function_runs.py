@@ -5,7 +5,9 @@ its own (never a member's session) and an identity naming the contact, while a
 member's run reaches the runtime exactly as before. The runtime half: that
 token fetches its own revision and reports its own run, and nothing else. The
 policy half: opening a function to contacts takes pod settings permission and
-either owning the function or administering the pod.
+either owning the function or administering the pod. The input half: the
+contact's proved handles reach only a function that declares ``contact``, and
+never the model's.
 """
 
 from __future__ import annotations
@@ -19,9 +21,9 @@ import httpx
 import pytest
 
 from app.core.authorization.context import (
-    ActorType,
     AuthorizationDecision,
     Context,
+    Person,
 )
 from app.core.authorization.function_run import parse_function_run_token
 from app.core.authorization.permissions import (
@@ -53,6 +55,7 @@ from app.modules.function.services.contact_access import (
     require_contact_input,
     require_contacts_opener,
 )
+from app.modules.function.services.contact_execution import with_contact_handles
 from sandbox_runtime.function.runtime_models import RuntimeInvocation
 
 pytestmark = pytest.mark.unit
@@ -86,6 +89,7 @@ def _dispatch(*, user_id: UUID | None, contact_id: UUID | None):
         config=None,
         mode=FunctionDispatchMode.ASYNCHRONOUS,
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=120),
+        execution_seconds=120,
         revision_hash=_REVISION,
         input_data={"contact_id": str(contact_id) if contact_id else None},
     )
@@ -134,6 +138,7 @@ async def _send(dispatch: FunctionExecutionDispatch, minter):
         runtime_http_client_factory=_Runtime,
         organization_resolver=_organization,
         delegated_tokens_enabled=True,
+        max_running_per_pod=1_000,
     )
     endpoint = FunctionRuntimeEndpoint(
         url="https://sandbox.test/runtime/",
@@ -143,8 +148,10 @@ async def _send(dispatch: FunctionExecutionDispatch, minter):
         profile_digest=f"sha256:{'2' * 64}",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
-    token = await dispatcher._function_session_token(dispatch)
-    await dispatcher._invoke_runtime(
+    token = await dispatcher._function_session_token(
+        dispatch, valid_until=dispatch.deadline_at
+    )
+    await dispatcher._invoker.post(
         dispatch,
         context=_context(dispatch),
         endpoint=endpoint,
@@ -246,7 +253,7 @@ class _RolePermissions:
 
 def _member(permissions, user_id: UUID) -> Context:
     return Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=user_id),
         actor_id=str(user_id),
         user_id=user_id,
         authorizer=_RolePermissions(),
@@ -298,3 +305,40 @@ def test_a_function_must_declare_the_contact_it_is_told():
         with pytest.raises(DomainError) as raised:
             require_contact_input(_function(uuid4(), input_schema=schema))
         assert raised.value.status_code == 422
+
+
+_PROVED = {"id": str(uuid4()), "emails": ["dana@example.com"], "phones": []}
+
+
+def test_a_function_that_declares_contact_is_told_the_proved_one():
+    declared = _function(
+        uuid4(), input_schema={"properties": {"contact_id": {}, "contact": {}}}
+    )
+
+    told = with_contact_handles(
+        declared,
+        {"order": "A-1", "contact": {"emails": ["somebody@else.com"]}},
+        _PROVED,
+    )
+
+    assert told == {"order": "A-1", "contact": _PROVED}
+
+
+def test_a_function_that_does_not_declare_contact_is_told_none_at_all():
+    """Not even the model's: the key only ever holds what the platform proved."""
+    undeclared = _function(uuid4(), input_schema={"properties": {"contact_id": {}}})
+
+    told = with_contact_handles(
+        undeclared, {"order": "A-1", "contact": {"emails": ["x@y.z"]}}, _PROVED
+    )
+
+    assert told == {"order": "A-1"}
+
+
+def test_nobody_to_prove_is_a_null_contact():
+    """An anonymous form submission, or a contact forgotten mid-conversation."""
+    declared = _function(uuid4(), input_schema={"properties": {"contact": {}}})
+
+    told = with_contact_handles(declared, {"contact": {"id": "me"}}, None)
+
+    assert told == {"contact": None}

@@ -1,9 +1,12 @@
 """Long-polling Telegram for one bot, when no webhook can be registered.
 
-Telegram allows a single consumer per bot token, so this leases the bot, polls
-getUpdates in a loop, and gives up only after a grace period of 409s -- long
-enough for a handover between two workers, short enough that a bot genuinely
-owned elsewhere is not held forever.
+Telegram allows a single consumer per bot token. The bot's ``surface.receiver``
+work item is the lease (one worker holds it; another takes over when its lease
+lapses), this polls getUpdates in a loop, and it gives up only after a grace
+period of 409s -- long enough for a handover between two workers, short enough
+that a bot genuinely owned elsewhere is not held forever. The offset lives in
+``surface_receiver_state`` and moves in the transaction that stores the
+updates it passed.
 """
 
 from __future__ import annotations
@@ -16,7 +19,8 @@ import httpx
 
 from app.core.infrastructure.redis.client import get_redis
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
+from app.modules.agent_surfaces.domain.credentials import TelegramCredentials
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.telegram.client import (
     ALLOWED_UPDATES,
@@ -28,14 +32,19 @@ from app.modules.agent_surfaces.platforms.telegram.update_batching import (
     next_telegram_offset as _next_telegram_offset,
 )
 from app.modules.agent_surfaces.services.native_receiver_base import (
-    _publish_native_receiver_event,
     NativeReceiverCandidate,
     NativeReceiverConflict,
+    NativeReceiverCredentialsRejected,
+    ReceiverFailureStreak,
+    ReceiverInbox,
 )
 
 logger = get_logger(__name__)
 
 _TELEGRAM_CONFLICT_GRACE_SECONDS = 75
+# Telegram answers 401 for a revoked token and 404 for a deleted bot: neither
+# is fixed by asking again.
+_TELEGRAM_REJECTED_TOKEN_STATUSES = frozenset({401, 404})
 
 
 def _poll_params(offset: int | None) -> dict[str, Any]:
@@ -50,10 +59,20 @@ def _poll_params(offset: int | None) -> dict[str, Any]:
 
 
 class TelegramPollingReceiverRunner:
-    def __init__(self, candidate: NativeReceiverCandidate) -> None:
+    def __init__(
+        self, candidate: NativeReceiverCandidate, inbox: ReceiverInbox | None = None
+    ) -> None:
         self._candidate = candidate
-        self._bot_token = str(candidate.credentials.get("bot_token") or "").strip()
-        self._api_base = resolve_api_base(candidate.credentials)
+        self._inbox = inbox or ReceiverInbox(candidate)
+        telegram = TelegramCredentials.of(candidate.credentials)
+        # Revealed for the life of the poll loop, which addresses every call
+        # to the bot by it.
+        self._bot_token = (reveal_secret(telegram.bot_token) or "").strip()
+        self._api_base = resolve_api_base(telegram)
+        self._failures = ReceiverFailureStreak(
+            platform=candidate.platform,
+            credential_label=candidate.credential_label,
+        )
 
     async def run(self) -> None:
         if not self._bot_token:
@@ -81,7 +100,10 @@ class TelegramPollingReceiverRunner:
             # Every candidate, the shared system bot included: its key is a
             # fingerprint of its own token like any other, and without a stored
             # offset a restart re-reads whatever Telegram still holds.
-            offset = await _load_telegram_offset(self._candidate.key)
+            stored = await self._inbox.load_cursor(
+                legacy=lambda: _load_legacy_telegram_offset(self._candidate.key)
+            )
+            offset = int(stored) if stored else None
 
             while True:
                 try:
@@ -92,6 +114,7 @@ class TelegramPollingReceiverRunner:
                     updates = await self._with_drain(client, base_url, data, offset)
                     for update in _assemble_telegram_updates(updates):
                         offset = await self._dispatch(update, offset)
+                    self._failures.succeeded()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -142,21 +165,16 @@ class TelegramPollingReceiverRunner:
             "agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed",
             update_id=update_id,
         )
-        await _publish_native_receiver_event(
+        # The update and the offset past it commit together: a crash can
+        # neither skip the update nor -- the row is unique on its id -- store
+        # it twice.
+        next_offset = update_id + 1 if isinstance(update_id, int) else None
+        await self._inbox.accept(
             source="telegram",
             payload=update,
-            receiver_key=self._candidate.key,
-            surface_ids=self._candidate.surface_ids,
+            cursor=str(next_offset) if next_offset is not None else None,
         )
-        if isinstance(update_id, int):
-            offset = update_id + 1
-            # After the publish, not before. Stored first, a crash between the
-            # two meant the restart resumed past an update that had never been
-            # published, and nothing ever replayed it. Stored last, the same
-            # crash replays it and the durable inbox -- keyed on the update id
-            # -- treats the second as a duplicate.
-            await _store_telegram_offset(self._candidate.key, offset)
-        return offset
+        return next_offset if next_offset is not None else offset
 
     async def _recover(
         self, exc: Exception, conflict_deadline: float | None
@@ -167,7 +185,14 @@ class TelegramPollingReceiverRunner:
         handover that is normal for a few seconds, so it is tolerated for a grace
         period and only then read as "someone else owns this bot" and given up.
         """
-        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 409:
+        status = (
+            exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        )
+        if status in _TELEGRAM_REJECTED_TOKEN_STATUSES:
+            raise NativeReceiverCredentialsRejected(
+                f"Telegram refused this bot's token ({status})"
+            ) from exc
+        if status == 409:
             now = asyncio.get_running_loop().time()
             if conflict_deadline is None:
                 conflict_deadline = now + _TELEGRAM_CONFLICT_GRACE_SECONDS
@@ -198,10 +223,7 @@ class TelegramPollingReceiverRunner:
             await asyncio.sleep(1)
             return conflict_deadline, True
 
-        logger.debug(
-            "agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic",
-            exc_info=exc,
-        )
+        self._failures.failed(exc)
         await asyncio.sleep(5)
         return conflict_deadline, True
 
@@ -221,28 +243,17 @@ def _telegram_offset_key(key: str) -> str:
     return f"agent_surfaces:telegram_offset:{key}"
 
 
-async def _load_telegram_offset(key: str) -> int | None:
+async def _load_legacy_telegram_offset(key: str) -> str | None:
+    """The offset Redis held before receivers kept it in Postgres: read once."""
     redis = get_redis(url=settings.redis_url)
     try:
         raw = await redis.get(_telegram_offset_key(key))
-        return int(raw) if raw else None
     except Exception:
-        # Warning: an offset that cannot be read makes polling resume from
-        # whatever Telegram still holds, which is how a restart re-delivers or
-        # skips updates -- and at debug nobody could see that it had happened.
         logger.warning(
             "agent_surfaces.event_receiver_service.could_not_load_telegram_polling.degraded",
             exc_info=True,
         )
         return None
-
-
-async def _store_telegram_offset(key: str, offset: int) -> None:
-    redis = get_redis(url=settings.redis_url)
-    try:
-        await redis.set(_telegram_offset_key(key), str(offset))
-    except Exception:
-        logger.warning(
-            "agent_surfaces.event_receiver_service.could_not_store_telegram_polling.degraded",
-            exc_info=True,
-        )
+    if raw is None:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else str(raw)

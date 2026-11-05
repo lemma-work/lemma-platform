@@ -23,6 +23,10 @@ class FunctionRepositoryPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_for_share(self, owner_id: UUID) -> FunctionEntity | None:
+        raise NotImplementedError
+
+    @abstractmethod
     async def mark_revisions_purged(self, version_ids: tuple[UUID, ...]) -> None:
         raise NotImplementedError
 
@@ -205,11 +209,3 @@ class FunctionSchemaExecutionPort(Protocol):
         artifact: FunctionArtifact,
     ) -> FunctionSchemaSet:
         raise NotImplementedError
-
-
-class FunctionRunQueuePort(Protocol):
-    """The one backend queue used for asynchronous function runs."""
-
-    async def enqueue(self, run_id: UUID) -> str:
-        """Publish the stable ``function_run_id`` and return its queue identity."""
-        ...

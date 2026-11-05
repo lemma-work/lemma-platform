@@ -1,6 +1,6 @@
 """Named spans for the fixed setup work an agent run does before the model.
 
-Between the worker picking up ``process_agent_run`` and the first byte leaving
+Between the worker picking up an ``agent.turn`` and the first byte leaving
 for the provider there is a flat run of roughly three dozen SQL spans. The
 exporter strips statement text, so in a production trace that stretch is one
 opaque block: measurable in total (p50 ~0.5s, p90 ~4.7s) and unattributable in
@@ -14,7 +14,8 @@ rewrites everything else to a generic dependency name.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+import time
 
 from opentelemetry import trace
 
@@ -53,6 +54,8 @@ def record_history_size(
 
 async def observe_first_output(
     events: AsyncIterator[AgentEvent],
+    *,
+    on_first_token: Callable[[float], None] | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Re-yield a harness's events, timing the run's first visible output.
 
@@ -67,7 +70,12 @@ async def observe_first_output(
     streamed token, the other on the first message worth persisting. A run that
     produces neither still exports both, tagged ``lemma.outcome=none``, so a
     silent run shows up as a long span rather than as no span at all.
+
+    ``on_first_token`` is told the seconds to the first token at the moment the
+    token span closes, so the metric and the span measure one thing. A run
+    that never streams a token records nothing there.
     """
+    started = time.monotonic()
     token_span = _tracer.start_span("lemma.agent.first_token")
     message_span = _tracer.start_span("lemma.agent.first_message")
     pending = {"token": token_span, "message": message_span}
@@ -80,6 +88,8 @@ async def observe_first_output(
             if span is not None:
                 span.set_attribute("lemma.outcome", "produced")
                 span.end()
+                if key == "token" and on_first_token is not None:
+                    on_first_token(time.monotonic() - started)
             yield event
     finally:
         for span in pending.values():

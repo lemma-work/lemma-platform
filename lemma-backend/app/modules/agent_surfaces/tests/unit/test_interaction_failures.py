@@ -6,7 +6,7 @@ tap and logged nothing. A failure therefore left the claim spent -- the person's
 second tap was ignored as a replay, in silence -- and left no trace for anybody
 to find. On Slack's Socket Mode the same taps never arrived at all: every
 envelope but an Events API event was dropped, and the ones that were kept were
-acknowledged before they were published.
+acknowledged before they were stored.
 """
 
 from __future__ import annotations
@@ -25,12 +25,14 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services.event_receiver_service import (
+from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
+)
+from app.modules.agent_surfaces.services.slack_socket_runner import (
     SlackSocketReceiverRunner,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
-    _ask_user_link,
+    _answered_in_thread,
     _slack_event,
     _slack_surface,
     _surface_conversation,
@@ -46,12 +48,9 @@ async def _tap(*, sender: str | None = None, decision: str = "APPROVE_ONCE"):
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
-    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.surface_conversation.return_value = _surface_conversation(
         surface, conversation_id=conversation_id
     )
@@ -131,7 +130,7 @@ async def test_a_refused_submitter_does_not_spend_the_replay_claim():
 async def test_a_gone_conversation_on_retry_is_acknowledged():
     service, adapter, interaction, _ = await _tap()
     interaction = interaction.model_copy(update={"action": "retry"})
-    service._refresh_interaction_conversation = AsyncMock(return_value=None)
+    agent_conversations.surface_conversation.return_value = None
 
     await service.handle_interaction(interaction)
 
@@ -142,7 +141,14 @@ async def test_a_gone_conversation_on_retry_is_acknowledged():
 # --- Slack Socket Mode ---------------------------------------------------
 
 
-def _runner() -> SlackSocketReceiverRunner:
+class _Inbox:
+    """Stands in for the receiver inbox the Socket Mode runner stores into."""
+
+    def __init__(self, accept: AsyncMock) -> None:
+        self.accept = accept
+
+
+def _runner(accept: AsyncMock) -> SlackSocketReceiverRunner:
     return SlackSocketReceiverRunner(
         NativeReceiverCandidate(
             key="slack:system:abc",
@@ -150,7 +156,8 @@ def _runner() -> SlackSocketReceiverRunner:
             surface_ids=(uuid4(),),
             credential_label="system",
             credentials={"app_token": "xapp-1"},
-        )
+        ),
+        _Inbox(accept),  # type: ignore[arg-type]
     )
 
 
@@ -160,25 +167,23 @@ def _envelope(kind: str) -> SimpleNamespace:
     )
 
 
-_PUBLISH = "app.core.infrastructure.events.publisher.EventPublisher.publish"
-
-
 @pytest.mark.parametrize("kind", ["events_api", "interactive"])
 async def test_socket_mode_publishes_events_and_interactions_then_acknowledges(
     monkeypatch, kind
 ):
     order: list[str] = []
-    publish = AsyncMock(side_effect=lambda *_: order.append("publish"))
-    monkeypatch.setattr(_PUBLISH, publish)
+    accept = AsyncMock(side_effect=lambda **_: order.append("store"))
     socket_client = SimpleNamespace(
         send_socket_mode_response=AsyncMock(side_effect=lambda *_: order.append("ack"))
     )
 
-    await _runner()._handle_envelope(socket_client, _envelope(kind))
+    await _runner(accept)._handle_envelope(socket_client, _envelope(kind))
 
-    assert order == ["publish", "ack"]
-    event = publish.await_args.args[1]
-    assert event.source == "slack" and event.payload == {"type": "block_actions"}
+    assert order == ["store", "ack"]
+    assert accept.await_args.kwargs == {
+        "source": "slack",
+        "payload": {"type": "block_actions"},
+    }
 
 
 async def test_socket_mode_leaves_an_unpublished_envelope_unacknowledged(
@@ -186,25 +191,26 @@ async def test_socket_mode_leaves_an_unpublished_envelope_unacknowledged(
 ):
     """Acknowledged first, a publish failure lost the event; Slack cannot redeliver
     what it was told arrived."""
-    monkeypatch.setattr(_PUBLISH, AsyncMock(side_effect=ConnectionError("redis blip")))
+    accept = AsyncMock(side_effect=ConnectionError("database blip"))
     socket_client = SimpleNamespace(send_socket_mode_response=AsyncMock())
 
     with caplog.at_level(logging.DEBUG):
         # Left to Slack's client, which logs it and leaves the envelope unacked.
         with pytest.raises(ConnectionError):
-            await _runner()._handle_envelope(socket_client, _envelope("interactive"))
+            await _runner(accept)._handle_envelope(
+                socket_client, _envelope("interactive")
+            )
 
     socket_client.send_socket_mode_response.assert_not_awaited()
     assert "slack_socket_publish_failed" in caplog.text
-    assert "redis blip" in caplog.text
+    assert "database blip" in caplog.text
 
 
 async def test_socket_mode_acknowledges_an_envelope_it_cannot_use(monkeypatch):
-    publish = AsyncMock()
-    monkeypatch.setattr(_PUBLISH, publish)
+    accept = AsyncMock()
     socket_client = SimpleNamespace(send_socket_mode_response=AsyncMock())
 
-    await _runner()._handle_envelope(socket_client, _envelope("slash_commands"))
+    await _runner(accept)._handle_envelope(socket_client, _envelope("slash_commands"))
 
-    publish.assert_not_awaited()
+    accept.assert_not_awaited()
     socket_client.send_socket_mode_response.assert_awaited_once()

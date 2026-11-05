@@ -8,17 +8,27 @@ rendering.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.channel_setup import (
+    ChannelSetupKind,
+    ChannelSetupRequest,
+)
+
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
     SurfaceLifecycleKind,
     SurfacePlatform,
+)
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.services.app_event_handler import AppEventHandler
 from app.modules.agent_surfaces.services.configuration_prompt import (
@@ -145,3 +155,111 @@ async def test_an_event_with_no_actor_is_not_answered_at_all():
     )
 
     adapter.publish_home_view.assert_not_awaited()
+
+
+async def test_the_channel_setup_modal_opens_with_the_connection_handed_back(
+    monkeypatch,
+):
+    """`views.open` runs inside the webhook request, so nothing may hold a
+    pooled connection across it -- including a session that resolving the
+    clicker has written to, which `connection_released` alone will not let go.
+    """
+    events: list[str] = []
+
+    class _Uow:
+        async def commit(self) -> None:
+            events.append("commit")
+
+    uow = _Uow()
+    uow.session = SimpleNamespace(info={"lemma_uow": uow}, new=[object()])
+    adapter = AsyncMock()
+    adapter.channel_name = AsyncMock(return_value="#general")
+
+    async def _open_modal(**_: object) -> None:
+        events.append("views.open")
+
+    adapter.open_channel_setup_modal = _open_modal
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.conversations_for_surfaces.surface_agent_identity",
+        AsyncMock(return_value=None),
+    )
+
+    await _handler(uow=uow)._open_channel_setup(
+        adapter,
+        {"access_token": "xoxb"},
+        ChannelSetupRequest(
+            kind=ChannelSetupKind.OPEN,
+            tenant_id="T1",
+            actor_external_user_id="U-1",
+            trigger_id="T-1",
+            channel_id="C-1",
+        ),
+        SimpleNamespace(id=uuid4(), agent_id=uuid4()),
+    )
+
+    assert events == ["commit", "views.open"]
+
+
+async def test_a_channel_setting_that_could_not_be_saved_is_reported_in_the_channel(
+    monkeypatch, caplog
+):
+    """The modal closes before the write; a failed write left the person
+    believing the channel was configured, with only a debug line behind it."""
+    rolled_back: list[bool] = []
+
+    class _Uow:
+        async def commit(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            rolled_back.append(True)
+
+    uow = _Uow()
+    uow.session = SimpleNamespace(info={"lemma_uow": uow}, new=[])
+    surface = SimpleNamespace(
+        id=uuid4(),
+        agent_id=uuid4(),
+        pod_id=uuid4(),
+        config=SimpleNamespace(channels=[]),
+    )
+    adapter = AsyncMock()
+    adapter.parse_channel_setup = AsyncMock(
+        return_value=ChannelSetupRequest(
+            kind=ChannelSetupKind.SUBMIT,
+            tenant_id="T1",
+            channel_id="C-1",
+            actor_external_user_id="U-1",
+        )
+    )
+    surfaces = AsyncMock()
+    surfaces.update = AsyncMock(side_effect=OperationalError("UPDATE", {}, None))
+    access = SimpleNamespace(
+        _authorized_configuration_surfaces=AsyncMock(
+            return_value=([surface], uuid4(), [(surface, None)])
+        ),
+        _pick_configuration_surface=AsyncMock(return_value=(surface, None)),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.conversations_for_surfaces.surface_agent_identity",
+        AsyncMock(return_value=None),
+    )
+    handler = _handler(
+        uow=uow,
+        surface_repository=surfaces,
+        adapter_registry=SimpleNamespace(get=lambda platform: adapter),
+        access=access,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        handled = await handler.try_handle_channel_setup(
+            SurfacePlatformWebhookIngress(source="slack", payload={}, headers={})
+        )
+
+    assert handled is True
+    assert rolled_back == [True]
+    adapter.send_channel_setup_prompt.assert_awaited_once()
+    sent = adapter.send_channel_setup_prompt.await_args.kwargs
+    assert sent["channel_id"] == "C-1"
+    assert sent["user_id"] == "U-1"
+    assert "could not save" in sent["configuration_error"]
+    assert "channel_setup_failed" in caplog.text

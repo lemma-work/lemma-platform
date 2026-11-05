@@ -48,6 +48,8 @@ def _coordinator(message):
     coordinator = ApprovalCoordinator(
         AsyncMock(), repository, resume_returns, AsyncMock()
     )
+    # No wait_for to cancel here; that half is SQL (the e2e covers it).
+    coordinator._cancel_superseded_wait = AsyncMock(return_value=[])  # type: ignore[method-assign]
     return coordinator, repository
 
 

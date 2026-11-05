@@ -1,9 +1,9 @@
 # Product analytics
 
 The plane is built on all four edges: the backend spine (`app/core/origin.py`,
-`app/core/analytics/`, and the subscriber in
-`app/composition/analytics_consumer.py`), the web client
-(`lib/analytics/client.ts`), the CLI (`lemma_cli/cli_core/telemetry.py` and
+`app/core/analytics/`, and the projections in
+`app/modules/analytics/events/`), the web client
+(`lemma-frontend/src/site/analytics/`), the CLI (`lemma_cli/cli_core/telemetry.py` and
 `lemma telemetry`), and Desktop (`desktop/src/telemetry.rs`). The ClickStack sink
 described in §4 is not written yet.
 
@@ -114,8 +114,7 @@ to know about pods first; until then the split above holds at the org level.
 ## 3. Origin: the missing enum
 
 The platform has no single name for how work entered. `Conversation` carries a
-loose `origin_type: str | None`; `NotificationOriginKind` is a proper enum but
-covers only notifications. Analytics needs one canonical spine, and *origin*
+loose `origin_type: str | None`. Analytics needs one canonical spine, and *origin*
 is already the platform's word for "what produced this" — so canonicalize it
 rather than inventing `client_surface`. This fixes an existing inconsistency
 as a side effect.
@@ -153,8 +152,8 @@ precisely because Lemma's pitch is that you bring your own.
 Origin is resolved once, at the edge, and rides the request context alongside
 the actor. The `X-Lemma-Client` header already exists on every SDK request
 (`lemma-python/lemma_sdk/transport.py`, currently `lemma-sdk-py/<version>`);
-it gains an origin token. Server-initiated work — schedules, triggers, outbox
-consumers — sets origin at the point it is enqueued, not guessed downstream.
+it gains an origin token. Server-initiated work — schedules, triggers, work
+items — sets origin at the point it is enqueued, not guessed downstream.
 
 The **origin × actor matrix is the point.** Not every cell is populated, and
 the empty ones are as informative as the full ones:
@@ -220,16 +219,20 @@ class NullSink:         # every deployment that is not Lemma Cloud
 
 ## 5. Where events are emitted
 
-**The backend is the primary emitter**, and events project off the **domain
-event bus**, not controllers. `app/core/domain/events.py` plus the
-transactional outbox already give durability, lineage (`correlation_id`,
-`causation_id`), and replay (`replay_outbox_event`). A subscriber there means:
+**The backend is the primary emitter**, and events project off **committed
+domain events**, not controllers. `app/core/domain/events.py` gives lineage
+(`correlation_id`, `causation_id`); the unit of work hands each committed batch
+to an after-commit, batched sink (`app/core/analytics/domain_events.py`), where
+projections register by event type. A projection there means:
 
 - no controller edits, so instrumentation cannot drift from behaviour;
-- events survive a PostHog outage and replay afterwards;
-- an event that fires is an event that committed, because the outbox writes in
-  the same transaction as the state change. Controller-level emits routinely
-  report actions that later rolled back.
+- an event that fires is an event that committed, because the unit of work
+  offers nothing from a transaction that rolled back. Controller-level emits
+  routinely report actions that later rolled back.
+
+The sink is best effort by design: a bounded in-process queue that drops its
+oldest event when full (counted as `lemma.analytics.sink.dropped`), and loses
+what it holds if the process crashes. Analytics does not get a durable path.
 
 Critically, it also means **every origin is covered by one implementation.** A
 pod created from the CLI, from an agent over MCP, from a coding agent over ACP,
@@ -423,13 +426,15 @@ scheduled run, a connector send a member approved. Derived from the raw events,
 computed once, origin recorded so the mix stays visible.
 
 ```text
-landing.viewed → auth.signed_up → organization.created → pod.created
+$pageview(/) → auth.signed_up → organization.created → pod.created
   → [ pod built: table/agent/workflow/app/surface/connector configured ]
   → pod.delivered   ← activation, any origin
 ```
 
-**The loop.** Share→import→remix is the growth engine, and the routes are built
-(`app/s`, `app/import`, `app/remix`), so this is instrumentable today.
+**The loop.** Share→import→remix is the growth engine. The web raises the two
+steps the server cannot see: `share_link.viewed` on the share page (`app/s`)
+and `import.started` from Remix and the GitHub install (`app/remix`,
+`app/import`).
 
 ```text
 bundle.exported → share_link.viewed → import.started → import.completed
@@ -463,10 +468,15 @@ against it can honestly claim:
   than `WEB`/`DESKTOP` — safe by construction (an unknown caller is never
   counted as a person in a browser) but the origin split is incomplete for the
   two biggest human surfaces.
-- **Server-initiated origins** (schedule, data trigger, workflow, connector) are
-  not set where the work is enqueued, so those events carry no origin. Guessing
-  them downstream from the consumer is what makes an origin dimension quietly
-  wrong, so the consumer leaves them empty instead.
+- **A work item starts with no origin bound.** The work runtime runs each item
+  in a fresh context, so an event raised there carries an origin only where the
+  code names one from what it holds: a workflow step binds `WORKFLOW`, a table
+  trigger `DATA_TRIGGER`, a schedule run's outcome takes its schedule's type,
+  and an agent turn takes what its conversation records (a schedule's type, a
+  surface's platform, a workflow step). A person's chat turn, run by a worker,
+  still carries none, because the row does not record which client was used.
+  Guessing it downstream from the consumer is what makes an origin dimension
+  quietly wrong, so the consumer leaves it empty instead.
 - **Not every catalog event has an emitter.** Most of the gaps need a domain
   event the platform does not publish today; `pod_bundle` and `connectors` raise
   none at all, which is why the share→import→remix loop is only half measurable

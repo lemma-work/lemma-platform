@@ -59,8 +59,15 @@ class _Session:
     async def get(self, _model, _id):
         return self.conversation
 
+    async def scalar(self, _statement):
+        return self.conversation.status
+
     async def execute(self, _statement):
-        return SimpleNamespace(scalar_one_or_none=lambda: self.run)
+        # `one_or_none` answers the status read, `scalar_one_or_none` the
+        # compare-and-set that moves the run.
+        return SimpleNamespace(
+            scalar_one_or_none=lambda: self.run, one_or_none=lambda: self.run
+        )
 
     def add(self, _model) -> None:
         return None
@@ -117,11 +124,9 @@ async def test_finishing_a_run_is_activity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_repairing_an_already_finished_run_is_not() -> None:
-    # The terminal-repair branch settles a status out of step; nobody did
-    # anything, so the conversation must not jump up the list. The run and the
-    # conversation here are both already finished, so the repair finds nothing
-    # to move either.
+async def test_finishing_an_already_finished_run_is_not() -> None:
+    # A second finalize ends nothing, so the conversation must not jump up the
+    # list.
     conversation = _conversation()
     run = SimpleNamespace(
         conversation_id=uuid4(),

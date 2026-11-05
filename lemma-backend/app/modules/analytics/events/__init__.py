@@ -1,9 +1,10 @@
-"""Every source stream analytics reads, and the one router they register on.
+"""Every domain event analytics projects, one file per source module.
 
-One file per source, because the streams have nothing to do with each other: an
-identity consumer and a workflow consumer share a vocabulary, not a reason to
-change. Importing them here is what registers their subscriptions, so this list
-is the module's wiring -- a source missing from it is a stream nobody reads.
+One file per source, because the sources have nothing to do with each other: an
+identity projection and a workflow projection share a vocabulary, not a reason
+to change. Importing them here is what registers them on the after-commit sink,
+so this list is the module's wiring -- a source missing from it is a module
+nobody measures.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ from app.modules.analytics.events import (
     surfaces,
     workflow,
 )
-from app.modules.analytics.events.wiring import router
 
 #: Catalog events raised somewhere other than a consumer in this package. Each
 #: is on a request path, where the fact is known and the bus is not involved:
@@ -56,4 +56,4 @@ WIRED_EVENTS = frozenset().union(
     workflow.WIRED,
 )
 
-__all__ = ["WIRED_EVENTS", "router"]
+__all__ = ["WIRED_EVENTS"]

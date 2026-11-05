@@ -24,6 +24,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_connector
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import auth_headers, signup_user
 
@@ -619,14 +620,24 @@ async def test_webhook_event_trigger_runs_full_real_workflow(
 
         payload = _composio_event_payload("Refund request from customer")
         provider_id = payload["metadata"]["trigger_id"]
-        await _create_schedule(
+        schedule = await _create_schedule(
             client,
             pod_id,
             {
                 "schedule_type": "WEBHOOK",
                 "workflow_name": workflow["name"],
-                "config": {"source": "composio", "provider_trigger_id": provider_id},
+                "config": {"source": "composio"},
             },
+        )
+        # Bound as provisioning leaves it, which would otherwise call Composio:
+        # a typed-in trigger id is not kept.
+        await bind_schedule_to_connector(
+            db_session,
+            schedule_id=schedule["id"],
+            org_id=org_id,
+            user_id=user["id"],
+            connector_id="composio",
+            config={"source": "composio", "provider_trigger_id": provider_id},
         )
 
         monkeypatch.setattr(
@@ -764,7 +775,7 @@ async def _wait_run(
 @pytest.mark.asyncio
 async def test_manual_job_function_workflow_completes_full_real(full_stack):
     """A JOB function node suspends the workflow, the real function executes in
-    Docker, and the real FunctionRunCompletedEvent wakes the run to completion.
+    Docker, and the run's end -- its ``workflow.resume`` item -- wakes the run.
 
     This is the end-to-end proof of the workflow-wake fix and the cold-sandbox
     readiness probe (the first execute must not 502).

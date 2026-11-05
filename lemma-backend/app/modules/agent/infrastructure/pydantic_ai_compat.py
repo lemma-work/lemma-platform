@@ -41,8 +41,12 @@ from pydantic_ai._function_schema import FunctionSchema  # noqa: PLC2701
 # ``before_model_request`` hook.
 from pydantic_ai._agent_graph import ModelRequestContext  # noqa: PLC2701
 
+# The type ``ProcessHistory`` accepts, which pydantic-ai does not export.
+from pydantic_ai._history_processor import HistoryProcessor  # noqa: PLC2701
+
 __all__ = [
     "FunctionSchema",
+    "HistoryProcessor",
     "InlineDefsJsonSchemaTransformer",
     "JsonSchema",
     "JsonSchemaTransformer",

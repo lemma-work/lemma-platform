@@ -16,7 +16,6 @@ the middle of a pair and leave the marker this module exists to prevent.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,8 +26,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
 )
+from app.modules.agent_surfaces.domain.reply_targets import WhatsAppReplyTarget
 from app.modules.agent_surfaces.platforms.attachment_limits import media_kind_for_mime
-from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.rendering import chunk_text, utf16_length
 from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
     balance_whatsapp_delimiters,
     to_plain_text,
@@ -57,6 +57,48 @@ WHATSAPP_INTERACTION_SEP = "~"
 # approval decision instead of an ask_user answer.
 WHATSAPP_APPROVAL_HEADER = "__approval__"
 
+# The same sentinel slot for a failure notice's "Try again" button. A retry
+# carries no callback: the chat it is tapped in names the failed request.
+WHATSAPP_RETRY_HEADER = "__retry__"
+_WHATSAPP_RETRY_BUTTON_ID = (
+    f"retry{WHATSAPP_INTERACTION_SEP}{WHATSAPP_RETRY_HEADER}"
+    f"{WHATSAPP_INTERACTION_SEP}retry"
+)
+
+
+def retry_notice_interactive(
+    bodies: list[str],
+    metadata: dict[str, Any] | None,
+    recipient: "WhatsAppRecipient",
+) -> dict[str, Any] | None:
+    """A failure notice as a message with a Try again button, where it fits.
+
+    A DM only: in a group anyone could tap it, and the tap is keyed to the
+    person's own chat.
+    """
+    if not (metadata or {}).get("retry_action") or recipient.is_group:
+        return None
+    return build_whatsapp_retry_interactive(bodies[0]) if len(bodies) == 1 else None
+
+
+def build_whatsapp_retry_interactive(body: str) -> dict[str, Any] | None:
+    """A reply button under a failure notice, or None when the notice is too
+    long to be an interactive body and must go as plain text."""
+    if not body.strip() or len(body) > INTERACTIVE_BODY_LIMIT:
+        return None
+    return {
+        "type": "button",
+        "body": {"text": body},
+        "action": {
+            "buttons": [
+                {
+                    "type": "reply",
+                    "reply": {"id": _WHATSAPP_RETRY_BUTTON_ID, "title": "Try again"},
+                }
+            ]
+        },
+    }
+
 
 @dataclass(frozen=True, slots=True)
 class WhatsAppRecipient:
@@ -78,7 +120,7 @@ class WhatsAppRecipient:
 
 
 def whatsapp_recipient(
-    reply_target: Mapping[str, object], *, fallback_wa_id: str | None = None
+    reply_target: WhatsAppReplyTarget, *, fallback_wa_id: str | None = None
 ) -> WhatsAppRecipient | None:
     """The recipient an inbound message's reply goes to, or None.
 
@@ -86,10 +128,9 @@ def whatsapp_recipient(
     it, and falling back to their number would answer a group question in
     private -- the one place the answer was not asked for.
     """
-    group_id = str(reply_target.get("group_id") or "").strip()
-    if group_id:
-        return WhatsAppRecipient(to=group_id, is_group=True)
-    wa_id = str(reply_target.get("sender_wa_id") or fallback_wa_id or "").strip()
+    if reply_target.group_id:
+        return WhatsAppRecipient(to=reply_target.group_id, is_group=True)
+    wa_id = str(reply_target.sender_wa_id or fallback_wa_id or "").strip()
     return WhatsAppRecipient(to=wa_id) if wa_id else None
 
 
@@ -284,7 +325,11 @@ def whatsapp_message_bodies(message: str) -> list[str]:
         balanced
         for balanced in (
             balance_whatsapp_delimiters(chunk)
-            for chunk in chunk_text(body, limit=WHATSAPP_TEXT_LIMIT)
+            # UTF-16 units: never more than Meta's character count, and the
+            # safe side of it for emoji-heavy text.
+            for chunk in chunk_text(
+                body, limit=WHATSAPP_TEXT_LIMIT, length=utf16_length
+            )
         )
         if balanced.strip()
     ]

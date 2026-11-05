@@ -8,7 +8,6 @@ from app.modules.agent_surfaces.domain.ports import SurfaceUserDirectoryPort
 from app.modules.identity.contracts import UserPreferences
 from app.modules.identity.contracts.surfaces import (
     live_user_id_by_email,
-    live_user_id_by_telegram_username,
     live_user_ids_by_mobile_numbers,
     set_user_preferences,
     user_preferences,
@@ -21,9 +20,6 @@ class IdentityUserDirectoryAdapter(SurfaceUserDirectoryPort):
 
     async def user_id_by_email(self, email: str) -> UUID | None:
         return await live_user_id_by_email(self._uow, email)
-
-    async def user_id_by_telegram_username(self, username: str) -> UUID | None:
-        return await live_user_id_by_telegram_username(self._uow, username)
 
     async def user_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool

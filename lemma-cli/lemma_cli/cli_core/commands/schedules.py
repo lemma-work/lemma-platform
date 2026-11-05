@@ -7,18 +7,26 @@ import typer
 from lemma_sdk.openapi_client.models.create_schedule_request import (
     CreateScheduleRequest,
 )
+from lemma_sdk.openapi_client.models.schedule_run_status import ScheduleRunStatus
 from lemma_sdk.openapi_client.models.update_schedule_request import (
     UpdateScheduleRequest,
 )
 
 from ...cli_app.enums import DATASTORE_OPERATIONS as _DATASTORE_OPERATIONS
 from ..confirm import confirm_destructive
+from ..deprecation import warn_deprecated
 from ..io import emit, list_items, to_plain
 from ..payload import build_request, read_json
 from ..sdk import pod_client
-from ..state import fail, run_with_client, state_from_ctx
+from ..state import CliState, err_console, fail, run_with_client, state_from_ctx
 
 app = typer.Typer(help="Schedule commands.")
+runs_app = typer.Typer(help="Schedule run commands: what each event or tick became.")
+app.add_typer(runs_app, name="runs")
+
+# From the SDK's generated enum, so a status the API adds is accepted here
+# without a second list to keep in step.
+_RUN_STATUSES = tuple(status.value for status in ScheduleRunStatus)
 
 
 @app.command("init")
@@ -91,19 +99,41 @@ def list_schedules(
     if result is None:
         return
     if state.output == "json":
-        emit(state, result)
+        emit(state, _shown(result))
         return
     # The list carried an `Agent Id` column and nothing for workflows, so a
     # workflow-targeted schedule showed a blank target — `schedules get` had to
     # be run just to learn what a schedule starts. Compute the target the same
     # way `pods describe` does.
-    payload = to_plain(result)
+    payload = _shown(result)
     items = [
         {**item, "target": schedule_target(item)}
         for item in list_items(payload)
         if isinstance(item, dict)
     ]
     emit(state, {**payload, "items": items} if isinstance(payload, dict) else items)
+
+
+#: Response keys that are deprecated and always null. Left out of what is
+#: printed: an agent reading a schedule took ``account_id`` for a field it
+#: should fill in, though a schedule names a pod connector now.
+_DEAD_FIELDS = ("account_id",)
+
+
+def _shown(result: object) -> Any:
+    """A schedule, or a page of them, without its dead fields."""
+    payload = to_plain(result)
+
+    def strip(item: object) -> object:
+        if not isinstance(item, dict):
+            return item
+        return {k: v for k, v in item.items() if not (k in _DEAD_FIELDS and v is None)}
+
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        return {**payload, "items": [strip(item) for item in payload["items"]]}
+    if isinstance(payload, list):
+        return [strip(item) for item in payload]
+    return strip(payload)
 
 
 def schedule_target(schedule: dict[str, Any]) -> str:
@@ -128,7 +158,54 @@ def get_schedule(
         lambda client, s: pod_client(client, s, pod).schedules.get(schedule),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
+
+
+def _text_field(payload: dict[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _create_target(
+    payload: dict[str, object],
+    *,
+    agent: str | None,
+    workflow: str | None,
+    connector: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """``(agent, workflow, pod connector)``, from the flags or else the payload.
+
+    A flag wins. Resolved before the check and before the request is built:
+    the flags used to be written over the payload unconditionally, so a target
+    named only in --data/--file was refused as missing or sent as null.
+    """
+    agent = agent or _text_field(payload, "agent_name")
+    workflow = workflow or _text_field(payload, "workflow_name")
+    if bool(agent) == bool(workflow):
+        fail(
+            "Provide exactly one of --agent or --workflow (or agent_name / "
+            "workflow_name in the payload)."
+        )
+    return agent, workflow, connector or _text_field(payload, "pod_connector")
+
+
+def _deprecated_account(payload: dict[str, object], account: str | None) -> str | None:
+    """The account a schedule was told to listen as, the way it was before
+    pod connectors: ``--account`` or ``account_id`` in the payload.
+
+    Still sent, and the server turns it into the pod connector serving that
+    account to the caller; it says so, and so does this, once.
+    """
+    account = account or _text_field(payload, "account_id")
+    if account:
+        warn_deprecated(
+            "schedules create --account"
+            if "account_id" not in payload
+            else "account_id in a schedule's --data",
+            "pass --connector <slug> (or pod_connector in the payload); the "
+            "pod connector decides the account",
+        )
+    return account
 
 
 @app.command("create")
@@ -156,9 +233,30 @@ def create_schedule(
             "fire at all, this directs the work afterwards."
         ),
     ),
-    cron: str | None = typer.Option(None, "--cron"),
+    cron: str | None = typer.Option(
+        None,
+        "--cron",
+        help=(
+            "5-field cron, e.g. '0 9 * * 1-5'. Read in --timezone, and in UTC "
+            "when that is not given."
+        ),
+    ),
     at: str | None = typer.Option(
-        None, "--at", help="ISO timestamp for a one-time schedule."
+        None,
+        "--at",
+        help=(
+            "ISO timestamp for a one-time schedule. Without an offset it is "
+            "read in --timezone, or UTC."
+        ),
+    ),
+    tz: str | None = typer.Option(
+        None,
+        "--timezone",
+        "--tz",
+        help=(
+            "IANA zone --cron/--at are read in, e.g. Europe/Berlin. Default "
+            "UTC. Follows daylight saving, which a UTC cron cannot."
+        ),
     ),
     datastore: str | None = typer.Option(
         None, "--datastore", help="Table name for datastore schedules."
@@ -172,7 +270,15 @@ def create_schedule(
         ),
     ),
     webhook_source: str | None = typer.Option(None, "--webhook-source"),
-    account: str | None = typer.Option(None, "--account"),
+    connector: str | None = typer.Option(
+        None,
+        "--connector",
+        help=(
+            "Pod connector, by slug, a WEBHOOK schedule listens through -- for "
+            "--connector-trigger or an MCP server's event. See `lemma "
+            "connectors pod-list`."
+        ),
+    ),
     connector_trigger: str | None = typer.Option(
         None,
         "--connector-trigger",
@@ -189,17 +295,37 @@ def create_schedule(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
     pod: str | None = typer.Option(None, "--pod"),
+    # Deprecated: the account it listens as, from before pod connectors.
+    # Hidden, still served -- as the pod connector serving that account.
+    account: str | None = typer.Option(None, "--account", hidden=True),
 ) -> None:
     """Create a schedule."""
-    if bool(agent) == bool(workflow):
-        fail("Provide exactly one of --agent or --workflow.")
     extra = read_json(json_payload, file, required=False)
+    agent, workflow, connector = _create_target(
+        extra, agent=agent, workflow=workflow, connector=connector
+    )
+    account = _deprecated_account(extra, account)
+    # One schedule has one trigger. Each later one used to replace the config
+    # the earlier built, so `--cron … --webhook-source …` quietly lost the cron.
+    triggers = [
+        flag
+        for flag, given in (
+            ("--cron/--at", cron or at),
+            ("--datastore", datastore),
+            ("--webhook-source", webhook_source),
+        )
+        if given
+    ]
+    if len(triggers) > 1:
+        fail(f"A schedule has one trigger; pick one of {', '.join(triggers)}.")
     schedule_type = "TIME"
     config: dict[str, object] = {}
     if cron:
         config["cron"] = cron
     if at:
         config["scheduled_at"] = at
+    if tz:
+        config["timezone"] = tz
     if datastore:
         schedule_type = "DATASTORE"
         if not on and not extra.get("config", {}).get("operations"):
@@ -230,19 +356,44 @@ def create_schedule(
                     "workflow_name": workflow,
                     "config": config,
                     "instruction": instruction or extra.get("instruction"),
-                    "account_id": account,
+                    "pod_connector": connector,
                     "connector_trigger_id": connector_trigger
                     or extra.get("connector_trigger_id"),
                     "filter_instruction": filter_instruction
                     or extra.get("filter_instruction"),
                     "filter_output_schema": extra.get("filter_output_schema"),
+                    **({"account_id": account} if account else {}),
                 },
                 context="schedule",
             )
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
+        _note_next_fire(state, result)
+
+
+def _note_next_fire(state: CliState, result: object) -> None:
+    """Say on stderr when a new TIME schedule will first fire, in UTC and in
+    its own zone -- so nobody has to create a test schedule and wait to find
+    out which zone a cron is read in."""
+    if state.output == "json":
+        return
+    payload = to_plain(result)
+    if not isinstance(payload, dict) or not payload.get("next_fire_at"):
+        return
+    utc = payload["next_fire_at"]
+    local = payload.get("next_fire_at_local")
+    raw_config = payload.get("config")
+    config: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
+    zone = config.get("timezone") or "UTC"
+    detail = f" ({local} in {zone})" if local and zone != "UTC" else ""
+    hint = (
+        ""
+        if config.get("timezone")
+        else " The cron is read in UTC; pass --timezone <IANA zone> to change it."
+    )
+    err_console.print(f"[dim]next fire:[/dim] {utc} UTC{detail}.{hint}")
 
 
 @app.command("update")
@@ -301,7 +452,7 @@ def update_schedule(
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
 
 
 @app.command("pause")
@@ -319,7 +470,7 @@ def pause_schedule(
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
 
 
 @app.command("resume")
@@ -337,7 +488,7 @@ def resume_schedule(
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
 
 
 @app.command("delete")
@@ -356,3 +507,57 @@ def delete_schedule(
     )
     if result is None:
         emit(state, {"ok": True})
+
+
+@runs_app.command("list")
+def list_schedule_runs(
+    ctx: typer.Context,
+    schedule: str = typer.Argument(..., help="Schedule name or id."),
+    pod: str | None = typer.Option(None, "--pod"),
+    limit: int = typer.Option(100, "--limit"),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Only runs with this status, e.g. COMPLETED, FILTERED, DEAD_LETTERED.",
+    ),
+    skipped: bool | None = typer.Option(
+        None,
+        "--skipped/--no-skipped",
+        help=(
+            "--skipped: only events the schedule's filter skipped. "
+            "--no-skipped: leave them out. Default: both."
+        ),
+    ),
+) -> None:
+    """List a schedule's runs, newest first."""
+    wanted = status.upper() if status else None
+    if wanted is not None and wanted not in _RUN_STATUSES:
+        raise typer.BadParameter(
+            f"--status is one of {', '.join(_RUN_STATUSES)}.", param_hint="--status"
+        )
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).schedules.runs(
+            schedule, limit=limit, status=wanted, skipped=skipped
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@runs_app.command("retry")
+def retry_schedule_run(
+    ctx: typer.Context,
+    schedule: str = typer.Argument(..., help="Schedule name or id."),
+    run: str = typer.Argument(..., help="The run to retry."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Run a failed or dead-lettered run again with the same event."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).schedules.retry_run(schedule, run),
+    )
+    if result is not None:
+        emit(state, result)
