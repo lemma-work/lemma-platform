@@ -5,7 +5,8 @@ in the transaction that finished the run: once a run has an outcome, the reply
 it owes is on record. It is the only way a run's answer reaches a surface: the
 run's observer only shows progress.
 
-The answer is posted as the agent's line at the place the run was asked, with
+The answer is posted as the agent's line at the place the run was asked --
+the one its run was stamped with, not wherever the person wrote last -- with
 a delivery to that place (``services/run_reply_lines``), which the channel
 delivery executor sends -- finishing a live stream in place, carrying the
 run's held files, offering a retry on a failure notice -- and records with
@@ -40,9 +41,15 @@ from app.modules.agent_surfaces.events.work_kinds import (
     SURFACE_REPLY_FOR_RUN,
     run_reply_key,
 )
-from app.modules.agent_surfaces.services.run_reply_lines import post_run_reply
+from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.run_reply_lines import (
+    post_run_reply,
+    post_unplaced_reply,
+)
 from app.modules.channels.contracts.lines import last_heard_line
 from app.modules.channels.contracts.places import reply_address
+
+logger = get_logger(__name__)
 
 _REPLYING_STATUSES = frozenset({"COMPLETED", "FAILED"})
 
@@ -67,12 +74,38 @@ def owes_a_reply(fact: AgentRunFinished) -> bool:
 
 
 async def post_run_answer(ctx: FastContext, payload: RunReplyPayload) -> None:
+    """The run's answer, at the place it was asked.
+
+    A run asked on a platform answers there, whoever has written from
+    somewhere else since: their message waited for a turn of its own
+    (``agent.domain.run_places``). A run asked nowhere in particular answers
+    where the conversation was last written to.
+    """
     material = await run_reply_material(ctx.uow, payload.run_id)
-    if material is None or material.private:
+    if material is None or material.private or material.asked_in_lemma:
         return
-    if await _answered_in_lemma(ctx, payload):
+    if material.asked_at is None and await _answered_in_lemma(ctx, payload):
         return
-    address = await reply_address(ctx.uow, payload.conversation_id)
+    address = await reply_address(
+        ctx.uow, payload.conversation_id, at_source_id=material.asked_at
+    )
+    if address is None and material.asked_at is not None:
+        # The place it was asked went while it worked. Never somewhere else
+        # the person wrote -- that answered email on WhatsApp -- and never
+        # nowhere: the answer stays on the channel's timeline, sent to nobody.
+        logger.warning(
+            "agent_surfaces.reply_for_run.asked_place_gone.degraded",
+            run_id=str(payload.run_id),
+            conversation_id=str(payload.conversation_id),
+            source_id=str(material.asked_at),
+        )
+        await post_unplaced_reply(
+            ctx.uow,
+            run_id=payload.run_id,
+            conversation_id=payload.conversation_id,
+            material=material,
+        )
+        return
     if address is None:
         return
     await post_run_reply(

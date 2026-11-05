@@ -48,6 +48,7 @@ from app.modules.agent_surfaces.services.place_threads import THREADED
 from app.modules.agent_surfaces.services.progress_events import failure_notice
 from app.modules.channels.contracts import (
     ChannelMessage,
+    ChannelNotFound,
     NewLine,
     Sender,
     Source,
@@ -75,6 +76,57 @@ def answer_text(material: RunReplyMaterial, *, platform: str) -> str | None:
     # Never reasoning tokens as a message. An answer that was nothing else is
     # said to have been, rather than met with silence.
     return sanitize_user_visible_text(material.answer) or ALL_REASONING_REPLY
+
+
+async def post_unplaced_reply(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    material: RunReplyMaterial,
+) -> ChannelMessage | None:
+    """The run's answer as a line in its conversation's channel, sent nowhere.
+
+    For a run whose place went while it worked -- the source was removed.
+    The answer must not go to wherever else the person last wrote, and must
+    not vanish either: it is on the timeline, where a member reads it. The
+    same line as a placed answer would be (``run:{run}``), so a retry is one.
+    """
+    channel_id = await agent_conversations.channel_of_conversation(uow, conversation_id)
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    text = answer_text(material, platform=WEB)
+    said = [
+        (earlier_answer_client_id(run_id, number), one)
+        for number, one in enumerate(
+            filter(None, map(sanitize_user_visible_text, material.earlier)), start=1
+        )
+    ] + ([(answer_line_client_id(run_id), text)] if text is not None else [])
+    if channel_id is None or conversation is None or not said:
+        return None
+    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
+    sender = Sender.agent(
+        agent_id,
+        on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+        display_name=await _agent_name(uow, agent_id),
+    )
+    line: ChannelMessage | None = None
+    try:
+        for client_message_id, one in said:
+            line = await post(
+                uow,
+                channel_id=channel_id,
+                line=NewLine(
+                    sender=sender,
+                    text=one,
+                    client_message_id=client_message_id,
+                    conversation_id=conversation_id,
+                    agent_run_id=run_id,
+                ),
+            )
+    except ChannelNotFound:
+        # The channel went with the place: there is nowhere left to show it.
+        return None
+    return line
 
 
 async def post_run_reply(
@@ -179,4 +231,10 @@ async def _agent_name(uow: SqlAlchemyUnitOfWork, agent_id: UUID) -> str:
     return agent.name
 
 
-__all__ = ["ALL_REASONING_REPLY", "agent_sender", "answer_text", "post_run_reply"]
+__all__ = [
+    "ALL_REASONING_REPLY",
+    "agent_sender",
+    "answer_text",
+    "post_run_reply",
+    "post_unplaced_reply",
+]

@@ -488,6 +488,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.receiver_work.wanted_check_failed.degraded': EventSpec('warning', frozenset()),
     'agent_surfaces.recent_leaves.not_noted.degraded': EventSpec('warning', frozenset()),
     'agent_surfaces.recent_leaves.not_read.degraded': EventSpec('warning', frozenset()),
+    'agent_surfaces.reply_for_run.asked_place_gone.degraded': EventSpec('warning', frozenset({'conversation_id', 'run_id', 'source_id'})),
     'agent_surfaces.reply_work.send_outcome_unknown.degraded': EventSpec('warning', frozenset({'conversation_id', 'delivery_id', 'destination', 'platform', 'purpose'})),
     'agent_surfaces.reply_work.send_timed_out.degraded': EventSpec('warning', frozenset({'delivery_id', 'destination', 'timeout_seconds'})),
     'agent_surfaces.resend.delivery_failed.degraded': EventSpec('warning', frozenset({'delivery_id', 'event_type', 'suppressed'})),

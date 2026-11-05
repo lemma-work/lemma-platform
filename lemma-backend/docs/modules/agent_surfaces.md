@@ -657,6 +657,19 @@ is answered *for the pod*, in a group the pod has opened to them.
   either keeps its kind. `surface_send_message` from a note's run is refused.
   In a contact's conversation a note is the keeper's alone: no later turn of
   the contact's reads it.
+- **A run answers the place it was asked.** One conversation spans a member's
+  every place -- their email, their WhatsApp, Lemma -- so the run a message
+  starts is stamped with the place it was heard at (the `asked_in_place`
+  metadata key, from `BoundThread.source_id`; see the agent module's
+  `domain/run_places`). A
+  message from another place, sent while it works, is not steered into it: it
+  waits, and the follow-up turn that claims it is asked at its place. The
+  answer is posted at the run's place (`reply_address(..., at_source_id=)`),
+  and while the run works its typing, progress and cards go there too
+  (`SurfaceDelivery.resolve_egress_target` reads the latest run's place). A
+  run asked nowhere in particular -- typed into the conversation in Lemma --
+  answers where the conversation was last written to, as before. The second
+  place's answer waits for the first's.
 - **A turn its model cannot run is said, once, not retried.** A teammate on a
   member's own runtime runs only for them; anybody else's message to it is
   refused before a run exists (`RuntimeUnavailableError`,

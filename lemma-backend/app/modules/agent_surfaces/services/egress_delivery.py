@@ -29,6 +29,7 @@ from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.contracts import channel_replies
 from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -137,11 +138,20 @@ class SurfaceDelivery:
         chosen for it, written to with what was last heard there. Returns None
         (never raises) when there is none, or it cannot be written to, so
         callers in the agent-run path treat egress as best-effort.
+
+        A run asked on a platform keeps to the place it was asked, so its
+        typing, progress and cards show where its answer will go, whoever
+        writes from somewhere else meanwhile.
         """
         address = (
             ReplyAddress(source=at, ref=at.delivery_ref)
             if at is not None
-            else await self.seats.reply_address(conversation_id)
+            else await self.seats.reply_address(
+                conversation_id,
+                at_source_id=await channel_replies.latest_run_asked_at(
+                    self.uow, conversation_id
+                ),
+            )
         )
         if address is None:
             # The one ordinary answer, and the reason the rest are not. Every

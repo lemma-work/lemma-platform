@@ -161,8 +161,10 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         )
 
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-            # Only the run's own kind: a private note never steers an answer
-            # that goes to the platform, nor the other way round.
+            # Only the run's own scope: a private note never steers an answer
+            # that goes to the platform, nor the other way round, and what was
+            # said at another place waits for a turn of its own there
+            # (`domain/run_places`).
             claimed = await QueuedMessages(uow).claim_queued_user_messages(
                 self._agent_run_id, as_run=True
             )

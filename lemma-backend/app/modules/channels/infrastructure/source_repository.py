@@ -366,14 +366,14 @@ class SourceRepository:
         )
 
     async def reply_address(
-        self, conversation_id: UUID
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
     ) -> tuple[Source, dict[str, object] | None] | None:
         """Where a conversation's answer goes, and what answers it in place.
 
         The place of the latest line a person said in it, with what its
         account kept to answer that line; else the latest line with a place
         at all -- heard there or carried there -- and that place's last word. None for a conversation said
-        nowhere outside Lemma.
+        nowhere outside Lemma. ``at_source_id``: a line said at that place.
         """
         message = ChannelMessageModel
         heard = (
@@ -384,6 +384,7 @@ class SourceRepository:
                 .where(
                     message.conversation_id == conversation_id,
                     message.sender_kind != SenderKind.AGENT.value,
+                    *([message.source_id == at_source_id] if at_source_id else []),
                 )
                 .order_by(message.seq.desc())
                 .limit(1)
@@ -392,6 +393,8 @@ class SourceRepository:
         if heard is not None:
             source = source_entity(heard[0], surface_id=heard[1])
             return source, heard[2] if heard[2] is not None else source.delivery_ref
+        if at_source_id is not None:
+            return None
         placed = (
             await self.session.execute(
                 _with_surface()

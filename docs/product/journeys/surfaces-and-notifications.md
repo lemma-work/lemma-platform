@@ -524,6 +524,31 @@ by its link.
 
 **Contracts:** `agent.surface.list_mine`, `agent.surface.set_my_default`, `agent.surface.channels`
 
+### PS-SURF-024 — A person writing from two places is answered in each
+**Status:** planned
+
+> One person has one conversation with an agent across every place they reach
+> it — their email, their WhatsApp, Lemma itself — so a second message can
+> arrive from somewhere else while the agent is still answering the first. The
+> agent used to take it into the answer it was writing and send that one answer
+> wherever the person had written last: what was asked by email was answered on
+> WhatsApp, and the WhatsApp message was never answered. Proven today by the
+> module suite (`test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said`);
+> the scenario lanes drive one platform per person, so no scenario test can
+> reach it yet.
+
+- When a person writes to the agent from a second place while it is answering
+  them at the first, the system shall answer the second message at the second
+  place once the first answer is done.
+- The system shall deliver each answer only at the place its question was
+  asked.
+- While the agent is answering a message, the system shall show that it is
+  working at the place that message was asked, and nowhere else.
+- If a message arrives from another place while the agent is answering, then
+  the system shall not fold it into the answer it is writing.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.surface.send`
+
 ---
 
 ## Capability: Be told when something needs you

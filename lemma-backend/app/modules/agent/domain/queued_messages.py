@@ -34,12 +34,15 @@ every other key that is a column now.
 from __future__ import annotations
 
 from app.modules.agent.domain.conversations import MOVED_MESSAGE_KEYS
+from app.modules.agent.domain.run_places import ASKED_IN_PLACE_KEY
 
 #: Dropped from what a caller passes as a message's metadata: every key the
 #: server keeps in a column (the queue, the send id, the note marks, the answer
-#: flags), and ``synthetic``, which marks a notice history assembly writes and
-#: is never stored -- a stored one could only be a caller imitating it.
-SERVER_OWNED_KEYS = MOVED_MESSAGE_KEYS | {"synthetic"}
+#: flags), where it was said -- which the server writes with the message, from
+#: what it heard -- and ``synthetic``, which marks a notice history assembly
+#: writes and is never stored -- a stored one could only be a caller imitating
+#: it.
+SERVER_OWNED_KEYS = MOVED_MESSAGE_KEYS | {"synthetic", ASKED_IN_PLACE_KEY}
 
 #: The key the web app first sent a send's id under, before the request had a
 #: field of its own; read off an old client's request, never stored.

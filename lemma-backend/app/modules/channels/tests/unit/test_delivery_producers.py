@@ -133,6 +133,13 @@ PRODUCERS: dict[str, Producer] = {
         f"{_PRODUCERS_E2E}"
         "::test_a_contacts_run_calling_a_person_in_plans_the_keepers_push",
     ),
+    # The answer of a run whose place went while it worked: on the timeline,
+    # carried to no place.
+    "agent_surfaces/services/run_reply_lines.py:post_unplaced_reply": Producer(
+        Sends.PUSH,
+        f"{_SURFACES}/test_answered_where_asked_e2e.py"
+        "::test_an_answer_whose_place_went_mid_run_stays_on_the_timeline",
+    ),
     # -- heard at a place -----------------------------------------------------
     "agent_surfaces/services/channel_lines.py:note_heard": Producer(Sends.HEARD),
     "agent_surfaces/services/channel_lines.py:note_heard_on_web": Producer(Sends.HEARD),

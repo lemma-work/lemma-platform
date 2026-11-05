@@ -41,6 +41,11 @@ class RunReplyMaterial:
     #: What it answered before the person said more, oldest first: each a
     #: message of its own, ahead of the final answer (``domain/steered_answers``).
     earlier: tuple[str, ...] = ()
+    #: The platform place it was asked at, which its answer goes to; None for
+    #: a run asked nowhere in particular (``domain/run_places``).
+    asked_at: UUID | None = None
+    #: Asked in Lemma's own channels, and answered there.
+    asked_in_lemma: bool = False
 
 
 def _answer_text(output: object) -> str | None:
@@ -88,7 +93,22 @@ async def run_reply_material(
         error=run.error,
         private=run.state.private_note,
         earlier=tuple(await answers_before_steers(uow.session, agent_run_id=run_id)),
+        asked_at=run.state.asked_at_source,
+        asked_in_lemma=run.state.asked_in_lemma,
     )
+
+
+async def latest_run_asked_at(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> UUID | None:
+    """The platform place the conversation's latest run was asked at, if any.
+
+    What the run shows while it works -- typing, progress, its cards -- goes
+    where its answer will: to the place it was asked, not to wherever somebody
+    wrote from while it worked (``domain/run_places``). None for a run asked
+    nowhere in particular, or no run.
+    """
+    return await Runs(uow).latest_run_asked_at(conversation_id)
 
 
 __all__ = [
@@ -98,6 +118,7 @@ __all__ = [
     "answer_line_client_id",
     "earlier_answer_client_id",
     "is_earlier_answer",
+    "latest_run_asked_at",
     "run_reply_material",
     "visible_messages",
 ]
