@@ -10,11 +10,13 @@
   line in a group waiting for its agent to finish answering another thread
   there is put off (``LineWaits``), uncharged, until that run has ended.
 * ``agent.channel_reply`` -- subscribed to ``AgentRunFinished`` for a run of
-  a member's own conversation: one that answers a line in Lemma posts its
-  answer in that line's thread (if it ended with one, or why it did not),
-  and tells the line's live readers it is done either way. A contact's run
-  that failed calls for a person (``services.contact_run_failures``). FAST;
-  the run is the line's client id, so a retry posts nothing new.
+  a person's own conversation: the one way any run's answer is said
+  (``services.run_answers``). At the place of the lines it answers: in
+  Lemma, in that line's thread -- its answer, or why there is none -- and
+  its live readers told it is done either way; on a platform, as the
+  agent's line with a delivery there. A contact's run that failed calls for
+  a person (``services.contact_run_failures``). FAST; the run is the line's
+  client id, so a retry posts nothing new.
 """
 
 from __future__ import annotations
@@ -49,11 +51,8 @@ from app.modules.agent.events.work_kinds import (
     channel_line_key,
     channel_reply_key,
 )
-from app.modules.agent.services.channel_answers import (
-    LineWaits,
-    answer_line,
-    post_run_answer,
-)
+from app.modules.agent.services.channel_answers import LineWaits, answer_line
+from app.modules.agent.services.run_answers import post_run_answer
 from app.modules.agent.services.contact_run_failures import after_contact_run
 from app.modules.channels.contracts.facts import ChannelMessagePosted
 
@@ -93,7 +92,8 @@ def sets_agents_answering(fact: ChannelMessagePosted) -> bool:
 
 
 def runs_for_a_member(fact: AgentRunFinished) -> bool:
-    """A run of a member's own conversation, however it ended."""
+    """A run of a person's own conversation, however it ended: a member's,
+    or a contact's, which the member looking after them keeps."""
     return fact.user_id is not None and fact.parent_kind is None
 
 
@@ -160,6 +160,11 @@ def register_channel_answer_work(
         mode=WorkMode.JOB,
         payload=ChannelAnswerWork,
     )(make_channel_answer(uow_factory))
+    register_run_answer_work(registry)
+
+
+def register_run_answer_work(registry: WorkRegistry) -> None:
+    """Only the answer: what a run's end owes, wherever it was asked."""
     registry.handler(
         kind=AGENT_CHANNEL_REPLY,
         cls=WorkClass.EVENTS,
@@ -190,7 +195,9 @@ __all__ = [
     "ended_with_an_answer",
     "fan_out",
     "make_channel_answer",
+    "post_reply",
     "register_channel_answer_work",
+    "register_run_answer_work",
     "runs_for_a_member",
     "sets_agents_answering",
 ]

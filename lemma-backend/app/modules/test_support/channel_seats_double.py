@@ -222,8 +222,16 @@ class InMemoryChannelSeats:
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:
         return self.channels.setdefault(("DIRECT", pod_id, user_id), uuid4())
 
-    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None:
+    async def reply_address(
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
+    ) -> ReplyAddress | None:
         answer = self._answers.get(conversation_id)
+        if at_source_id is not None and (
+            answer is None or answer.source.id != at_source_id
+        ):
+            # Asked at a place this double heard nothing at: its last word.
+            place = self._by_id(at_source_id)
+            return ReplyAddress(source=place, ref=place.delivery_ref) if place else None
         if answer is None:
             return None
         # The place as it is now, not as it was when the line was said.

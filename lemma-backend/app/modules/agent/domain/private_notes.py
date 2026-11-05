@@ -138,12 +138,19 @@ def note_in_member_dm(conversation: Conversation, surface_kind: str | None) -> b
 def run_state_for(
     message: MessageState, *, message_source: str | None = None
 ) -> RunState:
-    """What a run started by this message is created with."""
+    """What a run started by this message is created with.
+
+    A message heard on a platform starts a run that answers there
+    (``domain/run_places``); a line in Lemma's own channels, one answered in
+    Lemma.
+    """
+    asked_in_lemma = message_source == LEMMA_CHANNEL
     return RunState(
         trigger=_HANDED_BACK_TRIGGERS.get(message_source or "", RunTrigger.MESSAGE),
         private_note=message.private_note,
-        asked_in_lemma=message_source == LEMMA_CHANNEL,
+        asked_in_lemma=asked_in_lemma,
         written_in=message.written_in,
+        asked_at_source=None if asked_in_lemma else message.asked_at_source,
     )
 
 

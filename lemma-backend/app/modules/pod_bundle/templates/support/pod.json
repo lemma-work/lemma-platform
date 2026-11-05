@@ -1,0 +1,33 @@
+{
+  "format_version": 3,
+  "name": "Support",
+  "description": "Answers customers, and makes sure nobody waits more than a day for an answer.",
+  "lemma": {
+    "position": 1,
+    "face": "bloom",
+    "place": "Intercom",
+    "brings": [
+      "A table of every customer waiting",
+      "Drafts for the oldest, every weekday morning",
+      "The week's number in Pages, every Friday"
+    ],
+    "plan": {
+      "how": [
+        "Every customer who writes is a row in conversations, with when they wrote",
+        "A reply counts once the customer has it, not when it is drafted",
+        "Anyone waiting 20 hours gets a draft for whoever holds them, every weekday morning"
+      ],
+      "never": [
+        "Send anything to a customer without a person checking it first"
+      ]
+    }
+  },
+  "outcome": {
+    "sentence": "Every customer hears back within a day.",
+    "kind": "week",
+    "target": 90,
+    "unit": "%",
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE answered_in_time) / nullif(count(*), 0), 1) FROM conversations WHERE opened_at >= date_trunc('week', now())"
+  },
+  "variables": {}
+}

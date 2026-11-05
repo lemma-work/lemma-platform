@@ -1,0 +1,46 @@
+{
+  "name": "posts",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {
+    "description": "One row per post: drafted, approved, and when it went out where."
+  },
+  "columns": [
+    {
+      "name": "id",
+      "type": "UUID",
+      "required": true,
+      "auto": true
+    },
+    {
+      "name": "title",
+      "type": "TEXT",
+      "required": true
+    },
+    {
+      "name": "channel",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "link",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "status",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "author",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "published_at",
+      "type": "DATETIME",
+      "required": false
+    }
+  ]
+}

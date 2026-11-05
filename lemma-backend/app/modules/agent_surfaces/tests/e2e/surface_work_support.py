@@ -30,9 +30,7 @@ from app.modules.agent_surfaces.events.ingest_work import register_surface_inges
 from app.modules.agent_surfaces.events.platform_update_work import (
     register_platform_update_work,
 )
-from app.modules.agent_surfaces.events.reply_for_run_work import (
-    register_reply_for_run_work,
-)
+from app.modules.agent.events.channel_answer_work import register_run_answer_work
 from app.modules.agent_surfaces.events.reply_work import register_surface_reply_work
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.services.delivery_sender import DeliverySender
@@ -66,7 +64,7 @@ def surface_registry(
         sending_lease=sending_lease,
         send_timeout=send_timeout,
     )
-    register_reply_for_run_work(registry)
+    register_run_answer_work(registry)
     register_channel_delivery_work(registry)
     return registry
 
@@ -231,21 +229,22 @@ _REPLY_REGISTRY: WorkRegistry | None = None
 async def deliver_replies() -> int:
     """Send what finished runs owe their surfaces, as the worker would.
 
-    A run's answer is the agent's line its finalize posts
-    (``surface.reply_for_run``), carried by the line's channel delivery
-    (``surface.channel_delivery``) -- not the observer. Held and resent
-    messages still go by the destination pump. A test that drives a run
-    in-process runs those kinds after.
+    A run's answer is the agent's line its end posts (``agent.channel_reply``),
+    carried by the line's channel delivery (``surface.channel_delivery``) --
+    not the observer. Held and resent messages still go by the destination
+    pump. A test that drives a run in-process runs those kinds after.
     """
     global _REPLY_REGISTRY
     if _REPLY_REGISTRY is None:
         _REPLY_REGISTRY = WorkRegistry()
-        register_reply_for_run_work(_REPLY_REGISTRY)
+        register_run_answer_work(_REPLY_REGISTRY)
         register_surface_reply_work(_REPLY_REGISTRY)
         register_channel_delivery_work(_REPLY_REGISTRY)
     await make_due(async_session_maker)
     return await run_until_idle(
-        async_session_maker, registry=_REPLY_REGISTRY, classes=[WorkClass.DELIVERY]
+        async_session_maker,
+        registry=_REPLY_REGISTRY,
+        classes=[WorkClass.EVENTS, WorkClass.DELIVERY],
     )
 
 

@@ -71,7 +71,8 @@ def _no_typing_keepalive(monkeypatch):
 #: returns it with the account's surface.
 #:
 #: ``channel_messages`` is the two lines -- what they said, and what was said
-#: back -- and the line they last said, which is where the answer goes; a
+#: back -- and the line the run read, found by its platform message id, which
+#: is where the answer goes; a
 #: line is looked for by its key twice, before and under the channel's lock,
 #: so two deliveries of one message make one line -- a heard line by its
 #: platform message id, the answer by its run (a redelivered finish is the

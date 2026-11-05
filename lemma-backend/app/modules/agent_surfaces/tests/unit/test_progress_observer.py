@@ -163,6 +163,7 @@ async def test_progress_observer_streams_tool_comment_progress():
     assert service.updates == [
         {
             "conversation_id": conversation.id,
+            "run_id": None,
             "progress_text": "Checking the latest todo state",
             "progress_handle": None,
         }
@@ -197,6 +198,7 @@ async def test_progress_observer_strips_thinking_from_tool_comment():
     assert service.updates == [
         {
             "conversation_id": conversation.id,
+            "run_id": None,
             "progress_text": "Reading the file",
             "progress_handle": None,
         }
@@ -290,10 +292,15 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
 
     # The opening acknowledgement, then keep-alive ticks flagged as refreshes so
     # an adapter can tell them apart from it.
-    assert service.calls[0] == {"conversation_id": conversation.id, "metadata": None}
+    assert service.calls[0] == {
+        "conversation_id": conversation.id,
+        "run_id": None,
+        "metadata": None,
+    }
     assert len(service.calls) > 1
     assert service.calls[-1] == {
         "conversation_id": conversation.id,
+        "run_id": None,
         "metadata": {"is_refresh": True},
     }
 
@@ -343,6 +350,7 @@ async def test_progress_observer_stops_when_indicator_cannot_be_sent(monkeypatch
     assert service.calls == [
         {
             "conversation_id": conversation.id,
+            "run_id": None,
             "metadata": None,
         }
     ]
@@ -869,7 +877,9 @@ async def test_whatsapp_keeps_its_typing_bubble_alive():
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    assert service.calls == [{"conversation_id": conversation.id, "metadata": None}]
+    assert service.calls == [
+        {"conversation_id": conversation.id, "run_id": None, "metadata": None}
+    ]
 
 
 async def test_email_still_shows_nothing_before_the_reply():
@@ -898,7 +908,12 @@ async def test_slack_is_acknowledged_by_its_open_stream_and_nothing_else():
     )
 
     assert service.streamed == [
-        {"conversation_id": conversation.id, "progress_handle": None, "text": ""}
+        {
+            "conversation_id": conversation.id,
+            "run_id": None,
+            "progress_handle": None,
+            "text": "",
+        }
     ]
     assert service.calls == []
 
@@ -1017,6 +1032,7 @@ async def test_a_prompt_that_did_not_arrive_is_asked_again_in_plain_words(caplog
     assert service.text_fallbacks == [
         {
             "conversation_id": conversation.id,
+            "run_id": None,
             "kind": "ask_user",
             "tool_call_id": "ask-1",
         }
@@ -1086,7 +1102,7 @@ async def test_a_web_conversation_that_pauses_is_not_asked_about_anywhere():
 
 
 async def test_the_observer_never_sends_the_answer_it_only_takes_display_down():
-    """The answer is the run's delivery row (``surface.reply_for_run``).
+    """The answer is the run's delivery row (``agent.channel_reply``).
 
     A run that streamed onto Slack and wrote its answer: the observer closes
     and removes the live stream, and sends nothing -- so a worker that dies
