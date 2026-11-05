@@ -41,6 +41,7 @@ def admitted_state(
     surface_kind: str | None,
     typed_in_lemma: bool,
     client_message_id: str | None,
+    asked_at: UUID | None = None,
 ) -> MessageState:
     """What the server records about a user message, decided by the server.
 
@@ -48,7 +49,9 @@ def admitted_state(
     here, once. Where the message was written is never the caller's to say:
     the mark changes who the model takes the writer to be, so it comes from
     whether a person typed it in Lemma, and into what: ``surface_kind`` is
-    the place's kind as its surface records it (``DM``, ``CHANNEL``).
+    the place's kind as its surface records it (``DM``, ``CHANNEL``). Nor is
+    where it was said: ``asked_at`` is the channel source a surface heard it
+    at (``domain/run_places``).
     """
     private_note = requested_private_note(message_metadata)
     return MessageState(
@@ -59,6 +62,7 @@ def admitted_state(
         written_in=written_in_lemma_into(conversation, surface_kind)
         if typed_in_lemma
         else None,
+        asked_at_source=asked_at,
     )
 
 

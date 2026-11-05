@@ -163,13 +163,17 @@ class AdmitMessage:
         client_message_id: str | None = None,
         supersede_pauses: bool = True,
         kind: RunKind | None = RunKind.CHAT,
+        asked_at: UUID | None = None,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it. Commits.
 
         The conversation is already loaded and access-checked by the caller --
         this is the half that needs the lock. ``typed_in_lemma`` is the caller
         saying a person typed this in Lemma's own composer, rather than a chat
-        platform, a sub-agent or a reply delivery handing it on.
+        platform, a sub-agent or a reply delivery handing it on. ``asked_at``
+        is a surface saying which channel source it heard the message at: the
+        run it starts answers there, and a run already going takes it in only
+        if it was asked there too (``domain/run_places``).
 
         ``client_message_id`` is the sender's id for this send: a second send
         with the same id is the first one retried, and gets the first one's run
@@ -188,6 +192,7 @@ class AdmitMessage:
             else None,
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
+            asked_at=asked_at,
         )
         # Resolve the agent (a read) before taking the conversation lock, so the
         # FOR UPDATE span covers only the active-run check + run/message writes.

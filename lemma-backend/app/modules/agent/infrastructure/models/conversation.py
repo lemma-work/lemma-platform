@@ -316,6 +316,7 @@ class ConversationModel(UUIDAuditBase):
         loaded_messages = self.__dict__.get("messages", [])
         loaded_runs = self.__dict__.get("agent_runs", [])
         latest_run = loaded_runs[-1] if loaded_runs else None
+        failure = _failure(latest_run)
         return ConversationEntity(
             id=self.id,
             created_at=self.created_at,
@@ -347,8 +348,8 @@ class ConversationModel(UUIDAuditBase):
             last_activity_at=self.last_activity_at,
             last_run_status=latest_run.status if latest_run else None,
             last_run_error=latest_run.error if latest_run else None,
-            last_run_error_code=_failure_code(latest_run),
-            last_run_error_reason=_failure_reason(latest_run),
+            last_run_error_code=failure.code if failure else None,
+            last_run_error_reason=failure.reason if failure else None,
             last_run_finished_at=latest_run.finished_at if latest_run else None,
             messages=[message.to_entity() for message in loaded_messages],
             agent_runs=[agent_run.to_entity() for agent_run in loaded_runs],
@@ -588,13 +589,3 @@ def _failure(run: AgentRunModel | None) -> RunFailure | None:
     if run is None or run.status != AgentRunStatus.FAILED.value:
         return None
     return RunFailure.from_json(run.failure)
-
-
-def _failure_code(run: AgentRunModel | None) -> str | None:
-    failure = _failure(run)
-    return failure.code if failure else None
-
-
-def _failure_reason(run: AgentRunModel | None) -> str | None:
-    failure = _failure(run)
-    return failure.reason if failure else None

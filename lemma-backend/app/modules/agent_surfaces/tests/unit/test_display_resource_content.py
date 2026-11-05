@@ -84,6 +84,11 @@ def conversation_owner(monkeypatch):
     """
     owner = AsyncMock(return_value=SimpleNamespace(user_id=uuid4()))
     monkeypatch.setattr(f"{_CONVERSATIONS}.surface_conversation", owner)
+    # And where its latest run was asked: at no place of its own.
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.channel_replies.latest_run_asked_at",
+        AsyncMock(return_value=None),
+    )
     return owner
 
 
