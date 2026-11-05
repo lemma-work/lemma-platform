@@ -30,7 +30,7 @@ export type ChannelResponse = {
      */
     attention?: (AttentionResponse | null);
     /**
-     * A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).
+     * A contact's channel: its case, the one `status`, `assignee` and `attention` are read from. A channel keeps one case.
      */
     case_id?: (string | null);
     created_at: string;

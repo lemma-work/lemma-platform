@@ -56,8 +56,8 @@ class Outcome:
     retry_after: float | None = None
     #: What the platform last answered, when it said (an HTTP status).
     provider_status: str | None = None
-    #: A push the hourly budget held (``FOLDED``): how long before its lines
-    #: may go again, with the member's next push from the channel.
+    #: A push held while its member had the app open (``FOLDED``): how long
+    #: before its lines may go, with the member's next push from the channel.
     hold_for: timedelta | None = None
 
     @property
