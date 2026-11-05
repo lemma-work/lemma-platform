@@ -1,5 +1,5 @@
 import { fields } from "@/connect/schema";
-import { surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
+import { sayReachedOtherWays, surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
 import { SurfaceCredentials } from "./surface-credentials";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
 import { credentialFormForChannel, oauthFormForConnector } from "@/desktop/this-mac";
@@ -935,11 +935,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
             <div className={inline ? "reachsheet reachsheet--inline" : "reachsheet"}>
                 {!inline && <div className="reachsheet__who">
                     <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={40} />
-                    <p>
-                        {on.length === 0
-                            ? pod.name + " can only be reached here, in Lemma."
-                            : pod.name + " can also be reached " + (on.length === 1 ? "one other way." : on.length + " other ways.")}
-                    </p>
+                    <p>{sayReachedOtherWays(pod.name, on)}</p>
                 </div>}
 
                 {on.length > 0 && (
