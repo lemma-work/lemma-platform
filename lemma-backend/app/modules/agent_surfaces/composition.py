@@ -83,10 +83,7 @@ from app.modules.agent_surfaces.services.slack_workspace_people import (
 from app.modules.agent_surfaces.services.channel_deliveries import ChannelDeliveries
 from app.modules.agent_surfaces.services.direct_messages import DirectMessages
 from app.modules.agent_surfaces.services.member_pushes import MemberPushes
-from app.modules.agent_surfaces.services.notification_rate_limiter import (
-    EmailBudget,
-    PushBudget,
-)
+from app.modules.agent_surfaces.services.notification_rate_limiter import EmailBudget
 from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
 from app.modules.agent_surfaces.services.surface_connection_resolver import (
     SurfaceConnectionResolver,
@@ -260,7 +257,6 @@ def build_member_pushes(uow: SqlAlchemyUnitOfWork) -> MemberPushes:
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         surface_provisioner=_build_system_email_provisioner(uow),
         email_budget=EmailBudget(),
-        push_budget=PushBudget(),
     )
 
 

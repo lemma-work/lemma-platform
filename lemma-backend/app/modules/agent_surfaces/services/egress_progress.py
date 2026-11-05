@@ -41,7 +41,12 @@ def _progress_errors() -> tuple[type[BaseException], ...]:
 
 
 class SurfaceProgress:
-    """The live-message half of egress."""
+    """The live-message half of egress.
+
+    Every verb is something a run shows while it works, so each names the run
+    (``run_id``): the live message goes to the place that run was asked, not
+    to wherever the conversation's newest run was (``resolve_egress_target``).
+    """
 
     def __init__(self, *, delivery: SurfaceDelivery) -> None:
         self.delivery = delivery
@@ -50,6 +55,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
+        run_id: UUID | None = None,
         progress_text: str,
         progress_handle: ProgressHandle | None = None,
     ) -> ProgressHandle | None:
@@ -58,7 +64,9 @@ class SurfaceProgress:
         Best-effort: returns the (possibly updated) handle and never raises, so a
         failed progress edit cannot affect the agent run.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(
+            conversation_id, run_id=run_id
+        )
         if target is None:
             # Silent until this event existed, and indistinguishable from a
             # platform that simply has no live progress -- so a conversation
@@ -97,6 +105,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
+        run_id: UUID | None = None,
         progress_handle: ProgressHandle | None,
         text: str,
     ) -> StreamAppendResult:
@@ -105,7 +114,9 @@ class SurfaceProgress:
         Best-effort by construction -- a dropped delta must never take down a
         run, and the final answer still lands through the normal path.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(
+            conversation_id, run_id=run_id
+        )
         if target is None:
             return StreamAppendResult(handle=progress_handle, appended=False)
         try:
@@ -134,6 +145,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
+        run_id: UUID | None = None,
         progress_handle: ProgressHandle | None,
         message: str,
         metadata: dict[str, Any] | None = None,
@@ -147,7 +159,9 @@ class SurfaceProgress:
         """
         if not progress_handle:
             return False
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(
+            conversation_id, run_id=run_id
+        )
         if target is None:
             return False
         clean_message = sanitize_user_visible_text(message)
@@ -182,12 +196,15 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
+        run_id: UUID | None = None,
         progress_handle: ProgressHandle | None = None,
     ) -> None:
         """Remove the streaming progress message at run end (best-effort)."""
         if not progress_handle:
             return
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(
+            conversation_id, run_id=run_id
+        )
         if target is None:
             return
         # No connection held for the platform call; see `connection_released`.
@@ -210,6 +227,7 @@ class SurfaceProgress:
         self,
         *,
         conversation_id: UUID,
+        run_id: UUID | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         """The platform's own "working on it" affordance, where it has one."""
@@ -217,7 +235,9 @@ class SurfaceProgress:
             # The target and metadata reads are inside the guard too: a
             # database error there escaped `on_run_started` exactly as a
             # platform error used to.
-            target = await self.delivery.resolve_egress_target(conversation_id)
+            target = await self.delivery.resolve_egress_target(
+                conversation_id, run_id=run_id
+            )
             if target is None:
                 return False
             indicator_metadata = await self.delivery.egress_metadata(target, metadata)

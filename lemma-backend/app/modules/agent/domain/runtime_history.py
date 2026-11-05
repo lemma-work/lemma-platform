@@ -33,6 +33,7 @@ from uuid import UUID
 
 from app.modules.agent.domain.folded_turns import framed_folds, newest_folds
 from app.modules.agent.domain.history_notices import SYNTHETIC_NOTICE_PREFIX
+from app.modules.agent.domain.run_places import without_queued_elsewhere
 from app.modules.agent.domain.unattached_cut import newest_unattached
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.entities import (
@@ -298,6 +299,11 @@ async def assemble_runtime_history(
         # A run cut to its requests keeps none of what it was shown around them.
         messages = await read_channel(
             messages, background_of_runs=full_run_ids | {run_id}
+        )
+    if window.current_run is not None:
+        # What waits for a turn of its own is read by that turn only.
+        messages = without_queued_elsewhere(
+            messages, run_id=run_id, run=window.current_run.state
         )
     # After the channel is read in, which drops a copied follow-up whose line
     # is gone: a stretch of copies is framed as what is left of it.

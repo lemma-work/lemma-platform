@@ -95,6 +95,12 @@ def conversation_operations(monkeypatch):
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
+    # Nor was it asked at a place of its own: the target is wherever the
+    # conversation was last written to. Same reason.
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.channel_replies.latest_run_asked_at",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(
         f"{_AGENT_DIRECTORY}.agent_name_for_id", AsyncMock(return_value="Surface Agent")
     )

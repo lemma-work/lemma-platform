@@ -29,6 +29,13 @@ from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.pod_ask_record import PodAsk
 from app.modules.agent.domain.project_repo import parse_project_repo
 from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.run_places import (
+    ASKED_IN_PLACE_KEY,
+    message_place,
+    place_source,
+    run_place,
+    stored_place,
+)
 from app.modules.agent.domain.run_state import (
     ParkedSuspension,
     RunFailure,
@@ -36,6 +43,7 @@ from app.modules.agent.domain.run_state import (
     ScheduleFiring,
 )
 from app.modules.agent.domain.todos import todos_from_json, todos_to_json
+from app.modules.agent.domain.turn_admission import message_source
 from app.modules.agent.domain.value_objects import (
     ConversationOrigin,
     QueueState,
@@ -147,6 +155,7 @@ def run_state_of(row: AgentRunModel) -> RunState:
         private_note=bool(row.private_note),
         asked_in_lemma=bool(row.asked_in_lemma),
         written_in=row.written_in,
+        asked_at_source=place_source(stored_place(row.run_metadata)),
         resumed_tool_call_id=row.resumed_tool_call_id,
         retried_run_id=row.retried_run_id,
         queued_behind_run_id=row.queued_behind_run_id,
@@ -160,16 +169,22 @@ def run_state_of(row: AgentRunModel) -> RunState:
 
 
 def run_state_values(state: RunState) -> dict[str, object]:
-    """The typed-state columns of a run in ``state``, as they are written."""
+    """The typed-state columns of a run in ``state``, as they are written.
+
+    Where it was asked is a key of its metadata, written with the run and
+    never after (``domain/run_places``)."""
+    place = run_place(state)
     return {
         **state.model_dump(
             exclude={
+                "asked_at_source",
                 "queued_leftovers_behind",
                 "suspended_while_parked",
                 "schedule_firing",
                 "failure",
             }
         ),
+        **({"run_metadata": {ASKED_IN_PLACE_KEY: place}} if place else {}),
         "queued_leftovers_behind": [
             str(run_id) for run_id in state.queued_leftovers_behind
         ],
@@ -194,6 +209,7 @@ def message_state_of(row: MessageModel) -> MessageState:
         private_note=bool(row.private_note),
         private_note_in_dm=bool(row.private_note_in_dm),
         written_in=row.written_in,
+        asked_at_source=place_source(stored_place(row.message_metadata)),
         answer=row.answer,
         held_for_a_person=bool(row.held_for_a_person),
         folded_from=row.folded_from,
@@ -203,5 +219,22 @@ def message_state_of(row: MessageModel) -> MessageState:
 
 
 def message_state_values(state: MessageState) -> dict[str, object]:
-    """The typed-state columns of a message in ``state``, as they are written."""
-    return state.model_dump()
+    """The typed-state columns of a message in ``state``, as they are written.
+
+    Where it was asked is not a column: ``with_place`` writes it into the
+    message's metadata."""
+    return state.model_dump(exclude={"asked_at_source"})
+
+
+def with_place(
+    metadata: dict[str, object] | None, state: MessageState
+) -> dict[str, object] | None:
+    """``metadata`` with where the message was asked, stored once with it.
+
+    A source the surface heard it at, or Lemma for a line written in its own
+    channels (``domain/run_places``). The key is the server's alone: a
+    sender's copy never reaches here (``SERVER_OWNED_KEYS``)."""
+    place = message_place(state.asked_at_source, source=message_source(metadata))
+    if place is None:
+        return metadata
+    return {**(metadata or {}), ASKED_IN_PLACE_KEY: place}
