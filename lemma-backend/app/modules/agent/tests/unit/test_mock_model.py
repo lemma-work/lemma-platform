@@ -10,7 +10,7 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 
-from app.modules.agent.infrastructure.harnesses.mock_model import (
+from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
     build_mock_model,
     is_mock_llm_enabled,

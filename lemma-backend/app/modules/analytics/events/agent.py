@@ -12,7 +12,7 @@ from app.core.analytics.domain_events import projection
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.origin import Origin, OriginKind
-from app.modules.agent.contracts.conversations import (
+from app.modules.agent.contracts.analytics import (
     ConversationScope,
     conversation_scope,
 )

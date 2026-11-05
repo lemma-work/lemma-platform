@@ -19,40 +19,43 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.private_notes import (
-    IN_GROUP,
-    IN_OUTSIDERS_THREAD,
-    NOTE_IN_DM_KEY,
     PRIVATE_NOTE_FROM_KEEPER_LABEL,
     PRIVATE_NOTE_IN_DM_LABEL,
-    PRIVATE_NOTE_KEY,
     PRIVATE_NOTE_LABEL,
+    PRIVATE_NOTE_REQUEST_KEY,
     WRITTEN_BY_KEEPER_LABEL,
-    WRITTEN_IN_LEMMA_KEY,
     WRITTEN_IN_LEMMA_LABEL,
     keeper_started,
     lemma_label,
-    privacy_of,
-    run_metadata_for,
+    run_state_for,
     written_in_lemma_into,
 )
-from app.modules.agent.domain.surface_prompts import (
+from app.modules.agent.domain.prompt.surface import (
     is_group_conversation,
     surface_platform_guidance,
 )
-from app.modules.agent.domain.value_objects import AgentRunStatus, AgentRuntimeConfig
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    AgentRuntimeConfig,
+    WrittenIn,
+)
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
-from app.modules.agent.services import conversation_turns as turns
-from app.modules.agent.services.outsider_brief import render_outsider_brief
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.messaging.models import AskAPersonRequest
-from app.modules.agent.tools.messaging.pydantic_adapter import ask_a_person
+from app.modules.agent.application.turns import admit as turns
+from app.modules.agent.services.context_brief.outsider import render_outsider_brief
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.messaging.models import AskAPersonRequest
+from app.modules.agent.infrastructure.tools.messaging.tools import (
+    ask_a_person,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -70,10 +73,10 @@ _CONTACT_CHAT = {"surface_platform": "WHATSAPP", "conversation_kind": "DM"}
 @pytest.mark.parametrize(
     ("conversation_metadata", "contacts", "expected"),
     [
-        (_OUTSIDERS_THREAD, True, IN_OUTSIDERS_THREAD),
-        (_MEMBERS_GROUP, False, IN_GROUP),
+        (_OUTSIDERS_THREAD, True, WrittenIn.OUTSIDERS),
+        (_MEMBERS_GROUP, False, WrittenIn.GROUP),
         (_DIRECT_CHAT, False, None),
-        (_CONTACT_CHAT, True, IN_OUTSIDERS_THREAD),
+        (_CONTACT_CHAT, True, WrittenIn.OUTSIDERS),
         ({"surface_platform": "RESEND", "conversation_kind": "EMAIL"}, False, None),
         ({}, False, None),
         (None, False, None),
@@ -91,11 +94,10 @@ _CONTACT_CHAT = {"surface_platform": "WHATSAPP", "conversation_kind": "DM"}
 def test_only_a_groups_conversation_marks_what_is_typed_into_it(
     conversation_metadata, contacts, expected
 ):
-    conversation = SimpleNamespace(
-        metadata=conversation_metadata, contact_id=uuid4() if contacts else None
-    )
+    conversation = SimpleNamespace(contact_id=uuid4() if contacts else None)
+    kind = (conversation_metadata or {}).get("conversation_kind")
 
-    assert written_in_lemma_into(conversation) == expected
+    assert written_in_lemma_into(conversation, kind) == expected
 
 
 def _runtime() -> AgentRuntimeConfig:
@@ -103,7 +105,7 @@ def _runtime() -> AgentRuntimeConfig:
 
 
 def _coordinator(conversation: Conversation):
-    """A coordinator that records the run it creates and the message it saves."""
+    """A use case that records the run it creates and the message it saves."""
     created = AgentRun(
         conversation_id=conversation.id,
         status=AgentRunStatus.RUNNING,
@@ -120,6 +122,7 @@ def _coordinator(conversation: Conversation):
             kind=draft.kind,
             text=draft.text,
             metadata=draft.metadata,
+            state=draft.state,
         )
 
     repository = SimpleNamespace(
@@ -128,7 +131,7 @@ def _coordinator(conversation: Conversation):
         create_agent_run=AsyncMock(return_value=created),
         append_message=AsyncMock(side_effect=append_message),
         # No pause is open, so nothing holds the message back.
-        pausing_calls_decided_awaiting_a_return=AsyncMock(return_value=[]),
+        pending=AsyncMock(return_value=[]),
     )
     agents = SimpleNamespace(
         get=AsyncMock(
@@ -142,18 +145,20 @@ def _coordinator(conversation: Conversation):
         # The pod names no default runtime of its own.
         session=RecordingWorkSession(),
     )
-    coordinator = turns.TurnCoordinator(
+
+    async def surface_kind(_uow, _conversation_id):
+        # Where the conversation's surface heard it, as these tests state it.
+        return (conversation.metadata or {}).get("conversation_kind")
+
+    coordinator = turns.AdmitMessage(
         uow,
-        repository,
-        agents,
-        SimpleNamespace(
-            supersede_stale_pending_interactions=AsyncMock(return_value=[])
-        ),
-        SimpleNamespace(),
-        None,
+        agent_repository=agents,
+        supersede=SimpleNamespace(supersede=AsyncMock(return_value=[])),
+        usage_service=None,
         runtime_check=_runtime_is_available,
+        surface_kind=surface_kind,
     )
-    return coordinator, repository
+    return wire_repositories(coordinator, repository), repository
 
 
 async def _runtime_is_available(*_args: object, **_kwargs: object) -> None:
@@ -174,17 +179,16 @@ def _conversation(metadata: dict, *, contacts: bool = False) -> Conversation:
 
 async def _start(conversation, *, metadata, typed_in_lemma):
     coordinator, repository = _coordinator(conversation)
-    await coordinator.start(
+    await coordinator.admit(
         conversation,
         user_id=conversation.user_id,
-        pod_id=conversation.pod_id,
         content="ask him what's up with him",
         agent_name=None,
         message_metadata=metadata,
         typed_in_lemma=typed_in_lemma,
     )
-    saved = repository.append_message.await_args.kwargs["draft"].metadata
-    run = repository.create_agent_run.await_args.kwargs["metadata"]
+    saved = repository.append_message.await_args.kwargs["draft"]
+    run = repository.create_agent_run.await_args.kwargs["state"]
     return saved, run
 
 
@@ -195,7 +199,7 @@ async def test_the_keepers_message_and_its_run_are_marked_by_the_server():
         typed_in_lemma=True,
     )
 
-    assert saved[WRITTEN_IN_LEMMA_KEY] == IN_OUTSIDERS_THREAD
+    assert saved.state.written_in is WrittenIn.OUTSIDERS
     assert keeper_started(run)
 
 
@@ -206,12 +210,13 @@ async def test_a_chat_platform_cannot_claim_its_line_was_typed_in_lemma():
         metadata={
             "surface_platform": "TELEGRAM",
             "sender_display_name": "P C",
-            WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD,
+            "written_in_lemma": "outsiders",
         },
         typed_in_lemma=False,
     )
 
-    assert WRITTEN_IN_LEMMA_KEY not in saved
+    assert "written_in_lemma" not in saved.metadata
+    assert saved.state.written_in is None
     assert not keeper_started(run)
 
 
@@ -225,30 +230,30 @@ async def test_a_sender_cannot_mark_its_message_as_a_history_notice():
         typed_in_lemma=True,
     )
 
-    assert "synthetic" not in saved
+    assert "synthetic" not in saved.metadata
 
 
 async def test_typing_in_lemma_into_a_direct_chat_marks_nothing():
     """The person typing is the person the bot is talking to there."""
     saved, run = await _start(
         _conversation(dict(_DIRECT_CHAT)),
-        metadata={PRIVATE_NOTE_KEY: True},
+        metadata={PRIVATE_NOTE_REQUEST_KEY: True},
         typed_in_lemma=True,
     )
 
-    assert WRITTEN_IN_LEMMA_KEY not in saved
-    assert WRITTEN_IN_LEMMA_KEY not in run
+    assert saved.state.written_in is None
+    assert run.written_in is None
 
 
 async def test_a_note_in_a_members_own_dm_is_labelled_as_theirs():
     saved, _ = await _start(
         _conversation(dict(_DIRECT_CHAT)),
-        metadata={PRIVATE_NOTE_KEY: True},
+        metadata={PRIVATE_NOTE_REQUEST_KEY: True},
         typed_in_lemma=True,
     )
 
-    assert saved[NOTE_IN_DM_KEY] is True
-    assert lemma_label(saved) == PRIVATE_NOTE_IN_DM_LABEL
+    assert saved.state.private_note_in_dm is True
+    assert lemma_label(saved.state) == PRIVATE_NOTE_IN_DM_LABEL
 
 
 async def test_a_note_in_a_contacts_dm_is_the_keepers_never_the_contacts():
@@ -257,13 +262,13 @@ async def test_a_note_in_a_contacts_dm_is_the_keepers_never_the_contacts():
     model took the keeper's private words as the contact's own."""
     saved, run = await _start(
         _conversation(dict(_CONTACT_CHAT), contacts=True),
-        metadata={PRIVATE_NOTE_KEY: True},
+        metadata={PRIVATE_NOTE_REQUEST_KEY: True},
         typed_in_lemma=True,
     )
 
-    assert NOTE_IN_DM_KEY not in saved
-    assert saved[WRITTEN_IN_LEMMA_KEY] == IN_OUTSIDERS_THREAD
-    assert lemma_label(saved) == PRIVATE_NOTE_FROM_KEEPER_LABEL
+    assert saved.state.private_note_in_dm is False
+    assert saved.state.written_in is WrittenIn.OUTSIDERS
+    assert lemma_label(saved.state) == PRIVATE_NOTE_FROM_KEEPER_LABEL
     assert keeper_started(run)
 
 
@@ -274,58 +279,49 @@ async def test_a_plain_message_typed_into_a_contacts_dm_is_the_keepers():
         typed_in_lemma=True,
     )
 
-    assert lemma_label(saved) == WRITTEN_BY_KEEPER_LABEL
+    assert lemma_label(saved.state) == WRITTEN_BY_KEEPER_LABEL
     assert keeper_started(run)
 
 
 def test_a_dm_stamp_never_relabels_a_note_in_a_thread_answering_outsiders():
     """A row stamped before contacts counted as outsiders keeps the keeper's
     label: the thread decides whose words they were, not the stamp."""
-    note = {
-        PRIVATE_NOTE_KEY: True,
-        NOTE_IN_DM_KEY: True,
-        WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD,
-    }
+    note = MessageState(
+        private_note=True, private_note_in_dm=True, written_in=WrittenIn.OUTSIDERS
+    )
 
     assert lemma_label(note) == PRIVATE_NOTE_FROM_KEEPER_LABEL
 
 
 def test_a_resume_or_retry_keeps_answering_the_keeper():
-    marks = privacy_of(run_metadata_for({WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD}))
+    marks = run_state_for(MessageState(written_in=WrittenIn.OUTSIDERS)).privacy
 
     assert keeper_started(marks)
-    assert not keeper_started(privacy_of(run_metadata_for({})))
+    assert not keeper_started(run_state_for(MessageState()).privacy)
 
 
 # ------------------------------------------------------------------ the label
 
 
 @pytest.mark.parametrize(
-    ("metadata", "label"),
+    ("state", "label"),
     [
-        ({WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD}, WRITTEN_BY_KEEPER_LABEL),
+        (MessageState(written_in=WrittenIn.OUTSIDERS), WRITTEN_BY_KEEPER_LABEL),
         (
-            {WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD, PRIVATE_NOTE_KEY: True},
+            MessageState(written_in=WrittenIn.OUTSIDERS, private_note=True),
             PRIVATE_NOTE_FROM_KEEPER_LABEL,
         ),
-        ({WRITTEN_IN_LEMMA_KEY: IN_GROUP}, WRITTEN_IN_LEMMA_LABEL),
-        ({WRITTEN_IN_LEMMA_KEY: IN_GROUP, PRIVATE_NOTE_KEY: True}, PRIVATE_NOTE_LABEL),
-        ({}, None),
-        ({WRITTEN_IN_LEMMA_KEY: "somewhere"}, None),
+        (MessageState(written_in=WrittenIn.GROUP), WRITTEN_IN_LEMMA_LABEL),
+        (
+            MessageState(written_in=WrittenIn.GROUP, private_note=True),
+            PRIVATE_NOTE_LABEL,
+        ),
+        (MessageState(), None),
     ],
-    ids=[
-        "keeper-reply",
-        "keeper-note",
-        "group-reply",
-        "group-note",
-        "plain",
-        "unknown-value",
-    ],
+    ids=["keeper-reply", "keeper-note", "group-reply", "group-note", "plain"],
 )
-def test_the_history_says_who_typed_it_and_that_the_chat_did_not_see_it(
-    metadata, label
-):
-    assert lemma_label(metadata) == label
+def test_the_history_says_who_typed_it_and_that_the_chat_did_not_see_it(state, label):
+    assert lemma_label(state) == label
 
 
 def test_the_keepers_line_reads_as_theirs_beside_a_strangers():
@@ -338,7 +334,8 @@ def test_the_keepers_line_reads_as_theirs_beside_a_strangers():
     keepers = user_prompt_text(
         SimpleNamespace(
             text="ask him what's up with him",
-            metadata={WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD},
+            metadata={},
+            state=MessageState(written_in=WrittenIn.OUTSIDERS),
         )
     )
 
@@ -350,8 +347,8 @@ def test_the_keepers_line_reads_as_theirs_beside_a_strangers():
 # ------------------------------------------------------------- ask_a_person
 
 
-def _deps(*, keeper_asking: bool) -> BaseAgentContext:
-    return BaseAgentContext(
+def _deps(*, keeper_asking: bool) -> ToolContext:
+    return ToolContext(
         user_id=uuid4(),
         org_id=uuid4(),
         pod_id=uuid4(),
@@ -373,11 +370,11 @@ async def test_the_keepers_own_question_is_never_passed_back_to_them(monkeypatch
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+        "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(keeper_asking=True), tool_call_id="call-1"),
+        _deps(keeper_asking=True).model_copy(update={"tool_call_id": "call-1"}),
         AskAPersonRequest(reason="P C asks what's up with you"),
     )
 
@@ -394,11 +391,11 @@ async def test_a_strangers_run_still_calls_the_keeper_in(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+        "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(keeper_asking=False), tool_call_id="call-1"),
+        _deps(keeper_asking=False).model_copy(update={"tool_call_id": "call-1"}),
         AskAPersonRequest(reason="Wants the price list."),
     )
 

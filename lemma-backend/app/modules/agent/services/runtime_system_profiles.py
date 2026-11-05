@@ -6,10 +6,6 @@ row anywhere. That makes this the deployment's front door -- what these
 functions read out of the environment is exactly what a new pod can talk to on
 day one.
 
-The catalog is customizable at runtime (`register_system_openai_catalog_customizer`)
-because a deployment can front a gateway that exposes a different model list
-than the environment names, and the display names have to follow.
-
 Split from the profile service because none of it touches the database: it is
 configuration read into value objects, and the service is storage.
 """
@@ -17,7 +13,6 @@ configuration read into value objects, and the service is storage.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -48,12 +43,6 @@ from app.modules.agent.domain.runtime_profiles import (
 logger = get_logger(__name__)
 
 DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
-
-SystemOpenAICatalogCustomizer = Callable[
-    [list[RuntimeModelCatalogEntry]], list[RuntimeModelCatalogEntry]
-]
-
-_system_openai_catalog_customizer: SystemOpenAICatalogCustomizer | None = None
 
 
 def _load_runtime_env() -> None:
@@ -109,8 +98,7 @@ def _declare_reasoning_models(
 ) -> list[RuntimeModelCatalogEntry]:
     """Mark the deployment's reasoning models, and give them its effort.
 
-    Applied after the customizer, so a customizer that rebuilds entries cannot
-    quietly drop what the operator configured. The effort becomes each model's
+    The effort becomes each model's
     catalog default -- the lowest layer, which a profile, agent or step
     overrides -- and is sent only to a model marked here, because an
     OpenAI-compatible endpoint rejects the field on one that does not reason.
@@ -158,27 +146,10 @@ def _openai_compat_vision_model_names() -> set[str]:
     return {name.strip() for name in (raw or "").split(",") if name.strip()}
 
 
-def register_system_openai_catalog_customizer(
-    customizer: SystemOpenAICatalogCustomizer | None,
-) -> None:
-    """Register (or clear with ``None``) the system OpenAI catalog customizer.
-
-    Call once at application startup from an extension module. The customizer
-    receives the env-built catalog — each entry with ``provider_model_name ==
-    name`` and the TEXT+TOOLS baseline (plus any env-declared vision) — and
-    returns a rewritten catalog. This is the supported seam for a provider
-    overlay to keep short public model names user-facing while sending the real
-    provider model ID to the API and declaring per-model vision, without the
-    operator hand-configuring provider IDs in the environment.
-    """
-    global _system_openai_catalog_customizer
-    _system_openai_catalog_customizer = customizer
-
-
 def _build_system_openai_catalog(
     *, require_models: bool = True
 ) -> list[RuntimeModelCatalogEntry]:
-    """Build the configured system OpenAI catalog, then customize it."""
+    """Build the configured system OpenAI catalog."""
     _ensure_runtime_env_loaded()
     raw_model_names = (
         os.getenv("LEMMA_OPENAI_MODEL_NAMES") or agent_settings.lemma_openai_model_names
@@ -205,7 +176,7 @@ def _build_system_openai_catalog(
             name=model_name,
             display_name=_display_model_name(model_name),
             # The operator configures the exact provider model IDs, so the public
-            # name is the provider name unless a customizer remaps it.
+            # name is the provider name.
             provider_model_name=model_name,
             capabilities=_openai_compat_model_capabilities(
                 model_name, vision_model_names
@@ -216,8 +187,6 @@ def _build_system_openai_catalog(
         )
         for model_name in model_names
     ]
-    if _system_openai_catalog_customizer is not None:
-        catalog = _system_openai_catalog_customizer(catalog)
     return _declare_reasoning_models(catalog)
 
 

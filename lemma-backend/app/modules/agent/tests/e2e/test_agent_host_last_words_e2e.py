@@ -33,14 +33,14 @@ from app.core.infrastructure.db.uow_factory import (
     UnitOfWorkFactory,
     create_uow_from_session_maker,
 )
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
     AgentHostRunState,
 )
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host.domain.permissions import (
     permission_approval_tool_call_id,
 )
 from app.modules.agent.domain.entities import Agent, Message
@@ -52,14 +52,14 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     AgentHostRunConfig,
     RemoteHarness,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.infrastructure.models import ConversationModel
@@ -76,7 +76,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import paired_machine
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     conversation,
-    conversation_service,
+    resolve_pause,
     messages,
     owner_uow,
     running_run,
@@ -84,8 +84,9 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.agent.domain.value_objects import AnswerKind
 
 pytestmark = [pytest.mark.e2e]
 
@@ -265,7 +266,7 @@ def _worker(
                 name=seeded.agent_name,
                 instruction="Help.",
             ),
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=seeded.user_id,
                 pod_id=seeded.pod_id,
                 conversation_id=seeded.conversation_id,
@@ -372,7 +373,7 @@ async def test_a_resumed_run_ending_with_calls_it_never_ran_answers_with_its_las
     )
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=permission_approval_tool_call_id(_WRITE),
             user_id=seeded.user_id,
@@ -400,12 +401,10 @@ async def test_a_resumed_run_ending_with_calls_it_never_ran_answers_with_its_las
     assert ended.output_data == {"answer": _ANSWER}
     found = await messages(seeded.conversation_id)
     answer = _said(found, _ANSWER)
-    assert answer.metadata["is_final_answer"] is True
-    assert "is_intermediate_assistant_message" not in answer.metadata
-    assert answer.metadata["answer_from_last_words"] is True
+    assert answer.state.answer is AnswerKind.LAST_WORDS
     # The words before the work stay a step on the way.
     step = _said(found, "Approval came through. Importing the desk.")
-    assert step.metadata["is_final_answer"] is False
+    assert step.state.answer is AnswerKind.INTERMEDIATE
     # The calls are still closed, as every call a run leaves open is.
     for heartbeat in (f"{_IMPORT}-heartbeat-0", f"{_IMPORT}-heartbeat-1"):
         (closed,) = [
@@ -413,7 +412,7 @@ async def test_a_resumed_run_ending_with_calls_it_never_ran_answers_with_its_las
             for m in found
             if m.kind is MessageKind.TOOL_RETURN and m.tool_call_id == heartbeat
         ]
-        assert closed.metadata["synthetic_tool_return"] is True
+        assert closed.state.synthetic_tool_return is True
 
     # What `conversations get` answers, and so what the CLI and a script read.
     read = await scenario.owner_client.get(
@@ -444,8 +443,7 @@ async def test_words_a_tool_result_followed_were_a_step_and_are_no_answer(scenar
     assert ended.status == AgentRunStatus.COMPLETED.value
     assert ended.output_data is None
     step = _said(await messages(seeded.conversation_id), "Importing the desk.")
-    assert step.metadata["is_final_answer"] is False
-    assert step.metadata["is_intermediate_assistant_message"] is True
+    assert step.state.answer is AnswerKind.INTERMEDIATE
 
 
 @pytest.mark.parametrize(

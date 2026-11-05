@@ -31,6 +31,9 @@ from app.modules.agent.infrastructure import models as agent_models  # noqa: F40
 from app.modules.agent.infrastructure import (  # noqa: F401
     runtime_models as agent_runtime_models,
 )
+from app.modules.agent.agent_host.control import (  # noqa: F401
+    models as agent_host_models,
+)
 
 # Trigger
 from app.modules.schedule.infrastructure import models as trigger_models  # noqa: F401
@@ -83,6 +86,7 @@ REGISTERED_MODEL_MODULES = (
     pod_models,
     agent_models,
     agent_runtime_models,
+    agent_host_models,
     trigger_models,
     connector_models,
     function_models,

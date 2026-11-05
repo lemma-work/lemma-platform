@@ -20,13 +20,13 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from app.modules.agent.infrastructure.harnesses.stale_tool_output import (
+from app.modules.agent.infrastructure.harness.lemma.stale_tool_output import (
     BOUNDARY_BLOCK,
     CLIP_ABOVE_CHARS,
     RECENT_MESSAGES,
     clip_stale_tool_returns,
 )
-from app.modules.agent.services.history_tokens import count_model_message_tokens
+from app.modules.agent.infrastructure.providers.tokens import count_model_message_tokens
 
 pytestmark = pytest.mark.unit
 

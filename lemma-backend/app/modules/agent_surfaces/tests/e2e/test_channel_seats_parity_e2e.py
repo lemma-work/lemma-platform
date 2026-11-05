@@ -190,25 +190,24 @@ async def _a_place_heard_with_no_bot_is_taken_up_by_the_next(
     }
 
 
-async def _what_was_heard_is_kept_on_the_place(seats: ChannelSeats, w: World) -> object:
+async def _how_to_answer_is_kept_on_the_place(seats: ChannelSeats, w: World) -> object:
     home = MembersHome(w.user_id)
     source = await seats.source_for(
         pod_id=w.pod_id, place=_private(w.first, "T1"), home=home
     )
-    await seats.heard_at(source.id, {"external_thread_id": "D1"})
-    [heard] = await seats.person_places(
+    await seats.addressed_at(source.id, {"external_thread_id": "D1"})
+    [first] = await seats.person_places(
         platform="SLACK", external_user_id=PERSON, surface_ids=[w.first]
     )
     await seats.addressed_at(source.id, {"external_thread_id": "D2"})
-    [addressed] = await seats.person_places(
+    [then] = await seats.person_places(
         platform="SLACK", external_user_id=PERSON, surface_ids=[w.first]
     )
     return {
-        "heard ref": heard.delivery_ref,
-        "heard stamped": heard.last_inbound_at is not None,
-        "addressed ref": addressed.delivery_ref,
-        "addressed keeps the hearing": addressed.last_inbound_at
-        == heard.last_inbound_at,
+        "first ref": first.delivery_ref,
+        "then ref": then.delivery_ref,
+        # When the place was last heard is its lines' to say, not this.
+        "heard by nothing but a line": then.last_inbound_at is None,
     }
 
 
@@ -253,13 +252,12 @@ SCENARIOS: dict[str, tuple[Scenario, Callable[[World], object]]] = {
             "one source": 1,
         },
     ),
-    "heard and addressed": (
-        _what_was_heard_is_kept_on_the_place,
+    "how to answer": (
+        _how_to_answer_is_kept_on_the_place,
         lambda w: {
-            "heard ref": {"external_thread_id": "D1"},
-            "heard stamped": True,
-            "addressed ref": {"external_thread_id": "D2"},
-            "addressed keeps the hearing": True,
+            "first ref": {"external_thread_id": "D1"},
+            "then ref": {"external_thread_id": "D2"},
+            "heard by nothing but a line": True,
         },
     ),
 }

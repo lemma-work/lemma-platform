@@ -27,7 +27,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import SpanKind
 
 from app.core.observability import telemetry
-from app.modules.agent.services import runtime_model_factory as factory
+from app.modules.agent.infrastructure.providers import model_factory as factory
 
 pytestmark = pytest.mark.unit
 

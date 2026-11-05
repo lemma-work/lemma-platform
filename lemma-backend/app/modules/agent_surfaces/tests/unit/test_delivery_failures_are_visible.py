@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import logging
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent_surfaces.domain.conversation_surface import (
+    ConversationSurface,
+)
+from app.modules.test_support.conversation_surfaces_double import SurfaceRows
 from app.modules.channels.contracts import Source, SourceKind
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
@@ -59,33 +63,25 @@ def _delivery(seats, surfaces):
     )
 
 
-def _opened_from(monkeypatch, surface_id: str | None) -> None:
-    """The ``surface_id`` the conversation was opened with, if any.
-
-    `agent` owns that row, so its published read is what is doubled.
-    """
-
-    async def metadata_value(_uow, _conversation_id, key):
-        return surface_id if key == "surface_id" else None
-
-    monkeypatch.setattr(
-        "app.modules.agent.contracts.conversations_for_surfaces."
-        "conversation_metadata_value",
-        metadata_value,
-    )
+def _opened_from(rows: SurfaceRows, surface_id: UUID | None) -> UUID:
+    """A conversation, and the surface it was opened on, if any, as its row says."""
+    conversation_id = uuid4()
+    if surface_id is not None:
+        rows.surfaces[conversation_id] = ConversationSurface(surface_id=surface_id)
+    return conversation_id
 
 
-async def test_a_conversation_with_no_surface_stays_quiet(caplog, monkeypatch):
+async def test_a_conversation_with_no_surface_stays_quiet(caplog, surface_rows):
     """The one ordinary case: somebody typed in the web app.
 
     Every agent run asks for an egress target, so warning here would fire on
     conversations that were never on a platform at all.
     """
-    _opened_from(monkeypatch, None)
+    conversation_id = _opened_from(surface_rows, None)
     with caplog.at_level("DEBUG"):
         target = await _delivery(
             InMemoryChannelSeats(), AsyncMock()
-        ).resolve_egress_target(uuid4())
+        ).resolve_egress_target(conversation_id)
 
     assert target is None
     # Asserted as "not a warning" rather than "exactly DEBUG", and the reason is
@@ -104,7 +100,7 @@ async def test_a_conversation_with_no_surface_stays_quiet(caplog, monkeypatch):
 
 
 async def test_a_platform_conversation_that_lost_its_thread_is_a_warning(
-    caplog, monkeypatch
+    caplog, surface_rows
 ):
     """Opened from a platform, then its place went -- a deleted group.
 
@@ -112,10 +108,10 @@ async def test_a_platform_conversation_that_lost_its_thread_is_a_warning(
     waiting on this conversation's answer, and it is now going nowhere.
     """
     caplog.set_level(logging.DEBUG)
-    _opened_from(monkeypatch, str(uuid4()))
+    conversation_id = _opened_from(surface_rows, uuid4())
 
     target = await _delivery(InMemoryChannelSeats(), AsyncMock()).resolve_egress_target(
-        uuid4()
+        conversation_id
     )
 
     assert target is None

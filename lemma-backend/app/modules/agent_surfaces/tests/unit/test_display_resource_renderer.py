@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import settings
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     DisplayResourceRequest,
     DisplayResourceResponse,
 )

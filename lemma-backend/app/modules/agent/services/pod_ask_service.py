@@ -40,9 +40,6 @@ from app.modules.agent.domain.pod_ask_rules import (
     plan_ask,
 )
 from app.modules.agent.domain.pod_asks import (
-    ASK_KEY,
-    ASK_SOURCE,
-    ASKS_OUT_KEY,
     AnswerOutcome,
     AskChain,
     AskMode,
@@ -54,6 +51,7 @@ from app.modules.agent.domain.pod_asks import (
 )
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
+    ConversationOrigin,
     ConversationStatus,
 )
 from app.modules.agent.infrastructure.pod_ask_queries import (
@@ -62,24 +60,21 @@ from app.modules.agent.infrastructure.pod_ask_queries import (
     askable_pods,
 )
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
-from app.modules.agent.services.askable_pods_brief import narrowed
+from app.modules.agent.services.context_brief.askable_pods import narrowed
 from app.modules.agent.services.pod_ask_delivery import BUSY, settled_answer
 from app.modules.agent.services.pod_link_guards import (
     refuse_past_link_cap,
     still_stewards,
 )
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    ConversationRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.turns.send_message import SendMessage
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.identity.contracts.profiles import UserProfileRef, user_profile
 from app.modules.pod.contracts.members import pod_name
-from app.modules.usage.contracts.execution import build_usage_service
 
 if TYPE_CHECKING:
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
 logger = get_logger(__name__)
 
@@ -157,7 +152,7 @@ class AskPlan:
 
 
 def _asking_run(
-    deps: BaseAgentContext, asking: Conversation, *, latest_turn_source: str | None
+    deps: ToolContext, asking: Conversation, *, latest_turn_source: str | None
 ) -> AskingRun:
     return AskingRun(
         user_id=deps.user_id,
@@ -171,7 +166,7 @@ def _asking_run(
 
 
 def _plan(
-    deps: BaseAgentContext,
+    deps: ToolContext,
     asking: Conversation | None,
     teammate: Teammate,
     *,
@@ -201,15 +196,6 @@ class PodAskService:
     def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory
 
-    @staticmethod
-    def _conversation_service(uow: SqlAlchemyUnitOfWork) -> ConversationService:
-        return ConversationService(
-            uow=uow,
-            conversation_repository=ConversationRepository(uow),
-            agent_repository=AgentRepository(uow),
-            usage_service=build_usage_service(uow),
-        )
-
     async def teammates(
         self, *, user_id: UUID | None, organization_id: UUID | None, pod_id: UUID
     ) -> list[Teammate]:
@@ -219,16 +205,14 @@ class PodAskService:
                 uow, user_id=user_id, organization_id=organization_id, pod_id=pod_id
             )
 
-    async def reachable(self, deps: BaseAgentContext) -> list[Teammate]:
+    async def reachable(self, deps: ToolContext) -> list[Teammate]:
         """The pods this run can ask, each only by the ways it could ask it.
 
         ``teammates`` narrowed by the same rules ``plan_ask`` applies, so the
         agent is never offered a pod, or a way, the ask would then refuse.
         """
         async with self.uow_factory() as uow:
-            asking = await ConversationRepository(uow).get_conversation(
-                deps.conversation_id
-            )
+            asking = await Conversations(uow).get_conversation(deps.conversation_id)
             source = await PodAskQueries(uow).latest_turn_source(
                 conversation_id=deps.conversation_id
             )
@@ -243,12 +227,10 @@ class PodAskService:
         modes = open_modes(_asking_run(deps, asking, latest_turn_source=source))
         return [one for one in (narrowed(t, modes) for t in teammates) if one]
 
-    async def unreachable_reason(self, deps: BaseAgentContext) -> str | None:
+    async def unreachable_reason(self, deps: ToolContext) -> str | None:
         """Why this run can ask no pod at all, or ``None`` when it could."""
         async with self.uow_factory() as uow:
-            asking = await ConversationRepository(uow).get_conversation(
-                deps.conversation_id
-            )
+            asking = await Conversations(uow).get_conversation(deps.conversation_id)
             source = await PodAskQueries(uow).latest_turn_source(
                 conversation_id=deps.conversation_id
             )
@@ -256,18 +238,14 @@ class PodAskService:
             return None
         return closed_reason(_asking_run(deps, asking, latest_turn_source=source))
 
-    async def ensure_may_ask(
-        self, deps: BaseAgentContext, *, teammate: Teammate
-    ) -> AskMode:
+    async def ensure_may_ask(self, deps: ToolContext, *, teammate: Teammate) -> AskMode:
         """How the ask would be made, refused now if it can't be.
 
         Before anyone is asked to approve it: an ask that can't be made should
         not cost the person an approval first.
         """
         async with self.uow_factory() as uow:
-            asking = await ConversationRepository(uow).get_conversation(
-                deps.conversation_id
-            )
+            asking = await Conversations(uow).get_conversation(deps.conversation_id)
             source = await PodAskQueries(uow).latest_turn_source(
                 conversation_id=deps.conversation_id
             )
@@ -275,7 +253,7 @@ class PodAskService:
 
     async def ask(
         self,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         *,
         teammate: Teammate,
         request: str,
@@ -285,7 +263,7 @@ class PodAskService:
         if not request.strip():
             raise AskRefused("Say what you need from it: the request is empty.")
         async with self.uow_factory() as uow:
-            conversations = ConversationRepository(uow)
+            conversations = Conversations(uow)
             asking = await conversations.get_conversation(deps.conversation_id)
             if asking is None:
                 raise AskRefused("This conversation no longer exists.")
@@ -327,7 +305,7 @@ class PodAskService:
                     teammate=teammate,
                     instructions=instructions,
                 )
-                await self._conversation_service(uow).add_user_message_and_start_run(
+                await SendMessage.build(uow).send(
                     conversation_id=thread_id,
                     user_id=owner,
                     content=request.strip(),
@@ -351,9 +329,7 @@ class PodAskService:
                 reset_current_context(token)
             # Marks this conversation as one that may be owed answers, so its
             # own completions look for any that arrived while it was paused.
-            await conversations.set_conversation_metadata_key(
-                asking.id, ASKS_OUT_KEY, True
-            )
+            await conversations.mark_delegations_out(asking.id)
             await uow.commit()
         logger.info(
             "agent.pod_ask.asked",
@@ -373,7 +349,7 @@ class PodAskService:
     async def _side(
         self,
         uow: SqlAlchemyUnitOfWork,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         *,
         ask: PodAsk,
         teammate: Teammate,
@@ -426,7 +402,7 @@ class PodAskService:
         instructions: str | None,
     ) -> UUID:
         """The conversation in the other pod this ask continues, or a new one."""
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
         thread_id = await PodAskQueries(uow).find_thread(
             to_pod_id=teammate.pod_id,
             from_conversation_id=ask.from_conversation_id,
@@ -445,16 +421,15 @@ class PodAskService:
                 ask,
                 delivered_run_id=previous.delivered_run_id if previous else None,
             )
-            await conversations.set_conversation_metadata_key(
-                thread_id, ASK_KEY, kept.to_metadata()
-            )
+            await PodAskQueries(uow).set_ask(thread_id, kept)
             return thread_id
-        created = await self._conversation_service(uow).create_conversation(
+        created = await StartConversation.build(uow).start(
             pod_id=teammate.pod_id,
             agent_name=None,
             user_id=owner_user_id,
             instructions=instructions,
-            metadata={"source": ASK_SOURCE, ASK_KEY: ask.to_metadata()},
+            origin=ConversationOrigin.POD_ASK,
+            ask=ask,
         )
         return created.id
 
@@ -501,7 +476,7 @@ class PodAskService:
     ) -> AskOutcome | None:
         """The ask's outcome if it has one yet, taking delivery of the answer."""
         async with self.uow_factory() as uow:
-            conversations = ConversationRepository(uow)
+            conversations = Conversations(uow)
             thread = await conversations.get_conversation(
                 conversation_id, include_runs=True
             )

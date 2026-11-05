@@ -17,6 +17,9 @@ exactly as before.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
@@ -26,7 +29,7 @@ from sqlalchemy import select, update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostEvent,
     AgentHostEventBatch,
@@ -35,8 +38,7 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.pausing_tools import SUSPENDED_WHILE_PARKED_KEY
-from app.modules.agent.domain.queued_messages import WAITING_ON_ANSWER
+from app.modules.agent.domain.value_objects import QueueState, RunTrigger
 from app.modules.agent.domain.value_objects import (
     AgentEventType,
     AgentRunApprovalDecision,
@@ -45,21 +47,21 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
 )
 from app.modules.agent.events.run_followup_work import start_queued_followup_for
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     AgentHostRunConfig,
     RemoteHarness,
 )
-from app.modules.agent.infrastructure.agent_host.repository import (
+from app.modules.agent.agent_host.control.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+from app.modules.agent.agent_host.harness.pre_approvals import (
     pre_approvals_for,
     supports_pre_approval,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
@@ -67,7 +69,7 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostRunLeaseModel,
 )
-from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
+from app.modules.agent.agent_host.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_message_writer import RunMessageWriter
@@ -75,7 +77,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import paired_machine
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     conversation,
-    conversation_service,
+    resolve_pause,
     finish,
     messages,
     owner_uow,
@@ -85,7 +87,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e]
@@ -216,7 +218,7 @@ def _worker(
                 name=seeded.agent_name,
                 instruction="Help.",
             ),
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=seeded.user_id,
                 pod_id=seeded.pod_id,
                 conversation_id=seeded.conversation_id,
@@ -288,7 +290,7 @@ async def _decide(
     seeded: Seeded, approval_id: str, decision: AgentRunApprovalDecision, **response
 ) -> None:
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=approval_id,
             user_id=seeded.user_id,
@@ -316,6 +318,7 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
         conversation_id=seeded.conversation_id,
         agent_run_id=run_id,
         tool_name="ask_user",
+        pauses=PauseKind.QUESTION,
         arguments=_QUESTION,
     )
     # Asked eleven minutes ago, against the shipped ten-minute window.
@@ -342,7 +345,7 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
     assert not any(e.type is AgentEventType.STOPPED for e in observer.events)
     (ended,) = await runs(seeded.conversation_id)
     assert ended.status == AgentRunStatus.COMPLETED.value
-    assert ended.run_metadata[SUSPENDED_WHILE_PARKED_KEY]["tool_call_id"] == question
+    assert ended.suspended_while_parked["tool_call_id"] == question
     assert (await conversation(seeded.conversation_id)).status is (
         ConversationStatus.WAITING
     )
@@ -350,7 +353,7 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
     # What was typed during the window waits on the answer, not a turn of its own.
     assert await _completed(seeded, run_id) is None
     held = next(m for m in await messages(seeded.conversation_id) if m.id == typed.id)
-    assert held.metadata[WAITING_ON_ANSWER] == str(run_id)
+    assert held.state.queue_state is QueueState.WAITING_ON_ANSWER
     assert await _pending(scenario) == [(question, "QUESTION")]
 
     await _decide(
@@ -363,14 +366,14 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
     first, resumed = await runs(seeded.conversation_id)
     assert first.id == run_id
     assert resumed.status == AgentRunStatus.RUNNING.value
-    assert resumed.run_metadata["source"] == "approval_resume"
-    assert resumed.run_metadata["resumed_tool_call_id"] == question
+    assert resumed.trigger is RunTrigger.RESUME
+    assert resumed.resumed_tool_call_id == question
     found = await messages(seeded.conversation_id)
     (answer,) = _returns(found, question)
     assert answer.tool_result["answers"] == {"Which branch should I deploy?": "main"}
     claimed = next(m for m in found if m.id == typed.id)
     assert claimed.agent_run_id == resumed.id or (
-        claimed.metadata.get("steered_into_run") == str(resumed.id)
+        claimed.state.steered_into_run_id == resumed.id
     )
     assert await _pending(scenario) == []
 
@@ -435,7 +438,7 @@ async def test_a_permission_left_past_the_window_resumes_with_the_decision(scena
     assert decided.tool_result["message"].startswith("Approved. Your earlier turn")
     first, resumed = await runs(seeded.conversation_id)
     assert first.id == run_id
-    assert resumed.run_metadata["resumed_tool_call_id"] == _PERMISSION_ID
+    assert resumed.resumed_tool_call_id == _PERMISSION_ID
 
 
 async def test_a_question_answered_inside_the_window_is_answered_in_its_turn(
@@ -450,6 +453,7 @@ async def test_a_question_answered_inside_the_window_is_answered_in_its_turn(
         conversation_id=seeded.conversation_id,
         agent_run_id=run_id,
         tool_name="ask_user",
+        pauses=PauseKind.QUESTION,
         arguments=_QUESTION,
     )
 
@@ -474,7 +478,7 @@ async def test_a_question_answered_inside_the_window_is_answered_in_its_turn(
     assert not any(e.type is AgentEventType.WAITING for e in observer.events)
     (only,) = await runs(seeded.conversation_id)
     assert only.status == AgentRunStatus.COMPLETED.value
-    assert SUSPENDED_WHILE_PARKED_KEY not in (only.run_metadata or {})
+    assert only.suspended_while_parked is None
     assert len(_returns(await messages(seeded.conversation_id), question)) == 1
     assert await _completed(seeded, run_id) is None
     assert [r.id for r in await runs(seeded.conversation_id)] == [run_id]
@@ -533,10 +537,12 @@ async def test_a_late_approval_is_carried_to_the_resumed_turn_once(scenario):
     )
     first, resumed = await runs(seeded.conversation_id)
     # What the resume run's START_RUN carries, from what is on the record.
-    carried = pre_approvals_for(
-        await messages(seeded.conversation_id),
-        resumed_tool_call_id=resumed.run_metadata["resumed_tool_call_id"],
-    )
+    async with uow_factory()() as uow:
+        resumed_pause = await Pauses(uow).get(
+            conversation_id=seeded.conversation_id,
+            tool_call_id=resumed.resumed_tool_call_id,
+        )
+    carried = pre_approvals_for(resumed_pause)
     assert [approval.model_dump(mode="json") for approval in carried] == [
         {
             "approval_id": _PERMISSION_ID,

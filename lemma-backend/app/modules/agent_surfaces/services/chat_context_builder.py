@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts.channels import Audience
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,

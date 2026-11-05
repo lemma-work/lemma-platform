@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts.channels import Audience
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfaceConfig,

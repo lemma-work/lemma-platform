@@ -16,7 +16,7 @@ import pytest
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.core.exposure import exposure_settings
 
-from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.infrastructure.providers import discovery
 
 pytestmark = pytest.mark.unit
 

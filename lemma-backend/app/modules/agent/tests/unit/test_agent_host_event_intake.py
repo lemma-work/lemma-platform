@@ -20,22 +20,22 @@ from uuid import UUID, uuid7
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.event_stream import (
+from app.modules.agent.agent_host.control.event_stream import (
     AgentHostEventStream,
 )
-from app.modules.agent.infrastructure.agent_host.event_intake import (
+from app.modules.agent.agent_host.control.event_intake import (
     bounded_event_payload,
 )
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control.repository_common import (
     AgentHostProtocolViolation,
     AgentHostSequenceGap,
 )

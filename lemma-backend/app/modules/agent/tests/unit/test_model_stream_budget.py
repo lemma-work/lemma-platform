@@ -27,12 +27,12 @@ from collections.abc import AsyncIterator
 import httpx2
 import pytest
 
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     ModelResponseBudgetExceeded,
     is_retryable_stream_error,
     response_budget_message,
 )
-from app.modules.agent.services.model_stream_budget import (
+from app.modules.agent.infrastructure.providers.model_stream_budget import (
     ModelStreamBudgetTransport,
     budgeted_stream,
 )

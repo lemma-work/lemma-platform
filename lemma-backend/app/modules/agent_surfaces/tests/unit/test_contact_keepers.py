@@ -15,9 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts.conversations_for_surfaces import (
-    SurfaceConversation,
-)
+from app.modules.agent.contracts.channels import SurfaceConversation
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent_surfaces.services.contact_keepers import owned_or_moved
 

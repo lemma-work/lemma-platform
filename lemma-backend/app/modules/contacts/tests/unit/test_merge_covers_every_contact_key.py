@@ -16,7 +16,7 @@ from collections.abc import Callable
 import pytest
 
 from app.core.infrastructure.db.base import Base
-from app.modules.agent.contracts.contact_conversations import repoint_merged_contact
+from app.modules.agent.application.channels.fold import FoldConversations
 from app.modules.channels.infrastructure.contact_channels import (
     DEDUPED_ON_MERGE,
     RENAMED_ON_MERGE,
@@ -36,7 +36,7 @@ _MOVED_ELSEWHERE: dict[tuple[str, str], Callable[..., object]] = {
     ("contacts", "merged_into_id"): ContactRepository.merge,
     ("contact_identities", "contact_id"): ContactRepository.merge,
     ("visitor_sessions", "contact_id"): VisitorSessionRepository.repoint_contact,
-    ("agent_conversations", "contact_id"): repoint_merged_contact,
+    ("agent_conversations", "contact_id"): FoldConversations.merge_contact,
     # The merged contact's own channel folds into the survivor's.
     ("channels", "contact_id"): ContactChannels.fold,
 }

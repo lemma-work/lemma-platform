@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.modules.agent.contracts.sign_in import (
+from app.modules.agent.contracts.channel_words import (
     SignInRequest,
     sign_in_link,
     sign_in_message,

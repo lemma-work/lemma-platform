@@ -28,7 +28,11 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
     JsonObject,
 )
+from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.infrastructure.repositories import (
+    AgentRepository as AgentRows,
+)
 from app.modules.agent.services.runtime_availability import (
     SaveRuntimeCheck,
     check_runtime_for_pod,
@@ -79,6 +83,15 @@ def _refuse_pod_default(agent: Agent, *, verb: str) -> None:
 
 class AgentService:
     """Create and read pod-owned agent definitions."""
+
+    @classmethod
+    def build(cls, uow: SqlAlchemyUnitOfWork) -> AgentService:
+        """The service over ``uow``, with its repository and authorization."""
+        return cls(
+            uow=uow,
+            agent_repository=AgentRows(uow),
+            authorization_service=create_authorization_data_service(uow),
+        )
 
     def __init__(
         self,

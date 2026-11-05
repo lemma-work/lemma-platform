@@ -23,7 +23,10 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     surface_conversation,
 )
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
-from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
+from app.modules.agent.contracts.tools import (
+    DisplayResourceRequest,
+    DisplayResourceType,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ConversationType,
@@ -65,7 +68,7 @@ def _target(adapter, platform: str = "TELEGRAM"):
 
 
 #: Where `agent` publishes the conversation lookup a card's authorization needs.
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 
 
 def _file_entity(*, name: str, size_bytes: int, mime_type: str):

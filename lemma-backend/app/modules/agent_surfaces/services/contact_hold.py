@@ -25,9 +25,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.channel_conversations import (
-    channel_of_conversation,
-)
+from app.modules.agent.contracts.channels import channel_of_conversation
 from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.channels.contracts import (
     Channel,

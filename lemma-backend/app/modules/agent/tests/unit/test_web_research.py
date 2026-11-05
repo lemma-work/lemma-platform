@@ -25,11 +25,11 @@ from app.core.web_search.search_client import (
     SearXNGSearchClient,
     apply_domain_operators,
 )
-from app.modules.agent.tools.web import browser_capture, capture_result
-from app.modules.agent.tools.web import web_fetch as web_fetch_module
+from app.modules.agent.infrastructure.tools.web import browser_capture, capture_result
+from app.modules.agent.infrastructure.tools.web import web_fetch as web_fetch_module
 from pydantic import ValidationError
 
-from app.modules.agent.tools.web.models import WebFetchRequest
+from app.modules.agent.infrastructure.tools.web.models import WebFetchRequest
 
 pytestmark = pytest.mark.unit
 
@@ -246,7 +246,7 @@ def _patch_extraction(
     `monkeypatch.setattr` anywhere in this file fails the build. Every new
     case below is a keyword here.
     """
-    from app.modules.agent.tools.web import page_extract
+    from app.modules.agent.infrastructure.tools.web import page_extract
 
     async def fake_fetch(url: str):
         if unreachable:
@@ -391,7 +391,7 @@ class TestWebFetch:
         session = _FakeSession()
         _patch_session(monkeypatch, session)
 
-        from app.modules.agent.tools.web import page_extract
+        from app.modules.agent.infrastructure.tools.web import page_extract
 
         in_flight = 0
         peak = 0
@@ -530,7 +530,7 @@ class TestWebFetch:
         session = _FakeSession()
         _patch_session(monkeypatch, session)
 
-        from app.modules.agent.tools.web import page_extract
+        from app.modules.agent.infrastructure.tools.web import page_extract
 
         async def fake_fetch(url: str):
             if "boom" in url:
@@ -900,7 +900,7 @@ class TestTheToolAlwaysReturns:
         session = _FakeSession()
         _patch_session(monkeypatch, session, budget_seconds=0.3)
 
-        from app.modules.agent.tools.web import page_extract
+        from app.modules.agent.infrastructure.tools.web import page_extract
 
         async def slow_fetch(url: str):
             if "slow" in url:
@@ -949,7 +949,7 @@ class TestTheToolAlwaysReturns:
         # finite, not what it is.
         monkeypatch.setattr(web_fetch_module, "_MAX_CONCURRENT_FETCHES", 1)
 
-        from app.modules.agent.tools.web import page_extract
+        from app.modules.agent.infrastructure.tools.web import page_extract
 
         # Set when the quick page has been fetched, so the slow one cannot
         # start spending the budget before it. The semaphore above already
@@ -1154,7 +1154,7 @@ class TestTellingABlockFromAPage:
         identically. Spending a render on it costs seven seconds and one of
         only five slots in the batch -- which can starve a page the browser
         would have rescued."""
-        from app.modules.agent.tools.web.blocked import BlockVerdict
+        from app.modules.agent.infrastructure.tools.web.blocked import BlockVerdict
 
         _patch_extraction(
             monkeypatch,
@@ -1185,7 +1185,7 @@ class TestTellingABlockFromAPage:
     async def test_a_cloudflare_challenge_does_get_a_browser(self, monkeypatch) -> None:
         """A managed challenge is JavaScript, which is the one thing a real
         headed Chrome can actually do about it."""
-        from app.modules.agent.tools.web.blocked import BlockVerdict
+        from app.modules.agent.infrastructure.tools.web.blocked import BlockVerdict
 
         _patch_extraction(
             monkeypatch,
@@ -1403,7 +1403,7 @@ class TestPagesThatAreNotArticles:
     @pytest.mark.asyncio
     async def test_a_pdf_is_classified_before_any_browser(self) -> None:
         from app.core.net.impersonating_client import FetchedBody
-        from app.modules.agent.tools.web import page_extract
+        from app.modules.agent.infrastructure.tools.web import page_extract
 
         async def pdf(url: str) -> FetchedBody:
             return FetchedBody(
@@ -1418,7 +1418,7 @@ class TestPagesThatAreNotArticles:
     @pytest.mark.asyncio
     async def test_a_text_body_comes_back_verbatim(self) -> None:
         from app.core.net.impersonating_client import FetchedBody
-        from app.modules.agent.tools.web import page_extract
+        from app.modules.agent.infrastructure.tools.web import page_extract
 
         async def text(url: str) -> FetchedBody:
             return FetchedBody(
@@ -1491,7 +1491,10 @@ class TestAnAgentThatCannotReadTheWorkspace:
     async def test_a_file_url_is_not_answered_with_a_tool_the_agent_lacks(
         self,
     ) -> None:
-        from app.modules.agent.tools.web import http_capture, page_extract
+        from app.modules.agent.infrastructure.tools.web import (
+            http_capture,
+            page_extract,
+        )
 
         refusal = http_capture.refusal_for(
             "https://example.com/a.pdf",

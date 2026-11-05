@@ -15,13 +15,13 @@ from uuid import uuid4, uuid7
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.modules.agent.domain.agent_host_transfer import BLOB_FIELD
-from app.modules.agent.infrastructure.agent_host.transfers import (
+from app.modules.agent.agent_host.domain.transfer import BLOB_FIELD
+from app.modules.agent.agent_host.control.transfers import (
     AgentHostTransferStore,
     TransferRefusal,
     TransferRefused,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
+from app.modules.agent.agent_host.harness.artifacts import (
     PodFileAgentHostArtifactWriter,
     _inline_images,
 )

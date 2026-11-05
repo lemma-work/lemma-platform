@@ -59,7 +59,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
 from app.modules.agent_surfaces.services.direct_messages import tell_member
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts.channels import Audience
 from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder

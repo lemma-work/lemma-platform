@@ -35,7 +35,6 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.domain.steered_answers import ANSWERED_BEFORE_STEER
 from app.modules.agent.events.channel_answer_work import register_channel_answer_work
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.config import surface_settings
@@ -107,7 +106,6 @@ async def _finished(run_id: UUID, conversation_id: UUID, pod_id: UUID) -> None:
                 status="COMPLETED",
                 conversation_status="COMPLETED",
                 origin="surface",
-                has_reply_target=True,
             ),
         )
         await uow.commit()
@@ -173,20 +171,13 @@ async def _a_finished_run(
             await session.execute(
                 text(
                     "INSERT INTO agent_messages (id, conversation_id, agent_run_id, "
-                    "sequence, role, kind, text, message_metadata, created_at) "
+                    "sequence, role, kind, text, answer, created_at) "
                     "SELECT gen_random_uuid(), :c, :r, "
                     "coalesce(max(sequence), 0) + 1, 'assistant', 'TEXT', :t, "
-                    "CAST(:m AS jsonb), now() "
+                    "'BEFORE_STEER', now() "
                     "FROM agent_messages WHERE conversation_id = :c"
                 ),
-                {
-                    "c": conversation_id,
-                    "r": run_id,
-                    "t": earlier,
-                    "m": json.dumps(
-                        {"is_final_answer": False, ANSWERED_BEFORE_STEER: True}
-                    ),
-                },
+                {"c": conversation_id, "r": run_id, "t": earlier},
             )
         await session.commit()
     await _finished(run_id, conversation_id, UUID(test_pod["id"]))

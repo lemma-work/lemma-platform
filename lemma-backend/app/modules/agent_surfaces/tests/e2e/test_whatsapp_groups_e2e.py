@@ -292,6 +292,11 @@ async def test_a_client_in_the_group_is_answered_there_from_what_is_public(
     said = [line.text for line in lines]
     assert f"@{BUSINESS_NUMBER} what can you tell me?" in said
     assert "I can share the price list." in said
+    # The question is one line: written as it arrived, then taken up by the
+    # run's conversation -- not written again when the turn began.
+    [asked] = [line for line in lines if line.external_message_id == "wamid.g1"]
+    assert asked.conversation_id == context.conversation_id
+    assert asked.sender.contact_id is not None
 
 
 @pytest.mark.parametrize("called", ["the pod's name", "Lem"])
@@ -400,26 +405,18 @@ async def test_only_a_members_own_chat_can_open_a_group(
     offered,
 ):
     """In a group, whoever is talking could open groups in a member's name."""
-    from app.modules.agent.contracts import Conversation
-    from app.modules.agent_surfaces.contracts.egress import build_surface_toolsets
+    from app.modules.agent_surfaces.contracts.egress import build_surface_tools
 
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     surface = await _create_surface(
         authenticated_client, test_pod["id"], config={"type": "WHATSAPP"}
     )
-    conversation = Conversation(
-        user_id=UUID(fixed_test_user["id"]),
-        pod_id=UUID(test_pod["id"]),
-        metadata={
-            "surface_platform": "WHATSAPP",
-            "surface_id": surface["id"],
-            "conversation_kind": kind,
-        },
+    tools = await build_surface_tools(
+        SessionUnitOfWorkFactory(async_session_maker),
+        platform="WHATSAPP",
+        surface_id=UUID(surface["id"]),
+        conversation_kind=kind,
     )
 
-    toolsets = await build_surface_toolsets(
-        SessionUnitOfWorkFactory(async_session_maker), conversation
-    )
-
-    names = {name for toolset in toolsets for name in getattr(toolset, "tools", {})}
+    names = {spec.name for spec in tools}
     assert ("whatsapp_open_group" in names) is offered

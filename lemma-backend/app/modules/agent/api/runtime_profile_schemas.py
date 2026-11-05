@@ -12,8 +12,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
 
-from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
-from app.modules.agent.domain.agent_host import AgentHostStatus
+from app.modules.agent.agent_host.api import AgentHostHarnessResponse
+from app.modules.agent.agent_host.api import AgentHostStatus
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCatalogEntry,
     RuntimeProfileAvailability,

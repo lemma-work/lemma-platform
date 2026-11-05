@@ -199,31 +199,25 @@ async def maybe_emit_pod_delivered(
 # that is deliberate rather than unfinished. Each is one question that is
 # genuinely about every module at once, each runs at most once per pod for the
 # life of the platform, and the alternative -- a contract call per module -- is
-# five or seven round-trips to answer a question the database answers in one.
+# several round-trips to answer a question the database answers in one. The
+# agent module's half is its read model (``agent.contracts.analytics``).
 #
 # The dependency is therefore on these table and column names, and nothing else:
 #
-#   agent_runs.status, agent_runs.conversation_id, agent_conversations.pod_id
 #   workflow_flow_runs.status, workflow_flow_runs.pod_id
 #   schedule_runs.status, schedule_runs.schedule_id, schedules.pod_id
 #   datastore_tables.pod_id, datastore_files.pod_id, functions.pod_id,
-#   agents.pod_id, workflow_flows.pod_id, schedules.pod_id, apps.pod_id
+#   workflow_flows.pod_id, schedules.pod_id, apps.pod_id
 #
 # A rename in any of those modules breaks this file and nothing else, which is
 # the cost of the exception. It is stated here so the next reader does not have
 # to infer it from the SQL.
 
-#: Whether the pod had produced a completed outcome before the one being
-#: processed. Each source reaches the pod differently -- an agent run through its
-#: conversation, a schedule run through its schedule, only a workflow run
-#: directly -- which is why this is three subqueries rather than one.
+#: Whether the pod had produced a completed workflow or schedule outcome before
+#: the one being processed. A schedule run reaches the pod through its schedule,
+#: a workflow run directly, which is why this is two subqueries rather than one.
 _PRIOR_DELIVERY_SQL = """
 SELECT EXISTS (
-    SELECT 1 FROM agent_runs r
-    JOIN agent_conversations c ON c.id = r.conversation_id
-    WHERE c.pod_id = :pod_id AND upper(r.status::text) IN ('COMPLETED', 'SUCCEEDED')
-    OFFSET 1
-) OR EXISTS (
     SELECT 1 FROM workflow_flow_runs r
     WHERE r.pod_id = :pod_id AND upper(r.status::text) IN ('COMPLETED', 'SUCCEEDED')
     OFFSET 1
@@ -242,7 +236,6 @@ _RESOURCE_TABLES = (
     "datastore_tables",
     "datastore_files",
     "functions",
-    "agents",
     "workflow_flows",
     "schedules",
     "apps",
@@ -256,6 +249,10 @@ async def _delivered_before(uow, pod_id: UUID) -> bool:
     visible by the time the consumer runs, so "more than one completed run
     exists" means one existed before this one. Runs once per pod, ever.
     """
+    from app.modules.agent.contracts.analytics import delivered_before
+
+    if await delivered_before(uow, pod_id):
+        return True
     return bool(await uow.session.scalar(text(_PRIOR_DELIVERY_SQL), {"pod_id": pod_id}))
 
 
@@ -270,10 +267,12 @@ async def _resource_count(uow, pod_id: UUID) -> int | None:
         f"SELECT count(*) AS n FROM {table} WHERE pod_id = :pod_id"
         for table in _RESOURCE_TABLES
     )
+    from app.modules.agent.contracts.analytics import agents_built
+
     total = await uow.session.scalar(
         text(f"SELECT sum(n) FROM ({union}) AS counts"), {"pod_id": pod_id}
     )
-    return int(total) if total is not None else None
+    return int(total or 0) + await agents_built(uow, pod_id)
 
 
 __all__ = [

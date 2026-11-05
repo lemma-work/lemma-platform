@@ -14,9 +14,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.infrastructure.adapters.workflow_control import (
-    AgentControlAdapter,
-)
+from app.modules.agent.application.automation.start import StartAutomatedRun
+from app.modules.agent.contracts.automation import _AgentDriver
+from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 from app.modules.workflow.domain.nodes import AgentNode
 from app.modules.workflow.domain.nodes.agent import AgentNodeConfig
@@ -30,16 +30,21 @@ async def test_the_conversation_names_its_workflow_and_keeps_its_origin():
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="reviewer", agent_runtime=None
     )
-    adapter = AgentControlAdapter(Mock(session=RecordingWorkSession()))
-    adapter.agent_repo = Mock(get_by_pod_and_name=AsyncMock(return_value=agent))
-    adapter.conversation_repo = Mock(
-        create_conversation=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        append_message=AsyncMock(),
-        collect_events=Mock(),
+    starts = StartAutomatedRun(
+        Mock(session=RecordingWorkSession()),
+        default_runtime=AsyncMock(return_value=None),
     )
-    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
-    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+    starts.conversations = Mock(
+        create_conversation=AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    )
+    starts.runs = Mock(
+        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    )
+    starts.messages = Mock(append_message=AsyncMock())
+    starts.organization_of = AsyncMock(return_value=uuid4())  # type: ignore[method-assign]
+    adapter = object.__new__(_AgentDriver)
+    adapter.agents = Mock(get_by_pod_and_name=AsyncMock(return_value=agent))
+    adapter.starts = starts
     step = StepContext(
         run_id=uuid4(),
         flow_id=uuid4(),
@@ -56,10 +61,12 @@ async def test_the_conversation_names_its_workflow_and_keeps_its_origin():
 
     await AgentExecutor().execute(node, step)
 
-    conversation = adapter.conversation_repo.create_conversation.await_args.args[0]
+    conversation = starts.conversations.create_conversation.await_args.args[0]
+    # Where it came from is the conversation's origin and its workflow run;
+    # which workflow, the tags beside them.
+    assert conversation.origin is ConversationOrigin.WORKFLOW_STEP
+    assert conversation.workflow_run_id == step.run_id
     assert conversation.metadata == {
-        "source": "WORKFLOW_RUN",
-        "workflow_run_id": str(step.run_id),
         "workflow_id": str(step.flow_id),
         "workflow_name": "pr-review",
     }

@@ -180,7 +180,7 @@ def _egress_double() -> SurfaceEgress:
 
 
 #: Where `agent` publishes the conversation operations delivery calls.
-_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_OPERATIONS = "app.modules.agent.contracts.channels"
 
 #: Where a pod's own name is read, for the email ``From`` header.
 _POD_NAMES = "app.modules.agent_surfaces.services.group_names.pod_name_for"
