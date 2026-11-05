@@ -134,6 +134,9 @@ def resume_request(
                 tool_name=call.tool_name,
                 tool_call_id=call.tool_call_id,
                 content=content,
+                # When it came back, which the model is told: a stored return's
+                # row, not this resume. Logged with this request either way.
+                **({"timestamp": stored.created_at} if stored is not None else {}),
             )
         )
     return ModelRequest(parts=parts)

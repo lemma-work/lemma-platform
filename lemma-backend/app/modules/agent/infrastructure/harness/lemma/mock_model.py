@@ -54,6 +54,9 @@ from pydantic_ai.models.function import (
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.agent.domain.prompt.run_context import RUN_CONTEXT_OPEN
+from app.modules.agent.infrastructure.harness.lemma.tool_return_times import (
+    without_return_time,
+)
 
 _SENT_NOTE = re.compile(r"^<notes>Sent [^<]*</notes>\s*")
 
@@ -187,7 +190,12 @@ def _tool_result_value(
                 continue
             if part.tool_call_id != tool_call_id:
                 continue
-            value = _as_mapping(part.content)
+            # Read as the tool returned it: the model is sent it after the
+            # note of when it came back (``tool_return_times``).
+            content = part.content
+            value = _as_mapping(
+                without_return_time(content) if isinstance(content, str) else content
+            )
             for key in path.split("."):
                 if not isinstance(value, dict):
                     return None

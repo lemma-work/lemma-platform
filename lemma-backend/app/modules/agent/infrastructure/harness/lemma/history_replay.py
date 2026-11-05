@@ -20,6 +20,7 @@ beside the credential check it depends on.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from uuid import UUID
 
 import pydantic_core
@@ -328,6 +329,17 @@ def _user_moved_on(messages: list[object], after_index: int) -> bool:
     )
 
 
+def _returned_at(*rows: object) -> dict[str, datetime]:
+    """A rebuilt return's ``timestamp``: when its row was stored, else its
+    call's. The model is told it (``tool_return_times``), so a rebuild must
+    give the same one every time -- the default, the clock, never does."""
+    for row in rows:
+        stored = getattr(row, "created_at", None)
+        if isinstance(stored, datetime):
+            return {"timestamp": stored}
+    return {}
+
+
 def _build_tool_batch(
     messages: list[object],
     start_index: int,
@@ -404,6 +416,7 @@ def _build_tool_batch(
                     if synthetic_error is not None
                     else getattr(return_msg, "tool_result", None)
                 ),
+                **_returned_at(return_msg, msg),
             )
         )
 
