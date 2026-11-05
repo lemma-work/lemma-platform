@@ -67,9 +67,9 @@ class PublicWebsite:
         for old, new in [
             ("/login?next=%2Ft", "/auth?next=%2Ft"),
             ("/terms", "/tos"),
-            ("/pod/example/data?tab=orders", "/t/example/table/orders"),
-            ("/pod/example/conversations/thread", "/t/example/conversation/thread"),
-            ("/profile/billing", "/t?settings=plan"),
+            ("/pod/example/data?tab=orders", "/l/example/table/orders"),
+            ("/pod/example/conversations/thread", "/l/example/conversation/thread"),
+            ("/profile/billing", "/home?settings=plan"),
         ]:
             result = self.client.get(old)
             assert result.status_code in (307, 308)
