@@ -389,7 +389,12 @@ class ContactChannels:
         self, *, pod_id: UUID, contact_ids: Collection[UUID]
     ) -> dict[UUID, UUID]:
         """Each contact's own channel, by contact, for those who have one: a
-        contact who never wrote has none. One read for a page of them."""
+        contact who never wrote has none. One read for a page of them.
+
+        A contact has at most one (``uq_channels_contact``), so there is no
+        choosing between rows. It is theirs archived or not: archiving is a
+        group's (``place_stopped``, the group update), and a chat found under
+        Archived still opens."""
         ids = sorted(set(contact_ids))
         if not ids:
             return {}

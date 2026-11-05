@@ -5,6 +5,7 @@ import { source, type Pod } from "@/data";
 import {
     EMPTY_WIDGET_DRAFT,
     widgetAnswerChoices,
+    contactChannelId,
     contactName,
     handleText,
     outreachProblem,
@@ -21,6 +22,7 @@ import {
     type WidgetDraft,
 } from "@/data/contacts";
 import { SearchIcon } from "@/ui/icons";
+import { channelApi } from "@/channels/api";
 import { ContactQueue } from "@/channels/contact-queue";
 import { ContactBots } from "./contact-bots";
 import { isForbidden } from "@/session/auth-state";
@@ -292,20 +294,31 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
 
 /** A contact's channel: everything they and the space's agents said, where
  *  an editor can step in. The contact says which it is, so it opens at once;
- *  one who has never written has none. */
+ *  one who has never written has none. A backend too old to say is asked. */
 function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; onLeave: () => void }) {
-    const [none, setNone] = useState(false);
-    const open = () => {
-        if (!contact.channelId) { setNone(true); return; }
-        onLeave();
-        goTo(channelHref(pod.id, contact.channelId));
+    const [state, setState] = useState<"idle" | "finding" | "none" | "failed">("idle");
+    const open = async () => {
+        setState("finding");
+        try {
+            const id = await contactChannelId(contact, async (contactId) => {
+                const found = await channelApi(pod.id).list({ kind: "CONTACT", archived: false, contactId, limit: 1 });
+                return found.items[0]?.id ?? null;
+            });
+            if (!id) { setState("none"); return; }
+            setState("idle");
+            onLeave();
+            goTo(channelHref(pod.id, id));
+        } catch {
+            setState("failed");
+        }
     };
     return (
         <div className="csheet__actions">
-            <button type="button" className="ghost-pill" onClick={open}>
-                Open their chat
+            <button type="button" className="ghost-pill" disabled={state === "finding"} onClick={() => void open()}>
+                {state === "finding" ? "Finding it…" : "Open their chat"}
             </button>
-            {none && <p role="status">They have no chat yet: it starts when they first write.</p>}
+            {state === "none" && <p role="status">They have no chat yet: it starts when they first write.</p>}
+            {state === "failed" && <p role="alert">Couldn’t find their chat. Try again.</p>}
         </div>
     );
 }

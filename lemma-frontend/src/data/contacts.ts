@@ -26,8 +26,9 @@ export interface Contact {
     /** Known only by the browser they wrote from: nobody has vouched for them yet. */
     anonymous: boolean;
     /** Their own chat with the space, opened straight from them; null until
-     *  they first write. */
-    channelId: string | null;
+     *  they first write. Undefined from a backend too old to say, which
+     *  `contactChannelId` looks up instead of reading as "none yet". */
+    channelId: string | null | undefined;
 }
 
 export type WidgetAnswer = "off" | "known" | "anyone";
@@ -85,8 +86,18 @@ export function readContact(wire: ContactResponse): Contact {
                 strength: identity.strength,
             })),
         anonymous: wire.is_anonymous ?? false,
-        channelId: wire.channel_id ?? null,
+        channelId: wire.channel_id,
     };
+}
+
+/** Where a contact's chat is: what the contact says, or -- when the backend
+ *  doesn't say -- what `find` looks up. Null when they have none yet. */
+export async function contactChannelId(
+    contact: Contact,
+    find: (contactId: string) => Promise<string | null>,
+): Promise<string | null> {
+    if (contact.channelId !== undefined) return contact.channelId;
+    return find(contact.id);
 }
 
 export function readContacts(wire: ContactListResponse): { items: Contact[]; next: string | null } {
