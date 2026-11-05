@@ -35,7 +35,6 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.groups import (
     GroupUpdateKind,
     ParsedGroupUpdate,
-    SurfaceGroup,
 )
 from app.modules.agent_surfaces.domain.ingress_request import SurfaceIngressRequest
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -43,9 +42,6 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
@@ -56,7 +52,19 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.services.group_joiners import who_moved
 from app.modules.agent_surfaces.services.recent_leaves import left_lately, note_left
-from app.modules.channels.contracts.places import places_hearing
+from app.modules.channels.contracts import Source
+from app.modules.channels.contracts.places import (
+    change_place,
+    confirm_group,
+    forget_chat,
+    forget_pending_group,
+    joined_place,
+    left_place,
+    place_became_private,
+    place_resumed,
+    place_stopped,
+    places_hearing,
+)
 
 logger = get_logger(__name__)
 
@@ -120,7 +128,6 @@ async def apply_group_updates(
 class GroupUpdates:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
-        self.groups = SurfaceGroupRepository(uow.session)
 
     async def apply(
         self,
@@ -134,7 +141,7 @@ class GroupUpdates:
         with no transaction open and no connection held. ``surface_ids``: the
         surfaces the request could be for, where it names them.
         """
-        linkless: list[tuple[SurfaceGroup, str | None]] = []
+        linkless: list[tuple[Source, str | None]] = []
         for update in updates:
             if update.kind in _PLACE_CHANGES:
                 await self._place_changed(update, surface_ids=surface_ids)
@@ -146,12 +153,13 @@ class GroupUpdates:
         for group, phone_number_id in linkless:
             await self._fetch_invite_link(group, phone_number_id=phone_number_id)
 
-    async def _apply(self, update: ParsedGroupUpdate) -> SurfaceGroup | None:
+    async def _apply(self, update: ParsedGroupUpdate) -> Source | None:
         """Record one update; the group it confirmed, if it confirmed one."""
         if update.kind is GroupUpdateKind.CREATED:
             if not update.request_id or not update.external_channel_id:
                 return None
-            group = await self.groups.confirm_created(
+            group = await confirm_group(
+                self.uow,
                 platform=update.platform,
                 request_id=update.request_id,
                 external_channel_id=update.external_channel_id,
@@ -167,8 +175,8 @@ class GroupUpdates:
                 raise CreationNotYetRecorded(update.request_id)
             return group
         if update.kind is GroupUpdateKind.CREATE_FAILED and update.request_id:
-            await self.groups.forget_request(
-                platform=update.platform, request_id=update.request_id
+            await forget_pending_group(
+                self.uow, platform=update.platform, request_id=update.request_id
             )
             logger.warning(
                 "agent_surfaces.group_updates.creation_refused.degraded",
@@ -176,7 +184,8 @@ class GroupUpdates:
             )
             return None
         if update.kind is GroupUpdateKind.DELETED and update.external_channel_id:
-            await self.groups.forget_channel(
+            await forget_chat(
+                self.uow,
                 platform=update.platform,
                 external_channel_id=update.external_channel_id,
             )
@@ -197,7 +206,7 @@ class GroupUpdates:
 
     async def _mirrors(
         self, update: ParsedGroupUpdate, *, surface_ids: Sequence[UUID] | None
-    ) -> list[SurfaceGroup]:
+    ) -> list[Source]:
         """The pod places on this chat the update can be about.
 
         On the receiving surfaces when the request names them. Otherwise the
@@ -214,7 +223,7 @@ class GroupUpdates:
             platform=update.platform if surface_ids is None else None,
         )
         surfaces = SurfaceRepository(self.uow)
-        mirrors: list[SurfaceGroup] = []
+        mirrors: list[Source] = []
         for source in found:
             if source.surface_id is None:
                 continue
@@ -222,41 +231,41 @@ class GroupUpdates:
                 surface = await surfaces.get(source.surface_id)
                 if surface is None or not surface.matches_tenant(update.tenant_id):
                     continue
-            mirrors.append(SurfaceGroup.of(source))
+            mirrors.append(source)
         return mirrors
 
     async def _apply_place_change(
-        self, group: SurfaceGroup, update: ParsedGroupUpdate
+        self, group: Source, update: ParsedGroupUpdate
     ) -> bool:
         kind = update.kind
         if kind is GroupUpdateKind.BECAME_PRIVATE:
-            return await self.groups.became_private(group.id)
+            return await place_became_private(self.uow, group.id)
         if kind in (GroupUpdateKind.SHARED, GroupUpdateKind.UNSHARED):
             shared = kind is GroupUpdateKind.SHARED
             if group.shared_externally is shared:
                 return False
-            await self.groups.set_shared_externally(group.id, shared=shared)
+            await change_place(self.uow, group.id, {"shared_externally": shared})
             return True
         if kind is GroupUpdateKind.BOT_LEFT:
-            return await self.groups.bot_removed(group.id)
+            return await place_stopped(self.uow, group.id)
         if kind is GroupUpdateKind.BOT_RETURNED:
-            return await self.groups.bot_returned(group.id)
+            return await place_resumed(self.uow, group.id)
         if kind is GroupUpdateKind.MEMBER_JOINED:
             async with connection_released(self.uow.session):
                 gone = await left_lately(group.id, update.external_user_id)
             if gone:
                 return False
             joined = await who_moved(self.uow, group, update, joining=True)
-            return joined is not None and await self.groups.member_joined(
-                group.id, joined, name=update.display_name
+            return joined is not None and await joined_place(
+                self.uow, group.id, joined, name=update.display_name
             )
         async with connection_released(self.uow.session):
             await note_left(group.id, update.external_user_id)
         left = await who_moved(self.uow, group, update, joining=False)
-        return left is not None and await self.groups.member_left(group.id, left)
+        return left is not None and await left_place(self.uow, group.id, left)
 
     async def _fetch_invite_link(
-        self, group: SurfaceGroup, *, phone_number_id: str | None
+        self, group: Source, *, phone_number_id: str | None
     ) -> None:
         """Ask for the link when the confirmation did not carry it.
 
@@ -269,8 +278,10 @@ class GroupUpdates:
             WhatsAppClient,
         )
 
+        if group.surface_id is None or group.external_channel_id is None:
+            return
         surface = await SurfaceRepository(self.uow).get(group.surface_id)
-        if surface is None or group.external_channel_id is None:
+        if surface is None:
             return
         credentials = await SurfaceCredentialResolver(uow=self.uow).for_surface(
             surface, arrived_on=phone_number_id
@@ -286,5 +297,5 @@ class GroupUpdates:
             )
             return
         if link:
-            await self.groups.set_invite_link(group.id, link)
+            await change_place(self.uow, group.id, {"invite_link": link})
             await self.uow.commit()

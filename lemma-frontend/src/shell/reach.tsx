@@ -1,5 +1,5 @@
 import { fields } from "@/connect/schema";
-import { surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
+import { sayReachedOtherWays, surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
 import { SurfaceCredentials } from "./surface-credentials";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
 import { credentialFormForChannel, oauthFormForConnector } from "@/desktop/this-mac";
@@ -615,7 +615,7 @@ function Focused({
     return (
         <div className="focused">
             <button className="focused__back" onClick={onBack}>
-                <BackIcon size={15} /> All channels
+                <BackIcon size={15} /> Back
             </button>
 
             <span className="focused__logo"><ChannelIcon platform={entry.platform} size={38} /></span>
@@ -808,7 +808,7 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
     return (
         <Modal
             title={"Where can you reach " + pod.name + "?"}
-            subtitle={"Pick a channel and " + pod.name + " answers there, under its own name."}
+            subtitle={"Pick one and " + pod.name + " answers there, under its own name."}
             onClose={onClose}
         >
             <ReachPanel pod={pod} onLeave={onClose} />
@@ -867,8 +867,8 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
             const updated = await source.listSurfaces(pod.id);
             const made = updated.find(surface => surface.platform === platform && surface.mine);
             if (made) setManaging(made);
-            else setCompletionError("Connection saved. Refresh channels to finish setup.");
-        } catch { setCompletionError("Connection saved, but setup could not be loaded. Refresh channels to continue."); }
+            else setCompletionError("Connection saved. Refresh to finish setup.");
+        } catch { setCompletionError("Connection saved, but setup could not be loaded. Refresh to continue."); }
     };
 
     const connect = useMutation({
@@ -935,11 +935,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
             <div className={inline ? "reachsheet reachsheet--inline" : "reachsheet"}>
                 {!inline && <div className="reachsheet__who">
                     <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={40} />
-                    <p>
-                        {on.length === 0
-                            ? pod.name + " can only be reached here, in Lemma."
-                            : pod.name + " has " + on.length + (on.length === 1 ? " channel." : " channels.")}
-                    </p>
+                    <p>{sayReachedOtherWays(pod.name, on)}</p>
                 </div>}
 
                 {on.length > 0 && (
@@ -950,7 +946,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
                     </ul>
                 )}
 
-                {(catalog.isPending || surfaces.isPending) && <p className="empty-row">Reading the channels…</p>}
+                {(catalog.isPending || surfaces.isPending) && <p className="empty-row">Reading where it answers…</p>}
 
                 {catalog.isError && (
                     <button className="btn" onClick={() => void catalog.refetch()}>
@@ -960,7 +956,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
 
                 {offer.length > 0 && (
                     <>
-                        <h3 className="reachsheet__more">{on.length > 0 ? "Somewhere else" : "Pick a channel"}</h3>
+                        <h3 className="reachsheet__more">{on.length > 0 ? "Somewhere else" : "Pick one"}</h3>
                         <ul className="reachrows">
                             {offer.map((entry) => (
                                 <ConnectRow
@@ -981,9 +977,9 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
                     </>
                 )}
 
-                {completionError && <p role="alert">{completionError} <button className="btn" onClick={() => { refresh(); setCompletionError(null); }}>Refresh channels</button></p>}
-                {surfaces.isError && <p role="alert">Could not read existing channels. <button className="btn" onClick={() => void surfaces.refetch()}>Retry</button></p>}
-                {failed && <ProblemLine className="approval__error" error={failed} fallback="Couldn’t update this channel." />}
+                {completionError && <p role="alert">{completionError} <button className="btn" onClick={() => { refresh(); setCompletionError(null); }}>Refresh</button></p>}
+                {surfaces.isError && <p role="alert">Could not read where it answers now. <button className="btn" onClick={() => void surfaces.refetch()}>Retry</button></p>}
+                {failed && <ProblemLine className="approval__error" error={failed} fallback="Couldn’t update this." />}
             </div>
             )}
         </>

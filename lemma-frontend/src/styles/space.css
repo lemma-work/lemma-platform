@@ -2859,20 +2859,17 @@ samp,
     margin-top: 24px !important;
 }
 
-/* Who a schedule or workflow runs for, and whether it can run at all. */
-.sched-tag--scope,
-.wf-tag--scope {
+/* Who a schedule runs for, and whether it can run at all. */
+.sched-tag--scope {
     font-style: normal;
     color: var(--ink-3);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: transparent;
 }
-.sched-tag--scope[data-scope="space"],
-.wf-tag--scope[data-scope="space"] {
+.sched-tag--scope[data-scope="space"] {
     color: var(--ink-2);
 }
-.sched-tag--setup,
-.wf-tag--setup {
+.sched-tag--setup {
     font-style: normal;
     color: var(--warn);
     background: color-mix(in srgb, var(--warn) 12%, transparent);

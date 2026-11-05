@@ -12,7 +12,7 @@ has:
   is the connectors module's ``accounts`` (a credential), not channels'
   ``external_accounts`` (who owns a place), which is left as it is;
 * every group the bot was in is archived, as the bot taken out of one group
-  archives it (``SurfaceGroupRepository.bot_removed``). Slack sends no leave
+  archives it (``channels.contracts.places.place_stopped``). Slack sends no leave
   per channel for an uninstall. Invited back after a reinstall, each group
   returns the way any does (``BOT_RETURNED``). A person's private chat is left
   open: it is theirs, and other places feed it.
@@ -26,6 +26,8 @@ to the app the event names.
 """
 
 from __future__ import annotations
+
+from app.modules.channels.contracts.places import stop_places_of_surfaces
 
 from collections.abc import Sequence
 from uuid import UUID
@@ -46,9 +48,6 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
 from app.modules.agent_surfaces.domain.surface_connectors import (
     SURFACE_CONNECTOR_BINDINGS,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -101,9 +100,7 @@ async def retire_uninstalled_app(
         connector_id=binding.connector_id,
         account_ids=set((await bound_account_ids(uow, retired)).values()),
     )
-    archived = await SurfaceGroupRepository(uow.session).bots_removed_everywhere(
-        [surface.id for surface in retired]
-    )
+    archived = await stop_places_of_surfaces(uow, [surface.id for surface in retired])
     logger.info(
         "agent_surfaces.app_uninstalled.retired",
         platform=parsed.platform.value,

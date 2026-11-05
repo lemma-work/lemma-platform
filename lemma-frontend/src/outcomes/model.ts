@@ -633,7 +633,7 @@ export function isChat(conversation: Pick<ConversationRef, "origin" | "waitingOn
  *  the platforms it comes through -- or the notices the Lemma sends them.
  *  Called just "Email" beside chats with names, it read as an inbox. */
 export function lineTitle(platforms: string): string {
-    return platforms === "Notices" ? "Notices" : `Your line on ${platforms}`;
+    return platforms === "Notices" ? "Notices" : `Your chat on ${platforms}`;
 }
 
 function timeOf(iso: string | null | undefined): number | null {

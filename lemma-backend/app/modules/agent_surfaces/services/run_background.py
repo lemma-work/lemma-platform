@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceGroupParticipant
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
@@ -33,9 +32,6 @@ from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapt
 )
 from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
     IdentityUserDirectoryAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.platforms.resend.email_recipients import (
     reply_all_recipients,
@@ -49,7 +45,6 @@ from app.modules.agent_surfaces.services.group_audience import (
 from app.modules.agent_surfaces.services.group_log import (
     GroupBackground,
     group_background,
-    group_source,
     background_from_log,
 )
 from app.modules.agent_surfaces.services.live_group_roster import (
@@ -63,6 +58,7 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
     fetch_channel_context,
 )
 from app.modules.channels.contracts import ChannelMessage, Principal, Reader, Source
+from app.modules.channels.contracts.places import place_heard_on
 from app.modules.channels.contracts.backgrounds import (
     BACKGROUND_KEY,
     BackgroundItem,
@@ -116,7 +112,7 @@ async def run_background(
     group, logged = await _group_background(uow_factory, context)
     # A log with nothing in it yet -- a group first heard with this very
     # message -- says less than the platform does: the message replied to.
-    if logged is not None and logged.lines:
+    if logged is not None and logged.heard:
         refs = _logged_refs(context, logged.heard, group)
         outside = list(logged.outside_authors)
         participants = logged.participants
@@ -161,7 +157,7 @@ async def run_background(
 def _logged_refs(
     context: SurfaceChatContext,
     heard: Sequence[ChannelMessage],
-    group: SurfaceGroup | None,
+    group: Source | None,
 ) -> BackgroundRefs | None:
     """The pod's own log of the group, as this run's reader reads it."""
     if group is None or context.pod_id is None:
@@ -266,20 +262,20 @@ async def _members_in_live_group(
 
 async def _known_group(
     uow_factory: UnitOfWorkFactory, context: SurfaceChatContext
-) -> SurfaceGroup | None:
+) -> Source | None:
     """The group the pod knows this chat as, if it knows it."""
     channel_id = context.event.external_channel_id
     if context.surface_id is None or not channel_id:
         return None
     async with uow_factory() as uow:
-        return await SurfaceGroupRepository(uow.session).get(
-            surface_id=context.surface_id, external_channel_id=channel_id
+        return await place_heard_on(
+            uow, surface_id=context.surface_id, external_channel_id=channel_id
         )
 
 
 async def _group_background(
     uow_factory: UnitOfWorkFactory, context: SurfaceChatContext
-) -> tuple[SurfaceGroup | None, GroupBackground | None]:
+) -> tuple[Source | None, GroupBackground | None]:
     """The group the pod keeps a log for, and that log; else nothing.
 
     Nothing where the platform can read its history (Slack, Teams) or the
@@ -295,21 +291,16 @@ async def _group_background(
     ):
         return None, None
     async with uow_factory() as uow:
-        group = await SurfaceGroupRepository(uow.session).get(
-            surface_id=context.surface_id, external_channel_id=channel_id
+        group = await place_heard_on(
+            uow, surface_id=context.surface_id, external_channel_id=channel_id
         )
         if group is None:
-            return None, None
-        source = await group_source(uow, group)
-        if source is None:
             return None, None
         logged = await group_background(
             uow,
             group=group,
-            source=source,
             membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-            agent_display_name=context.agent_display_name,
-            reader=_reader(context, source),
+            reader=_reader(context, group),
             asker=_asker(context),
         )
     return group, logged

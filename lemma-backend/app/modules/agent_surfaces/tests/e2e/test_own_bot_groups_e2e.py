@@ -32,9 +32,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.channels.contracts.places import place_heard_on
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
@@ -176,8 +174,10 @@ async def test_an_own_whatsapp_number_confirms_logs_and_answers_its_groups(
             ),
             adapters=SurfacePlatformAdapterRegistry(),
         )
-    group = await SurfaceGroupRepository(db_session).get(
-        surface_id=surface_id, external_channel_id=GROUP
+    group = await place_heard_on(
+        SqlAlchemyUnitOfWork(db_session),
+        surface_id=surface_id,
+        external_channel_id=GROUP,
     )
     assert group is not None and group.invite_link is not None
 
@@ -288,8 +288,10 @@ async def test_an_own_telegram_bot_greets_once_and_answers_only_when_asked(
     )
     assert isinstance(context, SurfaceChatContext)
     assert context.audience.answers_outsiders is True
-    group = await SurfaceGroupRepository(db_session).get(
-        surface_id=surface_id, external_channel_id=str(TELEGRAM_GROUP)
+    group = await place_heard_on(
+        SqlAlchemyUnitOfWork(db_session),
+        surface_id=surface_id,
+        external_channel_id=str(TELEGRAM_GROUP),
     )
     assert group is not None
     said = [line.text for line in await timeline(db_session, group, limit=10)]

@@ -21,7 +21,6 @@ import {
     readLinePage,
     sayQuestion,
     sayUnread,
-    sectionsOf,
     senderLabel,
     sourceLabel,
     whoAnswers,
@@ -100,15 +99,6 @@ test("a row's preview is who said the last line, on one line", () => {
     assert.equal(previewOf({ lastLine: { sender: dana, text: "On it", createdAt: "" }, topic: null } as Pick<Channel, "lastLine" | "topic">, ME), "You: On it");
     assert.equal(previewOf({ lastLine: null, topic: "Beta" }, ME), "Beta");
     assert.equal(previewOf({ lastLine: null, topic: null }, ME), "Nothing said yet.");
-});
-
-test("cuts the list into the reader's own, the groups and -- for an editor -- the contacts", () => {
-    assert.deepEqual(sectionsOf(listed.items, true).map((section) => [section.key, section.label, section.channels.length]), [
-        ["direct", "Your channel", 1], ["groups", "Groups", 1], ["contacts", "Contacts", 1],
-    ]);
-    assert.deepEqual(sectionsOf(listed.items, false).map((section) => section.key), ["direct", "groups"]);
-    // An empty section is left out.
-    assert.deepEqual(sectionsOf([launch], true).map((section) => section.key), ["groups"]);
 });
 
 test("says what is new, and the sidebar's badge puts questions first", () => {
