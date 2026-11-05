@@ -1,6 +1,6 @@
 """Somebody else's pod account, lent into a sandbox session, and taking it back.
 
-The sandbox's git bridge (``agent/tools/workspace_cli/github_credential_bridge``)
+The sandbox's git bridge (``agent/infrastructure/tools/workspace_cli/github_credential_bridge``)
 writes a GitHub token into one session's directory in a person's sandbox.
 When the token is somebody else's -- a SHARED connector's account whose owner
 allowed use inside sandboxes -- the loan holds only while the whole pod-account

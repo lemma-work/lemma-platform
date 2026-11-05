@@ -22,7 +22,7 @@ export function ContactBots({ pod, onConnect }: { pod: Pod; onConnect?: () => vo
     return (
         <section className="ccard ccard--wide" aria-labelledby="contacts-bots">
             <div className="ccard__head">
-                <h2 id="contacts-bots">Where people reach it</h2>
+                <h2 id="contacts-bots">Where {pod.teammate?.name || pod.name} answers</h2>
                 {onConnect && <button type="button" className="ghost-pill" onClick={onConnect}>Connect</button>}
             </div>
             <p className="ccard__sub">Whom each number, bot and address answers privately. Groups follow each bot’s own “Answer people outside {pod.name}” switch.</p>

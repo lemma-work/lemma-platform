@@ -32,6 +32,7 @@ from app.modules.channels.infrastructure.source_repository import (
 )
 from app.modules.channels.services.places import (
     ChannelPlaces,
+    GroupHome,
     Place,
     recompute_visibility,
 )
@@ -40,13 +41,13 @@ __all__ = [
     "GROUP_SETTINGS",
     "ReplyAddress",
     "addressed_at",
+    "adopt_place",
     "change_place",
     "confirm_group",
     "conversation_at",
     "find_place",
     "forget_chat",
     "forget_pending_group",
-    "heard_at",
     "joined_place",
     "left_place",
     "open_pending_group",
@@ -55,13 +56,16 @@ __all__ = [
     "person_places",
     "place_became_private",
     "place_by_request",
+    "place_heard_on",
     "place_resumed",
     "place_stopped",
     "places_hearing",
     "places_of",
     "reply_address",
+    "set_place_owner",
     "shared_places_of_pod",
     "shared_places_of_surfaces",
+    "stop_places_of_surfaces",
     "surface_heard_from",
     "surfaces_hearing",
 ]
@@ -93,17 +97,13 @@ async def find_place(
     )
 
 
-async def heard_at(
-    uow: SqlAlchemyUnitOfWork, source_id: UUID, delivery_ref: Mapping[str, object]
-) -> None:
-    """The surface heard this place just now; ``delivery_ref`` is how to answer."""
-    await SourceRepository(uow.session).heard(source_id, delivery_ref)
-
-
 async def addressed_at(
     uow: SqlAlchemyUnitOfWork, source_id: UUID, delivery_ref: Mapping[str, object]
 ) -> None:
-    """How to write to a place nobody there has spoken in yet: a cold email."""
+    """How to write to this place from now: what answers the message just
+    heard there, or -- where nobody there has spoken yet -- what writing there
+    first learnt (a cold email). Not when it was heard: that is its line's to
+    say (``channels.infrastructure.lines``), once."""
     await SourceRepository(uow.session).addressed(source_id, delivery_ref)
 
 
@@ -130,6 +130,34 @@ async def places_hearing(
         surface_ids=surface_ids,
         platform=platform,
     )
+
+
+async def place_heard_on(
+    uow: SqlAlchemyUnitOfWork, *, surface_id: UUID, external_channel_id: str
+) -> Source | None:
+    """The shared place this surface hears on this chat, if it knows one."""
+    found = await places_hearing(
+        uow, external_channel_id=external_channel_id, surface_ids=[surface_id]
+    )
+    return found[0] if found else None
+
+
+async def adopt_place(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, place: Place
+) -> tuple[Source, bool]:
+    """A shared place, made -- with its GROUP channel -- on first sight, and
+    whether it was made now. A title the platform names it by now replaces the
+    one it was known by."""
+    known = await find_place(uow, pod_id=pod_id, place=place)
+    if known is None:
+        source = await ChannelPlaces(uow).source_for(
+            pod_id=pod_id, place=place, home=GroupHome(title=place.title)
+        )
+        return source, True
+    if place.title and known.title != place.title:
+        await change_place(uow, known.id, {"title": place.title})
+        known = known.model_copy(update={"title": place.title})
+    return known, False
 
 
 async def person_places(
@@ -302,6 +330,25 @@ async def change_place(
     await SourceRepository(uow.session).set(source_id, values)
 
 
+async def set_place_owner(
+    uow: SqlAlchemyUnitOfWork, source_id: UUID, owner_user_id: UUID | None
+) -> None:
+    """The member who answers for a shared place -- who is in its channel
+    too, so they can read what they answer for."""
+    sources = SourceRepository(uow.session)
+    await sources.set(source_id, {"owner_user_id": owner_user_id})
+    if owner_user_id is None:
+        return
+    source = await sources.get(source_id)
+    channel = (
+        await ChannelRepository(uow.session).get(source.channel_id) if source else None
+    )
+    if channel is not None:
+        await MemberRepository(uow.session).add_person(
+            channel, Principal.member(owner_user_id), seated_by=SeatedBy.PLATFORM
+        )
+
+
 async def forget_pending_group(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -404,3 +451,20 @@ async def place_resumed(uow: SqlAlchemyUnitOfWork, source_id: UUID) -> bool:
         return False
     await ChannelRepository(uow.session).change(channel.id, {"archived_at": None})
     return True
+
+
+async def stop_places_of_surfaces(
+    uow: SqlAlchemyUnitOfWork, surface_ids: Collection[UUID], *, page: int = 200
+) -> int:
+    """These surfaces' bots taken out of every shared place at once -- their
+    app removed from the workspace, which sends no leave per place. Each is
+    stopped as ``place_stopped`` stops one; returns how many were not already."""
+    stopped = 0
+    after: UUID | None = None
+    while found := await shared_places_page(
+        uow.session, surface_ids, after=after, limit=page
+    ):
+        for source in found:
+            stopped += await place_stopped(uow, source.id)
+        after = found[-1].id
+    return stopped

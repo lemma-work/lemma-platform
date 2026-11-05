@@ -31,7 +31,7 @@ export function newSince(lines: readonly Pick<Line, "seq" | "sender">[], sinceSe
 
 /** The pill's words. */
 export function sayNewLines(count: number): string {
-    return count === 1 ? "1 new line" : count + " new lines";
+    return count === 1 ? "1 new message" : count + " new messages";
 }
 
 /** How long after one message the same person's next is drawn as part of

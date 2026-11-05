@@ -16,18 +16,22 @@ import pytest
 
 from sandbox_runtime.errors import SandboxRejected
 
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import (
+    AgentRuntimeConfig,
+    ConversationOrigin,
+    RunTrigger,
+)
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
-from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
-from app.modules.agent.domain.prompt_directories import _directory_sections
-from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.prompt.directories import _directory_sections
+from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.infrastructure.agent_host.host_execution import (
+from app.modules.agent.agent_host.control.host_execution import (
     host_execution_of,
 )
-from app.modules.agent.infrastructure.agent_host.repository import _stored_capacity
-from app.modules.agent.services.host_execution_selection import (
+from app.modules.agent.agent_host.control.repository import _stored_capacity
+from app.modules.agent.agent_host.control.host_execution_selection import (
     HostExecutionFacts,
     choose_host_workspace,
     default_folder,
@@ -35,14 +39,12 @@ from app.modules.agent.services.host_execution_selection import (
     recorded_host_workspace,
     triggered_by_run_user,
 )
-from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent.tools.browser.vm_browser import vm_browser_toolset
-from app.modules.agent.tools.tool_assembler import (
-    RunToolAssembler,
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import ToolGroup
+from app.modules.agent.services.tool_catalog import (
+    ToolSurface,
     _for_host_execution,
-)
-from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
-    is_workspace_cli_toolset,
+    specs_for,
 )
 from app.modules.workspace.contracts.host_execution import (
     HostWorkspace,
@@ -76,8 +78,10 @@ class Facts:
         self.opened: list[dict] = []
         self.records: dict[UUID, dict] = {}
         self.host_lookups: list[tuple[UUID, UUID | None]] = []
-        # Sources of the runs before the one being chosen for, newest first.
-        self.earlier: list[str | None] = ["user_message"]
+        # What started the runs before the one being chosen for, newest first.
+        self.earlier: list[RunTrigger] = [RunTrigger.MESSAGE]
+        # The directory the conversation's last Agent Host run reported.
+        self.host_cwd: str | None = None
 
     def build(self) -> HostExecutionFacts:
         async def usable_host(
@@ -100,13 +104,21 @@ class Facts:
                 sandbox_id=host_sandbox_id(kwargs["conversation_id"]), root=ROOT
             )
 
-        async def earlier_sources(
+        async def earlier_triggers(
             conversation_id: UUID, run_id: UUID
-        ) -> list[str | None]:
+        ) -> list[RunTrigger]:
             return self.earlier
 
+        async def host_cwd(conversation_id: UUID) -> str | None:
+            return self.host_cwd
+
+        async def heard_on_platform(conversation_id: UUID) -> bool:
+            return conversation_id in _HEARD_ON_A_PLATFORM
+
         return HostExecutionFacts(
-            earlier_sources=earlier_sources,
+            host_cwd=host_cwd,
+            heard_on_platform=heard_on_platform,
+            earlier_triggers=earlier_triggers,
             is_desktop=lambda: self.desktop,
             usable_host=usable_host,
             open_workspace=open_workspace,
@@ -115,24 +127,43 @@ class Facts:
         )
 
 
-def _conversation(user_id: UUID = PAIRED, **metadata) -> Conversation:
-    return Conversation(
+#: Conversations a chat platform has been heard in, as agent_surfaces records.
+_HEARD_ON_A_PLATFORM: set[UUID] = set()
+
+
+def _conversation(
+    user_id: UUID = PAIRED,
+    *,
+    origin: ConversationOrigin = ConversationOrigin.CHAT,
+    cwd: str = "/home/user/lemma/c/2026-09-25/abc12345",
+    surface_platform: str | None = None,
+    **metadata,
+) -> Conversation:
+    """``surface_platform`` is a platform heard in it; the rest are tags."""
+    conversation = Conversation(
         user_id=user_id,
         pod_id=uuid4(),
-        metadata={"cwd": "/home/user/lemma/c/2026-09-25/abc12345", **metadata},
+        origin=origin,
+        cwd=cwd,
+        metadata=metadata,
         created_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
     )
+    if surface_platform:
+        _HEARD_ON_A_PLATFORM.add(conversation.id)
+    return conversation
 
 
 _SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID)
 
 
-def _run(conversation: Conversation, source: str | None = "user_message") -> AgentRun:
+def _run(
+    conversation: Conversation, trigger: RunTrigger = RunTrigger.MESSAGE
+) -> AgentRun:
     return AgentRun(
         conversation_id=conversation.id,
         started_at=datetime.now(timezone.utc),
         agent_runtime=_SYSTEM_RUNTIME,
-        metadata={"source": source} if source else {},
+        state=RunState(trigger=trigger),
     )
 
 
@@ -140,14 +171,14 @@ async def _choose(
     facts: Facts,
     *,
     conversation: Conversation | None = None,
-    source: str | None = "user_message",
+    trigger: RunTrigger = RunTrigger.MESSAGE,
     user_id: UUID = PAIRED,
     run: AgentRun | None = None,
 ):
     conversation = conversation or _conversation()
     return await choose_host_workspace(
         conversation=conversation,
-        agent_run=run or _run(conversation, source),
+        agent_run=run or _run(conversation, trigger),
         user_id=user_id,
         facts=facts.build(),
     )
@@ -230,96 +261,120 @@ async def test_a_hosted_deployment_never_runs_on_a_host():
 
 
 @pytest.mark.parametrize(
-    ("source", "expected"),
+    ("trigger", "expected"),
     [
-        ("user_message", True),
-        ("queued_messages", True),
-        ("manual_retry", True),
-        ("approval_resume", True),
-        ("person", True),
-        ("subagent", False),
+        (RunTrigger.MESSAGE, True),
+        (RunTrigger.FOLLOW_UP, True),
+        (RunTrigger.RETRY, True),
+        (RunTrigger.RESUME, True),
         # A teammate's reply must not drive commands on the user's Mac.
-        ("message_replies", False),
-        (None, False),
-        ("something_new", False),
+        (RunTrigger.REPLIES, False),
+        (RunTrigger.SCHEDULE_FIRE, False),
+        (RunTrigger.WORKFLOW_START, False),
+        (RunTrigger.NOTIFICATION, False),
     ],
 )
-def test_which_run_sources_count_as_the_run_user(source, expected):
+def test_which_triggers_count_as_the_run_user(trigger, expected):
     conversation = _conversation()
-    assert triggered_by_run_user(conversation, _run(conversation, source)) is expected
+    assert (
+        triggered_by_run_user(
+            conversation, _run(conversation, trigger), heard_on_platform=False
+        )
+        is expected
+    )
+
+
+_WAKE, _MESSAGE = RunTrigger.WAKE, RunTrigger.MESSAGE
 
 
 @pytest.mark.parametrize(
     ("earlier", "expected"),
     [
-        (["user_message"], True),
+        ([_MESSAGE], True),
         # Wakes chain: the first run that is not a wake decides.
-        (["agent_wait", "wait_resume", "manual_retry"], True),
-        (["message_replies"], False),
-        (["agent_wait", "message_replies", "user_message"], False),
-        (["something_new"], False),
+        ([_WAKE, RunTrigger.DELEGATION_RESULT, RunTrigger.RETRY], True),
+        ([RunTrigger.REPLIES], False),
+        ([_WAKE, RunTrigger.REPLIES, _MESSAGE], False),
+        ([RunTrigger.WORKFLOW_START], False),
         ([], False),
-        (["agent_wait"], False),
+        ([_WAKE], False),
     ],
 )
-@pytest.mark.parametrize("source", ["agent_wait", "wait_resume"])
-def test_a_wake_qualifies_only_through_the_run_it_continues(source, earlier, expected):
+@pytest.mark.parametrize("trigger", [_WAKE, RunTrigger.DELEGATION_RESULT])
+def test_a_continuation_qualifies_only_through_the_run_it_continues(
+    trigger, earlier, expected
+):
     conversation = _conversation()
-    run = _run(conversation, source)
-    assert triggered_by_run_user(conversation, run, earlier_sources=earlier) is expected
-    # Without the earlier runs, a wake never qualifies.
-    assert not triggered_by_run_user(conversation, run)
+    run = _run(conversation, trigger)
+    assert (
+        triggered_by_run_user(
+            conversation, run, heard_on_platform=False, earlier_triggers=earlier
+        )
+        is expected
+    )
+    # Without the earlier runs, a continuation never qualifies.
+    assert not triggered_by_run_user(conversation, run, heard_on_platform=False)
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    ("origin", "metadata"),
     [
-        {"source": "WORKFLOW_RUN", "workflow_run_id": str(uuid4())},
-        {"workflow_run_id": str(uuid4())},
-        {"source": "SCHEDULE", "started_by": "SCHEDULE"},
-        {"started_by": "SCHEDULE"},
-        {"source": "agent_surfaces"},
-        {"source": "notification"},
+        (ConversationOrigin.WORKFLOW_STEP, {}),
+        (ConversationOrigin.SCHEDULE, {}),
+        (ConversationOrigin.SURFACE, {"surface_platform": "SLACK"}),
+        (ConversationOrigin.NOTIFICATION, {"surface_platform": "SLACK"}),
+        (ConversationOrigin.CONTACT, {}),
+        (ConversationOrigin.POD_ASK, {}),
+        # The app opened it, and a platform has since bound it.
+        (ConversationOrigin.CHAT, {"surface_platform": "SLACK"}),
     ],
-    ids=["workflow", "workflow-id-only", "schedule", "started-by", "surface", "notice"],
+    ids=["workflow", "schedule", "surface", "notice", "contact", "pod-ask", "bound"],
 )
-@pytest.mark.parametrize("source", ["user_message", "agent_wait", "wait_resume"])
+@pytest.mark.parametrize("trigger", [_MESSAGE, _WAKE])
 async def test_a_conversation_something_else_opened_never_runs_on_the_host(
-    metadata, source
+    origin, metadata, trigger
 ):
     """A workflow's conversation waking from its wait, or a message typed into
     it, is still the workflow's: no run in it executes on the Mac."""
     facts = Facts()
-    conversation = _conversation(**metadata)
+    conversation = _conversation(origin=origin, **metadata)
 
-    assert await _choose(facts, conversation=conversation, source=source) is None
+    assert await _choose(facts, conversation=conversation, trigger=trigger) is None
     assert facts.opened == []
 
 
 async def test_a_wake_of_the_users_own_work_runs_on_their_mac():
     facts = Facts()
-    facts.earlier = ["agent_wait", "user_message"]
-    assert await _choose(facts, source="agent_wait") is not None
+    facts.earlier = [_WAKE, _MESSAGE]
+    assert await _choose(facts, trigger=_WAKE) is not None
 
 
 async def test_a_wake_of_a_teammates_reply_stays_in_the_vm():
     facts = Facts()
-    facts.earlier = ["message_replies", "user_message"]
-    assert await _choose(facts, source="agent_wait") is None
+    facts.earlier = [RunTrigger.REPLIES, _MESSAGE]
+    assert await _choose(facts, trigger=_WAKE) is None
     assert facts.opened == []
 
 
 def test_a_sub_agent_conversation_is_not_a_person_at_the_keyboard():
-    conversation = _conversation(is_sub_agent=True)
-    assert not triggered_by_run_user(conversation, _run(conversation))
+    conversation = _conversation(origin=ConversationOrigin.SUBAGENT)
+    assert not triggered_by_run_user(
+        conversation, _run(conversation), heard_on_platform=False
+    )
+
+
+def test_metadata_a_client_wrote_does_not_make_a_chat_unattended():
+    """The keys that used to stand for an origin are only tags now."""
+    conversation = _conversation(source="SCHEDULE", workflow_run_id=str(uuid4()))
+    assert triggered_by_run_user(
+        conversation, _run(conversation), heard_on_platform=False
+    )
 
 
 async def test_a_bound_folder_is_the_root_hint():
     facts = Facts()
-    conversation = _conversation(
-        **{AGENT_HOST_SESSION_METADATA_KEY: {"host_cwd": "/Users/owner/code/app"}}
-    )
-    await _choose(facts, conversation=conversation)
+    facts.host_cwd = "/Users/owner/code/app"
+    await _choose(facts, conversation=_conversation())
     assert facts.opened[0]["root_hint"] == "/Users/owner/code/app"
 
 
@@ -330,10 +385,10 @@ def test_a_conversation_without_a_dated_cwd_still_gets_a_folder():
 
 
 async def _native(
-    conversation: Conversation, facts: Facts, source: str | None = "user_message"
+    conversation: Conversation, facts: Facts, trigger: RunTrigger = RunTrigger.MESSAGE
 ) -> bool:
     return await host_runs_native_commands(
-        conversation, _run(conversation, source), facts=facts.build()
+        conversation, _run(conversation, trigger), facts=facts.build()
     )
 
 
@@ -345,29 +400,29 @@ async def test_agent_host_runs_drop_lemmas_command_tools_only_with_a_paired_host
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    "origin",
     [
-        {"source": "workflow", "workflow_run_id": str(uuid4())},
-        {"source": "schedule"},
-        {"source": "surface", "surface_platform": "slack"},
+        ConversationOrigin.WORKFLOW_STEP,
+        ConversationOrigin.SCHEDULE,
+        ConversationOrigin.SURFACE,
     ],
 )
-async def test_an_unattended_agent_host_run_keeps_lemmas_command_tools(metadata):
+async def test_an_unattended_agent_host_run_keeps_lemmas_command_tools(origin):
     """The agent's own shell asks a person before every command, and nobody is
     watching a workflow or a schedule: withholding Lemma's tools, which run
     without asking, left such a run waiting out every approval."""
     facts = Facts()
 
-    assert not await _native(_conversation(**metadata), facts)
-    assert not await _native(_conversation(), facts, source="workflow")
+    assert not await _native(_conversation(origin=origin), facts)
+    assert not await _native(_conversation(), facts, trigger=RunTrigger.WORKFLOW_START)
 
 
 async def test_a_wake_keeps_whichever_toolset_the_work_it_continues_had():
     person, unattended = Facts(), Facts()
-    unattended.earlier = ["agent_wait", "workflow"]
+    unattended.earlier = [_WAKE, RunTrigger.WORKFLOW_START]
 
-    assert await _native(_conversation(), person, source="agent_wait")
-    assert not await _native(_conversation(), unattended, source="agent_wait")
+    assert await _native(_conversation(), person, trigger=_WAKE)
+    assert not await _native(_conversation(), unattended, trigger=_WAKE)
 
 
 @pytest.mark.parametrize(
@@ -408,39 +463,50 @@ def test_run_slots_and_the_host_execution_report_share_capacity_without_clobberi
 # ------------------------------------------------------------- tool filtering
 
 
-async def test_the_assembler_withholds_only_the_workspace_command_tools():
-    conversation = SimpleNamespace(id=uuid4(), metadata={})
-    assembler = RunToolAssembler(None)
+async def test_the_catalog_withholds_only_the_workspace_command_tools():
+    user_id, pod_id = uuid4(), uuid4()
+    conversation = Conversation(user_id=user_id, pod_id=pod_id)
 
-    everything = await assembler.assemble(agent=None, conversation=conversation)
-    native = await assembler.assemble(
-        agent=None, conversation=conversation, host_execution="native"
-    )
-    sandbox = await assembler.assemble(
-        agent=None, conversation=conversation, host_execution="sandbox"
-    )
+    async def groups(**host: object) -> list[ToolGroup]:
+        ctx = ToolContext(
+            user_id=user_id, pod_id=pod_id, conversation_id=conversation.id, **host
+        )
+        specs = await specs_for(
+            agent=None,
+            conversation=conversation,
+            ctx=ctx,
+            surface=ToolSurface.AGENT_HOST,
+            uow_factory=None,
+        )
+        return [spec.toolset for spec in specs]
 
-    assert any(is_workspace_cli_toolset(t) for t in everything)
-    assert vm_browser_toolset not in everything
+    host = HostWorkspace(sandbox_id=uuid4(), root="/Users/someone/project")
+    everything = await groups()
+    native = await groups(host_runs_native_commands=True)
+    sandbox = await groups(host_workspace=host)
+
+    assert ToolGroup.WORKSPACE_CLI in everything
+    assert ToolGroup.VM_BROWSER not in everything
     # An Agent Host run loses the shell and gains the VM browser in its place.
-    assert not any(is_workspace_cli_toolset(t) for t in native)
-    assert native == [t for t in everything if not is_workspace_cli_toolset(t)] + [
-        vm_browser_toolset
-    ]
+    shell_less = [g for g in everything if g is not ToolGroup.WORKSPACE_CLI]
+    answer = [g for g in shell_less if g is ToolGroup.QUESTIONS]
+    before_answer = [g for g in shell_less if g is not ToolGroup.QUESTIONS]
+    assert native == [*before_answer, ToolGroup.VM_BROWSER, *answer]
     # An in-process host run keeps its shell (now on the Mac) and gains it too.
-    assert sandbox == [*everything, vm_browser_toolset]
+    with_shell = [g for g in everything if g is not ToolGroup.QUESTIONS]
+    assert sandbox == [*with_shell, ToolGroup.VM_BROWSER, *answer]
 
 
 def test_no_browser_tool_for_an_agent_that_never_had_a_shell():
-    assert _for_host_execution([], "native") == []
-    assert _for_host_execution([], "sandbox") == []
+    assert _for_host_execution([], native=True) == []
+    assert _for_host_execution([], native=False) == []
 
 
 # ------------------------------------------------------------------- prompts
 
 
-def _ctx(**fields) -> ConversationContext:
-    return ConversationContext(
+def _ctx(**fields) -> ToolContext:
+    return ToolContext(
         user_id=PAIRED,
         pod_id=uuid4(),
         conversation_id=uuid4(),
@@ -526,7 +592,7 @@ def test_the_host_execution_runtime_names_the_shipped_lemma_cli():
 async def test_the_choice_is_recorded_on_the_run_either_way():
     facts = Facts()
     conversation = _conversation()
-    on_host, in_vm = _run(conversation), _run(conversation, "subagent")
+    on_host, in_vm = _run(conversation), _run(conversation, RunTrigger.REPLIES)
 
     await _choose(facts, conversation=conversation, run=on_host)
     await _choose(facts, conversation=conversation, run=in_vm)

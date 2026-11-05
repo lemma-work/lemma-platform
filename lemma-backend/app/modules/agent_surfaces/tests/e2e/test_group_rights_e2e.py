@@ -35,9 +35,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.channels.contracts.places import set_place_owner
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
 from app.modules.agent_surfaces.tests.e2e.helpers import _create_surface
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import direct_lines
@@ -206,8 +204,8 @@ async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(
     assert refused.status_code == 403, refused.text
 
     # The editor answers for it now; the pod's admin takes it back.
-    await SurfaceGroupRepository(db_session).set_owner(
-        UUID(group["id"]), UUID(editor["id"])
+    await set_place_owner(
+        SqlAlchemyUnitOfWork(db_session), UUID(group["id"]), UUID(editor["id"])
     )
     await db_session.commit()
     taken = await scenario.owner_client.patch(path, json={"owner": "me"})
@@ -254,8 +252,8 @@ async def test_a_group_whose_owner_left_the_pod_is_anybodys_to_take_on(
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     _surface, group, editor = await _pod_with_a_group(scenario, message_store)
     gone = await scenario.create_user("left-the-pod")
-    await SurfaceGroupRepository(db_session).set_owner(
-        UUID(group["id"]), UUID(gone["id"])
+    await set_place_owner(
+        SqlAlchemyUnitOfWork(db_session), UUID(group["id"]), UUID(gone["id"])
     )
     await db_session.commit()
 

@@ -15,6 +15,8 @@ _NAME_TO_MODULE = {
     'AccountCreateSchemaPreferencesType0': 'account_create_schema_preferences_type_0',
     'AccountCredentialsUpdateSchema': 'account_credentials_update_schema',
     'AccountCredentialsUpdateSchemaCredentials': 'account_credentials_update_schema_credentials',
+    'AccountDeletionRequest': 'account_deletion_request',
+    'AccountDeletionResponse': 'account_deletion_response',
     'AccountInstallationsSchema': 'account_installations_schema',
     'AccountListResponseSchema': 'account_list_response_schema',
     'AccountOption': 'account_option',
@@ -657,7 +659,9 @@ _NAME_TO_MODULE = {
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramAccountItem': 'telegram_account_item',
     'TelegramAccountResponse': 'telegram_account_response',
+    'TelegramAccountsResponse': 'telegram_accounts_response',
     'TelegramLinkRequest': 'telegram_link_request',
     'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
@@ -773,6 +777,8 @@ if TYPE_CHECKING:
     from .account_create_schema_preferences_type_0 import AccountCreateSchemaPreferencesType0
     from .account_credentials_update_schema import AccountCredentialsUpdateSchema
     from .account_credentials_update_schema_credentials import AccountCredentialsUpdateSchemaCredentials
+    from .account_deletion_request import AccountDeletionRequest
+    from .account_deletion_response import AccountDeletionResponse
     from .account_installations_schema import AccountInstallationsSchema
     from .account_list_response_schema import AccountListResponseSchema
     from .account_option import AccountOption
@@ -1415,7 +1421,9 @@ if TYPE_CHECKING:
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_account_item import TelegramAccountItem
     from .telegram_account_response import TelegramAccountResponse
+    from .telegram_accounts_response import TelegramAccountsResponse
     from .telegram_link_request import TelegramLinkRequest
     from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
@@ -1544,6 +1552,8 @@ __all__ = [
     'AccountCreateSchemaPreferencesType0',
     'AccountCredentialsUpdateSchema',
     'AccountCredentialsUpdateSchemaCredentials',
+    'AccountDeletionRequest',
+    'AccountDeletionResponse',
     'AccountInstallationsSchema',
     'AccountListResponseSchema',
     'AccountOption',
@@ -2186,7 +2196,9 @@ __all__ = [
     'TableOpeningResponse',
     'TableResponse',
     'TableSummaryResponse',
+    'TelegramAccountItem',
     'TelegramAccountResponse',
+    'TelegramAccountsResponse',
     'TelegramLinkRequest',
     'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',

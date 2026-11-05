@@ -336,8 +336,8 @@ function ReachedOn({ pod, actions }: { pod: Pod; actions: FrameActions }) {
     const on = (surfaces.data ?? []).filter((surface) => surface.active);
     const shown = on.slice(0, PLACES_SHOWN);
     return (
-        <section className="ox-sideb" aria-label="Where people reach it">
-            <h2 className="ox-sideb__h">Where people reach it</h2>
+        <section className="ox-sideb" aria-label="Where it answers">
+            <h2 className="ox-sideb__h">Where it answers</h2>
             {surfaces.isSuccess && on.length === 0 && <p className="ox-vs">Only here, so far.</p>}
             {shown.length > 0 && (
                 <ul className="ox-sideb__list">

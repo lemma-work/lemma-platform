@@ -7,7 +7,7 @@ import io
 import pytest
 from PIL import Image
 
-from app.modules.agent.tools.image_payload import (
+from app.modules.agent.infrastructure.tools.image_payload import (
     VISION_MAX_LONG_EDGE,
     downscale_for_vision,
 )

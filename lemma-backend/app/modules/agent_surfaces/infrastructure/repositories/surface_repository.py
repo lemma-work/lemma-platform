@@ -38,9 +38,6 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql 
     routing_surfaces,
 )
 from app.modules.pod.contracts.orm import Pod
-from app.modules.agent.contracts.conversations import (
-    merge_conversation_metadata as merge_agent_conversation_metadata,
-)
 
 
 def _identity_claim_lock_key(
@@ -71,12 +68,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         events = entity.collect_events()
         if events:
             self.uow.collect_events(events)
-
-    async def merge_conversation_metadata(
-        self, conversation_id: UUID, updates: dict[str, object]
-    ) -> None:
-        """Merge ``updates`` into a conversation's metadata blob (no-op if gone)."""
-        await merge_agent_conversation_metadata(self.uow, conversation_id, updates)
 
     async def get(self, id: UUID) -> AgentSurfaceEntity | None:
         model = await self.session.get(AgentSurface, id)

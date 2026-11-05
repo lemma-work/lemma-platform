@@ -25,6 +25,10 @@ from __future__ import annotations
 from enum import Enum
 
 
+class VisionUnavailableError(RuntimeError):
+    """No vision-capable model is configured for this deployment."""
+
+
 class AgentVisionMode(str, Enum):
     DIRECT = "DIRECT"
     DELEGATED = "DELEGATED"

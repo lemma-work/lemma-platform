@@ -70,11 +70,11 @@ async def test_telegram_managed_bot_full_lifecycle_completes_and_creates_surface
     setup = start.json()
     assert setup["status"] == "PENDING"
     setup_id = setup["setup_id"]
-    assert (
-        setup["launch_url"]
-        == f"https://t.me/lemma_manager_bot?start=surface_{setup_id}"
-    )
-    assert setup["manager_bot_username"] == "lemma_manager_bot"
+    # The link names the bot Telegram says this token belongs to, not the
+    # username configured above — a stale one there is a t.me page that does not
+    # open, and this is the test's stand-in for it.
+    assert setup["launch_url"] == f"https://t.me/lemmabot?start=surface_{setup_id}"
+    assert setup["manager_bot_username"] == "lemmabot"
 
     telegram_user_id = 900555001
     chat_id = 555001

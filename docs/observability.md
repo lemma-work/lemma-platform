@@ -130,7 +130,7 @@ usual translation (`.` → `_`, counters gain `_total`).
 
 | Metric | Labels | Recorded at |
 |---|---|---|
-| `lemma.conversations.started` | `surface` = app, slack, telegram, whatsapp, teams, email, web_widget, api, workflow, other | Root conversation insert (`conversation_repository.create_conversation`). The app and the public API write the same rows and both count as `app` |
+| `lemma.conversations.started` | `surface` = app, slack, telegram, whatsapp, teams, email, web_widget, api, workflow, other | Root conversation insert (`Conversations.create_conversation`, `infrastructure/db/conversations.py`). The app and the public API write the same rows and both count as `app` |
 | `lemma.surface.messages` | `surface`, `direction` = in/out, `outcome` = success/failure/retry | In: `InboundAcceptor.accept`, for events classified as a message (success once stored or handled, failure if that raises). Out: every agent reply send (`reply_work`) and every Channels delivery. `retry` is a transient failure the row will try again, so `success + failure` is messages and `retry` is extra attempts |
 | `lemma.surface.delivery_seconds` | `surface` | Same outbound sends, platform call start to answer |
 | `lemma.workflow.runs`, `lemma.workflow.run_duration_seconds` | `outcome` = completed/failed/cancelled (counter only) | `RunPublication._record_transition`. A run cancelled before it started is counted and not timed |
@@ -180,11 +180,15 @@ What each label means, and what bounds it:
   `interrupted`: the worker went away mid-run (a deploy, a lost lease) and
   another worker resumes it, which counts it again when it does end. Read
   `interrupted` as a deploy signal, not a failure.
-- `kind` -- what started the run, from `run_origin`: `chat` (a person in the
-  app), `surface` (a channel such as Slack or WhatsApp), `schedule`,
-  `workflow` (an AGENT step), `trigger`, `subagent` (another agent called it)
-  or `pod_ask`. A function that starts an agent does so through one of these,
-  so there is no separate `function` kind.
+- `kind` -- who the run was for, its `RunKind`, stored on the run by
+  whatever started it: `chat` (a person in the app), `surface` (a channel
+  such as Slack or WhatsApp), `channel` (a line in Lemma's own channels),
+  `contact` (somebody outside the pod), `schedule`, `workflow` (an AGENT
+  step), `subagent` (another agent delegated it), `pod_ask` or `call` (a
+  voice call's coordinator). A person writing into a schedule's conversation
+  starts a `chat` run. A resume, wake, retry or follow-up takes the kind of
+  the run it continues. A function that starts an agent does so through one of
+  these, so there is no separate `function` kind.
 - `model` -- the model name the run's runtime resolved to. Bounded by the
   configured model catalog; cleaned to `[A-Za-z0-9_.:/-]` and 96 characters so
   a hand-typed custom model cannot carry anything odd. `unknown` when the run

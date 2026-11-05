@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent.domain.vision import (
@@ -49,7 +49,7 @@ def test_the_stored_run_config_alone_can_never_report_vision():
 @pytest.mark.asyncio
 async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monkeypatch):
     """A resolved runtime carries capabilities; the bridge must use that."""
-    from app.modules.agent.services import conversation_mcp_service as bridge
+    from app.modules.agent.agent_host import relayed_session as bridge
 
     resolved = SimpleNamespace(
         runtime_snapshot=lambda: RuntimeSnapshot(
@@ -68,21 +68,23 @@ async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monke
 
         resolve = AsyncMock(return_value=resolved)
 
-    monkeypatch.setattr(bridge, "AgentRuntimeProfileService", _Service)
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_profile_service.AgentRuntimeProfileService",
+        _Service,
+    )
     monkeypatch.setattr(
         bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object()
     )
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
     monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
-    service = bridge.ConversationMCPService.__new__(bridge.ConversationMCPService)
     run = SimpleNamespace(
         agent_runtime=SimpleNamespace(
             model_dump=lambda mode="json": {"profile_id": "p", "model_name": "m"}
         )
     )
 
-    profile = await service._resolved_runtime_profile(
+    profile = await bridge.resolved_runtime_profile(
         run=run, uow=object(), organization_id=uuid4(), user_id=uuid4()
     )
 
@@ -103,7 +105,7 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(
     delegate if a VISION_MODEL exists, otherwise refuse images -- which is a
     worse answer but a working one.
     """
-    from app.modules.agent.services import conversation_mcp_service as bridge
+    from app.modules.agent.agent_host import relayed_session as bridge
 
     class _Service:
         def __init__(self, *a, **k):
@@ -111,21 +113,23 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(
 
         resolve = AsyncMock(side_effect=RuntimeError("profile archived"))
 
-    monkeypatch.setattr(bridge, "AgentRuntimeProfileService", _Service)
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_profile_service.AgentRuntimeProfileService",
+        _Service,
+    )
     monkeypatch.setattr(
         bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object()
     )
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
     monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
-    service = bridge.ConversationMCPService.__new__(bridge.ConversationMCPService)
     run = SimpleNamespace(
         agent_runtime=SimpleNamespace(
             model_dump=lambda mode="json": {"profile_id": "p", "model_name": "m"}
         )
     )
 
-    profile = await service._resolved_runtime_profile(
+    profile = await bridge.resolved_runtime_profile(
         run=run, uow=object(), organization_id=uuid4(), user_id=uuid4()
     )
 
@@ -134,11 +138,10 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(
 
 @pytest.mark.asyncio
 async def test_a_run_less_conversation_has_no_runtime_to_resolve(monkeypatch):
-    from app.modules.agent.services import conversation_mcp_service as bridge
+    from app.modules.agent.agent_host import relayed_session as bridge
 
-    service = bridge.ConversationMCPService.__new__(bridge.ConversationMCPService)
     assert (
-        await service._resolved_runtime_profile(
+        await bridge.resolved_runtime_profile(
             run=None, uow=object(), organization_id=uuid4(), user_id=uuid4()
         )
         is None
@@ -149,12 +152,10 @@ def test_the_pod_bridge_lets_its_client_decide_about_images():
     """The pod MCP bridge has no run, so it cannot resolve anything -- but MCP
     carries images natively, so producing them and letting the client choose
     beats refusing on its behalf."""
-    import inspect
+    from app.modules.agent.services.run_session import pod_tool_context
 
-    from app.modules.agent.services import pod_mcp_service
-
-    source = inspect.getsource(pod_mcp_service._pod_context)
-    assert "vision_mode=AgentVisionMode.DIRECT" in source
+    ctx = pod_tool_context(user_id=uuid4(), pod_id=uuid4())
+    assert ctx.vision_mode is AgentVisionMode.DIRECT
 
 
 @pytest.mark.asyncio
@@ -385,9 +386,7 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
         RuntimeProfileProtocol,
         RuntimeProfileScope,
     )
-    from app.modules.agent.services.runtime_profile_service import (
-        ResolvedAgentRuntime,
-    )
+    from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
     from app.modules.agent.domain.harness_options import HarnessOptions  # noqa: F401
 
     profile = SimpleNamespace(

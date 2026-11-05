@@ -54,9 +54,14 @@ pub(crate) fn extract_archive(
                 relative.display()
             )));
         }
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        // The file type is read from the raw attributes as well as from
+        // `unix_mode()`. Since zip 9, `unix_mode()` ignores the Unix half of
+        // the attributes on an entry whose host is MS-DOS and reports a regular
+        // file, so a symbolic link recorded there would pass a check on it
+        // alone.
+        let is_symlink = |mode: u32| mode & 0o170000 == 0o120000;
+        if entry.unix_mode().is_some_and(is_symlink)
+            || is_symlink(entry.external_attributes() >> 16)
         {
             return Err(invalid("ZIP archive contains a symbolic link"));
         }

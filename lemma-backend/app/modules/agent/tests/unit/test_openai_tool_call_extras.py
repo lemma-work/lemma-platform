@@ -1,5 +1,9 @@
 """A tool call's ``extra_content`` goes back to the endpoint that sent it.
 
+pydantic-ai carries it (2.57+): read into the call's ``provider_details`` and
+sent back unchanged. These hold that through Lemma's own model and its run
+log.
+
 Gemini 3's OpenAI-compatible endpoint puts a ``thought_signature`` in a tool
 call's ``extra_content`` and refuses a request that sends the call back
 without it. The gateway below is a stand-in for any endpoint that
@@ -10,7 +14,6 @@ test, so its shape here is only illustrative.
 from __future__ import annotations
 
 import json
-from uuid import uuid7
 
 import httpx2
 import pytest
@@ -19,16 +22,10 @@ from pydantic_ai import Agent as PydanticAgent
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.value_objects import JsonObject, MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
-    history_and_prompt,
-)
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_stream_parts import (
-    StreamingParts,
-)
-from app.modules.agent.services.runtime_model_factory import (
-    _UsageOnlyStreamOptionsChatModel,
+from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.infrastructure.harness.lemma.run_log import decode, encode
+from app.modules.agent.infrastructure.providers.openai_compatible_model import (
+    OpenAICompatibleChatModel,
 )
 
 pytestmark = pytest.mark.unit
@@ -109,7 +106,7 @@ class _Gateway:
 
 
 def _model(gateway: _Gateway, base_url: str = _BASE_URL):
-    return _UsageOnlyStreamOptionsChatModel(
+    return OpenAICompatibleChatModel(
         "m",
         provider=OpenAIProvider(
             openai_client=AsyncOpenAI(
@@ -162,30 +159,10 @@ async def test_extra_content_is_sent_back_on_the_call_that_carried_it(
     assert "extra_content" not in calls["call_2"]
 
 
-def test_a_call_from_another_endpoint_goes_without_its_extra_content() -> None:
-    """An agent's model can change mid-conversation; a different endpoint never
-    sent the field, and a strict one would refuse it."""
-    part = ToolCallPart(
-        "add",
-        {"a": 1},
-        tool_call_id="call_1",
-        provider_name="openai",
-        provider_details={"extra_content": _EXTRA, "origin": _BASE_URL},
-    )
-
-    here = _model(_Gateway(stream=False))._map_tool_call(part)
-    elsewhere = _model(
-        _Gateway(stream=False), base_url="https://other.example.test/v1/"
-    )._map_tool_call(part)
-
-    assert here.get("extra_content") == _EXTRA
-    assert "extra_content" not in elsewhere
-
-
-def test_a_stored_call_rebuilds_with_what_it_arrived_with() -> None:
-    """A run that resumes -- after an approval, say -- rebuilds its tool calls
-    from their message rows, and the endpoint checks them all again."""
-    details = {"extra_content": _EXTRA, "origin": _BASE_URL}
+def test_a_logged_call_replays_with_what_it_arrived_with() -> None:
+    """A run that resumes -- after an approval, say -- replays its calls from
+    the run log, and the endpoint checks them all again."""
+    details = {"extra_content": _EXTRA}
     part = ToolCallPart(
         "add",
         {"a": 1},
@@ -193,61 +170,10 @@ def test_a_stored_call_rebuilds_with_what_it_arrived_with() -> None:
         provider_name="openai",
         provider_details=details,
     )
-    draft = StreamingParts(
-        emit_tokens=False, malformed_tool_call_ids=set()
-    ).completed_part_message(part=part, part_kind="tool_call", part_content=None)
-    assert draft is not None
 
-    conversation_id = uuid7()
+    (replayed,) = decode([encode([ModelResponse(parts=[part])])])
 
-    def row(sequence: int, **fields) -> Message:
-        return Message.create(
-            conversation_id=conversation_id,
-            sequence=sequence,
-            agent_run_id=None,
-            **fields,
-        )
-
-    history, _ = history_and_prompt(
-        [
-            row(1, role=MessageRole.USER, kind=MessageKind.TEXT, text="add"),
-            row(
-                2,
-                role=draft.role,
-                kind=draft.kind,
-                tool_name=draft.tool_name,
-                tool_call_id=draft.tool_call_id,
-                tool_args=draft.tool_args,
-                metadata=draft.metadata,
-            ),
-            row(
-                3,
-                role=MessageRole.TOOL,
-                kind=MessageKind.TOOL_RETURN,
-                tool_name="add",
-                tool_call_id="call_1",
-                tool_result=1,
-            ),
-        ]
-    )
-
-    (rebuilt,) = [
-        p
-        for m in history
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, ToolCallPart)
-    ]
+    (rebuilt,) = replayed.parts
+    assert isinstance(rebuilt, ToolCallPart)
     assert rebuilt.provider_name == "openai"
     assert rebuilt.provider_details == details
-
-
-def test_a_call_with_nothing_attached_stores_nothing_extra() -> None:
-    draft = StreamingParts(
-        emit_tokens=False, malformed_tool_call_ids=set()
-    ).completed_part_message(
-        part=ToolCallPart("add", {"a": 1}, tool_call_id="call_1"),
-        part_kind="tool_call",
-        part_content=None,
-    )
-    assert draft is not None and draft.metadata == {"tool_name": "add"}

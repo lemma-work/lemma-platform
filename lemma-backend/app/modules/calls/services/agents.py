@@ -45,11 +45,9 @@ from app.modules.agent.contracts.calls import (
     call_conversations,
     call_transcripts,
     call_working,
+    keep_in_call,
     missed_relays,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import (
-    append_delivery_notice,
-    start_surface_turn,
+    speak_into_call,
 )
 
 logger = get_logger(__name__)
@@ -57,11 +55,26 @@ logger = get_logger(__name__)
 _CONVERSATION_STREAM = "agent.conversation"
 _CANVAS_TOOLS = frozenset({"display_resource"})
 _RELAY_TOOL = "relay_to_voice"
-_SPAWN_TOOL = "spawn_subagent"
+#: The calls that start sub-agents: `delegate` lists each child it started,
+#: the deprecated `spawn_subagent` returns its one.
+_SPAWN_TOOLS = frozenset({"delegate", "spawn_subagent"})
 _RUN_ENDINGS = frozenset({"completed", "error", "stopped"})
 #: Attempts at a stream that keeps failing before the call says so.
 _FOLLOW_ATTEMPTS = 5
 _FOLLOW_BACKOFF_SECONDS = 1.0
+
+
+def _children_started(result: dict[str, object]) -> list[str]:
+    """The child conversations a spawning call's return names."""
+    named = [result.get("conversation_id")]
+    children = result.get("children")
+    if isinstance(children, list):
+        named.extend(
+            child.get("conversation_id")
+            for child in children
+            if isinstance(child, dict)
+        )
+    return [child for child in named if isinstance(child, str)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,13 +201,12 @@ class CallAgents:
 
     async def send_turn(self, content: str) -> None:
         async with as_caller(self._party) as scope:
-            await start_surface_turn(
+            await speak_into_call(
                 scope.uow,
-                conversation_id=self.call_id,
+                call_id=self.call_id,
                 user_id=self._party.user_id,
                 pod_id=self._party.pod_id,
                 content=content,
-                message_metadata={"source": "call"},
             )
 
     async def earlier(self) -> list[str]:
@@ -209,10 +221,10 @@ class CallAgents:
     async def record(self, transcript: str) -> None:
         """Part of the call's transcript, kept in its conversation as it goes."""
         async with as_caller(self._party) as scope:
-            await append_delivery_notice(
+            await keep_in_call(
                 scope.uow,
-                conversation_id=self.call_id,
-                message=transcript,
+                call_id=self.call_id,
+                text=transcript,
                 metadata={CALL_TRANSCRIPT_KEY: str(uuid4())},
             )
 
@@ -224,10 +236,10 @@ class CallAgents:
         and a call with something in it is never archived as empty.
         """
         async with as_caller(self._party) as scope:
-            await append_delivery_notice(
+            await keep_in_call(
                 scope.uow,
-                conversation_id=self.call_id,
-                message=text,
+                call_id=self.call_id,
+                text=text,
                 metadata={CALL_NOTICE_KEY: str(uuid4())},
             )
 
@@ -414,9 +426,8 @@ class CallAgents:
     def _on_return(
         self, conversation_id: UUID, tool: str, call_id: str, result: JsonValue
     ) -> None:
-        if tool == _SPAWN_TOOL and isinstance(result, dict):
-            child = result.get("conversation_id")
-            if isinstance(child, str):
+        if tool in _SPAWN_TOOLS and isinstance(result, dict):
+            for child in _children_started(result):
                 with contextlib.suppress(ValueError):
                     self._watch(UUID(child))
             return

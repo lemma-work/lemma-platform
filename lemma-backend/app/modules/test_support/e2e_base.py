@@ -1007,6 +1007,10 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     #       whenever the listen path is not attached, which reads as "this test
     #       is sometimes five seconds slower" rather than as a fault.
     os.environ["AGENT_RUN_STOP_POLL_INTERVAL_SECONDS"] = "0.1"
+    # The pushed path's backstop: a run hears a steer or a stop at once, and
+    # looks on its own only this often -- a lost signal costs this, here.
+    os.environ["AGENT_RUN_CONTROL_BACKSTOP_SECONDS"] = "0.5"
+    agent_settings.agent_run_control_backstop_seconds = 0.5
     os.environ["FUNCTION_RUN_POLL_INTERVAL_SECONDS"] = "0.1"
     # 0.5 is the floor these two declare (ge=0.5); anything lower fails
     # validation at import and takes the whole app down, not just the setting.
@@ -1114,6 +1118,7 @@ def _import_e2e_models() -> None:
     from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
+    from app.modules.agent.agent_host.control import models as agent_host_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
     from app.modules.apps.infrastructure import models as app_models
     from app.modules.connectors.infrastructure import models as connector_models
@@ -1141,6 +1146,7 @@ def _import_e2e_models() -> None:
     _ = (
         workspace_models,
         agent_runtime_models,
+        agent_host_models,
         work_models,
         user_models,
         organization_models,

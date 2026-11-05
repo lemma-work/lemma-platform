@@ -13,7 +13,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
+from app.modules.agent.contracts.tools import (
+    DisplayResourceRequest,
+    DisplayResourceType,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
 )

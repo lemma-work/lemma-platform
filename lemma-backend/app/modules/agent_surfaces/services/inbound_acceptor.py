@@ -28,6 +28,8 @@ as the rows it read.
 
 from __future__ import annotations
 
+from app.modules.channels.contracts.places import surfaces_hearing
+
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Literal
@@ -59,9 +61,6 @@ from app.modules.agent_surfaces.events.work_kinds import (
 )
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repository import (  # noqa: E501
     InboundMessageRepository,
@@ -187,8 +186,8 @@ class InboundAcceptor:
         channel = verdict.unless_adopted
         assert channel is not None
         async with self.uow_factory() as uow:
-            adopted = await SurfaceGroupRepository(uow.session).surface_ids_for_channel(
-                platform=platform.value, external_channel_id=channel
+            adopted = await surfaces_hearing(
+                uow, platform=platform.value, external_channel_id=channel
             )
         if adopted:
             return replace(verdict, unless_adopted=None)

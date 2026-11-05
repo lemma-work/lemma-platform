@@ -395,3 +395,8 @@
  .docs-article :is(h2,h3,h4) { scroll-margin-top: 140px; }
  .docs-heading h1 { font-size: 34px; }
 }
+
+/* The deletion page's form sits in a card under the explanation, so what the
+   button does is read before the button is reached. */
+.delete-account-page h2 { font-weight: 500; font-size: 18px; margin: 0 0 14px; overflow-wrap: anywhere; }
+.delete-account-page p { color: var(--ink-2); line-height: 1.6; }

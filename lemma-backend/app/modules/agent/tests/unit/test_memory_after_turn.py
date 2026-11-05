@@ -8,17 +8,17 @@ to that, so the two prompts cannot drift apart anywhere else.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.capabilities.memory import MemoryCapability
 from app.modules.agent.domain.agent_memory_paths import memory_kept_after_turn
-from app.modules.agent.domain.prompts import (
+from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.prompt.templates import (
     FRAGMENT_BY_TOOLSET,
     load_memory_pass_prompt,
     load_memory_prompt,
+    memory_timing_prompt,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
 
@@ -40,16 +40,24 @@ def _sections(text: str) -> dict[str, str]:
     return {name: body.strip() for name, body in sections.items()}
 
 
-@pytest.mark.parametrize("origin", ["chat", "surface"])
-def test_a_run_a_person_waits_on_leaves_its_memory_to_the_pass(origin):
-    assert memory_kept_after_turn(**_WAITED_ON, origin=origin)
+@pytest.mark.parametrize("kind", [RunKind.CHAT, RunKind.SURFACE, RunKind.CHANNEL])
+def test_a_run_a_person_waits_on_leaves_its_memory_to_the_pass(kind):
+    assert memory_kept_after_turn(**_WAITED_ON, kind=kind)
 
 
 @pytest.mark.parametrize(
-    "origin", ["schedule", "workflow", "trigger", "subagent", "pod_ask"]
+    "kind",
+    [
+        RunKind.SCHEDULE,
+        RunKind.WORKFLOW,
+        RunKind.SUBAGENT,
+        RunKind.POD_ASK,
+        # Every voice turn is a run: a pass after each would be noise.
+        RunKind.CALL,
+    ],
 )
-def test_a_run_nobody_waits_on_keeps_saving_memory_in_the_turn(origin):
-    assert not memory_kept_after_turn(**_WAITED_ON, origin=origin)
+def test_a_run_nobody_waits_on_keeps_saving_memory_in_the_turn(kind):
+    assert not memory_kept_after_turn(**_WAITED_ON, kind=kind)
 
 
 @pytest.mark.parametrize(
@@ -65,7 +73,7 @@ def test_a_run_nobody_waits_on_keeps_saving_memory_in_the_turn(origin):
 def test_a_chat_run_keeps_saving_in_the_turn_when_the_pass_cannot_follow_it(
     condition,
 ):
-    assert not memory_kept_after_turn(**{**_WAITED_ON, **condition}, origin="chat")
+    assert not memory_kept_after_turn(**{**_WAITED_ON, **condition}, kind=RunKind.CHAT)
 
 
 def test_the_after_turn_contract_differs_only_in_when_to_write():
@@ -104,7 +112,7 @@ def test_the_pass_is_told_how_to_keep_memory_but_not_when():
 def test_the_screen_reads_the_turn_without_the_contract():
     """The cheap first read: what is worth keeping, with none of the rules for
     writing it, which only the keeper needs."""
-    from app.modules.agent.domain.prompts import load_memory_screen_prompt
+    from app.modules.agent.domain.prompt.templates import load_memory_screen_prompt
 
     screen = load_memory_screen_prompt()
     contract = _sections(load_memory_prompt())
@@ -116,21 +124,33 @@ def test_the_screen_reads_the_turn_without_the_contract():
 @pytest.mark.anyio
 @pytest.mark.parametrize("after_turn", [False, True])
 async def test_the_assembled_run_is_told_the_contract_its_context_chose(after_turn):
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.domain.context import ToolContext
+    from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+        Instructions,
+        harness_capabilities,
+    )
+    from app.modules.agent.services.tool_runtime import ToolRuntime
 
-    ctx = SimpleNamespace(
+    ctx = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
         conversation_id=uuid4(),
         is_pod_default_agent=True,
         memory_enabled=True,
         memory_after_turn=after_turn,
     )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=ctx, full_toolsets=[], enable_prompt_caching=False
+    capabilities = harness_capabilities(
+        ctx=ctx, specs=[], runtime=ToolRuntime([]), enable_prompt_caching=False
     )
 
     taught = [
         cap.get_instructions()
         for cap in capabilities
-        if isinstance(cap, MemoryCapability)
+        if type(cap) is Instructions and "AGENTS.md" in cap.get_instructions()
     ]
-    assert taught == [load_memory_prompt(after_turn=after_turn)]
+    # The contract is the same either way; its timing rides with the
+    # conversation's context, after the agent's instruction.
+    assert taught == [load_memory_prompt(timing=False)]
+    timing = memory_timing_prompt(after_turn=after_turn)
+    assert ("memory pass" in timing) is after_turn
+    assert timing.splitlines()[0] not in load_memory_prompt(timing=False)

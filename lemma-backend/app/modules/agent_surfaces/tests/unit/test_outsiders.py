@@ -21,7 +21,7 @@ import pytest
 
 from app.modules.agent_surfaces.services.channel_lines import answered_for
 from app.modules.channels.contracts import Principal
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts.channels import Audience
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     SurfaceConfig,
@@ -30,9 +30,8 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceLifecycleKind,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import (
-    SurfaceGroup,
-)
+from app.modules.channels.contracts import Source
+from app.modules.test_support.group_sources import a_group
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.platforms.telegram.membership import (
@@ -120,7 +119,7 @@ def test_the_pod_keeps_a_log_only_where_the_platform_keeps_no_history():
 
 
 def test_a_group_welcomes_outsiders_only_with_somebody_answering_for_them():
-    group = SurfaceGroup(
+    group = a_group(
         channel_id=uuid4(),
         pod_id=POD,
         surface_id=uuid4(),
@@ -166,7 +165,7 @@ def _event(*, is_dm: bool = False) -> ParsedInboundSurfaceEvent:
 
 def _door(
     *,
-    group: SurfaceGroup | None,
+    group: Source | None,
     member_of_pod: bool = False,
     allow=True,
     owner_in_pod: bool = True,
@@ -188,7 +187,7 @@ def _door(
         limiter=SimpleNamespace(allow=_allow),
         contacts=_Contacts(),
     )
-    door.groups = SimpleNamespace(get=_get)
+    door.group_at = _get
     return door
 
 
@@ -214,8 +213,8 @@ class _Contacts:
         )
 
 
-def _welcoming_group() -> SurfaceGroup:
-    return SurfaceGroup(
+def _welcoming_group() -> Source:
+    return a_group(
         channel_id=uuid4(),
         pod_id=POD,
         surface_id=uuid4(),
@@ -265,14 +264,14 @@ async def test_a_lemma_user_from_another_pod_is_an_outsider_here():
     "group",
     [
         None,
-        SurfaceGroup(
+        a_group(
             channel_id=uuid4(),
             pod_id=POD,
             surface_id=uuid4(),
             platform="TELEGRAM",
             external_channel_id=CHAT,
         ),
-        SurfaceGroup(
+        a_group(
             channel_id=uuid4(),
             pod_id=POD,
             surface_id=uuid4(),

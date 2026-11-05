@@ -25,7 +25,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent_surfaces.tests.e2e.group_timeline import timeline
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -33,9 +33,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.channels.contracts.places import place_heard_on
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
 from app.modules.agent_surfaces.services.whatsapp_groups import WhatsAppGroupOpener
 from app.modules.agent_surfaces.tests.e2e.helpers import (
@@ -133,7 +131,7 @@ def _ingress(payload: dict) -> SurfacePlatformWebhookIngress:
 
 async def _open_group(
     *, surface_id: UUID, owner: UUID, message_store
-) -> tuple[WhatsAppGroupOpener, SurfaceGroup]:
+) -> tuple[WhatsAppGroupOpener, Source]:
     factory = SessionUnitOfWorkFactory(async_session_maker)
     opener = WhatsAppGroupOpener(factory, wait_seconds=0)
     opened = await opener.open(
@@ -148,8 +146,8 @@ async def _open_group(
             adapters=SurfacePlatformAdapterRegistry(),
         )
     async with factory() as uow:
-        group = await SurfaceGroupRepository(uow.session).get(
-            surface_id=surface_id, external_channel_id=GROUP
+        group = await place_heard_on(
+            uow, surface_id=surface_id, external_channel_id=GROUP
         )
     assert group is not None
     return opener, group
@@ -292,6 +290,11 @@ async def test_a_client_in_the_group_is_answered_there_from_what_is_public(
     said = [line.text for line in lines]
     assert f"@{BUSINESS_NUMBER} what can you tell me?" in said
     assert "I can share the price list." in said
+    # The question is one line: written as it arrived, then taken up by the
+    # run's conversation -- not written again when the turn began.
+    [asked] = [line for line in lines if line.external_message_id == "wamid.g1"]
+    assert asked.conversation_id == context.conversation_id
+    assert asked.sender.contact_id is not None
 
 
 @pytest.mark.parametrize("called", ["the pod's name", "Lem"])
@@ -400,26 +403,18 @@ async def test_only_a_members_own_chat_can_open_a_group(
     offered,
 ):
     """In a group, whoever is talking could open groups in a member's name."""
-    from app.modules.agent.contracts import Conversation
-    from app.modules.agent_surfaces.contracts.egress import build_surface_toolsets
+    from app.modules.agent_surfaces.contracts.egress import build_surface_tools
 
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     surface = await _create_surface(
         authenticated_client, test_pod["id"], config={"type": "WHATSAPP"}
     )
-    conversation = Conversation(
-        user_id=UUID(fixed_test_user["id"]),
-        pod_id=UUID(test_pod["id"]),
-        metadata={
-            "surface_platform": "WHATSAPP",
-            "surface_id": surface["id"],
-            "conversation_kind": kind,
-        },
+    tools = await build_surface_tools(
+        SessionUnitOfWorkFactory(async_session_maker),
+        platform="WHATSAPP",
+        surface_id=UUID(surface["id"]),
+        conversation_kind=kind,
     )
 
-    toolsets = await build_surface_toolsets(
-        SessionUnitOfWorkFactory(async_session_maker), conversation
-    )
-
-    names = {name for toolset in toolsets for name in getattr(toolset, "tools", {})}
+    names = {spec.name for spec in tools}
     assert ("whatsapp_open_group" in names) is offered

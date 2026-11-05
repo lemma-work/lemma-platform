@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AGENT_HOST_OFFLINE_AFTER_SECONDS,
     AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCapacity,
@@ -12,7 +12,7 @@ from app.modules.agent.domain.agent_host import (
     HostHello,
     effective_agent_host_status,
 )
-from app.modules.agent.services.agent_host_auth import (
+from app.modules.agent.agent_host.control.auth import (
     generate_host_secret,
     generate_pairing_code,
     host_secret_hash,

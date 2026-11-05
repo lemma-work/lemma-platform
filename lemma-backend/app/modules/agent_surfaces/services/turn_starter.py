@@ -276,12 +276,12 @@ class SurfaceTurnStarter:
                     context, message_text, metadata, uow, lines=self.channel_lines(uow)
                 )
                 # Their message reopened a closed reply window: what waited for
-                # it is written out now, before the answer this message will get
-                # is even started, and the destination pump sends it at once.
+                # it is posted now, before the answer this message will get is
+                # even started, so it goes to their place ahead of that answer.
                 await stage_held_replies(
                     uow,
                     conversation_id=context.conversation_id,
-                    pod_id=context.pod_id,
+                    source_id=context.source_id,
                     platform=context.platform,
                 )
         except RuntimeUnavailableError as refused:

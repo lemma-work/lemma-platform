@@ -6,8 +6,8 @@ loop is cut, so this is an ordinary contract
 and can say what it takes and returns. Every signature on the shim was `object`
 or `list[object]` -- not because the types were unknown, but because naming them
 in the composition root would have put a third module's paths into `agent`'s
-build. `agent/contracts` publishes `Conversation` and `DisplayResourceRequest`,
-so they are named here.
+build. `agent/contracts` publishes `DisplayResourceRequest`, so it is named
+here.
 
 The direction is one-way: `agent` decides what to send and this delivers it.
 What a platform *is* -- the capability lookups and the prompt text derived from
@@ -26,12 +26,11 @@ if TYPE_CHECKING:
         SurfaceAgentRunProgressObserver,
     )
 from uuid import UUID
-from pydantic_ai.toolsets import AbstractToolset
-from app.modules.agent.contracts import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import Conversation, DisplayResourceRequest
+from app.modules.agent.contracts.tools import DisplayResourceRequest
+from app.modules.agent.contracts.tools import ToolSpec
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,
 )
@@ -65,17 +64,20 @@ def parse_surface_event_metadata(
     return TypeAdapter(SurfaceEventMetadata).validate_python(payload)
 
 
-async def build_surface_toolsets(
+async def build_surface_tools(
     uow_factory: UnitOfWorkFactory,
-    conversation: Conversation,
-) -> list[AbstractToolset[ConversationContext]]:
-    """The tools this conversation's platform adds to the run."""
+    *,
+    platform: str,
+    surface_id: UUID | None,
+    conversation_kind: str | None,
+) -> list[ToolSpec]:
+    """The tools the platform a run talks over adds to it, as specs."""
     from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
         SurfacePlatformToolFactory,
     )
 
-    return await SurfacePlatformToolFactory(uow_factory).build_toolsets(
-        conversation=conversation
+    return await SurfacePlatformToolFactory(uow_factory).build_tools(
+        platform=platform, surface_id=surface_id, conversation_kind=conversation_kind
     )
 
 
@@ -210,14 +212,49 @@ def build_progress_observer(
     )
 
 
+def conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
+    """Where a person opens this conversation in Lemma, from anywhere else."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_conversation_url,
+    )
+
+    return build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
+
+
+def workflow_run_url(*, pod_id: UUID, run_id: UUID) -> str:
+    """Where a person opens one workflow run in Lemma, with the form it waits on.
+
+    The page reads the run, so it opens only for someone who may read its
+    workflow; a form assigned on one they may not is answered from the pod's
+    waiting list instead (``space_url``).
+    """
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_workflow_run_url,
+    )
+
+    return build_workflow_run_url(pod_id=pod_id, run_id=run_id)
+
+
+def space_url(*, pod_id: UUID) -> str:
+    """Where a person opens the pod itself in Lemma."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_space_url,
+    )
+
+    return build_space_url(pod_id=pod_id)
+
+
 __all__ = [
     "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
-    "build_surface_toolsets",
+    "build_surface_tools",
+    "conversation_url",
     "deliver_display_resource",
     "deliver_voice_note",
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
     "report_approved_action_failed",
     "retire_cards_answered_in_lemma",
+    "space_url",
+    "workflow_run_url",
 ]

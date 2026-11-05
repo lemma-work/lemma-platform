@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.modules.agent.infrastructure import pydantic_ai_compat
+from app.modules.agent.infrastructure.providers import pydantic_ai_compat
 from app.modules.test_support import source_tree
 
 pytestmark = pytest.mark.unit

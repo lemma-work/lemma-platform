@@ -26,16 +26,15 @@ from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.run_context_prompt import render_run_context
+from app.modules.agent.domain.prompt.run_context import render_run_context
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import NoArguments, ToolGroup, tool
 
 pytestmark = pytest.mark.unit
 
@@ -58,15 +57,12 @@ class _Recorder:
         yield self._script[len(self.requests) - 1]
 
 
-def _lookup_toolset() -> FunctionToolset[ConversationContext]:
-    toolset = FunctionToolset[ConversationContext]()
+async def lookup(ctx: ToolContext, request: NoArguments) -> str:
+    """Look the answer up."""
+    return "42"
 
-    @toolset.tool_plain
-    def lookup() -> str:
-        """Look the answer up."""
-        return "42"
 
-    return toolset
+_LOOKUP = tool(lookup, ToolGroup.CALLABLES)
 
 
 def _row(
@@ -114,15 +110,12 @@ async def _run(
 ) -> None:
     model = FunctionModel(stream_function=recorder.stream)
     monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda options: model)
-    ctx = ConversationContext(
+    ctx = ToolContext(
         user_id=conversation.user_id,
         pod_id=conversation.pod_id,
         conversation_id=conversation.id,
         agent_name=agent.name,
         run_context=run_context,
-    )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=ctx, full_toolsets=[_lookup_toolset()], enable_prompt_caching=True
     )
     async for _ in PydanticAIHarness()._execute(
         agent=agent,
@@ -132,7 +125,7 @@ async def _run(
         options=HarnessOptions(
             model_name="test-model",
             history_summarization_enabled=False,
-            capabilities=capabilities,
+            tools=[_LOOKUP],
         ),
         agent_run_id=uuid4(),
         should_stop=None,
@@ -224,14 +217,16 @@ async def test_the_next_run_starts_with_exactly_what_the_last_one_sent(monkeypat
     last_of_first = await _wire(first.requests[-1])
     first_of_second = await _wire(second.requests[0])
 
-    # The first run's last request ends with its context part, and nothing
-    # else of it is anywhere but the tail.
-    assert "<run_context>" in last_of_first[-1]
-    assert not any("<run_context>" in entry for entry in last_of_first[:-1])
-    sent_before_the_context = last_of_first[:-1]
-    assert first_of_second[: len(sent_before_the_context)] == sent_before_the_context
-    # ...followed by the first run's final answer, as the provider produced it.
-    assert "It is 42." in first_of_second[len(sent_before_the_context)]
+    # Within the run the context part stays where the first request put it,
+    # just before the turn, so the second request starts with the first.
+    first_of_first = await _wire(first.requests[0])
+    assert last_of_first[: len(first_of_first)] == first_of_first
+    at = next(i for i, entry in enumerate(last_of_first) if "<run_context>" in entry)
+    assert "Find the answer." in last_of_first[at + 1]
+    # Rebuilt from rows (no run log: the one-release fallback), the next run
+    # starts with everything the last one sent before its context part -- the
+    # rows do not hold it; the run log does (test_cache_stable_prefix).
+    assert first_of_second[:at] == last_of_first[:at]
     # And the system prompt in front of all of it did not move either.
     assert second.instructions[0] == first.instructions[-1]
 

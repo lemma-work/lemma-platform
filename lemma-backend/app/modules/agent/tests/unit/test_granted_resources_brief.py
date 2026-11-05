@@ -17,8 +17,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.context import ResourceType
-from app.modules.agent.services.brief_lines import MAX_RESOURCES
-from app.modules.agent.services.granted_resources_brief import GrantedResourcesBrief
+from app.modules.agent.services.context_brief.lines import MAX_RESOURCES
+from app.modules.agent.services.context_brief.granted_resources import (
+    GrantedResourcesBrief,
+)
 from app.modules.datastore.contracts import DatastoreTableNotFoundError
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,

@@ -21,12 +21,12 @@ its members (``is_private``).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.contracts import channels as agent_channels
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -63,10 +63,6 @@ class ChannelSeats(Protocol):
     """
 
     async def source_for(self, *, pod_id: UUID, place: Place, home: Home) -> Source: ...
-
-    async def heard_at(
-        self, source_id: UUID, delivery_ref: Mapping[str, object]
-    ) -> None: ...
 
     async def addressed_at(
         self, source_id: UUID, delivery_ref: Mapping[str, object]
@@ -126,6 +122,44 @@ class ChannelSeats(Protocol):
     ) -> UUID | None: ...
 
 
+async def find_or_open[R](
+    seats: ChannelSeats,
+    *,
+    channel_id: UUID,
+    pod_id: UUID,
+    agent_id: UUID | None,
+    user_id: UUID,
+    contact_id: UUID | None,
+    found: Callable[[UUID], Awaitable[R | None]],
+    opening: Callable[[], Awaitable[R]],
+) -> R:
+    """A person's one conversation with an agent in a channel, opened if new.
+
+    Serialised on the person and the channel, so two first messages open one:
+    the lock is taken, the conversation looked for under it, and opened under
+    it. ``found`` says what a conversation already there comes to -- ``None``
+    where the caller may not keep it -- and ``opening`` opens one. The lock
+    lasts the transaction, so whatever commits on the way -- authorizing the
+    person -- is the caller's to do before.
+    """
+    await seats.lock_person(
+        channel_id=channel_id,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        person_id=contact_id or user_id,
+    )
+    existing = await seats.conversation_in_channel(
+        channel_id=channel_id,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        user_id=user_id,
+        contact_id=contact_id,
+    )
+    if existing is not None and (kept := await found(existing)) is not None:
+        return kept
+    return await opening()
+
+
 class ChannelSeatsInDatabase:
     """The seats, as ``channels`` and ``agent`` keep them."""
 
@@ -135,11 +169,6 @@ class ChannelSeatsInDatabase:
     async def source_for(self, *, pod_id: UUID, place: Place, home: Home) -> Source:
         return await source_for(self.uow, pod_id=pod_id, place=place, home=home)
 
-    async def heard_at(
-        self, source_id: UUID, delivery_ref: Mapping[str, object]
-    ) -> None:
-        await places.heard_at(self.uow, source_id, delivery_ref)
-
     async def addressed_at(
         self, source_id: UUID, delivery_ref: Mapping[str, object]
     ) -> None:
@@ -148,7 +177,7 @@ class ChannelSeatsInDatabase:
     async def lock_person(
         self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
     ) -> None:
-        await channel_conversations.lock_person_in_channel(
+        await agent_channels.lock_person_in_channel(
             self.uow,
             channel_id=channel_id,
             pod_id=pod_id,
@@ -165,7 +194,7 @@ class ChannelSeatsInDatabase:
         user_id: UUID,
         contact_id: UUID | None,
     ) -> UUID | None:
-        return await channel_conversations.conversation_in_channel(
+        return await agent_channels.conversation_in_channel(
             self.uow,
             channel_id=channel_id,
             pod_id=pod_id,

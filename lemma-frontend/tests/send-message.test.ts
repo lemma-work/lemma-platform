@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sendToConversation, steerConversation } from "../src/thread/send-message.ts";
+import { composerSend, sendToConversation, steerConversation } from "../src/thread/send-message.ts";
 import { withoutSent } from "../src/thread/queued.ts";
 
 test("creates and selects the conversation before sending, without waiting for the stream to end", async () => {
@@ -159,4 +159,22 @@ test("a steer clears only the files it sent, not one attached while it uploaded"
         report: () => assert.fail("nothing to report"),
     });
     assert.deepEqual(held, [{ key: "b" }]);
+});
+
+test("the composer is free again once a new turn is handed over, not when its run ends", async () => {
+    let finish!: () => void;
+    const run = new Promise<void>(resolve => { finish = resolve; });
+    const sent: string[] = [];
+    const fromComposer = composerSend(async (text) => { sent.push(text); await run; }, () => true);
+
+    await fromComposer("plan the trip");
+    /* Resolved while the run is still going: the next send is a steer. */
+    assert.deepEqual(sent, ["plan the trip"]);
+    finish();
+});
+
+test("a steer is waited on, so a failed one gives the composer its words back", async () => {
+    const fromComposer = composerSend(async () => { throw new Error("That did not send."); }, () => false);
+
+    await assert.rejects(fromComposer("and Bergen"), /did not send/);
 });

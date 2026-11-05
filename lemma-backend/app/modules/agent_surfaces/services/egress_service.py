@@ -27,15 +27,13 @@ from pydantic import ValidationError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
+from app.modules.agent.contracts.tools import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,
 )
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channels import PendingInteraction
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
@@ -77,7 +75,7 @@ from app.modules.agent_surfaces.services.one_reply_attachments import (
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
-from app.modules.agent.contracts.interaction_replies import ask_user_request_dict
+from app.modules.agent.contracts.channel_words import ask_user_request_dict
 from app.modules.agent_surfaces.services.surface_sign_in import (
     sign_in_prompt_envelope,
 )

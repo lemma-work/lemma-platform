@@ -12,14 +12,26 @@ letting later messages overtake it, and a burst costs one 429 per window
 instead of one per message.
 
 What goes this way is what the platform must receive once and has no channel
-line of its own: a held WhatsApp reply, a reply to a stranger, a "please
-resend". A run's answer is a line, sent as its channel delivery
-(``channel_deliveries``). No network here.
+line to be the delivery of, because it is said to somebody no channel holds:
+a reply to a stranger (how to get access, or that they are being let in), and
+a "please send that again" to whoever's message could not be processed. Every
+line -- a run's answer, an acknowledgement, a message held for a closed
+WhatsApp window -- is a channel delivery (``channel_deliveries``), so one
+place's lines go out in the order they were written.
+
+Rows a held message was staged as, before it became a line, still drain here
+(``ConversationTarget``); nothing writes one now. Once they have, that target
+goes (see ``domain/deliveries``).
+
+Every time the pump compares -- ``not_before``, ``sending_until`` -- is the
+database's (``DeliveryRepository.clock``): a row is written with the
+database's ``now()``, and a worker whose clock ran behind it found a row it
+had just been handed not yet due, and put it off. No network here.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -35,13 +47,11 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.deliveries import (
     MAX_SEND_ATTEMPTS,
     RETRY_DELAYS,
-    ConversationTarget,
     DeliveryContent,
     DeliveryStatus,
     DeliveryTarget,
 )
 from app.modules.agent_surfaces.events.work_kinds import SURFACE_REPLY
-from app.modules.channels.contracts.places import reply_address
 from app.modules.agent_surfaces.infrastructure.repositories.delivery_repository import (
     DeliveryRepository,
     queued_pump_run_at,
@@ -56,20 +66,6 @@ class PumpPayload(BaseModel):
 
 def pump_key(destination_key: str) -> str:
     return f"dest:{destination_key}"
-
-
-async def conversation_destination(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
-) -> tuple[str, UUID | None]:
-    """Where a conversation's messages go, as a pump key, and its surface.
-
-    The place, not the conversation: a Telegram group holds one conversation
-    per member, and every one of them shares the group's limit.
-    """
-    address = await reply_address(uow, conversation_id)
-    if address is None or address.source.surface_id is None:
-        return f"conversation:{conversation_id}", None
-    return f"place:{address.source.id}", address.source.surface_id
 
 
 async def ensure_pump(
@@ -148,34 +144,6 @@ async def stage_delivery(
     return row_id
 
 
-async def stage_conversation_message(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    idempotency_key: str,
-    conversation_id: UUID,
-    pod_id: UUID | None,
-    content: DeliveryContent,
-    agent_run_id: UUID | None = None,
-    not_before: datetime | None = None,
-    work: WorkWriter | None = None,
-) -> UUID | None:
-    """A message to the surface thread ``conversation_id`` is bound to."""
-    destination, surface_id = await conversation_destination(uow, conversation_id)
-    return await stage_delivery(
-        uow,
-        idempotency_key=idempotency_key,
-        target=ConversationTarget(conversation_id=conversation_id),
-        content=content,
-        destination_key=destination,
-        pod_id=pod_id,
-        surface_id=surface_id,
-        conversation_id=conversation_id,
-        agent_run_id=agent_run_id,
-        not_before=not_before,
-        work=work,
-    )
-
-
 def retry_delay(attempts: int, retry_after: float | None) -> timedelta | None:
     """The wait before the next try after ``attempts`` sends, or None: give up."""
     if attempts >= MAX_SEND_ATTEMPTS:
@@ -229,8 +197,9 @@ async def settle_claimed_send(
             transient=result.transient,
         )
         return None
-    not_before = datetime.now(UTC) + delay
-    await repository.retry_later(row_id, not_before=not_before, error=result.error)
+    not_before = await repository.retry_later(row_id, delay=delay, error=result.error)
+    if not_before is None:
+        return None
     await ensure_pump(
         WorkWriter.of(uow),
         session=uow.session,
@@ -255,12 +224,10 @@ __all__ = [
     "PumpPayload",
     "SendResult",
     "content_of",
-    "conversation_destination",
     "ensure_pump",
     "namespace_for",
     "pump_key",
     "retry_delay",
     "settle_claimed_send",
-    "stage_conversation_message",
     "stage_delivery",
 ]

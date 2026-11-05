@@ -31,7 +31,7 @@ async def agent_name_for_agent_id(
 ) -> str | None:
     if agent_id is None:
         return None
-    return await agent_directory.agent_name_for_id(uow.session, agent_id)
+    return await agent_directory.agent_name_for_id(uow, agent_id)
 
 
 async def agent_name_for_surface(

@@ -1,8 +1,13 @@
 """``surface.reply``: the destination pump that sends ``surface_deliveries`` rows.
 
+What it carries is said to somebody no channel holds -- a stranger, the sender
+of a message that could not be processed -- and so has no line to be the
+delivery of (``surface_deliveries``). Everything said in a channel goes as a
+channel delivery (``channel_deliveries``).
+
 One item per destination (a Slack channel, a Telegram chat, a WhatsApp sender),
 concurrency 1 on that key. Each run sends the destination's rows oldest first
-until none is due:
+until none is due, by the database's clock:
 
 * a row still SENDING past its deadline was being sent by somebody who died --
   this pump on an earlier attempt, or a run's observer -- and nobody can say
@@ -24,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from uuid import UUID
 
 from opentelemetry import metrics
@@ -155,9 +160,7 @@ async def mark_outcome_unknown(
     not have reached its platform, the miss is counted for alerting, and it
     is logged -- all in the transaction that marks it.
     """
-    from app.modules.agent.contracts import (
-        conversations_for_surfaces as agent_conversations,
-    )
+    from app.modules.agent.contracts import channels as agent_conversations
 
     marked = await DeliveryRepository(uow.session).set_delivery_status(
         row.id,
@@ -221,7 +224,8 @@ def make_pump(
                 row = await repository.oldest_open(payload.destination_key)
                 if row is None:
                     return
-                now = datetime.now(UTC)
+                # The database's time: what the row's times are written in.
+                now = await repository.clock()
                 if row.status == DeliveryStatus.SENDING.value:
                     if row.sending_until is not None and row.sending_until > now:
                         raise Defer(row.sending_until - now)

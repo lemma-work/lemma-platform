@@ -6,7 +6,6 @@ import { source, type Pod } from "@/data";
 import { readableName } from "@/library/reading";
 import { StandingWork } from "@/schedule/standing-work";
 import { WorkflowsPage, type WorkflowsView } from "@/space/workflows-page";
-import { AgentsView } from "@/stage/agents-view";
 import { platformName } from "@/thread/conversation-origin";
 import { useWorkflowList } from "@/workflow/use-run";
 import type { FrameActions } from "./actions";
@@ -81,17 +80,28 @@ export function AutomationsTab({ pod, pods, section, queue, go, actions }: {
                     onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
                 />
             )}
-            {shown === "agents" && (
-                <AgentsView
-                    podId={pod.id}
-                    orgId={pod.orgId}
-                    teammate={pod.name}
-                    embedded
-                    open={null}
-                    onOpen={(agent) => { if (agent) go({ name: "agent", podId: pod.id, agent }); }}
-                />
-            )}
+            {shown === "agents" && <AgentsTab pod={pod} go={go} />}
             {shown === "xray" && <XrayTab pod={pod} go={go} actions={actions} />}
+        </div>
+    );
+}
+
+/* ── agents ───────────────────────────────────────────────────────────── */
+
+/** What the Lemma hands work to, each opening on its own page. The agent
+ *  that answers as the Lemma is left out: it is the Lemma, whose page this
+ *  already is. */
+function AgentsTab({ pod, go }: { pod: Pod; go: Go }) {
+    const agents = useQuery({ queryKey: ["outcome-agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
+    const rows = (agents.data ?? []).filter((agent) => !agent.front);
+    if (agents.isPending) return <p className="ox-loading">Loading…</p>;
+    if (agents.isError) return <p className="ox-vs">Couldn’t read its agents.</p>;
+    if (rows.length === 0) return <p className="ox-vs">{pod.name} does its own work, and hands nothing on.</p>;
+    return (
+        <div className="ox-pieces">
+            {rows.map((agent) => (
+                <Piece key={agent.id} icon="agent" name={agent.label} line={agent.blurb} link={to({ name: "agent", podId: pod.id, agent: agent.name }, go)} tone="lemma" />
+            ))}
         </div>
     );
 }
@@ -170,7 +180,7 @@ export function XrayTab({ pod, go, actions }: { pod: Pod; go: Go; actions: Frame
             pieces: (skills.data?.items ?? []).map((item) => <Piece key={item.id} icon="skill" name={item.name.replace(/\.md$/i, "")} line={item.description} link={to({ name: "file", podId: pod.id, path: item.kind === "file" ? item.path : item.path.replace(/\/+$/, "") + "/SKILL.md" }, go)} />),
         },
         {
-            title: "Where people reach it",
+            title: `Where ${pod.name} answers`,
             pending: surfaces.isPending,
             failed: surfaces.isError,
             empty: "Only here.",

@@ -14,19 +14,16 @@ from typing import Any
 from urllib.parse import quote
 
 import aiohttp
-from pydantic_ai.tools import RunContext
 
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
-from app.modules.agent.contracts.surface_prompts import (
-    background_channel_context_note,
-)
+from app.modules.agent.contracts.channel_words import background_channel_context_note
 from app.modules.agent_surfaces.platforms.common import (
     channel_author_label,
     payload_section,
@@ -189,7 +186,7 @@ class TeamsChannelHistoryMixin:
     async def get_recent_channel_messages(
         self,
         *,
-        ctx: RunContext[ConversationContext],
+        ctx: ToolContext,
         request: TeamsGetRecentMessagesParams,
     ) -> TeamsGetRecentMessagesResult:
         try:
@@ -202,7 +199,7 @@ class TeamsChannelHistoryMixin:
         except Exception:
             logger.debug(
                 "agent_surfaces.service.teams_get_recent_channel_messages.propagated",
-                conversation_id=ctx.deps.conversation_id,
+                conversation_id=ctx.conversation_id,
                 exc_info=True,
             )
             raise
@@ -227,11 +224,9 @@ class TeamsChannelHistoryMixin:
             messages=messages,
         )
 
-    async def _resolve_history_target(
-        self, ctx: RunContext[ConversationContext]
-    ) -> _ChannelHistoryTarget:
+    async def _resolve_history_target(self, ctx: ToolContext) -> _ChannelHistoryTarget:
         """Everything a channel-history read needs before it opens a session."""
-        if ctx.deps.surface_platform != "TEAMS":
+        if ctx.surface_platform != "TEAMS":
             raise _TeamsHistoryUnavailable(
                 "This tool is only available in Teams conversations."
             )
@@ -256,7 +251,7 @@ class TeamsChannelHistoryMixin:
             )
 
         teams_meta = self._teams_metadata(ctx)
-        channel_id = ctx.deps.external_channel_id
+        channel_id = ctx.external_channel_id
         if teams_meta is None or not teams_meta.team_id or not channel_id:
             raise _TeamsHistoryUnavailable(
                 "Channel history is only available for team channel conversations."
@@ -267,7 +262,7 @@ class TeamsChannelHistoryMixin:
             team_aad_group_id=teams_meta.team_aad_group_id,
             service_url=teams_meta.service_url,
             channel_id=channel_id,
-            current_thread=ctx.deps.external_thread_id,
+            current_thread=ctx.external_thread_id,
         )
 
     async def _history_url(

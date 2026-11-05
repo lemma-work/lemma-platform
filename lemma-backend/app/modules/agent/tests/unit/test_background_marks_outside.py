@@ -17,7 +17,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import Message, MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     channel_context_block,
 )
 from app.modules.agent.services.outside_text import carries_outside_text
