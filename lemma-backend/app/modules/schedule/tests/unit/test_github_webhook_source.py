@@ -206,9 +206,33 @@ class TestSourceEventId:
         assert ids[0] == ids[1]
 
     def test_a_new_push_to_the_same_ref_is_a_new_event(self):
-        base = {"after": "sha-one"}
+        base = {
+            "ref": "refs/heads/main",
+            "before": "sha-zero",
+            "after": "sha-one",
+        }
         assert source_event_id("push", "1", 2, base) != source_event_id(
-            "push", "1", 2, {"after": "sha-two"}
+            "push", "1", 2, {**base, "after": "sha-two"}
+        )
+
+    def test_pushes_to_different_refs_with_the_same_commit_are_distinct(self):
+        base = {
+            "ref": "refs/heads/main",
+            "before": "sha-zero",
+            "after": "sha-one",
+        }
+        assert source_event_id("push", "1", 2, base) != source_event_id(
+            "push", "1", 2, {**base, "ref": "refs/heads/release"}
+        )
+
+    def test_same_ref_and_after_from_different_prior_tips_are_distinct(self):
+        base = {
+            "ref": "refs/heads/main",
+            "before": "sha-zero",
+            "after": "sha-one",
+        }
+        assert source_event_id("push", "1", 2, base) != source_event_id(
+            "push", "1", 2, {**base, "before": "sha-old"}
         )
 
     def test_the_same_event_in_two_installations_is_two_events(self):
@@ -229,18 +253,67 @@ class TestSourceEventId:
 
     def test_a_run_that_advances_status_is_a_new_event(self):
         def run(status: str) -> dict:
-            return {"workflow_run": {"id": 30433642, "status": status}}
+            return {
+                "action": "completed" if status == "completed" else "in_progress",
+                "workflow_run": {"id": 30433642, "status": status},
+            }
 
         assert source_event_id(
             "workflow_run", "1", 2, run("in_progress")
         ) != source_event_id("workflow_run", "1", 2, run("completed"))
+
+    def test_a_rerun_workflow_completing_again_is_a_new_event(self):
+        def completed(attempt: int) -> dict:
+            return {
+                "action": "completed",
+                "workflow_run": {
+                    "id": 30433642,
+                    "status": "completed",
+                    "run_attempt": attempt,
+                },
+            }
+
+        first = source_event_id("workflow_run", "1", 2, completed(1))
+        assert first == source_event_id("workflow_run", "1", 2, completed(1))
+        assert first != source_event_id("workflow_run", "1", 2, completed(2))
 
     def test_an_event_missing_its_key_produces_none(self):
         """Better no id than an unstable one: a missing id is refused loudly by
         the handler, while an id derived from `None` would silently collapse
         every such delivery onto one."""
         assert source_event_id("push", "1", 2, {}) is None
+        assert source_event_id("push", "1", 2, {"after": "sha-one"}) is None
         assert source_event_id("unknown_event", "1", 2, {"after": "x"}) is None
+
+    def test_a_rerequested_check_suite_is_distinct_from_a_redelivery(self):
+        def suite(updated_at: str) -> dict:
+            return {
+                "action": "rerequested",
+                "check_suite": {
+                    "id": 118578147,
+                    "status": "queued",
+                    "conclusion": None,
+                    "updated_at": updated_at,
+                },
+            }
+
+        first = source_event_id("check_suite", "1", 2, suite("2026-11-01T10:00:00Z"))
+        redelivery = source_event_id(
+            "check_suite", "1", 2, suite("2026-11-01T10:00:00Z")
+        )
+        second_request = source_event_id(
+            "check_suite", "1", 2, suite("2026-11-01T10:05:00Z")
+        )
+
+        assert first == redelivery
+        assert first != second_request
+
+    def test_a_check_suite_without_its_update_timestamp_has_no_stable_id(self):
+        payload = {
+            "action": "rerequested",
+            "check_suite": {"id": 118578147, "status": "queued"},
+        }
+        assert source_event_id("check_suite", "1", 2, payload) is None
 
 
 # What a pod reviewing pull requests reacts to: a person's review, a comment on
@@ -601,3 +674,78 @@ class TestInstallationBinding:
         source = GitHubWebhookSource(bound_organization=_unbound)
         verified = await source.verify(_delivery(_pull_request(), event="pull_request"))
         assert source.normalize(verified) is None
+
+
+class TestSourceEventIdRejectsIncompletePayloads:
+    @pytest.mark.parametrize(
+        ("event", "payload"),
+        [
+            (
+                "pull_request",
+                {"action": "opened", "pull_request": {"head": {"sha": "abc"}}},
+            ),
+            (
+                "pull_request_review",
+                {"action": "submitted", "review": {"state": "approved"}},
+            ),
+            (
+                "pull_request_review_comment",
+                {
+                    "action": "created",
+                    "comment": {"updated_at": "2026-11-01T00:00:00Z"},
+                },
+            ),
+            ("issues", {"action": "opened", "issue": {}}),
+            ("issue_comment", {"action": "created", "comment": {}}),
+            (
+                "workflow_run",
+                {"action": "completed", "workflow_run": {"status": "completed"}},
+            ),
+            (
+                "check_suite",
+                {"action": "rerequested", "check_suite": {"id": 1, "status": "queued"}},
+            ),
+            (
+                "check_run",
+                {"action": "completed", "check_run": {"status": "completed"}},
+            ),
+            ("release", {"action": "published", "release": {}}),
+        ],
+    )
+    def test_missing_event_identity_fields_do_not_create_shared_ids(
+        self, event, payload
+    ):
+        assert source_event_id(event, "1", 2, payload) is None
+
+    @pytest.mark.parametrize(
+        ("installation_id", "repository_id"),
+        [(None, 2), ("", 2), ("1", None), ("1", True), ("1", 0)],
+    )
+    def test_missing_or_invalid_tenant_and_repository_ids_are_rejected(
+        self, installation_id, repository_id
+    ):
+        assert (
+            source_event_id(
+                "pull_request", installation_id, repository_id, _pull_request()
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        ("event", "payload"),
+        [
+            ("pull_request", {"action": "opened", "pull_request": "not-an-object"}),
+            ("pull_request_review", {"action": "submitted", "review": []}),
+            ("pull_request_review_comment", {"action": "created", "comment": None}),
+            ("issues", {"action": "opened", "issue": []}),
+            ("issue_comment", {"action": "created", "comment": "not-an-object"}),
+            ("workflow_run", {"action": "completed", "workflow_run": []}),
+            ("check_suite", {"action": "rerequested", "check_suite": []}),
+            ("check_run", {"action": "completed", "check_run": []}),
+            ("release", {"action": "published", "release": []}),
+        ],
+    )
+    def test_malformed_nested_objects_are_dropped_without_exceptions(
+        self, event, payload
+    ):
+        assert source_event_id(event, "1", 2, payload) is None

@@ -13,7 +13,9 @@ from pydantic import BaseModel, EmailStr, ValidationError
 from sqlalchemy import func, select
 from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
 
+from app.core.api.request_body import read_body_limited
 from app.core.webhooks.signatures import (
+    constant_time_equals,
     svix_signature_matches,
     timestamp_within_skew,
 )
@@ -29,6 +31,11 @@ router = APIRouter(
     tags=["Auth"],
     redirect_slashes=False,
 )
+
+# A bounce is a few fields about one message. Both routes are unauthenticated
+# until the signature over the body checks out, so this is how much of a body
+# anyone can make them hold first.
+MAX_BOUNCE_BODY_BYTES = 1_048_576
 
 
 class BounceEvent(BaseModel):
@@ -71,7 +78,10 @@ def verify_bounce_signature(
         secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256
     ).hexdigest()
     candidate = signature.removeprefix("sha256=")
-    if not hmac.compare_digest(expected, candidate):
+    # Not `hmac.compare_digest` on the two strings: it raises on a non-ASCII
+    # `str`, and a header byte from 0x80 up arrives as one -- a 500 where the
+    # answer is a 401.
+    if not constant_time_equals(candidate, expected):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
 
@@ -137,17 +147,25 @@ async def _deactivate_email_for_hard_bounce(email_address: str) -> None:
 
 
 @router.post("", include_in_schema=False, status_code=204)
-async def accept_email_bounce(request: Request, event: BounceEvent) -> Response:
+async def accept_email_bounce(request: Request) -> Response:
+    # The event is parsed here, after the signature, rather than declared as a
+    # body parameter: FastAPI reads and validates a declared body before the
+    # handler runs, which would put the whole of it in memory -- unbounded and
+    # unverified -- before either check below could refuse it.
     secret = reveal_secret(identity_settings.auth_bounce_webhook_secret)
     if not secret:
         raise HTTPException(status_code=404, detail="Not found")
-    body = await request.body()
+    body = await read_body_limited(request, max_bytes=MAX_BOUNCE_BODY_BYTES)
     verify_bounce_signature(
         timestamp=request.headers.get("x-lemma-timestamp", ""),
         signature=request.headers.get("x-lemma-signature", ""),
         body=body,
         secret=secret,
     )
+    try:
+        event = BounceEvent.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload") from exc
     if event.event == "hard_bounce":
         await _deactivate_email_for_hard_bounce(str(event.email))
     return Response(status_code=204)
@@ -163,7 +181,7 @@ async def accept_resend_email_bounce(request: Request) -> Response:
     )
     if not secret:
         raise HTTPException(status_code=404, detail="Not found")
-    body = await request.body()
+    body = await read_body_limited(request, max_bytes=MAX_BOUNCE_BODY_BYTES)
     verify_resend_webhook_signature(
         message_id=request.headers.get("svix-id", ""),
         timestamp=request.headers.get("svix-timestamp", ""),

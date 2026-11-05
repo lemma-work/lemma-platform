@@ -72,11 +72,11 @@ def refresh_cli_session(
             payload = response.json()
         except ValueError:
             payload = {"message": response.text.strip() or response.reason}
-        message = (
-            payload.get("message")
-            or payload.get("detail")
-            or "Unable to refresh session"
-        )
+        if not isinstance(payload, dict):
+            payload = {}
+        message = payload.get("message") or payload.get("detail")
+        if not isinstance(message, str) or not message.strip():
+            message = "Unable to refresh session"
         raise ValueError(message)
     return response.json()
 

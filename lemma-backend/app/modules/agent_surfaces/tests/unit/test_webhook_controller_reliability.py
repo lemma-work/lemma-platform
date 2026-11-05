@@ -305,24 +305,25 @@ async def test_surface_webhook_verifies_binding_and_accepts_for_the_surface():
     surface = SimpleNamespace(
         id=uuid4(), surface_type=SurfacePlatform.WHATSAPP, pod_id=uuid4()
     )
-    service = SimpleNamespace(get_surface=AsyncMock(return_value=surface))
+    surface_by_id = AsyncMock(return_value=surface)
     security = SimpleNamespace(verify_surface_request=AsyncMock())
     body = json.dumps({"id": "provider-event-1"}).encode()
 
-    factory = _CountingUowFactory()
     accept = AsyncMock()
-    with patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "get_surface_service",
-        return_value=service,
-    ):
-        result = await handle_surface_webhook(
-            surface.id, _request(body), security, uow_factory=factory, accept=accept
-        )
+    result = await handle_surface_webhook(
+        surface.id,
+        _request(body),
+        security,
+        surface_by_id=surface_by_id,
+        accept=accept,
+    )
 
     assert result == {"message": "Webhook received"}
-    assert (factory.scopes, factory.open_scopes) == (1, 0)
-    service.get_surface.assert_awaited_once_with(surface.id)
+    # Nothing here about session scope: the read is behind
+    # `get_surface_lookup`, so "one short scope, closed before the body is
+    # read" is that provider's property, and `scripts/check_session_scope.py`
+    # is what holds it.
+    surface_by_id.assert_awaited_once_with(surface.id)
     security.verify_surface_request.assert_awaited_once()
     delivery: InboundDelivery = accept.await_args.args[0]
     assert delivery.request.surface_id == surface.id

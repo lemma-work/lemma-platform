@@ -90,7 +90,9 @@ it. The registry in `app/modules/schedule/contracts/webhook_source.py` is the
 allow-list that makes that safe: a source with no plugin is refused before
 anything reaches matching, a run, or an agent's first message. Plugins live in
 `app/modules/connectors/infrastructure/webhook_sources/` — `composio`,
-`github` and `mcp` today.
+`github` and `mcp` today. A known source's body is read under a 1 MiB ceiling
+(`MAX_WEBHOOK_BODY_BYTES`, GitHub included) before any plugin sees it; a larger
+one answers 413 as soon as it crosses, and is never verified or matched.
 
 `mcp` is a connected MCP server's events. Every subscription has its own
 secret, so the delivery names the subscription in the callback URL's query
