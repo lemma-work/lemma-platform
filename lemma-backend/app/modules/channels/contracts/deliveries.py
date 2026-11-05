@@ -43,7 +43,6 @@ __all__ = [
     "delivery_skipped",
     "delivery_undelivered",
     "delivery_unnoted",
-    "due_deliveries",
     "due_fact",
     "lapsed_delivery",
     "reclaim_delivery",
@@ -248,10 +247,6 @@ async def deliveries_of(
     uow: SqlAlchemyUnitOfWork, message_ids: Sequence[UUID]
 ) -> list[Delivery]:
     return await DeliveryRepository(uow.session).of_messages(message_ids)
-
-
-async def due_deliveries(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> list[UUID]:
-    return await DeliveryRepository(uow.session).due(limit=limit)
 
 
 def due_fact(delivery: Delivery) -> ChannelDeliveryDue:

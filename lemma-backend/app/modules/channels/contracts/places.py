@@ -55,7 +55,6 @@ __all__ = [
     "people_places",
     "person_places",
     "place_became_private",
-    "place_by_request",
     "place_heard_on",
     "place_resumed",
     "place_stopped",
@@ -240,20 +239,6 @@ async def conversation_at(
         source_id,
         sender_external_id=sender_external_id,
         external_thread_id=external_thread_id,
-    )
-
-
-async def place_by_request(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    request_id: str,
-    surface_ids: Collection[UUID] | None = None,
-    platform: str | None = None,
-) -> Source | None:
-    """A pending group by the platform's request id, on these surfaces or --
-    for a platform whose request ids are unique everywhere -- that platform."""
-    return await SourceRepository(uow.session).by_request_on_surfaces(
-        request_id=request_id, surface_ids=surface_ids, platform=platform
     )
 
 

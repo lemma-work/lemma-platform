@@ -229,8 +229,8 @@ async def test_a_keeper_who_cannot_open_contacts_is_not_put_in_their_channel(
 ):
     source, _ = await contact_place(db_session, pod, keeper=pod.user)
 
-    members = await pod.client(pod.owner).get(f"{pod.base}/{source.channel_id}/members")
-    assert members.status_code == 200, members.text
+    shown = await pod.client(pod.owner).get(f"{pod.base}/{source.channel_id}")
+    assert shown.status_code == 200, shown.text
     assert pod.user["id"] not in {
-        item["person"]["id"] for item in members.json()["items"]
+        item["person"]["id"] for item in shown.json()["members"]
     }
