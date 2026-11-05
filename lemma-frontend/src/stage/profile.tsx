@@ -1,26 +1,15 @@
-import { LoadingRows } from "@/ui/loading";
-import { Surfaces, useSurfaces } from "@/shell/surfaces";
 import {
     AgentIcon, EditIcon, ExternalIcon, ChatIcon, BrowserIcon, CheckCircleIcon, ClockIcon,
     ConnectorIcon, GlobeIcon, ImageIcon, LibraryIcon, MemoryIcon, QuestionIcon,
     SparkleIcon, TerminalIcon, ToolIcon, VoiceIcon,
 } from "@/ui/icons";
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { initialsOf, saidAbout, source } from "@/data";
-import type { Member, Profile, Pod, Surface } from "@/data";
+import { saidAbout } from "@/data";
+import type { Member, Profile, Surface } from "@/data";
 import { Mark } from "@/shell/mark";
 import { identityGenes } from "@/identity/seeded-identity";
 import { pressSlot } from "@/identity/palette";
-import { AgentsView } from "./agents-view";
 import { capabilityList, type ToolsetIcon } from "./colleagues";
-import { SkillsView } from "@/skills/skills-view";
-import { StandingWork } from "@/schedule/standing-work";
-import { WorkflowsView } from "@/workflow/workflows-view";
-import { AtTheDoor } from "@/shell/at-the-door";
-import { RunsOn } from "@/shell/runs-on";
-import { WhoCanJoin } from "@/shell/who-can-join";
-import { AddPeopleButton } from "@/shell/add-people";
 
 /** The teammate's own page.
  *
@@ -31,10 +20,6 @@ import { AddPeopleButton } from "@/shell/add-people";
  *  toolsets, the schedules it keeps, the apps it runs, the addresses it
  *  answers on. No invented endorsements, no numbers with nothing behind them.
  *  A section with nothing in it says so rather than showing a placeholder. */
-
-/** How many conversations the first page of the list holds — the page size
- *  `listConversations` asks for. A page this full may have more behind it. */
-const CONVERSATION_PAGE = 25;
 
 function monthOf(iso: string): string {
     if (!iso) return "";
@@ -994,209 +979,5 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                 </aside>
             </div>
         </div>
-    );
-}
-
-export function ProfilePane({
-    initialSection,
-    openAgentName,
-    onOpenAgentName,
-    onAskFor,
-    pod,
-    orgName,
-    others,
-    onOpenTab,
-    onPickPod,
-    onMessage,
-    onFile,
-    onDiscussAgent,
-    onDiscussWorkflow,
-    onAddPeople,
-}: {
-    initialSection?: string;
-    pod: Pod;
-    orgName: string;
-    others: Pod[];
-    onOpenTab: (tabId: string) => void;
-    onPickPod: (podId: string) => void;
-    onMessage: () => void;
-    /** Put a pod file on the stage as a tab of its own — the same handler the
-     *  Library is given, for the same reason: a path is handed up and the
-     *  shell decides what a tab is.
-     *
-     *  Optional because the shell does not pass one here yet. Where it is
-     *  absent a skill opens inside its own section instead, which is the same
-     *  drill-down the Agents and Workflows sections on this page already do.
-     *  Passing `onFile={openFile}` from the shell is all it takes to make a
-     *  skill open as a file tab like any other file. */
-    onFile?: (path: string) => void;
-    /** Open an agent's own conversation — the place it gets changed. */
-    onDiscussAgent?: (name: string) => void;
-    /** And a workflow's, for the same reason: the shape is read here and
-     *  changed by asking. Separate from `onDiscussAgent` rather than one
-     *  `(kind, name)` prop because `ProfileView` hands each straight to the
-     *  section that uses it, and a section taking a kind it must always pass
-     *  the same value for is a parameter that only exists to be ignored. */
-    onDiscussWorkflow?: (name: string) => void;
-    /** Which agent to land expanded, when search sent somebody here. */
-    openAgentName?: string | null;
-    onOpenAgentName?: (name: string | null) => void;
-    /** Put a request to this teammate in the composer, on the conversation
-     *  tab, ready to be read and sent. The shell owns which conversation is
-     *  open and owns the composer, so it does the filling. */
-    onAskFor?: (text: string) => void;
-    /** Open the people dialog. The shell owns it, because the header's faces
-     *  open the same one. */
-    onAddPeople?: () => void;
-}) {
-
-    const queryClient = useQueryClient();
-
-    const profile = useQuery({
-        queryKey: ["profile", pod.id],
-        queryFn: () => source.getProfile(pod.id),
-        staleTime: 5 * 60_000,
-    });
-
-    /* The rail, the header, the badge and the masthead all read the pod out
-       of one list, so the new name is written into that list rather than
-       waited for: a refetch has to match a key and beat a stale time, and
-       until it lands the page the rename happened on is the one page still
-       showing the old name. The refetch still runs behind it.
-
-       The teammate's name follows the pod's only where it *was* the pod's —
-       a pod whose front agent has a name of its own keeps it. */
-    const rename = useMutation({
-        mutationFn: (name: string) => source.renamePod(pod.id, name),
-        onSuccess: (_answer, name) => {
-            queryClient.setQueryData(["pods", pod.orgId], (old: Pod[] | undefined) =>
-                old?.map((entry) => entry.id !== pod.id ? entry : {
-                    ...entry,
-                    name,
-                    teammate: entry.teammate.name === entry.name
-                        ? { ...entry.teammate, name, initials: initialsOf(name) }
-                        : entry.teammate,
-                }),
-            );
-            void queryClient.invalidateQueries({ queryKey: ["pods"] });
-            /* And the roster, which is a second query and the one that wins:
-               the shell spreads pod detail *over* the listed pod, so a
-               teammate name patched into the list alone is overwritten by a
-               five-minute-stale copy of the old one — the rail would say the
-               new name while the roster under it said the old. */
-            void queryClient.invalidateQueries({ queryKey: ["pod-detail", pod.id] });
-        },
-    });
-
-    /* Surfaces are already on screen elsewhere in this pod, so they come from
-       the same cache. So do conversations: the sidebar's first page, under its
-       key, rather than the same request again under one of its own. That list
-       drops the cursor, so "is there more" is read from the page being full —
-       wrong only for a space with exactly one page's worth, which says "25+". */
-    const surfaces = useSurfaces(pod.id);
-    const conversations = useQuery({
-        queryKey: ["conversations", pod.id],
-        queryFn: () => source.listConversations(pod.id),
-        staleTime: 60_000,
-    });
-
-    if (profile.isError) {
-        return (
-            <div className="pane"><div className="pane__inner">
-                <p className="empty-row">Couldn’t load this profile. <button className="linkish" onClick={() => void profile.refetch()}>Try again</button></p>
-            </div></div>
-        );
-    }
-
-    if (!profile.data) {
-        return (
-            <div className="pane"><div className="pane__inner">
-                <LoadingRows label={"Loading " + pod.name + "’s profile"} rows={4} />
-            </div></div>
-        );
-    }
-
-    const reach = (surfaces.data ?? []).filter(
-        (surface) => surface.mine && surface.active !== false && Boolean(surface.handle),
-    );
-
-    return (
-        <ProfileView
-            initialSection={initialSection}
-            subject={{
-                seed: pod.id,
-                name: pod.name,
-                iconUrl: pod.iconUrl,
-                orgName,
-                me: profile.data,
-                onRetryProfile: () => { void profile.refetch(); },
-                reach,
-                members: pod.members,
-                stats: conversations.isSuccess
-                    ? { talks: conversations.data.length, talksMore: conversations.data.length >= CONVERSATION_PAGE, people: pod.members.length }
-                    : undefined,
-                onOpenProject: onOpenTab,
-                onDiscussAgent,
-                action: (
-                    <button className="btn btn--primary hero__message" onClick={onMessage}>
-                        <ChatIcon size={16} aria-hidden="true" /><span>Message</span>
-                    </button>
-                ),
-                agents: (
-                    <AgentsView
-                        podId={pod.id}
-                        orgId={pod.orgId}
-                        teammate={pod.teammate?.name ?? pod.name}
-                        embedded
-                        open={openAgentName ?? null}
-                        onOpen={(name) => onOpenAgentName?.(name)}
-                        onDiscussAgent={onDiscussAgent}
-                    />
-                ),
-                skills: (
-                    <SkillsView
-                        podId={pod.id}
-                        teammate={pod.teammate?.name ?? pod.name}
-                        onFile={onFile}
-                        onCreate={onAskFor && (() => onAskFor(
-                            "Write me a new skill. Use the lemma-skill-creator skill: decide its triggers, "
-                            + "write the instructions, and publish it under /skills. Ask me what it should do first."
-                        ))}
-                    />
-                ),
-                standing: <StandingWork podId={pod.id} teammate={pod.teammate?.name ?? pod.name} />,
-                flows: (
-                    <WorkflowsView
-                        podId={pod.id}
-                        teammate={pod.teammate?.name ?? pod.name}
-                        onDiscuss={onDiscussWorkflow}
-                    />
-                ),
-                channels: <Surfaces pod={pod} expanded />,
-                runsOn: <RunsOn podId={pod.id} orgId={pod.orgId} />,
-                joining: <WhoCanJoin podId={pod.id} orgName={orgName} />,
-                knocking: <AtTheDoor podId={pod.id} teammate={pod.teammate?.name ?? pod.name} />,
-                addPeople: onAddPeople && <AddPeopleButton podId={pod.id} onOpen={onAddPeople} />,
-                onRename: rename.mutateAsync,
-                aside: others.length > 0 ? (
-                    <section className="pcard">
-                        <div className="pcard__head"><h3>Also in {orgName}</h3></div>
-                        <ul className="alsolist">
-                            {others.slice(0, 6).map((other) => (
-                                <li key={other.id}>
-                                    <button onClick={() => onPickPod(other.id)}>
-                                        <Mark seed={other.id} name={other.name} icon={other.iconUrl} size={26} />
-                                        <span className="alsolist__body">
-                                            <span className="alsolist__name">{other.name}</span>
-                                            <span className="alsolist__sub">{other.subtitle}</span>
-                                        </span>
-                                    </button>
-                                </li>
-                            ))}
-                        </ul>
-                    </section>
-                ) : undefined,
-            }}
-        />
     );
 }

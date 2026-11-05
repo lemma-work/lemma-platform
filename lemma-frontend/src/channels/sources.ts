@@ -326,7 +326,7 @@ export function linkShown(link: string): string {
  *  promises none -- Slack's channels are in its own settings. */
 const HOW_A_GROUP_STARTS: Record<string, (bot: string) => string> = {
     TELEGRAM: (bot) => "Add " + bot + " to a Telegram group and it shows up here.",
-    WHATSAPP: (bot) => "Start a WhatsApp group on " + bot + "’s number from Channels and it shows up here.",
+    WHATSAPP: (bot) => "Start a WhatsApp group on " + bot + "’s number from Chats and it shows up here.",
 };
 
 export function groupsSupported(platform: string): boolean {

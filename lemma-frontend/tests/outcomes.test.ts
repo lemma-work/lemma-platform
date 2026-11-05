@@ -435,7 +435,7 @@ test("chats from every outcome make one list: waiting on you first, then the res
         me: "u1",
     });
     assert.deepEqual(needs.map((item) => item.title), ["Approve a refund", "Escalations"]);
-    assert.deepEqual(rest.map((item) => item.title), ["Renewal list", "Ops", "Refund question", "Your line on WhatsApp"]);
+    assert.deepEqual(rest.map((item) => item.title), ["Renewal list", "Ops", "Refund question", "Your chat on WhatsApp"]);
     const ops = rest[1];
     assert.equal(ops.kind, "shared");
     assert.equal(ops.unread, 3);
@@ -559,8 +559,8 @@ test("the sidebar puts the busiest outcome first and folds the ones gone quiet",
 });
 
 test("a private line is named for what it is, and repeated names get told apart", () => {
-    assert.equal(lineTitle("Email"), "Your line on Email");
-    assert.equal(lineTitle("WhatsApp and Email"), "Your line on WhatsApp and Email");
+    assert.equal(lineTitle("Email"), "Your chat on Email");
+    assert.equal(lineTitle("WhatsApp and Email"), "Your chat on WhatsApp and Email");
     assert.equal(lineTitle("Notices"), "Notices");
     const repeated = repeatedTitles([
         { key: "a", title: "LLM Lab tutor" },

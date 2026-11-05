@@ -62,7 +62,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
     } else if (tab?.kind === "channel") {
         /* Its people talk while you read. The page reads itself again every
            few seconds; this is for now. */
-        primary = <button onClick={() => { void cache.invalidateQueries({ queryKey: ["channel", podId, "detail", tab.channelId] }); void cache.invalidateQueries({ queryKey: ["channel", podId, "lines", tab.channelId] }); }} title="Read this channel again"><RefreshIcon size={17}/><span>Refresh</span></button>;
+        primary = <button onClick={() => { void cache.invalidateQueries({ queryKey: ["channel", podId, "detail", tab.channelId] }); void cache.invalidateQueries({ queryKey: ["channel", podId, "lines", tab.channelId] }); }} title="Read this chat again"><RefreshIcon size={17}/><span>Refresh</span></button>;
     } else if (tab?.kind === "computer") {
         primary = <button onClick={() => void cache.invalidateQueries({ queryKey: ["computer"] })} title="Look again"><RefreshIcon size={17}/><span>Refresh</span></button>;
     } else {

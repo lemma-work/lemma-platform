@@ -52,8 +52,8 @@ test("the unread lines start at the first line from somebody else past the read 
 test("lines that came in while the reader read back are counted on the pill", () => {
     const lines = [{ seq: 4, sender: priya }, { seq: 5, sender: me }, { seq: 6, sender: priya }, { seq: 7, sender: priya }];
     assert.equal(newSince(lines, 4, "me"), 2);
-    assert.equal(sayNewLines(1), "1 new line");
-    assert.equal(sayNewLines(2), "2 new lines");
+    assert.equal(sayNewLines(1), "1 new message");
+    assert.equal(sayNewLines(2), "2 new messages");
 });
 
 test("an answer starting is news once; one already going is not", () => {
