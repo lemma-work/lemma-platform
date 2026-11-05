@@ -10,15 +10,15 @@ wrong for a member's line, which goes where it was written:
 * a line at the top of a shared place goes to the place itself, not into the
   thread of whoever spoke last, and quotes nobody.
 
-Slack and Teams keep threads; elsewhere only the quoting changes.
+Slack and Teams keep threads (``channels.contracts.placement.THREADED``);
+elsewhere only the quoting changes.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-#: Platforms whose shared places have threads.
-THREADED = frozenset({"SLACK", "TEAMS"})
+from app.modules.channels.contracts.placement import THREADED
 
 _TEAMS_THREAD = ";messageid="
 
@@ -76,4 +76,4 @@ def in_thread(
     }
 
 
-__all__ = ["THREADED", "StoredEvent", "at_place_level", "in_thread"]
+__all__ = ["StoredEvent", "at_place_level", "in_thread"]

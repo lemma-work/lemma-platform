@@ -126,17 +126,19 @@ class LineAnswers:
         self,
         answers: Sequence[LineAnswer],
         *,
-        run_id: UUID,
+        run_id: UUID | None,
         state: AnswerState,
         answer_message_id: UUID | None = None,
     ) -> None:
+        """Settle ``answers``, as ended by ``run_id`` -- or, ``None``, by a run
+        that is gone, which they keep no pointer to."""
         if not answers:
             return
         await self.session.execute(
             update(ChannelLineAnswerModel)
             .where(_keyed(answers))
             .values(
-                agent_run_id=run_id,
+                **({"agent_run_id": run_id} if run_id is not None else {}),
                 state=state.value,
                 answer_message_id=answer_message_id,
                 updated_at=func.now(),
