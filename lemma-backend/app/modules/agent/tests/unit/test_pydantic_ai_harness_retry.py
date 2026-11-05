@@ -545,7 +545,9 @@ class TestTheHarnessDoesNotBill:
             tools=[tool(request_approval, ToolGroup.USER_INTERACTION)],
         )
 
-        assert isinstance(exc, AgentInputRequired), "the run should have paused"
+        # A pause ends the run cleanly now, on its deferred call.
+        assert exc is None
+        assert [event.type for event in events][-1] is AgentEventType.WAITING
         assert self._usage(events) == []
 
     @pytest.mark.asyncio

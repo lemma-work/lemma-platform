@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 from pydantic_ai.models import Model
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.run import AgentRun
 from contextlib import AbstractAsyncContextManager
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import AsyncIterator, Sequence
 from uuid import UUID
 
@@ -15,12 +16,19 @@ from app.core.infrastructure.db.transient_errors import is_transient_database_er
 from app.core.infrastructure.work import LeaseLost
 from app.modules.agent.infrastructure.harness.lemma.tool_returns import (
     OutstandingToolCalls,
+    paused_call_ids,
 )
+from app.modules.agent.infrastructure.harness.lemma.deferred_projection import (
+    DeferredCallProjection,
+)
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.tools import ToolSpec
 from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     build_mock_model,
     is_mock_llm_enabled,
 )
 from pydantic_ai import Agent as PydanticAIAgent
+from pydantic_ai import DeferredToolRequests
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     UnexpectedModelBehavior,
@@ -48,26 +56,37 @@ from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
 )
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
-from app.modules.agent.domain.prompt.templates import build_agent_instruction_parts
+from app.modules.agent.infrastructure.harness.lemma.prompt_layout import (
+    run_instructions,
+)
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
-    AnswerKind,
     AgentEvent,
     AgentEventType,
     HarnessKind,
     JsonObject,
     MessageDraft,
-    to_json_value,
 )
 from app.modules.agent.infrastructure.harness.lemma.capabilities import (
     LeaseGate,
     harness_capabilities,
 )
+from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
+    ClaimSteered,
+)
+from app.modules.agent.infrastructure.harness.lemma.run_log import (
+    starting_history,
+)
+from app.modules.agent.infrastructure.harness.lemma.cache_telemetry import (
+    CacheTelemetry,
+)
 from app.modules.agent.infrastructure.harness.lemma.history_parts import (
     RunNoticeCapability,
+)
+from app.modules.agent.infrastructure.harness.lemma.final_answer_output import (
+    final_output_message,
 )
 from app.modules.agent.infrastructure.harness.lemma.run_options import (
     final_answer_output,
@@ -79,27 +98,23 @@ from app.modules.agent.infrastructure.harness.lemma.history import history_capab
 from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.harness.lemma.thinking import (
-    replays_prior_run_reasoning,
-)
 from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     failure_event,
     log_model_http_error,
 )
 from app.modules.agent.config import agent_settings
-from app.modules.usage.contracts.metering import with_external_stream_retries
+from app.modules.usage.contracts.metering import (
+    RUN_INDEX_METADATA_KEY,
+    with_external_stream_retries,
+)
 from app.modules.agent.infrastructure.providers.model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     provider_model_settings,
+    with_affinity,
 )
 from app.modules.agent.infrastructure.providers.summarization import (
     lazy_compaction_target,
 )
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_text import (
-    final_answer_text,
-)
-from app.modules.agent.infrastructure.tools.final_answer.tools import FinalAgentResult
-from app.modules.agent.domain.tools import AgentInputRequired
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
@@ -113,43 +128,6 @@ _STREAM_QUEUE_ITEMS = 256
 DEFAULT_TOOL_RETRIES = 5
 
 
-def _instructions(
-    *,
-    agent: Agent,
-    conversation: Conversation,
-    ctx: ToolContext,
-) -> list[str | Callable[[], str]]:
-    """The run's system instructions, timed as its own phase.
-
-    Prompt assembly reads and renders every prompt fragment the agent's
-    configuration pulls in, so it is worth telling apart from the model call it
-    sits immediately in front of.
-
-    Two parts, and the second is a function on purpose. PydanticAI puts every
-    literal instruction first -- this agent's, then each capability's -- and
-    instruction functions after them. So the stable part leads, the capability
-    guidance (large, and the same for every conversation) follows it, and the
-    per-conversation part comes last: a new conversation reuses the cached
-    prefix up to its own working directory instead of re-reading everything
-    after it.
-    """
-    with run_phase("instructions") as span:
-        stable, per_conversation = build_agent_instruction_parts(
-            agent=agent,
-            conversation=conversation,
-            ctx=ctx,
-            include_toolset_prompts=False,
-        )
-        span.set_attribute(
-            "lemma.instructions.chars", len(stable) + len(per_conversation)
-        )
-
-        def this_conversation() -> str:
-            return per_conversation
-
-        return [stable, this_conversation]
-
-
 class PydanticAIHarness:
     """Execute an agent through PydanticAI and emit domain events."""
 
@@ -160,12 +138,17 @@ class PydanticAIHarness:
         *,
         emit_tokens: bool = True,
         model: Model | None = None,
+        claim_steered: ClaimSteered | None = None,
     ) -> None:
         self.emit_tokens = emit_tokens
         # Which model a run talks to. The runtime profile decides in production;
         # a test hands in a scripted model here rather than replacing a name
-        # inside this module.
+        # inside this module. A scripted model is not metered, and neither is
+        # its compaction call.
         self._model = model
+        # Where messages sent mid-run come from: the database unless a test
+        # says otherwise.
+        self._claim_steered = claim_steered
 
     async def run[DepsT: ToolContext](
         self,
@@ -182,8 +165,8 @@ class PydanticAIHarness:
         # the tool never ran and invited to repeat it -- a duplicate email, a
         # duplicate record write.
         outstanding = OutstandingToolCalls()
+        projection = DeferredCallProjection(_pauses(options.tools))
         terminal: AgentEvent | None = None
-        pause_tool_call_id: str | None = None
 
         try:
             async for event in self._execute(
@@ -195,8 +178,13 @@ class PydanticAIHarness:
                 agent_run_id=agent_run_id,
                 should_stop=options.should_stop,
             ):
+                event = projection.project(event)
                 outstanding.observe(event)
-                if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
+                if event.type in {
+                    AgentEventType.ERROR,
+                    AgentEventType.STOPPED,
+                    AgentEventType.WAITING,
+                }:
                     # Held back, not yielded here. The closing returns for tool
                     # calls still open are emitted below, and the pump drops
                     # every event after the terminal one -- so emitting the
@@ -235,25 +223,6 @@ class PydanticAIHarness:
                 "agent.pydantic_ai.agent_run_hit_usage_limit.degraded", exc_info=True
             )
             terminal = failure_event(exc, agent_run_id=agent_run_id)
-        except AgentInputRequired as exc:
-            # The agent called ask_user / request_approval: pause the run cleanly
-            # rather than failing. The tool call is already persisted; the runner
-            # finishes this run and flips the conversation to WAITING. The user's
-            # submission later starts a fresh run that resumes from history.
-            logger.debug(
-                "agent.pydantic_ai.agent_input_required_kind_call.observed",
-                tool_call_id=exc.tool_call_id,
-            )
-            pause_tool_call_id = exc.tool_call_id
-            terminal = AgentEvent(
-                type=AgentEventType.WAITING,
-                data={
-                    "tool_call_id": exc.tool_call_id,
-                    "kind": exc.kind,
-                    "conversation_id": str(conversation.id),
-                },
-                agent_run_id=agent_run_id,
-            )
         except Exception as exc:
             if is_transient_database_error(exc) or isinstance(exc, LeaseLost):
                 # Lemma's own database, not the model: a stop check, a step
@@ -275,10 +244,10 @@ class PydanticAIHarness:
                 agent_run_id=agent_run_id,
             )
         # Close whatever is still open before the run ends, whichever way it
-        # ended. The pausing call is excluded: its real return is appended when
-        # the user answers, so a synthetic one would duplicate it.
+        # ended. The pausing calls are excluded: their real returns are
+        # appended when they are resolved, so a synthetic one would duplicate.
         for closing in outstanding.closing_events(
-            terminal, skip_tool_call_id=pause_tool_call_id
+            terminal, skip_tool_call_ids=paused_call_ids(terminal)
         ):
             yield closing
         # Always last. Every path now holds its terminal back to here, so the
@@ -299,13 +268,11 @@ class PydanticAIHarness:
     ) -> AsyncIterator[AgentEvent]:
         snapshot = options.runtime_profile
         with run_phase("history_convert") as history_span:
-            history, user_prompt = self._history_and_prompt(
+            history, user_prompt, recorder = starting_history(
                 messages,
-                # Whether a stored thought can be replayed depends on the
-                # provider family: each wants different reasoning credentials.
-                protocol=snapshot.protocol if snapshot else None,
-                current_run_id=agent_run_id,
-                replay_prior_run_reasoning=replays_prior_run_reasoning(snapshot),
+                options=options,
+                conversation_id=conversation.id,
+                agent_run_id=agent_run_id,
             )
             history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
@@ -316,6 +283,11 @@ class PydanticAIHarness:
             model = _meter_mock_model(conversation, options)
         else:
             model = _runtime_profile_model(options)
+        # The e2e mock scripts call a found tool by its own name, as a model
+        # with a tool-addition channel does.
+        reveals_natively = (
+            self._model is None and is_mock_llm_enabled()
+        ) or reveals_tools_natively(model)
         # The graph driver owns stream resets, history recovery and retry limits.
         # Retrying inside the model would hide connection drops from that driver.
         model = with_external_stream_retries(model)
@@ -325,8 +297,15 @@ class PydanticAIHarness:
             organization_id=conversation.organization_id,
             user_id=conversation.user_id,
             run_model=model,
-            run_compaction_settings=options.compaction_model_settings,
-            meter=lambda resolved: _meter_compaction_model(resolved, options),
+            run_compaction_settings=with_affinity(
+                options.compaction_model_settings,
+                f"{ctx.pod_id}:compaction" if ctx.pod_id else None,
+            ),
+            meter=lambda resolved: (
+                resolved
+                if self._model is not None
+                else _meter_compaction_model(resolved, options)
+            ),
         )
         capabilities = harness_capabilities(
             ctx=ctx,
@@ -338,6 +317,10 @@ class PydanticAIHarness:
                 if snapshot is not None
                 else RuntimeProfileProtocol.OPENAI_COMPATIBLE
             ),
+            claim_steered=self._claim_steered,
+            on_steered=recorder.claimed if recorder is not None else None,
+            reveals_tools_natively=reveals_natively,
+            steer_due=options.steer_due,
         )
         # Before the history processors, not after. Capabilities run in
         # registration order, and the processors include the hard-ceiling guard
@@ -360,15 +343,25 @@ class PydanticAIHarness:
         )
         if options.lease_alive is not None:
             capabilities.append(LeaseGate(options.lease_alive))
-        output_type = final_answer_output(agent, conversation)
+        capabilities.append(CacheTelemetry(run_index=options.run_index))
+        output_type = final_answer_output(
+            agent, conversation, pausing=frozenset(_pauses(options.tools))
+        )
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
-            instructions=_instructions(agent=agent, conversation=conversation, ctx=ctx),
+            instructions=run_instructions(
+                agent=agent, conversation=conversation, ctx=ctx
+            ),
             deps_type=type(ctx),
             retries=DEFAULT_TOOL_RETRIES,
             # A final answer must not skip a sibling approval tool that pauses the run.
             end_strategy="graceful",
-            output_type=output_type if output_type is not None else str,
+            # A run that pauses ends on its deferred calls, every one of them,
+            # once the step's other calls have finished.
+            output_type=[
+                output_type if output_type is not None else str,
+                DeferredToolRequests,
+            ],
             model_settings=provider_model_settings(options.model_settings),
             capabilities=capabilities,
         )
@@ -389,6 +382,8 @@ class PydanticAIHarness:
                 model_settings=provider_model_settings(attempt_settings),
                 usage_limits=harness_usage_limits(),
                 conversation_id=str(conversation.id),
+                # Read back by the metered model for each request's receipt.
+                metadata={RUN_INDEX_METADATA_KEY: options.run_index},
             )
 
         # pydantic-ai's agent.iter() enters anyio cancel scopes that are bound to
@@ -413,11 +408,8 @@ class PydanticAIHarness:
             emit_tokens=self.emit_tokens,
             agent_run_id=agent_run_id,
             should_stop=should_stop,
-            pauses={
-                spec.name: spec.policy.pauses
-                for spec in options.tools
-                if spec.policy.pauses is not None
-            },
+            pauses=_pauses(options.tools),
+            idle_seconds=agent_settings.agent_model_stream_idle_timeout_seconds,
         )
 
         node_loop = NodeLoop(
@@ -429,6 +421,7 @@ class PydanticAIHarness:
             conversation_id=ctx.conversation_id,
             final_output_message=self._final_output_message,
             structured_output=output_type is not None,
+            recorder=recorder,
         )
 
         async def _drive() -> None:
@@ -516,50 +509,34 @@ class PydanticAIHarness:
         tool_name: str | None,
         tool_call_id: str | None,
     ) -> MessageDraft | None:
-        if output is None:
-            return None
-
-        structured_output = to_json_value(output)
-        metadata: JsonObject = {"structured_output": structured_output}
-        if tool_name:
-            metadata["tool_name"] = tool_name
-            metadata["final_answer_tool_name"] = tool_name
-        if tool_call_id:
-            metadata["tool_call_id"] = tool_call_id
-
-        if isinstance(output, FinalAgentResult):
-            metadata["final_answer_status"] = output.status
-            if output.error:
-                metadata["final_answer_error"] = output.error
-            if output.output is not None:
-                metadata["structured_output"] = output.output
-            content_text = self._final_answer_text(
-                output.output,
-                fallback=output.error,
-            )
-            if not content_text:
-                content_text = output.error or output.status
-        else:
-            content_text = self._final_answer_text(structured_output)
-
-        if not content_text:
-            return None
-
-        return MessageDraft.of_text(
-            content_text,
-            metadata=metadata,
-            state=MessageState(answer=AnswerKind.FINAL),
+        return final_output_message(
+            output=output, tool_name=tool_name, tool_call_id=tool_call_id
         )
 
-    def _final_answer_text(
-        self,
-        data: object,
-        *,
-        fallback: str | None = None,
-    ) -> str:
-        # Shared with the Agent Host normalizer so identical structured output
-        # reads identically on a surface, whichever harness produced it.
-        return final_answer_text(data, fallback=fallback)
+
+def _pauses(specs: Sequence[ToolSpec]) -> dict[str, PauseKind]:
+    """Each pausing tool of the run, and the pause it opens."""
+    return {
+        spec.name: spec.policy.pauses
+        for spec in specs
+        if spec.policy.pauses is not None
+    }
+
+
+def reveals_tools_natively(model: Model) -> bool:
+    """Whether ``model`` can be shown a tool mid-run without rewriting ``tools``.
+
+    Either it has a channel for tools added mid-run, or it declares a tool with
+    its schema withheld from the first request on (Anthropic's standalone
+    ``defer_loading``), so a reveal unhides what was always in the array.
+    Read off the model under the wrappers (metering, stream retries), which
+    declare neither of their own.
+    """
+    while isinstance(model, WrapperModel):
+        model = model.wrapped
+    return isinstance(model, Model) and (
+        model.tool_addition_mode is not None or model.tool_deferral_mode == "standalone"
+    )
 
 
 def _runtime_profile_model[DepsT](options: HarnessOptions) -> Model:

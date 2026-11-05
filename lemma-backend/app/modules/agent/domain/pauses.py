@@ -24,7 +24,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from app.core.domain.aggregate import AggregateRoot
-from app.modules.agent.domain.approvals import EXPIRED_UNANSWERED, SUPERSEDED_KEY
+from app.modules.agent.domain.approvals import (
+    ANSWERED_BY_REPLY,
+    EXPIRED_UNANSWERED,
+    SUPERSEDED_KEY,
+)
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pause_opening import (
     AgentHostPermissionRequest,
@@ -74,7 +78,10 @@ CALL_NAMES: dict[PauseKind, str] = {
     PauseKind.BUDGET: "request_approval",
     PauseKind.HOST_PERMISSION: "request_approval",
 }
-PAUSING_CALL_NAMES = frozenset(CALL_NAMES.values())
+#: The call that hands tasks to sub-agents and waits on them: a WAIT pause
+#: under a name of its own, since it is not ``wait_for``.
+DELEGATE_CALL_NAME = "delegate"
+PAUSING_CALL_NAMES = frozenset({*CALL_NAMES.values(), DELEGATE_CALL_NAME})
 #: Somebody decided it (or the system did, for them); its return may still be
 #: on its way -- an approved tool runs in a worker first.
 DECIDED = frozenset({PauseStatus.RESOLVED, PauseStatus.EXPIRED, PauseStatus.SUPERSEDED})
@@ -217,13 +224,21 @@ class Pause(AggregateRoot):
             now=now,
         )
 
-    def supersede(self, *, by: UUID) -> bool:
-        """The person moved past it: DENY on their behalf, never an approval."""
+    def supersede(self, *, by: UUID, reply: str | None = None) -> bool:
+        """The person moved past it: DENY on their behalf, never an approval.
+
+        ``reply`` is what they wrote instead, kept on a question: the model is
+        handed it as the answer (live, a free-text answer read as "dismissed"),
+        while the question itself stays unanswered -- nobody answered it.
+        """
+        response: dict[str, object] = {SUPERSEDED_KEY: True}
+        if reply is not None and self.kind is PauseKind.QUESTION:
+            response[ANSWERED_BY_REPLY] = reply
         return self._end(
             PauseStatus.SUPERSEDED,
             PauseResolution(
                 decision=AgentRunApprovalDecision.DENY,
-                response={SUPERSEDED_KEY: True},
+                response=response,
                 resolved_by_user_id=by,
             ),
         )

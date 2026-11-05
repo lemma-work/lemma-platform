@@ -43,6 +43,7 @@ from app.modules.agent.application.conversations.start import (
 from app.modules.agent.application.pauses.resolve import ResolvePause
 from app.modules.agent.application.turns.retry import RetryFailedRun
 from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.conversations import surface_origin
@@ -225,6 +226,8 @@ async def start_surface_turn(
         pod_id=pod_id,
         agent_name=agent_name,
         message_metadata=message_metadata,
+        # A contact's, when the thread answers people outside the pod.
+        kind=RunKind.SURFACE,
     )
     return result.agent_run_id if result.started_new_run else None
 

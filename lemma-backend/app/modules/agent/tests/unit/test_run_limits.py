@@ -174,7 +174,6 @@ async def test_the_node_loop_pauses_a_run_repeating_one_call():
     from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
-    from app.modules.agent.domain.tools import AgentInputRequired
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = NodeLoop(
@@ -210,8 +209,7 @@ async def test_the_node_loop_pauses_a_run_repeating_one_call():
             )
         )
 
-    with pytest.raises(AgentInputRequired):
-        await loop._spend_a_model_request()
+    assert await loop._spend_a_model_request() is True
 
 
 def test_carrying_on_is_a_new_run_with_a_new_budget():
@@ -272,9 +270,9 @@ def test_an_unattended_run_reads_its_own_clock():
 async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     """The enforcement point, and the shape everything downstream depends on.
 
-    A budget trip leaves by the path a pause already takes: it raises
-    `AgentInputRequired`, which `pydantic_ai` turns into WAITING, and it queues a
-    `request_approval` card first so there is something for the person to answer.
+    A budget trip stops the node loop before the request, with no exception:
+    it queues a `request_approval` card, so there is something for the person
+    to answer, and the WAITING terminal naming it.
     Hard-stopping instead would kill a nearly-finished run and make the person
     re-ask, and work redone because the first attempt was discarded is already
     one of the larger costs here.
@@ -287,7 +285,6 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
-    from app.modules.agent.domain.tools import AgentInputRequired
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = NodeLoop(
@@ -309,14 +306,16 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
         final_output_message=lambda **_kwargs: None,
     )
 
-    await loop._spend_a_model_request()
+    assert await loop._spend_a_model_request() is False
     assert queue.empty(), "a run inside its budget must not be interrupted"
 
-    with pytest.raises(AgentInputRequired) as raised:
-        await loop._spend_a_model_request()
+    assert await loop._spend_a_model_request() is True
 
-    assert raised.value.kind == "request_approval"
     (_label, event) = queue.get_nowait()
+    *_, (_label, waiting) = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert waiting.type is AgentEventType.WAITING
+    assert waiting.data["kind"] == "request_approval"
+    assert waiting.data["tool_call_ids"] == [event.data.tool_call_id]
     assert event.type is AgentEventType.MESSAGE
     assert event.data.pause.kind is PauseKind.BUDGET
     assert event.data.pause.budget.spent == 2
@@ -429,87 +428,3 @@ def test_both_approvals_renew_and_neither_retires_the_guard():
     # to repair something that was never broken.
     assert denied["success"] is True
     assert "Stop here" in str(denied["message"])
-
-
-async def test_a_paused_run_does_not_export_as_a_failed_run():
-    """The run span is the other half of "a pause is not a failure".
-
-    Marking the tool span was not enough. Every pause also unwinds through the
-    span the harness opened for the whole run, and a span context manager
-    stamps ERROR on anything that leaves that way -- so in the backend where
-    error rates are read, every `ask_user` and every `wait_for` still closed
-    its run as failed. Verified against live traces: the tool spans came back
-    clean and the `agent run` spans did not.
-
-    Inside `drive_once` the current span *is* that run span, which is the only
-    place left that can mark it before it closes. `StatusCode.OK` is final in
-    the SDK, so it survives the unwind.
-    """
-    import asyncio
-    from contextlib import asynccontextmanager
-
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter
-    from opentelemetry.trace import StatusCode
-
-    from app.modules.agent.domain.harness_options import HarnessOptions
-    from app.modules.agent.infrastructure.harness.lemma.node_loop import (
-        NodeLoop,
-    )
-    from app.modules.agent.domain.tools import AgentInputRequired
-
-    exported: list = []
-
-    class _Collect(SpanExporter):
-        def export(self, spans):
-            exported.extend(spans)
-
-        def shutdown(self):
-            return None
-
-    provider = trace.get_tracer_provider()
-    if not isinstance(provider, TracerProvider):
-        provider = TracerProvider()
-        trace.set_tracer_provider(provider)
-    provider.add_span_processor(SimpleSpanProcessor(_Collect()))
-
-    class _PausingRun:
-        """A graph that pauses on its first node, the way `ask_user` does."""
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise AgentInputRequired("call-1", "ask_user")
-
-    @asynccontextmanager
-    async def _run_context(_history, _settings):
-        yield _PausingRun()
-
-    loop = NodeLoop(
-        run_context=_run_context,
-        queue=asyncio.Queue(),
-        streamer=None,
-        options=HarnessOptions(model_name="test-model"),
-        agent_run_id=uuid4(),
-        conversation_id=uuid4(),
-        final_output_message=lambda **_kwargs: None,
-    )
-
-    # Stands in for the span pydantic-ai opens around the whole run; the probe
-    # that settled this showed `agent run` is what `drive_once` runs inside.
-    before = len(exported)
-    tracer = trace.get_tracer("app.tests.run_span")
-    # `pytest.raises` goes OUTSIDE the span, or it swallows the exception
-    # before the context manager sees it and nothing ever stamps ERROR -- a
-    # test that passes against the unfixed code and proves nothing.
-    with pytest.raises(AgentInputRequired):
-        with tracer.start_as_current_span("agent run"):
-            await loop.drive_once(None, {})
-
-    (span,) = exported[before:]
-    assert span.name == "agent run"
-    assert span.status.status_code is not StatusCode.ERROR, (
-        "a paused run still closes as a failed run"
-    )

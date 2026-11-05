@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
@@ -110,6 +111,7 @@ async def test_finishing_a_run_is_activity() -> None:
     run = SimpleNamespace(
         conversation_id=uuid4(),
         status=AgentRunStatus.RUNNING.value,
+        kind=RunKind.CHAT,
         run_metadata={},
         error=None,
         output_data=None,

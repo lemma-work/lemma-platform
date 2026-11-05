@@ -81,6 +81,7 @@ def _coordinator(
     uow = _Uow()
 
     conversations = SimpleNamespace(
+        unfinished_children=AsyncMock(return_value=[]),
         set_conversation_status=AsyncMock(
             side_effect=lambda *, conversation_id, status: statuses.append(status)
         ),
@@ -169,13 +170,14 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
 
     coordinator = wire_repositories(
         stops.StopConversation(
-            SimpleNamespace(),
+            SimpleNamespace(commit=AsyncMock()),
             agent_repository=SimpleNamespace(),
             supersede=SimpleNamespace(),
         ),
         SimpleNamespace(
             get_conversation=AsyncMock(return_value=conversation),
             get_active_agent_run_for_update=AsyncMock(return_value=None),
+            unfinished_children=AsyncMock(return_value=[]),
         ),
     )
     monkeypatch.setattr(

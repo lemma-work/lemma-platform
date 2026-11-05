@@ -21,6 +21,7 @@ from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.application.conversations.start import StartConversation
 from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.calls import CallMark, CallRole
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.errors import (
@@ -235,6 +236,7 @@ async def speak_into_call(
         content=content,
         pod_id=pod_id,
         message_metadata={"source": "call"},
+        kind=RunKind.CALL,
     )
 
 

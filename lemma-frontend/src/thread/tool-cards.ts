@@ -1326,6 +1326,32 @@ function taskCard(args: unknown, result: unknown, answered: boolean): SubTask | 
     };
 }
 
+/** Lemma's `delegate`: the tasks handed to sub-agents, on the `task` card, and
+ *  each child's report once the parent wakes with them. */
+function delegateCard(args: unknown, result: unknown, answered: boolean): SubTask | null {
+    const tasks = Array.isArray(asRecord(args).tasks) ? (asRecord(args).tasks as unknown[]) : [];
+    const briefs = tasks.map((task) => asString(asRecord(task).brief)).filter(Boolean);
+    if (!briefs.length) return null;
+    const record = asRecord(parsedRecord(result));
+    const reports = Array.isArray(record.results) ? (record.results as unknown[]) : [];
+    const output = reports
+        .map((item) => {
+            const report = asRecord(item);
+            const said = asString(report.report) || asString(report.error) || asString(report.status);
+            return `${asString(report.agent) || "Sub-agent"} (${asString(report.status)}): ${said}`;
+        })
+        .join("\n\n");
+    return {
+        kind: "task",
+        description: briefs.length === 1 ? briefs[0].split("\n")[0] : `Delegated ${briefs.length} tasks`,
+        agentType: "",
+        prompt: briefs.join("\n\n"),
+        output: answered ? output || outputText(result) : "",
+        pending: !answered,
+        ...failureOf(result, answered),
+    };
+}
+
 /** A pydantic tool return can arrive serialised; read it either way. */
 function parsedRecord(result: unknown): unknown {
     if (typeof result !== "string") return result;
@@ -1417,6 +1443,8 @@ export function parseToolCard({
             return connectorCard(args, result, answered);
         case "wait_for":
             return waitCard(args, result, answered, atMs);
+        case "delegate":
+            return delegateCard(args, result, answered);
         case "read_file":
             return readCard(args, result, answered);
         case "write_file":

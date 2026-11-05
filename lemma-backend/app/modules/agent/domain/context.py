@@ -22,10 +22,16 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class ToolCaller(Protocol):
-    """Runs another of the run's tools by name: the approval re-run's way in."""
+    """Runs another of the run's tools by name: the approval re-run's way in,
+    and ``call_tool``'s."""
 
     async def call(
-        self, name: str, arguments: Mapping[str, object] | None, ctx: ToolContext
+        self,
+        name: str,
+        arguments: Mapping[str, object] | None,
+        ctx: ToolContext,
+        *,
+        tool_call_id: str | None = None,
     ) -> object: ...
 
 
@@ -98,6 +104,9 @@ class ToolContext(BaseModel):
     # invoking user for the assistant, where a named agent is limited to its own
     # resource grants.
     is_pod_default_agent: bool = False
+    #: The tool surface this run's pod assistant gets (``domain/tool_profile``),
+    #: a ``ToolProfile`` value; "today" for every other run.
+    tool_profile: str = "today"
     # Set only on the context of a call a person approved; see
     # `ApprovedExecution`. Tools must not read it directly: they get their
     # authorization context from `tool_authorization_context`.

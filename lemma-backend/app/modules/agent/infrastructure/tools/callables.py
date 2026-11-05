@@ -23,6 +23,8 @@ from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent
+from app.modules.agent.domain.subagent_results import result_text
+from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
 from app.modules.agent.infrastructure.mcp import (
     MAX_LOCAL_TOOL_NAME_LENGTH,
     resource_tool_name,
@@ -115,6 +117,38 @@ def function_tool_result(function_name: str, run: FunctionRunEntity) -> dict[str
     if run.status != FunctionRunStatus.COMPLETED:
         raise RuntimeError(run.error or f"Function {function_name} failed")
     return bounded_tool_payload(run.output_data or {}, what="function output")
+
+
+def agent_call_answer(
+    result: dict[str, Any], *, handle_ids: dict[str, str], structured: bool
+) -> dict[str, Any]:
+    """What an ``agent_<name>`` call returns: an answer, a question or an error.
+
+    Never the bare status string it used to be -- a child that stopped to ask
+    returned ``"WAITING"`` as if that were its answer, and its question was
+    lost; a failed one returned its error text the same way.
+    """
+    status = result.get("status")
+    if status == ConversationStatus.WAITING.value:
+        return {
+            **handle_ids,
+            "status": "NEEDS_INPUT",
+            "question": result.get("waiting_on"),
+            "note": (
+                "The agent stopped to ask this and has not finished. Answer it "
+                "(or ask the person, if only they can), then call it again."
+            ),
+        }
+    if status != AgentRunStatus.COMPLETED.value:
+        return {
+            **handle_ids,
+            "status": status,
+            "error": result.get("error") or f"The agent ended {status}.",
+        }
+    output = result.get("output")
+    if structured and isinstance(output, dict):
+        return {"status": status, "output": output}
+    return {"status": status, "answer": result_text(output)}
 
 
 class AgentCallableToolFactory:
@@ -215,6 +249,13 @@ class AgentCallableToolFactory:
             ResourcePermissionGrantModel.pod_id == pod_id,
             ResourcePermissionGrantModel.grantee_type == "AGENT",
             ResourcePermissionGrantModel.grantee_id == agent_id,
+        )
+        # Ordered: the callable tools are built in grant order, and the tool
+        # array is the front of every request's cached prefix.
+        stmt = stmt.order_by(
+            ResourcePermissionGrantModel.resource_type,
+            ResourcePermissionGrantModel.resource_id,
+            ResourcePermissionGrantModel.permission_id,
         )
         rows = list((await uow.session.execute(stmt)).all())
         return grant_summary_of(rows, agent_id=agent_id)
@@ -325,23 +366,14 @@ class AgentCallableToolFactory:
                         "you wake with its result."
                     ),
                 }
-            output = result.get("output")
-            if not has_output_schema:
-                # Plain agent → return the final answer as a string. A no-schema
-                # run stores its output as {"answer": <text>}
-                # (RunMessageWriter.output_data_from_event), so unwrap that.
-                if isinstance(output, dict) and "answer" in output:
-                    return str(output["answer"])
-                if output is None:
-                    return str(result.get("error") or result.get("status") or "")
-                return output if isinstance(output, str) else str(output)
-            if isinstance(output, dict):
-                return output
-            return {
-                "status": result.get("status"),
-                "output": output,
-                "error": result.get("error"),
-            }
+            return agent_call_answer(
+                result,
+                handle_ids={
+                    "conversation_id": str(handle.conversation_id),
+                    "run_id": str(handle.run_id),
+                },
+                structured=has_output_schema,
+            )
 
         return _dynamic_spec(
             agent_tool_name, description, schema, _run_agent, kind="agent"

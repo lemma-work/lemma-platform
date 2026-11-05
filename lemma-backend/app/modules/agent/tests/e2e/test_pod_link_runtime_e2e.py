@@ -116,9 +116,7 @@ async def _start_scripted(conversation_id: UUID, script: list[dict[str, object]]
         found = await conversations.get_conversation(conversation_id, include_runs=True)
         assert found is not None
         run = found.agent_runs[-1]
-        await stage_agent_turn(
-            uow, turn_for(found, run_id=run.id, user_id=found.user_id)
-        )
+        await stage_agent_turn(uow, turn_for(found, run, user_id=found.user_id))
         await uow.commit()
 
 

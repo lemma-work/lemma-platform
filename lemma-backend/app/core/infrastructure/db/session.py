@@ -12,8 +12,12 @@ from app.core.log.log import get_logger
 from app.core.observability.connection_scope import attach_connection_scope_monitor
 from app.core.observability.memory_sampler import watch_compiled_cache
 from app.core.observability.dependency_incident import DependencyIncident
+from app.core.infrastructure.db import pod_inventory
 
 logger = get_logger(__name__)
+# Every session this process opens replaces a pod's inventory token when it
+# commits a change to what the pod holds (`pod_inventory`).
+pod_inventory.install()
 # Counts failures of the pool-utilization probe below, so a broken diagnostic is
 # reported once rather than on every checkout. A counter rather than a flag
 # because checkout runs on whichever thread borrowed the connection, and a

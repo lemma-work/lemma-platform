@@ -1,6 +1,7 @@
 """Synthetic tool returns emitted when a harness terminates mid-call."""
 
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
@@ -94,20 +95,57 @@ class OutstandingToolCalls:
             self._calls.pop(tool_call_id, None)
 
     def closing_events(
-        self, terminal_event: AgentEvent, *, skip_tool_call_id: str | None = None
+        self,
+        terminal_event: AgentEvent,
+        *,
+        skip_tool_call_ids: frozenset[str] = frozenset(),
     ) -> list[AgentEvent]:
         """Returns that close whatever is still open, given how the run ended.
 
-        `skip_tool_call_id` is the pausing call on the WAITING path: `ask_user`
-        and `request_approval` get their real return appended when the user
-        answers, so closing them here would duplicate it.
+        `skip_tool_call_ids` are the pausing calls on the WAITING path: each
+        gets its real return appended when it is resolved, so closing it here
+        would duplicate it.
         """
         outstanding = {
             call_id: name
             for call_id, name in self._calls.items()
-            if call_id != skip_tool_call_id
+            if call_id not in skip_tool_call_ids
         }
         self._calls.clear()
         return missing_tool_return_events(
             outstanding_tool_calls=outstanding, terminal_event=terminal_event
         )
+
+
+def waiting_event(
+    calls: list[tuple[str, str]], *, conversation_id: str, agent_run_id: UUID
+) -> AgentEvent:
+    """The run ends waiting on ``calls``: each pause's ``(tool_call_id, kind)``.
+
+    ``tool_call_id`` and ``kind`` name the first, as a WAITING event always has;
+    ``tool_call_ids`` names every one the step opened.
+    """
+    first_id, first_kind = calls[0]
+    return AgentEvent(
+        type=AgentEventType.WAITING,
+        data={
+            "tool_call_id": first_id,
+            "kind": first_kind,
+            "tool_call_ids": [call_id for call_id, _ in calls],
+            "conversation_id": conversation_id,
+        },
+        agent_run_id=agent_run_id,
+    )
+
+
+def paused_call_ids(terminal: AgentEvent) -> frozenset[str]:
+    """The calls a WAITING terminal leaves open for their real returns."""
+    if terminal.type is not AgentEventType.WAITING or not isinstance(
+        terminal.data, dict
+    ):
+        return frozenset()
+    ids = terminal.data.get("tool_call_ids")
+    if isinstance(ids, list):
+        return frozenset(str(call_id) for call_id in ids)
+    first = terminal.data.get("tool_call_id")
+    return frozenset({str(first)}) if first else frozenset()
