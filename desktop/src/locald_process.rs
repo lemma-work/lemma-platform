@@ -276,7 +276,7 @@ pub(crate) fn connect_locald_with_mode(nonblocking: bool) -> Result<LocaldConnec
     stream
         .set_nonblocking(nonblocking)
         .map_err(|error| error.to_string())?;
-    let (receive, send) = stream.split();
+    let (receive, send) = LocaldStream::pair(stream);
     Ok(LocaldConnection {
         reader: BufReader::new(receive),
         writer: send,

@@ -66,3 +66,82 @@ fn rejects_zip_traversal_and_symbolic_links() {
     writer.finish().unwrap();
     assert!(extract_for_test(&symlink, &root.path().join("symlink-out")).is_err());
 }
+
+#[test]
+fn an_absolute_entry_name_lands_under_the_destination_not_at_the_path_it_names() {
+    let root = tempfile::tempdir().unwrap();
+    let escape = root.path().join("escape");
+    let archive = root.path().join("absolute.zip");
+    write_zip(&archive, &[(escape.to_str().unwrap(), b"bad", 0o600)]);
+    // So the test cannot pass by the writer having made the name relative.
+    let stored = zip::ZipArchive::new(File::open(&archive).unwrap())
+        .unwrap()
+        .by_index(0)
+        .unwrap()
+        .name()
+        .unwrap()
+        .into_owned();
+    assert!(Path::new(&stored).is_absolute(), "{stored}");
+
+    let output = root.path().join("output");
+    extract_for_test(&archive, &output).unwrap();
+
+    assert!(!escape.exists());
+    let rerooted: PathBuf = escape
+        .components()
+        .filter(|component| matches!(component, std::path::Component::Normal(_)))
+        .collect();
+    assert_eq!(fs::read(output.join(rerooted)).unwrap(), b"bad");
+}
+
+#[test]
+fn rejects_two_entries_whose_paths_differ_only_in_case() {
+    let root = tempfile::tempdir().unwrap();
+    let archive = root.path().join("case.zip");
+    write_zip(
+        &archive,
+        &[
+            ("runtime/LICENSE", b"upper", 0o644),
+            ("runtime/license", b"lower", 0o644),
+        ],
+    );
+
+    let error = extract_for_test(&archive, &root.path().join("output")).unwrap_err();
+
+    assert!(error.to_string().contains("duplicate path"), "{error}");
+}
+
+#[test]
+fn rejects_a_symbolic_link_recorded_by_an_ms_dos_host() {
+    let root = tempfile::tempdir().unwrap();
+    let archive = root.path().join("dos-symlink.zip");
+    let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
+    writer
+        .add_symlink(
+            "link",
+            "target",
+            SimpleFileOptions::default().unix_permissions(0o777),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    // The central directory's "version made by" host byte, set to MS-DOS.
+    let mut bytes = fs::read(&archive).unwrap();
+    let central = bytes
+        .windows(4)
+        .position(|window| window == b"PK\x01\x02")
+        .unwrap();
+    bytes[central + 5] = 0;
+    fs::write(&archive, &bytes).unwrap();
+    // The gap this covers: zip reads the entry as a regular file. Should a
+    // later release see the link here, this line can go and the test stays.
+    assert!(!zip::ZipArchive::new(File::open(&archive).unwrap())
+        .unwrap()
+        .by_index(0)
+        .unwrap()
+        .is_symlink());
+
+    let error = extract_for_test(&archive, &root.path().join("output")).unwrap_err();
+
+    assert!(error.to_string().contains("symbolic link"), "{error}");
+    assert!(!root.path().join("output/link").exists());
+}
