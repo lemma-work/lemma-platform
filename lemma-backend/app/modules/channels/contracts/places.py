@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.channels.domain.answering import answers_every_line
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
@@ -42,6 +43,7 @@ __all__ = [
     "ReplyAddress",
     "addressed_at",
     "adopt_place",
+    "answers_every_line_at",
     "change_place",
     "confirm_group",
     "conversation_at",
@@ -169,6 +171,26 @@ async def adopt_place(
         await change_place(uow, known.id, {"title": place.title})
         known = known.model_copy(update={"title": place.title})
     return known, False
+
+
+async def answers_every_line_at(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    external_channel_id: str,
+    surface_id: UUID,
+    agent_id: UUID,
+) -> bool:
+    """Whether this agent answers every line said in the shared place this
+    surface hears on that chat -- so its bot answers a member's message
+    there that nobody put to it, as it would the same line typed in Lemma
+    (``domain/answering``)."""
+    members = MemberRepository(uow.session)
+    for source in await SourceRepository(uow.session).hearing(
+        external_channel_id=external_channel_id, surface_ids=[surface_id]
+    ):
+        if answers_every_line(agent_id, await members.agents(source.channel_id)):
+            return True
+    return False
 
 
 async def person_places(

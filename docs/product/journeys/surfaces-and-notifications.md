@@ -571,6 +571,38 @@ by its link.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.surface.send`
 
+### PS-SURF-025 — Which agent answers does not depend on where the line was typed
+**Status:** planned
+
+> A group mirrored from a platform is a channel members also write to in
+> Lemma. The agents that answered a line used to be chosen two ways: in Lemma,
+> the agents it named and those answering every line; on the platform, the
+> bot alone, and only when the line was put to it. The same words got
+> different agents depending on where they were typed. Proven today by the
+> module suites (`test_a_line_is_answered_by_the_same_agents_typed_in_lemma_or_heard_on_the_platform`,
+> `test_an_agent_answering_a_line_heard_on_the_platform_answers_there`, and
+> `test_a_message_nobody_put_to_the_bot_is_let_in_where_it_answers_every_line`);
+> no scenario lane yet speaks in a group from both sides.
+
+- When a member writes a line in a group, the system shall have it answered by
+  the agents it names and by the agents set to answer every line there,
+  whether the member typed it in Lemma or on the platform the group mirrors.
+- On the platform, the system shall take a line put to the bot -- a mention, a
+  reply in its thread, its name -- as naming the bot's agent.
+- When an agent answers a line heard on the platform, the system shall send
+  its answer to that place, whichever agent it is.
+- Where the bot's agent answers every line in a group, when a member writes
+  there without putting it to the bot, the system shall answer them as if
+  they had.
+- If somebody outside the pod writes in a group without putting it to the
+  bot, then the system shall not answer them, nor tell them it will not,
+  whatever the agents there are set to answer.
+- The system shall start each agent at most once for a line, however many of
+  these reasons name it.
+
+**Contracts:** `surface.webhook.handle_platform`, `channel.message.post`,
+`channel.member.add`
+
 ---
 
 ## Capability: Be told when something needs you

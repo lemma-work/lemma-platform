@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
+from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts import channels as agent_channels
 from app.modules.agent.contracts.channels import Audience
@@ -113,7 +114,7 @@ def reply_ref_of(event: ParsedInboundSurfaceEvent) -> dict[str, object]:
             },
         }
     )
-    return target.model_dump(mode="json", exclude={"raw_payload"})
+    return target.model_dump(mode="json", exclude={"raw_payload", "unasked"})
 
 
 def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
@@ -224,7 +225,23 @@ async def note_heard(
         ),
         mentions=said.mentions,
         mentioned_agents=said.agents,
+        # Written by the turn answering it: put to that conversation's agent.
+        door_agent_id=await _door_agent(uow, context),
     )
+
+
+async def _door_agent(
+    uow: SqlAlchemyUnitOfWork, context: SurfaceChatContext
+) -> UUID | None:
+    """The agent this turn's message was put to: its conversation's, which
+    answers it here. Any other agent the line names, or that answers every
+    line in the channel, is started by ``channels`` -- the one rule."""
+    conversation = await agent_channels.surface_conversation(
+        uow, context.conversation_id
+    )
+    if conversation is None:
+        return None
+    return effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
 
 
 async def _thread_root(
