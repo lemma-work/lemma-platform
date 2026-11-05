@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from app.core.log.log import get_logger
-from app.modules.agent.tools.speech.provider import SpeechProviderError
+from app.modules.agent.infrastructure.tools.speech.provider import SpeechProviderError
 
 logger = get_logger(__name__)
 
@@ -48,7 +48,9 @@ async def transcribe_voice_notes(
     if not clips:
         return []
 
-    from app.modules.agent.tools.speech.provider import get_speech_provider
+    from app.modules.agent.infrastructure.tools.speech.provider import (
+        get_speech_provider,
+    )
 
     try:
         provider = get_speech_provider()

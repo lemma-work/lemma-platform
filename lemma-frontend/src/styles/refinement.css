@@ -137,7 +137,7 @@ button svg, a svg { flex-shrink:0; }
     .shell--mobile-open .side { transform:none;visibility:visible; }.sidebar-backdrop { display:block;position:fixed;inset:0;z-index:99;background:rgb(10 8 20 / .35);border:0;backdrop-filter:blur(2px); }
     .shell--mobile-open .side__brand { justify-content:space-between;align-items:center;height:36px; }.shell--mobile-open .sidebar-toggle { position:static;width:36px;height:36px; }.shell--mobile-open .rail__section { display:flex; }.shell--mobile-open .rail__name,.shell--mobile-open .rail__add-label,.shell--mobile-open .side__settings span { display:block; }.shell--mobile-open .rail__pod,.shell--mobile-open .rail__add,.shell--mobile-open .side__settings { justify-content:flex-start; }.shell--mobile-open .human-profile__text { display:flex; }.shell--mobile-open .human-profile__chevron { display:block; }.shell--mobile-open .human-profile { justify-content:flex-start;padding:9px; }.shell--mobile-open .org__menu { left:0;top:calc(100% + 6px); }
     .mobile-nav-toggle { display:grid;position:absolute;left:10px;top:17px;z-index:10;width:40px;height:40px; }.head { padding:18px 12px 10px 58px;align-items:flex-start;gap:8px;min-height:120px; }.head > .mark,.head > .being { display:none; }.head__title h1 { font-size:19px;max-width:calc(100vw - 164px); }.head__title p { max-width:calc(100vw - 96px);font-size:11px; }.head__title .reaches { order:3;margin:10px 0 0;width:100%;gap:6px; }.head__spacer { display:none; }.head .theme { margin-left:auto; }.head > .head__gear { display:none; }.reach--compact,.reach--add { min-height:38px;min-width:38px; }.head__gear { width:38px;height:38px; }.head__flag { display:none; }
-    .tabs { padding-inline:18px;gap:14px; }.tab { min-height:44px; }.convo-host { min-width:0; }.convo-host .history { display:none; }.convo-host { grid-template-columns:minmax(0,1fr); }.pane__inner { padding-inline:18px; }.composer { padding:12px 14px 18px; }.composer__row { gap:8px;flex-wrap:wrap; }.composer__box { min-width:0; }.composer__note { font-size:10px; }.composer__send,.composer__wave { min-width:40px;min-height:40px; }.profile { padding:18px!important;gap:24px; }.profile__aside { min-width:0; }.idwrap { max-width:300px;margin-inline:auto; }.hero__name { font-size:30px; }.hero__acts .reaches { display:flex; }.reaches--expanded .reach { min-height:44px; }.reach__handle { max-width:190px; }.modal { padding:14px; }.modal__panel { max-height:calc(100dvh - 28px);width:100%; }.modal__head { padding:20px; }.modal__body { padding:20px; }.modal__close { min-width:44px;min-height:44px; }.rail__pod,.rail__add,.side__settings { min-height:44px; }.theme__menu { right:0;max-width:calc(100vw - 24px); }
+    .tabs { padding-inline:18px;gap:14px; }.tab { min-height:44px; }.convo-host { min-width:0; }.convo-host .history { display:none; }.convo-host { grid-template-columns:minmax(0,1fr); }.pane__inner { padding-inline:18px; }.composer { padding:12px 14px 18px; }.composer__row { gap:8px;flex-wrap:wrap; }.composer__box { min-width:0; }.composer__note { font-size:10px; }.composer__send,.composer__wave { min-width:40px;min-height:40px; }.profile { padding:18px!important;gap:24px; }.profile__aside { min-width:0; }.idwrap { max-width:300px;margin-inline:auto; }.hero__name { font-size:30px; }.reaches--expanded .reach { min-height:44px; }.reach__handle { max-width:190px; }.modal { padding:14px; }.modal__panel { max-height:calc(100dvh - 28px);width:100%; }.modal__head { padding:20px; }.modal__body { padding:20px; }.modal__close { min-width:44px;min-height:44px; }.rail__pod,.rail__add,.side__settings { min-height:44px; }.theme__menu { right:0;max-width:calc(100vw - 24px); }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important; } }
 .workspace { display:flex;flex-direction:column;min-height:0;flex:1; }.workspace[hidden] { display:none; }.settings-view { display:flex;flex-direction:column;min-height:0;flex:1; }
@@ -276,9 +276,7 @@ button svg, a svg { flex-shrink:0; }
 .profile__aside { order:0; }
 .profile__aside .idwrap { position:relative;padding-top:0;width:100%;max-width:none; }
 .hero__acts > .btn { display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px; }
-.hero__acts .reaches--expanded { margin-top:4px;align-items:stretch; }
-.hero__acts .reach { min-height:38px; }
-.hero__meta,.hero__stats { display:block;line-height:1.65; }
+.hero__meta { display:block;line-height:1.65; }
 .pcard__head { flex-wrap:wrap;gap:6px 16px; }
 @media(max-width:1080px) {
     .pane--profile .profile { padding-inline:var(--gutter); }
@@ -304,10 +302,6 @@ button svg, a svg { flex-shrink:0; }
     .profile__main,.profile__aside { display:flex;flex-direction:column;gap:14px;min-width:0; }
     .profile__main > .pcard,.profile__aside > .pcard { margin-top:0; }
 }
-
-.hero__message { line-height:1; }
-.hero__message > svg { display:block;align-self:center; }
-.hero__message > span { display:block;line-height:16px; }
 
 .head__mobile-channels { display:none; }
 @media(max-width:767px) {
@@ -1385,11 +1379,9 @@ button svg, a svg { flex-shrink:0; }
    rather than as a form: the current answer, in words, and the list
    behind it.
 
-   Shared, because the profile now has two of them — what a teammate runs
-   on, and who may join it — and two copies of this block would have
-   drifted the first time either was touched. What stays `runson__` below
-   is the part only that one has: a provider logo, and rows gathered under
-   a heading. */
+   Shared, because more than one setting uses it, and two copies of this
+   block would have drifted the first time either was touched. What stays
+   `runson__` below is the part only the model's has: a provider logo. */
 .pick { position:relative; }
 .pick__face {
     display:inline-flex;align-items:center;gap:9px;max-width:100%;
@@ -1434,14 +1426,6 @@ button svg, a svg { flex-shrink:0; }
    one falls from above: the motion comes from the control. */
 .pick__menu--up { top:auto;bottom:calc(100% + 6px);animation-name:menu-up; }
 @keyframes menu-up { from {opacity:0;transform:translateY(4px);} to {opacity:1;transform:none;} }
-.runson__group + .runson__group,.pick__row + .runson__group { margin-top:4px;padding-top:4px;border-top:1px solid var(--line); }
-.runson__label {
-    display:flex;align-items:center;gap:7px;padding:7px 9px 4px;color:var(--ink-3);
-    font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
-}
-.runson__label img { width:14px;height:14px;object-fit:contain;border-radius:3px; }
-.runson__label span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
-.runson__label em { font-style:normal;margin-left:auto;color:var(--wait);letter-spacing:0;text-transform:none; }
 .pick__row {
     display:flex;align-items:flex-start;gap:8px;width:100%;
     font:inherit;font-size:13px;color:var(--ink);text-align:left;cursor:pointer;
@@ -1455,7 +1439,6 @@ button svg, a svg { flex-shrink:0; }
    be recognised, so it is set in mono; "they add themselves, without asking"
    is a sentence, and mono makes a sentence look like a value. */
 .pick__body small { font-size:11.5px;line-height:1.45;color:var(--ink-3); }
-.pick__empty { margin:0;padding:8px 9px;font-size:12px;line-height:1.5;color:var(--ink-3); }
 
 @media(max-width:620px) {
     .pick__face,.pick__row { min-height:44px; }

@@ -3,17 +3,15 @@
 A wait and its item (``agent.wait.fire`` / ``agent.wait.poll``) commit together.
 These pin the races the item has to settle against real Postgres: a stop or a
 new message landing while the timer fires, a PROCESS poll that is already
-running when the wait is cancelled, a child finishing at its parent's deadline,
-and the cutover that seeds items for the waits and approvals in flight.
+running when the wait is cancelled, and a child finishing at its parent's
+deadline.
 """
 
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from sqlalchemy import text
@@ -22,38 +20,33 @@ from starlette import status
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.work import WorkWriter, facts
-from app.core.infrastructure.work.testing import make_due
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseStatus
 from app.modules.agent.domain.value_objects import (
-    AgentRunApprovalDecision,
     AgentRunStatus,
     ConversationStatus,
 )
 from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
-    AgentWaitStatus,
     AgentWaitType,
     AgentWaitWakeReason,
 )
 from app.modules.agent.events import wait_work
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.wait_targets import TargetOutcome
 from app.modules.agent.services.wait_timers import arm_wait
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     finish,
+    pause_by_id,
     pausing_call,
     running_run,
     runs,
     seeded_conversation,
+    wait_pause,
 )
 from app.modules.test_support.e2e.agent_work import run_wait_work
 from app.modules.test_support.e2e.builders import E2EScenario
-from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e]
 
@@ -67,43 +60,40 @@ async def _waiting(
     deadline_in: timedelta = timedelta(hours=1),
     armed: bool = True,
     seeded: Seeded | None = None,
-) -> tuple[Seeded, UUID, AgentConversationWaitEntity]:
+) -> tuple[Seeded, UUID, Pause]:
     """A conversation paused on ``wait_for``, its wait row and (``armed``) item."""
     seeded = seeded or await seeded_conversation(scenario)
     run_id = await running_run(seeded)
     call = await pausing_call(
-        seeded, run_id, tool_name=WAIT_TOOL_NAME, tool_args={"reason": "waiting"}
+        seeded, run_id, tool_name="wait_for", tool_args={"reason": "waiting"}
     )
     await finish(run_id, conversation_status=ConversationStatus.WAITING)
     now = datetime.now(timezone.utc)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        wait = await AgentConversationWaitRepository(uow).create(
-            AgentConversationWaitEntity(
-                conversation_id=seeded.conversation_id,
-                agent_run_id=run_id,
-                pod_id=seeded.pod_id,
-                tool_call_id=call,
-                wait_type=wait_type,
-                external_ref=str(uuid4()),
-                scheduled_at=now + due_in,
-                spec={
-                    "reason": "waiting",
-                    "started_at": now.isoformat(),
-                    "deadline_at": (now + deadline_in).isoformat(),
-                    "target_ref": target_ref,
-                    "user_id": str(seeded.user_id),
-                },
-            )
+        wait = wait_pause(
+            conversation_id=seeded.conversation_id,
+            run_id=run_id,
+            pod_id=seeded.pod_id,
+            tool_call_id=call,
+            wait_type=wait_type,
+            wake_at=now + due_in,
+            spec={
+                "reason": "waiting",
+                "started_at": now.isoformat(),
+                "deadline_at": (now + deadline_in).isoformat(),
+                "target_ref": target_ref,
+                "user_id": str(seeded.user_id),
+            },
         )
+        assert await Pauses(uow).open(wait)
         if armed:
-            await arm_wait(WorkWriter.of(uow), wait, wait.scheduled_at)
+            await arm_wait(WorkWriter.of(uow), wait, wait.wake_at)
         await uow.commit()
     return seeded, run_id, wait
 
 
-async def _wait(wait_id: UUID) -> AgentConversationWaitEntity:
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        found = await AgentConversationWaitRepository(uow).get(wait_id)
+async def _wait(wait_id: UUID) -> Pause:
+    found = await pause_by_id(wait_id)
     assert found is not None
     return found
 
@@ -153,19 +143,19 @@ async def test_a_process_poll_rearms_until_the_process_exits(
 
     for look in (1, 2):
         assert await run_wait_work(due_now=True) == 1
-        assert (await _wait(wait.id)).status is AgentWaitStatus.ACTIVE
+        assert (await _wait(wait.id)).status is PauseStatus.PENDING
         assert await _items(wait.id) == 1, f"look {look} did not re-arm its item"
         assert (await _wait(wait.id)).wait_spec.poll_attempt == look
 
     assert await run_wait_work(due_now=True) == 1
 
     ended = await _wait(wait.id)
-    assert ended.status is AgentWaitStatus.COMPLETED
+    assert ended.status is PauseStatus.RESOLVED
     assert ended.wait_spec.woke_because is AgentWaitWakeReason.TARGET_FINISHED
     assert await _items(wait.id) == 0, "re-armed after the process exited"
     assert len(looks) == 3
     (_, resumed) = await runs(seeded.conversation_id)
-    assert resumed.run_metadata["resumed_tool_call_id"] == wait.tool_call_id
+    assert resumed.resumed_tool_call_id == wait.tool_call_id
     del paused
 
 
@@ -197,7 +187,7 @@ async def test_a_stop_landing_while_the_poll_runs_is_not_rearmed(
     await polling
 
     ended = await _wait(wait.id)
-    assert ended.status is AgentWaitStatus.CANCELLED
+    assert ended.status is PauseStatus.CANCELLED
     assert await _items(wait.id) == 0, "a cancelled wait was re-armed"
     assert await _items(wait.id, state="running") == 0
     assert len(await runs(seeded.conversation_id)) == 1, "a stopped agent woke"
@@ -224,11 +214,11 @@ async def test_a_stop_racing_the_timer_ends_the_wait_exactly_one_way(scenario) -
         assert stopped.status_code == status.HTTP_200_OK, stopped.text
         ended = await _wait(wait.id)
         resumed = len(await runs(seeded.conversation_id)) == 2
-        if ended.status is AgentWaitStatus.COMPLETED:
+        if ended.status is PauseStatus.RESOLVED:
             assert resumed, "the wait woke but no run resumed it"
             outcomes.append("resumed")
         else:
-            assert ended.status is AgentWaitStatus.CANCELLED
+            assert ended.status is PauseStatus.CANCELLED
             assert not resumed, "cancelled, yet the agent woke"
             outcomes.append("cancelled")
         assert await _items(wait.id) == 0
@@ -251,7 +241,7 @@ async def test_a_new_message_cancels_the_wait_and_drops_its_timer(scenario) -> N
 
     assert sent.status_code in (status.HTTP_200_OK, status.HTTP_201_CREATED), sent.text
     ended = await _wait(wait.id)
-    assert ended.status is AgentWaitStatus.CANCELLED
+    assert ended.status is PauseStatus.CANCELLED
     assert await _items(wait.id) == 0, "the superseded wait's timer is still armed"
 
 
@@ -300,7 +290,7 @@ async def test_a_child_finishing_at_the_deadline_resumes_the_parent_once(
         await run_wait_work()
 
         ended = await _wait(wait.id)
-        assert ended.status is AgentWaitStatus.COMPLETED
+        assert ended.status is PauseStatus.RESOLVED
         assert ended.wait_spec.woke_because is AgentWaitWakeReason.TARGET_FINISHED
         assert len(await runs(parent.conversation_id)) == 2, "resumed twice"
         assert await _items(wait.id) == 0
@@ -343,7 +333,7 @@ async def test_a_deadline_item_fired_early_rearms_for_the_deadline(scenario) -> 
 
     await run_wait_work()
 
-    assert (await _wait(wait.id)).status is AgentWaitStatus.ACTIVE
+    assert (await _wait(wait.id)).status is PauseStatus.PENDING
     async with async_session_maker() as session:
         due = (
             await session.execute(
@@ -352,162 +342,6 @@ async def test_a_deadline_item_fired_early_rearms_for_the_deadline(scenario) -> 
             )
         ).scalar_one()
     assert due > datetime.now(timezone.utc) + timedelta(minutes=29)
-
-
-# -- the cutover -------------------------------------------------------------------
-
-
-def _cutover_statements() -> list[str]:
-    path = next(
-        Path(__file__)
-        .resolve()
-        .parents[5]
-        .joinpath("migrations", "versions")
-        .glob("*_agent_surface_bundle_work_0056.py")
-    )
-    spec = importlib.util.spec_from_file_location("migration_0056", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    # `notifications` is dropped by 0058, which this database is past; its
-    # seed is the notifications' own, not the agent's.
-    return [
-        statement
-        for statement in module.cutover_statements()
-        if "FROM notifications" not in statement
-    ]
-
-
-async def _seed() -> None:
-    async with async_session_maker() as session:
-        for statement in _cutover_statements():
-            await session.execute(text(statement))
-        await session.commit()
-
-
-async def _conversation_status(conversation_id: UUID) -> str:
-    async with async_session_maker() as session:
-        return (
-            await session.execute(
-                text("SELECT status FROM agent_conversations WHERE id = :id"),
-                {"id": conversation_id},
-            )
-        ).scalar_one()
-
-
-async def test_the_cutover_ends_a_running_turn_saying_so(scenario) -> None:
-    """A turn the old workers were driving is not resumed: it fails with a
-    message telling the person to continue, and nothing is queued for it."""
-    seeded = await seeded_conversation(scenario)
-    run_id = await running_run(seeded)
-    async with async_session_maker() as session:
-        await session.execute(
-            text("UPDATE agent_conversations SET status = 'RUNNING' WHERE id = :id"),
-            {"id": seeded.conversation_id},
-        )
-        await session.commit()
-
-    await _seed()
-
-    async with async_session_maker() as session:
-        run_status, error = (
-            await session.execute(
-                text("SELECT status, error FROM agent_runs WHERE id = :id"),
-                {"id": run_id},
-            )
-        ).one()
-        turns = (
-            await session.execute(
-                text("SELECT count(*) FROM work_items WHERE kind LIKE 'agent.turn%'")
-            )
-        ).scalar_one()
-    assert (run_status, turns) == ("FAILED", 0)
-    assert error.startswith("Interrupted by the upgrade")
-    assert await _conversation_status(seeded.conversation_id) == "FAILED"
-
-
-async def test_the_cutover_fails_a_conversation_whose_decided_approval_never_ran(
-    scenario,
-) -> None:
-    """An approval decided but not yet executed is not run by the new release --
-    nothing replays it -- so the conversation paused on it is failed rather than
-    left waiting forever."""
-    seeded = await seeded_conversation(scenario)
-    run_id = await running_run(seeded)
-    approval_id = await pausing_call(
-        seeded, run_id, tool_name="ask_user", tool_args={"questions": []}
-    )
-    await finish(run_id, conversation_status=ConversationStatus.WAITING)
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
-            conversation_id=seeded.conversation_id,
-            approval_id=approval_id,
-            agent_run_id=run_id,
-            tool_name="ask_user",
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            response={"answers": {"q": "yes"}},
-            resolved_by_user_id=seeded.user_id,
-        )
-        await uow.commit()
-
-    await _seed()
-
-    async with async_session_maker() as session:
-        queued = (
-            await session.execute(
-                text(
-                    "SELECT count(*) FROM work_items "
-                    "WHERE kind = 'agent.approval.execute' "
-                    "AND payload->>'conversation_id' = :id"
-                ),
-                {"id": str(seeded.conversation_id)},
-            )
-        ).scalar_one()
-    assert queued == 0
-    assert await _conversation_status(seeded.conversation_id) == "FAILED"
-
-
-@pytest.mark.drives_work
-async def test_the_cutover_arms_each_open_wait_once(scenario, monkeypatch) -> None:
-    """Waits armed by the old poller have no item; the migration writes one each,
-    and each fires once. A second run writes nothing for what has ended."""
-
-    async def _probe(target) -> TargetOutcome:
-        return TargetOutcome(reason=AgentWaitWakeReason.TARGET_FINISHED, exit_code=0)
-
-    monkeypatch.setattr(wait_work, "probe_process_target", _probe)
-    _, _, past_due = await _waiting(scenario, AgentWaitType.TIME, armed=False)
-    _, _, future = await _waiting(
-        scenario, AgentWaitType.TIME, due_in=timedelta(hours=1), armed=False
-    )
-    _, _, polled = await _waiting(
-        scenario, AgentWaitType.PROCESS, target_ref="p", armed=False
-    )
-
-    await _seed()
-
-    for wait in (past_due, future, polled):
-        assert await _items(wait.id) == 1
-
-    await run_wait_work()
-
-    assert (await _wait(past_due.id)).status is AgentWaitStatus.COMPLETED
-    assert (await _wait(polled.id)).status is AgentWaitStatus.COMPLETED
-    assert (await _wait(future.id)).status is AgentWaitStatus.ACTIVE
-
-    await _seed()
-    assert await _items(past_due.id) == 0
-    assert await _items(polled.id) == 0
-    assert await _items(future.id) == 1, "the future wait's item was duplicated"
-
-    await make_due(async_session_maker, kind="agent.wait.fire")
-    await run_wait_work()
-    await eventually(
-        label="the future wait fired once",
-        probe=lambda: _wait(future.id),
-        done=lambda w: w.status is AgentWaitStatus.COMPLETED,
-        timeout_seconds=5,
-    )
 
 
 async def test_a_run_ending_on_its_own_wait_says_so_and_one_asking_a_person_does_not(

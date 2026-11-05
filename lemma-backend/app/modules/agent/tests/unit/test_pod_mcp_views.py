@@ -20,10 +20,11 @@ import pytest
 from fastmcp import Client
 
 from app.mcp_server import build_pod_mcp_server
-from app.modules.agent.services.pod_mcp_service import as_mcp_tool
-from app.modules.agent.services.pod_mcp_tool_policy import POD_TOOL_POLICIES
+from uuid import uuid4
+
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.services.pod_mcp_service import pod_mcp_tools
 from app.modules.agent.services.pod_mcp_views import POD_MCP_VIEWS, TABLE_VIEW
-from app.modules.agent.tools.dispatcher import ToolInfo
 
 pytestmark = pytest.mark.unit
 
@@ -78,40 +79,46 @@ def _node() -> str:
     return node
 
 
-def _tool(name: str) -> ToolInfo:
-    return ToolInfo(name=name, description="", input_schema={"type": "object"})
+async def _listed() -> dict:
+    ctx = ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+    return {tool.name.removeprefix("lemma_"): tool for tool in await pod_mcp_tools(ctx)}
 
 
 # --- The server's half --------------------------------------------------------
 
 
-def test_records_and_query_results_name_the_table_view():
+async def test_records_and_query_results_name_the_table_view():
+    listed = await _listed()
     for name in ("pod_get_records", "pod_query"):
-        assert as_mcp_tool(_tool(name)).meta == {
+        assert listed[name].meta == {
             "lemma_tool_name": name,
             "ui": {"resourceUri": "ui://lemma/table"},
         }
 
 
-def test_tools_without_a_view_name_none():
+async def test_tools_without_a_view_name_none():
     """A host given a `resourceUri` draws that view for every call -- a file
     read rendered as an empty table would be worse than its text."""
-    assert as_mcp_tool(_tool("pod_read_file")).meta == {
+    assert (await _listed())["pod_read_file"].meta == {
         "lemma_tool_name": "pod_read_file"
     }
 
 
-def test_only_reading_tools_have_a_view():
+async def test_only_reading_tools_have_a_view():
     """The view pages by calling its tool again, which must never write."""
-    for name, policy in POD_TOOL_POLICIES.items():
-        if policy.view is not None:
-            assert policy.annotations().read_only_hint is True, name
+    for name, tool in (await _listed()).items():
+        if "ui" in (tool.meta or {}):
+            assert tool.annotations.read_only_hint is True, name
 
 
 async def test_every_view_a_tool_names_is_served():
     """A tool pointing at a `ui://` URI the server cannot read is a broken card
     in every host that supports MCP Apps."""
-    named = {p.view.uri for p in POD_TOOL_POLICIES.values() if p.view is not None}
+    named = {
+        tool.meta["ui"]["resourceUri"]
+        for tool in (await _listed()).values()
+        if "ui" in (tool.meta or {})
+    }
     async with Client(build_pod_mcp_server()) as client:
         served = {str(resource.uri) for resource in await client.list_resources()}
     assert named <= served

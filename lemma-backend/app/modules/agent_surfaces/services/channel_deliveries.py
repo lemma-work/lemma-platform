@@ -51,7 +51,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.product_metrics import record_surface_delivery
-from app.modules.agent.contracts.contact_conversations import append_follow_up
+from app.modules.agent.contracts.channels import append_follow_up
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.deliveries import SEND_TIMEOUT
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt

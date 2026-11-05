@@ -45,7 +45,7 @@ propose creating an address, and reach for a connector only to send as the
 
 `lemma chat` is not delegation: it starts a separate conversation with that
 agent, which is not your sub-agent, so its result is never delivered to you.
-Delegate with `spawn_subagent` where you have it.
+Delegate with `delegate` where you have it.
 
 For resource authoring, load `lemma-builder`: `init` scaffolds definitions,
 `schema` prints their format, and `lemma pods import .` applies a bundle.

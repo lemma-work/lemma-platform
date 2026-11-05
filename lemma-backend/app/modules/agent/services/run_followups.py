@@ -34,7 +34,7 @@ from app.core.infrastructure.work import WorkWriter, facts, pod_namespace
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.run_origin import run_origin
+from app.modules.agent.domain.run_waiters import run_waiters
 from app.modules.agent.domain.value_objects import (
     AgentRunFinishResult,
     AgentRunStatus,
@@ -51,7 +51,7 @@ from app.modules.agent.events.work_kinds import (
     pod_ask_key,
     subagent_result_key,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 
 logger = get_logger(__name__)
 
@@ -67,12 +67,8 @@ def run_finished_fact(
     finish: AgentRunFinishResult,
     started_at: datetime | None = None,
 ) -> AgentRunFinished:
-    """The fact a finished run announces, read off its conversation."""
-    origin = run_origin(
-        metadata=conversation.metadata,
-        parent_id=conversation.parent_id,
-        conversation_id=conversation.id,
-    )
+    """The fact a finished run announces: its kind, and who waits on it."""
+    waiters = run_waiters(conversation)
     status = finish.status
     if status not in (
         AgentRunStatus.COMPLETED,
@@ -89,10 +85,9 @@ def run_finished_fact(
         user_id=conversation.user_id,
         status=status.value,
         conversation_status=finish.conversation_status.value,
-        parent_kind=origin.parent_kind,
-        parent_ref=origin.parent_ref,
-        origin=origin.origin,
-        has_reply_target=origin.has_reply_target,
+        parent_kind=waiters.parent_kind,
+        parent_ref=waiters.parent_ref,
+        origin=finish.kind.value,
         started_at=started_at,
     )
 
@@ -118,7 +113,7 @@ async def stage_run_followups(
     """
     if not finish.updated:
         return None
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     if conversation is None:
         return None
     _registered()
@@ -127,21 +122,17 @@ async def stage_run_followups(
     )
     work = WorkWriter.of(uow)
     subscribers = await facts.emit(uow, fact, writer=work)
-    origin = run_origin(
-        metadata=conversation.metadata,
-        parent_id=conversation.parent_id,
-        conversation_id=conversation.id,
-    )
+    waiters = run_waiters(conversation)
     ns = pod_namespace(conversation.pod_id)
     payload = ConversationWork(conversation_id=conversation.id, run_id=run_id)
     # Every finish: what was said while it ran, or a pause answered before it
     # finished ending. The handler's first read is the cheap no-op.
     await work.add(AGENT_FOLLOWUP, ns, payload, dedup_key=followup_key(run_id))
-    if origin.settles_subagents:
+    if waiters.settles_subagents:
         await work.add(
             AGENT_SUBAGENT_RESULT, ns, payload, dedup_key=subagent_result_key(run_id)
         )
-    if origin.settles_pod_asks:
+    if waiters.settles_pod_asks:
         await work.add(POD_ASK_DELIVER, ns, payload, dedup_key=pod_ask_key(run_id))
     # Completed only: a failed or stopped turn's words are said again in the
     # turn that answers them, and a pass over a half-finished one would keep

@@ -285,7 +285,7 @@ function ConnectorRow({ pod, connector, title, owner, status, focused, may, usab
                 {may && !confirming && <button className="linkish reachrow__quiet" onClick={onEdit}>Change</button>}
                 {may && (confirming ? (
                     <span className="acct__confirm">
-                        <span>Agents, apps and channels using {connector.slug} stop working.</span>
+                        <span>Agents, apps and bots using {connector.slug} stop working.</span>
                         <button className="btn reachrow__drop" disabled={remove.isPending} onClick={() => remove.mutate()}>
                             {remove.isPending ? "Removing…" : "Remove"}
                         </button>

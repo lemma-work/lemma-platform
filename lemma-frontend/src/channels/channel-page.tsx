@@ -108,7 +108,7 @@ function ChatIntro({ pod, channel, title, me, onPeople }: { pod: Pod; channel: C
     const places = channel.places.filter((place) => !place.pending);
     let said: string;
     if (channel.kind === "DIRECT") {
-        said = "Your private line with " + teammate + ". " + answersHint(channel, teammate) + " Nobody else reads it.";
+        said = "Your private chat with " + teammate + ". " + answersHint(channel, teammate) + " Nobody else reads it.";
     } else if (channel.kind === "CONTACT") {
         const via = [...new Set(places.map((place) => platformName(place.platform)))];
         said = (channel.person?.name ?? (nameless(channel) === "A website visitor" ? "This visitor" : "This person")) + " is outside " + pod.name

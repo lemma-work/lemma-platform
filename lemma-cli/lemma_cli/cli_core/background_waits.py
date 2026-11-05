@@ -104,7 +104,13 @@ def follow_background_waits(
         # The resumed run finished unwatched. Attaching would replay only its
         # ending, so read what it said instead.
         terminal = render(
-            _resumed_messages(conversations, conversation_id, after, status)
+            _resumed_messages(
+                conversations,
+                conversation_id,
+                after,
+                status,
+                output=conversation.get("output"),
+            )
         )
 
 
@@ -169,13 +175,20 @@ def _ending_status(terminal: StreamEvent | None) -> str | None:
 
 
 def _resumed_messages(
-    conversations: Any, conversation_id: str, after: int, status: str
+    conversations: Any,
+    conversation_id: str,
+    after: int,
+    status: str,
+    *,
+    output: Any = None,
 ) -> SseResponse:
     """The answer of runs that ended unwatched, as the frames a stream sends.
 
     Everything after ``after`` -- the newest message when the wait began -- is
     theirs. Played through the ordinary renderer, so text and `--output json`
-    read it as they would have read it live.
+    read it as they would have read it live -- the ending too, which carries
+    the conversation and the run's output as the server's own ``completed``
+    does, the output read off the conversation.
     """
     frames: list[dict[str, Any]] = []
     run_id: str | None = None
@@ -190,12 +203,14 @@ def _resumed_messages(
     elif status == "STOPPED":
         frames.append({"type": "stopped", "data": {"status": status}})
     else:
-        frames.append(
-            {
-                "type": "completed",
-                "data": {"status": status, "conversation_status": status},
-            }
-        )
+        ending: dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "status": status,
+            "conversation_status": status,
+        }
+        if output is not None:
+            ending["output_data"] = output
+        frames.append({"type": "completed", "data": ending})
     return _Replayed([{**frame, "agent_run_id": run_id} for frame in frames])
 
 

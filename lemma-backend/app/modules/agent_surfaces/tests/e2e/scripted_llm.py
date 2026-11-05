@@ -8,7 +8,7 @@ and never exercised real toolset resolution.
 
 This module instead scripts the LLM's *token source* only, via the same
 mechanism the general (non-surface) agent e2e suite already uses:
-``app.modules.agent.infrastructure.harnesses.mock_model.build_mock_model``
+``app.modules.agent.infrastructure.harness.lemma.mock_model.build_mock_model``
 reads a flat list of turns off ``conversation.metadata["mock_llm_script"]`` and
 returns a deterministic pydantic-ai ``FunctionModel``. The REST of the pipeline
 — toolset resolution, real tool execution (including ``ask_user``/
@@ -30,6 +30,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.test_support.e2e.scripted_model import tag_conversation
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     deliver_replies,
 )
@@ -38,13 +39,12 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.test_support.e2e.agent_work import run_approval_work
-from app.modules.agent.infrastructure.harnesses.mock_model import (
+from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import (
@@ -95,15 +95,12 @@ async def set_mock_llm_script(
 ) -> None:
     """Merge ``mock_llm_script`` onto a conversation's metadata.
 
-    Uses ``jsonb_set`` (via ``ConversationRepository.set_conversation_metadata_key``)
-    so sibling keys (``surface_platform``, ``surface_id``, etc.) are untouched.
+    Sibling tags are untouched.
     Must be called after the conversation exists (i.e. after
     ``prepare_ingress``/``execute_chat``) and before the run is driven.
     """
     uow = SqlAlchemyUnitOfWork(db_session)
-    await ConversationRepository(uow).set_conversation_metadata_key(
-        conversation_id, MOCK_SCRIPT_METADATA_KEY, script
-    )
+    await tag_conversation(uow, conversation_id, MOCK_SCRIPT_METADATA_KEY, script)
     await db_session.commit()
 
 
@@ -124,7 +121,7 @@ def record_model_requests(monkeypatch) -> list[dict]:
     import pydantic_core
     from pydantic_ai.models.function import FunctionModel
 
-    from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness
+    from app.modules.agent.infrastructure.harness.lemma import harness
 
     seen: list[dict] = []
     original = harness.build_mock_model

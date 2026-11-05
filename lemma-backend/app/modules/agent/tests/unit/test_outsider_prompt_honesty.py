@@ -23,14 +23,15 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.capabilities.assembler import _instructions_for
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.surface_prompts import surface_platform_guidance
-from app.modules.agent.services.outsider_brief import render_outsider_brief
-from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
-from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
+from app.modules.agent.domain.prompt.surface import surface_platform_guidance
+from app.modules.agent.domain.prompt.templates import (
+    build_agent_instructions,
+    toolset_instructions,
+)
+from app.modules.agent.domain.tools import ToolGroup
+from app.modules.agent.services.context_brief.outsider import render_outsider_brief
 
 pytestmark = pytest.mark.unit
 
@@ -89,10 +90,10 @@ def test_a_members_prompt_still_has_its_folder_and_tools():
     assert "You cannot save, change, delete or send anything" not in text
 
 
-@pytest.mark.parametrize("toolset", [pod_toolset, messaging_toolset])
-def test_a_guests_run_is_not_given_the_guidance_for_tools_it_lacks(toolset):
-    assert _instructions_for(toolset, answers_outsider=True) is None
-    assert _instructions_for(toolset, answers_outsider=False) is not None
+@pytest.mark.parametrize("group", [ToolGroup.POD, ToolGroup.MESSAGING])
+def test_a_guests_run_is_not_given_the_guidance_for_tools_it_lacks(group):
+    assert toolset_instructions(group, answers_outsider=True) is None
+    assert toolset_instructions(group, answers_outsider=False) is not None
 
 
 def test_the_chat_platforms_delivery_tools_are_not_offered_to_a_guest():

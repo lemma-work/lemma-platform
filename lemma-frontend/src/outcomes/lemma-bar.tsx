@@ -85,7 +85,7 @@ export function LemmaActions({ pod, go, actions, newChat = true }: {
                 <summary aria-label={`More for ${pod.name}`} title="More"><Icon name="more" size={16} /></summary>
                 <div className="ox-more__menu" role="menu">
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.addPeople(pod.id); }}>Who has access</button>
-                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where people reach it</button>
+                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where it answers</button>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.share(pod.id); }}>Share or export</button>
                     <a role="menuitem" {...to({ name: "computer", podId: pod.id, conversationId: null }, go)} onClick={(event) => { closeMenu(event); to({ name: "computer", podId: pod.id, conversationId: null }, go).onClick(event); }}>Its computer</a>
                 </div>

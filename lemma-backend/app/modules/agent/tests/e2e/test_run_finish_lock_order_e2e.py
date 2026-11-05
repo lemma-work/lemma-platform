@@ -27,9 +27,8 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
-from app.modules.agent.infrastructure.repositories.conversation_repository import (
-    ConversationRepository,
-)
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e.waiters import eventually
 
@@ -70,21 +69,21 @@ async def _blocked_on_conversations() -> int:
 
 
 async def _in_own_transaction(
-    work: Callable[[ConversationRepository], Awaitable[object]],
+    work: Callable[[Runs], Awaitable[object]],
 ) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await work(ConversationRepository(uow))
+        await work(Runs(uow))
         await uow.commit()
 
 
-async def _finish(repository: ConversationRepository, run_id: UUID) -> None:
+async def _finish(repository: Runs, run_id: UUID) -> None:
     """What the runner's finalizer does when a run pauses on an approval."""
     await repository.finish_agent_run(
         agent_run_id=run_id, status=AgentRunStatus.COMPLETED
     )
 
 
-async def _stop(repository: ConversationRepository, conversation_id: UUID) -> None:
+async def _stop(repository: Runs, conversation_id: UUID) -> None:
     """What Stop does: take the active run, then ask it to stop."""
     active = await repository.get_active_agent_run_for_update(conversation_id)
     assert active is not None
@@ -100,9 +99,10 @@ async def test_a_turn_holding_the_conversation_and_a_run_ending_do_not_deadlock(
     conversation_id, run_id = await _running_run(db_session, scenario)
 
     async with create_uow_from_session_maker(async_session_maker) as turn:
-        resume = ConversationRepository(turn)
+        conversations = Conversations(turn)
+        runs = Runs(turn)
         # What `start_resume_run_if_ready` does first.
-        await resume.lock_conversation(conversation_id)
+        await conversations.lock_conversation(conversation_id)
 
         ending = asyncio.create_task(
             _in_own_transaction(
@@ -121,7 +121,7 @@ async def test_a_turn_holding_the_conversation_and_a_run_ending_do_not_deadlock(
         # ...and then what it does next. Under the old order the other side
         # already held this row, and Postgres aborted one of the two here.
         active = await asyncio.wait_for(
-            resume.get_active_agent_run_for_update(conversation_id), timeout=30
+            runs.get_active_agent_run_for_update(conversation_id), timeout=30
         )
         assert active is not None and active.id == run_id
         await turn.commit()

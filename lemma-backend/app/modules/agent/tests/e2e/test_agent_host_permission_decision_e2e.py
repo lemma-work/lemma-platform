@@ -16,17 +16,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostRunState,
 )
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host.domain.permissions import (
     permission_approval_events,
     permission_approval_tool_call_id,
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.models import MessageModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
@@ -66,7 +66,7 @@ async def _parked_permission(db_session, scenario) -> tuple[UUID, UUID]:
         )
         if event.type is AgentEventType.MESSAGE
     )
-    await ConversationRepository(SqlAlchemyUnitOfWork(db_session)).append_message(
+    await Messages(SqlAlchemyUnitOfWork(db_session)).append_message(
         conversation_id=conversation_id, agent_run_id=run_id, draft=call.data
     )
     await db_session.commit()
@@ -117,7 +117,7 @@ async def test_a_decision_the_host_cannot_be_given_is_not_written_either(
     # The database half of the decision fails, the way a connection dropping
     # mid-transaction does; everything the request runs through stays real.
     monkeypatch.setattr(
-        "app.modules.agent.infrastructure.agent_host.dispatch_repository."
+        "app.modules.agent.agent_host.control.dispatch_repository."
         "AgentHostDispatchRepository.enqueue_permission_decision",
         _unavailable,
     )

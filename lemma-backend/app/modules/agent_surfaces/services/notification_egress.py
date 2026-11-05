@@ -21,10 +21,14 @@ from uuid import UUID
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
+from app.modules.agent_surfaces.domain.conversation_surface import (
+    ConversationSurface,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
+)
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
     SurfaceNotificationEgressPort,
@@ -32,7 +36,10 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.domain.external_accounts import account_of
-from app.modules.agent_surfaces.services.channel_places import ChannelSeats
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeats,
+    find_or_open,
+)
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
     Outbound,
@@ -236,24 +243,24 @@ class NotificationEgress:
             if channel.source is not None
             else await self.seats.direct_channel(pod_id=pod_id, user_id=recipient)
         )
-        agent_id = channel.surface.agent_id
-        await self.seats.lock_person(
+
+        async def theirs(found: UUID) -> UUID:
+            return found
+
+        async def opening() -> UUID | None:
+            return await self.open_conversation(
+                channel, outbound=outbound, channel_id=channel_id
+            )
+
+        return await find_or_open(
+            self.seats,
             channel_id=channel_id,
             pod_id=pod_id,
-            agent_id=agent_id,
-            person_id=recipient,
-        )
-        found = await self.seats.conversation_in_channel(
-            channel_id=channel_id,
-            pod_id=pod_id,
-            agent_id=agent_id,
+            agent_id=channel.surface.agent_id,
             user_id=recipient,
             contact_id=None,
-        )
-        if found is not None:
-            return found
-        return await self.open_conversation(
-            channel, outbound=outbound, channel_id=channel_id
+            found=theirs,
+            opening=opening,
         )
 
     async def persist_outbound(
@@ -292,17 +299,19 @@ class NotificationEgress:
             user_id=outbound.recipient_user_id,
             channel_id=channel_id,
             title=outbound.title,
-            metadata={
-                "source": "notification",
-                "channel_message_id": str(outbound.id),
-                "surface_id": str(surface.id),
-                "surface_platform": surface.surface_type.value,
-                "external_user_id": channel.external_user_id,
-                "conversation_kind": (
-                    "EMAIL" if surface.surface_type.is_email else "DM"
-                ),
-            },
+            metadata={"channel_message_id": str(outbound.id)},
             require_execute_grant=False,
+            for_notification=True,
+            started_on=surface.surface_type.value,
+        )
+        await ConversationSurfaces(self.uow).record_place(
+            conversation.id,
+            ConversationSurface(
+                surface_id=surface.id,
+                surface_platform=surface.surface_type.value,
+                external_user_id=channel.external_user_id,
+                conversation_kind="EMAIL" if surface.surface_type.is_email else "DM",
+            ),
         )
         return conversation.id
 

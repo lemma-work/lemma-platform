@@ -28,6 +28,9 @@ class WorkflowModel(UUIDAuditBase):
     """Workflow definitions table."""
 
     __tablename__ = "workflow_flows"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "pod_id"
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_workflow_flow_pod_name"),
         Index("ix_workflow_flow_pod_name", "pod_id", "name"),

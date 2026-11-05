@@ -19,7 +19,7 @@ bug nobody connects to the rename.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import hex_digest_signature_matches
@@ -62,17 +62,47 @@ _PULL_REQUEST_EVENTS = frozenset(
 )
 
 
+def _mapping(value: object) -> Mapping[str, object]:
+    """Treat malformed nested webhook objects as absent, not as exceptions."""
+    return value if isinstance(value, dict) else {}
+
+
+def _required_text(value: object) -> str | None:
+    """Return a nonblank string identity component without coercing other types."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _required_id(value: object) -> str | None:
+    """Accept GitHub's integer IDs (or nonblank string forms), never bool/None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value) if value > 0 else None
+    return _required_text(value)
+
+
 def _push_key(payload: WebhookPayload) -> str | None:
-    # `after` is the commit the ref now points at: the same push redelivered
-    # names the same commit, and a force-push to a different one is a different
-    # event that should fire again.
-    return payload.get("after")
+    # A push is a ref transition, not just a commit. Two branches can point at
+    # the same `after` SHA, and the same ref can reach that SHA from different
+    # prior tips. Include all three required GitHub fields so distinct pushes
+    # remain distinct while a redelivery of one transition stays idempotent.
+    ref = _required_text(payload.get("ref"))
+    before = _required_text(payload.get("before"))
+    after = _required_text(payload.get("after"))
+    if not all((ref, before, after)):
+        return None
+    return f"{ref}:{before}:{after}"
 
 
 def _pull_request_key(payload: WebhookPayload) -> str | None:
-    pull_request = payload.get("pull_request") or {}
-    head_sha = (pull_request.get("head") or {}).get("sha")
-    return f"{pull_request.get('id')}:{payload.get('action')}:{head_sha}"
+    pull_request = _mapping(payload.get("pull_request"))
+    head = _mapping(pull_request.get("head"))
+    pull_request_id = _required_id(pull_request.get("id"))
+    action = _required_text(payload.get("action"))
+    head_sha = _required_text(head.get("sha"))
+    if not all((pull_request_id, action, head_sha)):
+        return None
+    return f"{pull_request_id}:{action}:{head_sha}"
 
 
 def _review_key(payload: WebhookPayload) -> str | None:
@@ -80,34 +110,73 @@ def _review_key(payload: WebhookPayload) -> str | None:
     # any number of times, and the body is the only thing an edit changes -- a
     # review carries no `updated_at`. Without it the second edit would collapse
     # onto the first and never fire.
-    review = payload.get("review") or {}
-    return (
-        f"{review.get('id')}:{payload.get('action')}:{review.get('state')}"
-        f":{review.get('body')}"
-    )
+    review = _mapping(payload.get("review"))
+    review_id = _required_id(review.get("id"))
+    action = _required_text(payload.get("action"))
+    state = _required_text(review.get("state"))
+    body = review.get("body")
+    if not all((review_id, action, state)) or (
+        body is not None and not isinstance(body, str)
+    ):
+        return None
+    return f"{review_id}:{action}:{state}:{body}"
 
 
 def _review_comment_key(payload: WebhookPayload) -> str | None:
     # `updated_at` moves on every edit, so each edit is its own event, while a
     # redelivery -- the same payload, byte for byte -- names the same instant.
-    comment = payload.get("comment") or {}
-    return f"{comment.get('id')}:{payload.get('action')}:{comment.get('updated_at')}"
+    comment = _mapping(payload.get("comment"))
+    comment_id = _required_id(comment.get("id"))
+    action = _required_text(payload.get("action"))
+    updated_at = _required_text(comment.get("updated_at"))
+    if not all((comment_id, action, updated_at)):
+        return None
+    return f"{comment_id}:{action}:{updated_at}"
 
 
 def _issue_key(payload: WebhookPayload) -> str | None:
-    # `issue_comment` carries both; the comment is the thing that happened.
-    subject = payload.get("comment") or payload.get("issue") or {}
-    return f"{subject.get('id')}:{payload.get('action')}"
+    issue = _mapping(payload.get("issue"))
+    issue_id = _required_id(issue.get("id"))
+    action = _required_text(payload.get("action"))
+    if not issue_id or not action:
+        return None
+    return f"{issue_id}:{action}"
+
+
+def _issue_comment_key(payload: WebhookPayload) -> str | None:
+    comment = _mapping(payload.get("comment"))
+    comment_id = _required_id(comment.get("id"))
+    action = _required_text(payload.get("action"))
+    if not comment_id or not action:
+        return None
+    return f"{comment_id}:{action}"
 
 
 def _workflow_run_key(payload: WebhookPayload) -> str | None:
-    run = payload.get("workflow_run") or {}
-    return f"{run.get('id')}:{run.get('status')}"
+    # "Re-run jobs" keeps the run's id and walks it through requested,
+    # in_progress and completed again; `run_attempt` is what tells the second
+    # completion from a redelivery of the first.
+    run = _mapping(payload.get("workflow_run"))
+    run_id = _required_id(run.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(run.get("status"))
+    if not all((run_id, action, status)):
+        return None
+    return f"{run_id}:{run.get('run_attempt')}:{action}:{status}"
 
 
 def _check_suite_key(payload: WebhookPayload) -> str | None:
-    suite = payload.get("check_suite") or {}
-    return f"{suite.get('id')}:{suite.get('status')}"
+    suite = _mapping(payload.get("check_suite"))
+    suite_id = _required_id(suite.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(suite.get("status"))
+    updated_at = _required_text(suite.get("updated_at"))
+    if not all((suite_id, action, status, updated_at)):
+        return None
+    # A GitHub App can receive requested/rerequested check_suite actions. A
+    # rerequest resets status to queued on the same suite id; updated_at moves
+    # for each new request, while a redelivery carries the same timestamp.
+    return f"{suite_id}:{action}:{status}:{suite.get('conclusion')}:{updated_at}"
 
 
 def _check_run_key(payload: WebhookPayload) -> str | None:
@@ -118,17 +187,26 @@ def _check_run_key(payload: WebhookPayload) -> str | None:
     # An App may also re-run a check in place, and it can finish with the
     # conclusion it had before; `completed_at` is what tells that second
     # completion from a redelivery of the first.
-    run = payload.get("check_run") or {}
-    button = (payload.get("requested_action") or {}).get("identifier")
+    run = _mapping(payload.get("check_run"))
+    run_id = _required_id(run.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(run.get("status"))
+    if not all((run_id, action, status)):
+        return None
+    button = _mapping(payload.get("requested_action")).get("identifier")
     return (
-        f"{run.get('id')}:{payload.get('action')}:{run.get('status')}"
+        f"{run_id}:{action}:{status}"
         f":{run.get('conclusion')}:{run.get('completed_at')}:{button}"
     )
 
 
 def _release_key(payload: WebhookPayload) -> str | None:
-    release = payload.get("release") or {}
-    return f"{release.get('id')}:{payload.get('action')}"
+    release = _mapping(payload.get("release"))
+    release_id = _required_id(release.get("id"))
+    action = _required_text(payload.get("action"))
+    if not release_id or not action:
+        return None
+    return f"{release_id}:{action}"
 
 
 # Dict dispatch rather than a chain of `if event == ...`: one function per event
@@ -140,7 +218,7 @@ _EVENT_KEYS: dict[str, Callable[[WebhookPayload], str | None]] = {
     "pull_request_review": _review_key,
     "pull_request_review_comment": _review_comment_key,
     "issues": _issue_key,
-    "issue_comment": _issue_key,
+    "issue_comment": _issue_comment_key,
     "workflow_run": _workflow_run_key,
     "check_suite": _check_suite_key,
     "check_run": _check_run_key,
@@ -168,10 +246,16 @@ def source_event_id(
     key = _EVENT_KEYS.get(event)
     if key is None:
         return None
+    normalized_installation = _required_id(installation_id)
+    normalized_repository = _required_id(repository_id)
+    if not normalized_installation or not normalized_repository:
+        return None
     event_key = key(payload)
     if not event_key:
         return None
-    material = f"github:{event}:{installation_id}:{repository_id}:{event_key}"
+    material = (
+        f"github:{event}:{normalized_installation}:{normalized_repository}:{event_key}"
+    )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 

@@ -355,7 +355,7 @@ function Inside({ pod, plan, queue, apps, chats, tables, go, actions }: {
         { key: "plan", icon: "skill", label: "Plan", count: lines || null, said: plan === undefined ? "" : lines ? `${counted(lines, "line")} in plan.md` : "Not written yet", open: { kind: "view", view: outcomeView(pod.id, "plan") } },
         { key: "people", icon: "agent", label: "People", count: pod.members.length || null, said: names(pod.members.map((member) => member.name)), open: { kind: "act", run: () => actions.addPeople(pod.id) } },
         { key: "connections", icon: "plug", label: "Connections", count: through.length || null, said: connectors.isSuccess ? (through.length ? names(through) : "None yet") : "", open: { kind: "view", view: outcomeView(pod.id, "settings", "connections") } },
-        { key: "reach", icon: "link", label: "Reached on", count: on.length || null, said: surfaces.isSuccess ? (places.length ? names(places) : "Only here, so far") : "", open: { kind: "act", run: () => actions.connect(pod.id) } },
+        { key: "reach", icon: "link", label: "Where it answers", count: on.length || null, said: surfaces.isSuccess ? (places.length ? names(places) : "Only here, so far") : "", open: { kind: "act", run: () => actions.connect(pod.id) } },
         { key: "settings", icon: "gear", label: "Settings", count: null, said: "", open: { kind: "view", view: outcomeView(pod.id, "settings") } },
     ];
 

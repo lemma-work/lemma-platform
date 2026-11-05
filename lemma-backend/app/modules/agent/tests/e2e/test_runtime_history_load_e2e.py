@@ -15,15 +15,15 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts.contact_conversations import hold_outside_turn
-from app.modules.agent.contracts.folded_history import fold_history
+from app.modules.agent.contracts.channels import hold_outside_turn
+from app.modules.agent.application.channels.fold import FoldConversations
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.infrastructure.db.history_reads import HistoryReads
+from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
     runtime_full_run_ids,
@@ -76,8 +76,8 @@ async def _seed(
     return run_ids
 
 
-def _repo(db_session) -> ConversationRepository:
-    return ConversationRepository(SqlAlchemyUnitOfWork(db_session))
+def _repo(db_session) -> HistoryReads:
+    return HistoryReads(SqlAlchemyUnitOfWork(db_session))
 
 
 async def _window(db_session, agent_run_id, *, limit=MAX_HISTORY_AGENT_RUNS):
@@ -399,7 +399,9 @@ async def test_what_a_merge_folded_in_is_loaded_under_a_bound_of_its_own(
         )
     )
     await db_session.flush()
-    await fold_history(SqlAlchemyUnitOfWork(db_session), lost, into=kept)
+    await FoldConversations.build(SqlAlchemyUnitOfWork(db_session)).fold(
+        lost, into=kept
+    )
 
     async def carried(
         *,
@@ -441,7 +443,7 @@ async def test_the_run_less_read_stops_at_its_bounds(db_session, scenario):
     included, on every run of a long-lived conversation."""
     from sqlalchemy import text, union_all
 
-    from app.modules.agent.infrastructure.runtime_history_queries import (
+    from app.modules.agent.infrastructure.db.history_reads import (
         _newest_unattached_ids,
     )
 

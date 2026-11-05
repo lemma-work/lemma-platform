@@ -14,15 +14,15 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
+from app.modules.test_support.group_sources import a_group
 from app.modules.agent_surfaces.services import link_nudges
 
 pytestmark = pytest.mark.unit
 
 
-def _group(*, platform: str = "TELEGRAM", owner: UUID | None = None) -> SurfaceGroup:
-    return SurfaceGroup(
-        id=uuid4(),
+def _group(*, platform: str = "TELEGRAM", owner: UUID | None = None) -> Source:
+    return a_group(
         channel_id=uuid4(),
         pod_id=uuid4(),
         surface_id=uuid4(),
@@ -76,7 +76,7 @@ class _Pod:
     async def notice(self, uow, **said):
         self.told.append(said)
 
-    async def nudge(self, group: SurfaceGroup, contact: UUID, name: str) -> None:
+    async def nudge(self, group: Source, contact: UUID, name: str) -> None:
         await link_nudges.nudge_lookalikes(
             _Uow(),
             group=group,
@@ -103,7 +103,7 @@ async def test_the_member_who_shares_the_newcomers_first_name_is_asked_once():
     ("group", "name"),
     [
         (_group(platform="SLACK"), "Anu"),
-        (SurfaceGroup(**{**_group().__dict__, "owner_user_id": None}), "Anu"),
+        (_group().model_copy(update={"owner_user_id": None}), "Anu"),
         (_group(), ""),
         (_group(), "Zed"),
     ],

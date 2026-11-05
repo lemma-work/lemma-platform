@@ -41,18 +41,41 @@ router = APIRouter(
 )
 
 
-def _response(service, setup) -> TelegramManagedBotSetupResponse:
+#: Statuses the sheet shows as an outcome -- the bot is live, or the reason it
+#: is not -- and never with the link to the manager bot.
+_FINISHED_STATUSES = frozenset({"COMPLETE", "FAILED"})
+
+
+async def _response(
+    service, setup, *, manager_username: str | None
+) -> TelegramManagedBotSetupResponse:
+    """One setup, as the sheet reads it.
+
+    ``manager_username`` is what `TelegramManagerService.manager_username`
+    answered, resolved once by the caller: it is both what the link points at
+    and what the sheet names, and two answers there would send somebody to a
+    bot the page did not name.
+
+    Only a setup the person is still finishing in Telegram needs that link. A
+    finished one is answered without it when no username can be found, so the
+    person waiting sees their bot go live, or why it did not, rather than a 503.
+    """
+    launch_url = (
+        ""
+        if not manager_username and setup.status.value in _FINISHED_STATUSES
+        else service.launch_url(setup, manager_username=manager_username)
+    )
     return TelegramManagedBotSetupResponse(
         setup_id=setup.setup_id,
         status=setup.status.value,
-        launch_url=service.launch_url(setup),
-        manager_bot_username=service.manager_username,
+        launch_url=launch_url,
+        manager_bot_username=manager_username or "",
         expires_at=setup.expires_at.isoformat(),
         pod_connector=setup.pod_connector_slug,
         surface_id=setup.surface_id,
         bot_username=setup.bot_username,
         bot_launch_url=(
-            service.bot_launch_url(setup)
+            await service.bot_launch_url(setup)
             if setup.status.value == "COMPLETE" and setup.bot_username
             else None
         ),
@@ -81,9 +104,7 @@ async def start_telegram_managed_bot_setup(
         raise AgentSurfaceAlreadyExistsError(surface_name)
 
     agent_name_id = (
-        await agent_id_for_name(
-            uow.session, pod_id=pod_id, name=request.default_agent_name
-        )
+        await agent_id_for_name(uow, pod_id=pod_id, name=request.default_agent_name)
         if request.default_agent_name
         else None
     )
@@ -112,11 +133,16 @@ async def start_telegram_managed_bot_setup(
         app_name=request.config.telegram.app_name,
         ctx=ctx,
     )
-    # Every read above is done, and `start_setup` is Redis only -- its store
-    # (`TelegramManagedBotSetupStore`) speaks to Redis and nothing else. So the
-    # pooled connection goes back before the setup allocation, which retries up
-    # to five times against Redis to find a free setup id.
+    # Every read above is done, and what follows is Telegram and Redis only --
+    # `start_setup`'s store (`TelegramManagedBotSetupStore`) speaks to Redis and
+    # nothing else. So the pooled connection goes back before the username
+    # lookup and the setup allocation, which retries up to five times against
+    # Redis to find a free setup id.
     async with connection_released(uow.session):
+        # Asked before the setup is claimed, and handed to `start_setup`, which
+        # refuses without one rather than claim this surface for a setup that
+        # has no bot to send anybody to.
+        manager_username = await service.manager_username()
         setup = await service.start_setup(
             user_id=user.id,
             organization_id=organization_id,
@@ -126,8 +152,9 @@ async def start_telegram_managed_bot_setup(
             surface_config=surface_config,
             is_enabled=request.is_enabled,
             pod_name=pod_name,
+            manager_username=manager_username,
         )
-    return _response(service, setup)
+    return await _response(service, setup, manager_username=manager_username)
 
 
 @router.get(
@@ -146,4 +173,6 @@ async def get_telegram_managed_bot_setup(
         user_id=user.id,
         pod_id=pod_id,
     )
-    return _response(service, setup)
+    return await _response(
+        service, setup, manager_username=await service.manager_username()
+    )

@@ -16,11 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
-    AgentWaitType,
-    AgentWaitWakeReason,
-)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.wait import AgentWaitType, AgentWaitWakeReason
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +49,7 @@ UNREADABLE_GRACE_SECONDS = 5 * 60
 
 
 def decide_wait(
-    wait: AgentConversationWaitEntity,
+    wait: Pause,
     *,
     target_reason: AgentWaitWakeReason | None,
     now: datetime,
@@ -92,7 +89,7 @@ def decide_wait(
     return LookAgainAt(min(deadline, now + timedelta(seconds=poll_delay_seconds)))
 
 
-def deadline_of(wait: AgentConversationWaitEntity, *, fallback: datetime) -> datetime:
+def deadline_of(wait: Pause, *, fallback: datetime) -> datetime:
     """When this wait gives up, from its spec; ``fallback`` if it cannot say.
 
     A row written before deadlines existed, or with an unparseable one, is not
@@ -100,4 +97,5 @@ def deadline_of(wait: AgentConversationWaitEntity, *, fallback: datetime) -> dat
     agent told its wait expired can check and carry on, while one that is never
     woken is simply lost.
     """
-    return wait.wait_spec.deadline_at or fallback
+    deadline = wait.wait_spec.deadline_at if wait.wait_spec else None
+    return deadline or fallback

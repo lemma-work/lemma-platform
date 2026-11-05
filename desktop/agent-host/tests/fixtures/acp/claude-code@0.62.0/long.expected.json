@@ -1,0 +1,318 @@
+[
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "commands": [
+        "recorded"
+      ]
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 31639,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7eVecDtagYRq6DDk6m",
+    "payload": {
+      "text": "Running the shell s"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7eVecDtagYRq6DDk6m",
+    "payload": {
+      "text": "leep in"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7eVecDtagYRq6DDk6m",
+    "payload": {
+      "text": " the foreground now."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01Bt4H8zGFHAPasCaj1eSH18",
+    "payload": {
+      "input": {
+        "cmd": "python3 -c \"import time; time.sleep(35)\"; echo slept",
+        "description": "Sleep 35 seconds then print slept"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "python3 -c \"import time; time.sleep(35)\"; echo slept",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 31752,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_01Bt4H8zGFHAPasCaj1eSH18",
+    "payload": {
+      "input": {
+        "cmd": "python3 -c \"import time; time.sleep(35)\"; echo slept",
+        "description": "Sleep 35 seconds then print slept"
+      },
+      "tool": {
+        "name": "exec_command",
+        "source": "native",
+        "server": null,
+        "title": "python3 -c \"import time; time.sleep(35)\"; echo slept",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 31752,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01Bt4H8zGFHAPasCaj1eSH18",
+    "payload": {
+      "error": null,
+      "output": {
+        "stdout": "slept"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 32197,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7hNAEzPmAALupxg1eN",
+    "payload": {
+      "text": "Step 1 fin"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7hNAEzPmAALupxg1eN",
+    "payload": {
+      "text": "ished. Lo"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7hNAEzPmAALupxg1eN",
+    "payload": {
+      "text": "ading the MCP tool sch"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7hNAEzPmAALupxg1eN",
+    "payload": {
+      "text": "ema next"
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7hNAEzPmAALupxg1eN",
+    "payload": {
+      "text": "."
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01Q7DAzGkZXz7NomXZkaZpsS",
+    "payload": {
+      "input": {
+        "query": "select:mcp__lemma_tools__lemma_exec_command",
+        "max_results": 1
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "tool_search",
+        "source": "native",
+        "server": null,
+        "title": "ToolSearch",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 32268,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 32268,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01Q7DAzGkZXz7NomXZkaZpsS",
+    "payload": {
+      "error": null,
+      "output": {
+        "output": "Tool: mcp__lemma_tools__lemma_exec_command"
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 32451,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call",
+    "object_id": "toolu_01GqLAe7Zukc6Ypudxepabhn",
+    "payload": {
+      "input": {
+        "cmd": "sleep 65"
+      },
+      "parent_call_id": null,
+      "tool": {
+        "name": "exec_command",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp__lemma_tools__lemma_exec_command",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "permission_request",
+    "object_id": "toolu_01GqLAe7Zukc6Ypudxepabhn",
+    "payload": {
+      "input": {
+        "cmd": "sleep 65"
+      },
+      "tool": {
+        "name": "exec_command",
+        "source": "lemma",
+        "server": null,
+        "title": "mcp__lemma_tools__lemma_exec_command",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 32488,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "tool_call_result",
+    "object_id": "toolu_01GqLAe7Zukc6Ypudxepabhn",
+    "payload": {
+      "error": null,
+      "output": {
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "status": "completed"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 32542,
+        "size": 200000,
+        "cost": null
+      }
+    }
+  },
+  {
+    "type": "agent_message_chunk",
+    "object_id": "msg_011CgU7nQ6TQDA1iBqgVhkcu",
+    "payload": {
+      "text": "done"
+    }
+  },
+  {
+    "type": "session_update",
+    "object_id": null,
+    "payload": {
+      "context": {
+        "used": 32542,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.4595425,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  {
+    "type": "usage",
+    "object_id": null,
+    "payload": {
+      "cached_input_tokens": 107838,
+      "input_tokens": 98,
+      "output_tokens": 306,
+      "total_tokens": 129050
+    }
+  }
+]

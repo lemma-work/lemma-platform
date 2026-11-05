@@ -30,6 +30,7 @@ from app.modules.channels.domain.entities import (
     Principal,
     Question,
     SeatedBy,
+    Sender,
     SenderKind,
 )
 from app.modules.channels.infrastructure.cases import CaseRepository
@@ -48,6 +49,7 @@ from app.modules.channels.infrastructure.questions import (
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.revisions import holding
 from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.channels.infrastructure.taken_up import answered_in
 
 
 class ChannelNotFound(LookupError):
@@ -94,9 +96,8 @@ class Timeline:
             except LookupError as gone:
                 raise ChannelNotFound(str(gone)) from gone
             question = await self._ask(channel, message, post.question)
-            # Heard again, perhaps now knowing who said it: they are seated.
-            await self._seat(channel, message)
             if written:
+                await self._seat(channel, message)
                 await self._name(channel, message, post)
                 await self._move_contact(channel, message)
         # Read against the head just written: their own line is read.
@@ -123,6 +124,33 @@ class Timeline:
             ),
         )
         return message.model_copy(update={"question": question})
+
+    async def answered_in(
+        self,
+        channel: Channel,
+        *,
+        source_id: UUID,
+        external_message_id: str,
+        conversation_id: UUID,
+        sender: Sender,
+    ) -> ChannelMessage | None:
+        """A platform message written as it arrived, now taken up by a
+        conversation (``infrastructure.taken_up``) -- and whoever the turn
+        named as its speaker seated, as a post seats whoever speaks. Nothing
+        else of a post follows: the line was told, delivered and announced
+        when it was written. ``None`` for a message that is no line here."""
+        message = await answered_in(
+            self.session,
+            source_id,
+            external_message_id,
+            conversation_id=conversation_id,
+            sender=sender,
+        )
+        if message is None:
+            return None
+        await self._seat(channel, message)
+        await self._read_own(channel, message)
+        return message
 
     async def _in_place(self, channel: Channel, post: Post) -> None:
         """Every place the line goes to is of this channel. Its thread, the

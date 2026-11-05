@@ -2,9 +2,9 @@
 
 Approve on the phone and Deny in the browser, or two taps on one card, arrive
 as two requests that both read "no decision yet" before either has written
-one. The database arbitrates -- a unique row per approval, inserted with
-``ON CONFLICT DO NOTHING`` -- and the request that loses has to adopt the
-winner's decision rather than act on its own. Acting on its own is the costly
+one. The database arbitrates -- the pause is ended by an UPDATE fenced on its
+PENDING status -- and the request that loses has to adopt the winner's
+decision rather than act on its own. Acting on its own is the costly
 failure: an approved card runs the wrapped tool, so a loser that believed its
 "approve" would delete the record a winning "deny" had just refused.
 
@@ -29,10 +29,9 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageKind,
 )
-from app.modules.agent.infrastructure.models.approval import (
-    AgentApprovalDecisionModel,
-)
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.domain.pauses import DECIDED
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.models import AgentPauseModel
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     RECORD_DELETE_REFUSALS,
     Seeded,
@@ -109,9 +108,9 @@ async def _decisions_recorded(seeded: Seeded, approval_id: str) -> int:
         return (
             await session.execute(
                 select(func.count()).where(
-                    AgentApprovalDecisionModel.conversation_id
-                    == seeded.conversation_id,
-                    AgentApprovalDecisionModel.approval_id == approval_id,
+                    AgentPauseModel.conversation_id == seeded.conversation_id,
+                    AgentPauseModel.tool_call_id == approval_id,
+                    AgentPauseModel.status.in_(DECIDED),
                 )
             )
         ).scalar_one()
@@ -176,7 +175,7 @@ async def test_approve_and_deny_at_once_settle_on_one_decision(scenario) -> None
 
 
 async def _blocked_on_the_decision_row() -> int:
-    """Backends waiting for another transaction's insert into the decision table."""
+    """Backends waiting for another transaction's write of the pause."""
     async with async_session_maker() as session:
         return (
             await session.execute(
@@ -184,7 +183,7 @@ async def _blocked_on_the_decision_row() -> int:
                     "SELECT count(*) FROM pg_stat_activity "
                     "WHERE datname = current_database() "
                     "AND wait_event_type = 'Lock' "
-                    "AND query ILIKE '%agent_approval_decisions%'"
+                    "AND query ILIKE '%agent_pauses%'"
                 )
             )
         ).scalar_one()
@@ -196,22 +195,19 @@ async def test_requests_that_lose_the_race_adopt_the_winning_decision(
     """The losing branch, made certain rather than likely.
 
     A third resolver -- a platform tap, say -- has inserted DENY and not yet
-    committed. Two Approve clicks read no decision, reach the insert, and wait
-    on its row. When the deny commits, both inserts find the conflict, and both
-    must report and act on DENY: nothing deleted, the card answered once.
+    committed. Two Approve clicks read no decision, reach the fenced UPDATE, and
+    wait on its row. When the deny commits, both find it no longer PENDING, and
+    both must report and act on DENY: nothing deleted, the card answered once.
     """
     seeded, paused, approval_id = await _paused_on_a_delete(scenario)
     async with create_uow_from_session_maker(async_session_maker) as tap:
-        recorded = await ConversationRepository(tap).record_approval_decision(
-            conversation_id=seeded.conversation_id,
-            approval_id=approval_id,
-            agent_run_id=paused,
-            tool_name="pod_write_record",
-            decision=AgentRunApprovalDecision.DENY,
-            response={},
-            resolved_by_user_id=seeded.user_id,
+        pauses = Pauses(tap)
+        pause = await pauses.get(
+            conversation_id=seeded.conversation_id, tool_call_id=approval_id
         )
-        assert recorded is True
+        assert pause is not None
+        pause.resolve(AgentRunApprovalDecision.DENY, by=seeded.user_id)
+        assert await pauses.save(pause) is True
         clicks = [
             asyncio.create_task(
                 _decide(

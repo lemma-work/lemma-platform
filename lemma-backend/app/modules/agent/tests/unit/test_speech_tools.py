@@ -6,17 +6,19 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
-import app.modules.agent.tools.speech.speech as speech_module
-from app.modules.agent.tools.speech.models import (
+import app.modules.agent.infrastructure.tools.speech.speech as speech_module
+from app.modules.agent.infrastructure.tools.speech.models import (
     ListenRequest,
     SayRequest,
 )
-from app.modules.agent.tools.speech.provider import (
+from app.modules.agent.infrastructure.tools.speech.provider import (
     SpeechProviderName,
     TranscriptionResult,
     get_speech_provider,
 )
-from app.modules.agent.tools.speech.deepgram_provider import DeepgramSpeechProvider
+from app.modules.agent.infrastructure.tools.speech.deepgram_provider import (
+    DeepgramSpeechProvider,
+)
 
 
 class _StubProvider:
@@ -247,7 +249,9 @@ async def test_say_requires_text():
 
 def test_stt_defaults_to_multilingual_not_single_language(monkeypatch):
     from app.modules.agent.config import agent_settings
-    from app.modules.agent.tools.speech.deepgram_provider import _language_params
+    from app.modules.agent.infrastructure.tools.speech.deepgram_provider import (
+        _language_params,
+    )
 
     monkeypatch.setattr(agent_settings, "speech_stt_language", "multi")
     # A voice note that switches languages mid-sentence must not be forced into
@@ -258,14 +262,18 @@ def test_stt_defaults_to_multilingual_not_single_language(monkeypatch):
 
 def test_stt_auto_setting_uses_whole_file_detection(monkeypatch):
     from app.modules.agent.config import agent_settings
-    from app.modules.agent.tools.speech.deepgram_provider import _language_params
+    from app.modules.agent.infrastructure.tools.speech.deepgram_provider import (
+        _language_params,
+    )
 
     monkeypatch.setattr(agent_settings, "speech_stt_language", "auto")
     assert _language_params(None) == {"detect_language": "true"}
 
 
 def test_detected_language_falls_back_to_word_tags():
-    from app.modules.agent.tools.speech.deepgram_provider import _parse_transcription
+    from app.modules.agent.infrastructure.tools.speech.deepgram_provider import (
+        _parse_transcription,
+    )
 
     # Multilingual code-switching tags words, not the channel.
     result = _parse_transcription(
@@ -295,7 +303,9 @@ def test_detected_language_falls_back_to_word_tags():
 
 
 def test_detected_language_prefers_channel_when_present():
-    from app.modules.agent.tools.speech.deepgram_provider import _parse_transcription
+    from app.modules.agent.infrastructure.tools.speech.deepgram_provider import (
+        _parse_transcription,
+    )
 
     result = _parse_transcription(
         {
@@ -315,7 +325,9 @@ def test_detected_language_prefers_channel_when_present():
 
 def test_opus_bitrate_is_raised_off_deepgrams_12k_default(monkeypatch):
     from app.modules.agent.config import agent_settings
-    from app.modules.agent.tools.speech.deepgram_provider import _bitrate_for
+    from app.modules.agent.infrastructure.tools.speech.deepgram_provider import (
+        _bitrate_for,
+    )
 
     monkeypatch.setattr(agent_settings, "speech_tts_bitrate", 48000)
     # Opus is what every native voice note is encoded as; Deepgram's own
@@ -336,7 +348,9 @@ def test_voice_follows_the_language_being_spoken():
     fallback — the same one-per-language map that used to be the whole story —
     because a unit test must not depend on a provider being reachable.
     """
-    from app.modules.agent.tools.speech.voice_catalogue import default_voice_for
+    from app.modules.agent.infrastructure.tools.speech.voice_catalogue import (
+        default_voice_for,
+    )
 
     assert default_voice_for("es", ()) == "aura-2-celeste-es"
     assert default_voice_for("ja-JP", ()) == "aura-2-uzume-ja"
@@ -348,7 +362,10 @@ def test_voice_follows_the_language_being_spoken():
 
 def test_the_catalogue_beats_the_fallback_when_it_is_available():
     """The map exists for when the provider cannot be read, and only then."""
-    from app.modules.agent.tools.speech.voice_catalogue import Voice, default_voice_for
+    from app.modules.agent.infrastructure.tools.speech.voice_catalogue import (
+        Voice,
+        default_voice_for,
+    )
 
     catalogue = (Voice(name="aura-2-someone-es", languages=("es-419",)),)
 

@@ -256,7 +256,7 @@ test("a bare space address filled in with the restored view replaces", () => {
 });
 
 test("a channel rebuilds from its id alone, named until its page reads it", () => {
-    assert.deepEqual(tabFromId("channel:7f3c9a2e"), { id: "channel:7f3c9a2e", kind: "channel", label: "Channel", channelId: "7f3c9a2e" });
+    assert.deepEqual(tabFromId("channel:7f3c9a2e"), { id: "channel:7f3c9a2e", kind: "channel", label: "Chat", channelId: "7f3c9a2e" });
     assert.equal(tabFromId("channel:"), null);
     // A channel's address is one id and nothing after it.
     assert.deepEqual(readAddress("/t/" + POD + "/channel"), at(null));

@@ -687,12 +687,13 @@ export function isChat(conversation: Pick<ConversationRef, "origin" | "waitingOn
     return CHAT_ORIGINS.has(conversation.origin?.kind ?? "chat");
 }
 
-/** Someone's own chat with a Lemma, named by where they reach it
- *  ("WhatsApp"), or "Notices" when it only sends them things. Its glyph
- *  already says it is theirs, and a person never reads "line" or "channel"
+/** Someone's own chat with a Lemma, named for what it is: theirs, on the
+ *  platforms it comes through ("Your chat on WhatsApp"), or "Notices" when
+ *  it only sends them things. Called just "Email" beside chats with names,
+ *  it read as an inbox; and a person never reads "line" or "channel"
  *  (`tests/outcomes-copy.test.ts`). */
 export function lineTitle(platforms: string): string {
-    return platforms;
+    return platforms === "Notices" ? "Notices" : `Your chat on ${platforms}`;
 }
 
 function timeOf(iso: string | null | undefined): number | null {

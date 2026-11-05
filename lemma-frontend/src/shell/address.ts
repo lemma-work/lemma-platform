@@ -271,9 +271,9 @@ export function tabFromId(tabId: string): Tab | null {
     }
     if (tabId.startsWith("channel:")) {
         const channelId = tabId.slice("channel:".length);
-        /* Named "Channel" until the page has read it and says what it is
+        /* Named "Chat" until the page has read it and says what it is
            called. */
-        return channelId ? { id: tabId, kind: "channel", label: "Channel", channelId } : null;
+        return channelId ? { id: tabId, kind: "channel", label: "Chat", channelId } : null;
     }
     if (tabId.startsWith("run:")) {
         const runId = tabId.slice("run:".length);

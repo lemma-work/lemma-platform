@@ -40,11 +40,7 @@ from app.core.domain.errors import BadRequestError, DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    ConversationRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.turns.stop import StopConversation
 from app.modules.agent.infrastructure.pod_link_queries import (
     LinkRow,
     PodLinkQueries,
@@ -54,7 +50,6 @@ from app.modules.identity.contracts.profiles import UserProfileRef, user_profile
 from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.modules.pod.contracts.members import pod_member_id
 from app.modules.pod.contracts.user_pods import AttachablePod, pods_by_ids
-from app.modules.usage.contracts.execution import build_usage_service
 
 logger = get_logger(__name__)
 
@@ -169,15 +164,10 @@ class PodLinkService:
         threads = await PodAskQueries(self.uow).busy_link_threads(
             to_pod_id=answering_pod_id, from_pod_id=asking_pod_id
         )
-        conversations = ConversationService(
-            uow=self.uow,
-            conversation_repository=ConversationRepository(self.uow),
-            agent_repository=AgentRepository(self.uow),
-            usage_service=build_usage_service(self.uow),
-        )
+        stop = StopConversation.build(self.uow)
         for conversation_id, owner in threads:
             try:
-                await conversations.stop_conversation(
+                await stop.stop(
                     conversation_id=conversation_id,
                     user_id=owner,
                     pod_id=answering_pod_id,

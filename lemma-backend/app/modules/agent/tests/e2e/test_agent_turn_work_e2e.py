@@ -35,10 +35,9 @@ from app.core.infrastructure.work import RetryPolicy, WorkClass
 from app.core.infrastructure.work.testing import dispatcher_for
 from app.modules.agent.events.turn_work import TurnFences, TurnRunner
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.harness_wiring import (
-    build_harness_registry,
-    worker_uow_factory,
-)
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.infrastructure.harness.registry import build_harness_registry
 from app.modules.agent.tests.e2e.turn_work_support import (
     TurnPod,
     drain,
@@ -254,7 +253,7 @@ def _interrupting_runner(interrupt: BaseException):
 
     def runner(fences: TurnFences) -> TurnRunner:
         real = AgentRunnerService(
-            uow_factory=worker_uow_factory(),
+            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
             harness_registry=build_harness_registry(),
             terminal_units=fences.terminal,
             step_units=fences.steps,
@@ -432,13 +431,21 @@ async def test_racing_children_and_their_parent_deliver_each_result_once(
                 await asyncio.gather(*(dispatcher.execute(i) for i in claimed))
 
         await asyncio.wait_for(asyncio.gather(*(pump(d) for d in dispatchers)), 60)
-        results = await scalar(
-            "SELECT count(*) FROM agent_messages WHERE conversation_id = :c "
-            "AND message_metadata->>'source' = 'subagent_result'",
-            c=UUID(parent),
-        )
-        assert results == len(children)
-        delivered += results
+        # Results owed at once arrive together, so count the children each
+        # delivery names rather than the messages.
+        named = [
+            child
+            for (metadata,) in await rows(
+                "SELECT message_metadata FROM agent_messages "
+                "WHERE conversation_id = :c "
+                "AND message_metadata->>'source' = 'subagent_result'",
+                c=UUID(parent),
+            )
+            for child in metadata.get("subagent_conversation_ids")
+            or [metadata["subagent_conversation_id"]]
+        ]
+        assert sorted(named) == sorted(str(child) for child in children)
+        delivered += len(named)
         assert (
             await scalar(
                 "SELECT count(*) FROM work_items WHERE state = 'dead' "

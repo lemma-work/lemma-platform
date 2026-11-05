@@ -87,6 +87,15 @@ export function surfaceStatus(status: string | undefined, active: boolean): stri
     }
 }
 
+/** How many other ways a teammate can be reached, said in one sentence. Only a
+ *  surface that answers counts: a disabled one, or one still waiting on setup
+ *  or consent, is connected but reaches nobody. */
+export function sayReachedOtherWays(name: string, surfaces: Surface[]): string {
+    const answering = surfaces.filter((surface) => surface.active).length;
+    if (answering === 0) return name + " can only be reached here, in Lemma.";
+    return name + " can also be reached " + (answering === 1 ? "one other way." : answering + " other ways.");
+}
+
 export function surfacesForAgent(surfaces: Surface[], agentName = "pod_default"): Surface[] {
     return surfaces.filter(surface => isPodDefaultAgent(agentName)
         ? surface.mine

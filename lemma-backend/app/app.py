@@ -274,7 +274,7 @@ async def lifespan(app: FastAPI):
             from app.modules.identity.infrastructure.supertokens_auth.querier_client import (
                 close_shared_querier_client,
             )
-            from app.modules.agent.services.runtime_model_factory import (
+            from app.modules.agent.infrastructure.providers.model_factory import (
                 close_agent_provider_clients,
             )
             from app.modules.connectors.infrastructure.adapters.sql_executor import (

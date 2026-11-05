@@ -10,10 +10,8 @@ instruction recorded as the answer, and no run started for it.
 So the intent is written down, against the specific call it belongs to, and
 spent once. Anything typed without it is what it looks like: a new message.
 
-Kept in the conversation's own metadata rather than a new table: it is one
-short-lived flag per conversation, read on the next inbound message and cleared
-there, and `todo_storage` and the Agent Host's session memory already use that
-seam for the same kind of state.
+Kept on this module's row for the conversation (``surface_conversation_state``):
+one short-lived flag, read on the next inbound message and cleared there.
 """
 
 from __future__ import annotations
@@ -21,12 +19,9 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
 )
-
-#: Holds the ``tool_call_id`` of the pause whose answer is being typed.
-_KEY = "surface_free_text_answer_for"
 
 
 def tool_call_id_of(plan: Any) -> str:
@@ -68,8 +63,8 @@ async def remember_free_text_answer_wanted(
     """Record that the next typed message answers ``tool_call_id``."""
     if not tool_call_id:
         return
-    await agent_conversations.set_conversation_metadata_value(
-        uow, conversation_id, _KEY, tool_call_id
+    await ConversationSurfaces(uow).set_free_text_answer_for(
+        conversation_id, tool_call_id
     )
 
 
@@ -87,9 +82,7 @@ async def free_text_answer_wanted_for(
     """
     if not tool_call_id:
         return False
-    stored = await agent_conversations.conversation_metadata_value(
-        uow, conversation_id, _KEY
-    )
+    stored = await ConversationSurfaces(uow).free_text_answer_for(conversation_id)
     return stored == tool_call_id
 
 
@@ -99,9 +92,7 @@ async def forget_free_text_answer_wanted(
     conversation_id: UUID,
 ) -> None:
     """Spend the intent, so it answers one message and not every later one."""
-    await agent_conversations.set_conversation_metadata_value(
-        uow, conversation_id, _KEY, None
-    )
+    await ConversationSurfaces(uow).set_free_text_answer_for(conversation_id, None)
 
 
 async def remember_a_prompt_that_arrived_as_words(

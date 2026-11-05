@@ -9,7 +9,6 @@ finished by hand, which is all the delivery rules look at.
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -22,7 +21,6 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.modules.agent.domain.pod_asks import (
     ANSWER_SOURCE,
-    ASK_KEY,
     ASK_SOURCE,
     AskRefused,
 )
@@ -35,11 +33,15 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
@@ -47,9 +49,9 @@ from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
-from app.modules.agent.tools.approval_denials import show_card
-from app.modules.agent.tools.authority import workload_actor_id
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.infrastructure.tools.approval.denials import show_card
+from app.modules.agent.infrastructure.tools.authority import workload_actor_id
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.scripted_model import script_text, script_tool_call
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import (
@@ -58,7 +60,7 @@ from app.modules.test_support.e2e_authz import (
     invite_org_member,
     signup_user,
 )
-from app.modules.agent.tools.messaging.teammates import (
+from app.modules.agent.infrastructure.tools.messaging.teammates import (
     AskTeammateRequest,
     ask_permission_id,
     ask_teammate,
@@ -84,7 +86,7 @@ async def _chat(client, pod_id: str) -> UUID:
 
 
 def _deps(*, user_id: UUID, org_id: UUID, pod_id: str, conversation_id: UUID):
-    return BaseAgentContext(
+    return ToolContext(
         user_id=user_id,
         org_id=org_id,
         pod_id=UUID(pod_id),
@@ -97,7 +99,7 @@ async def _two_pods(client, org) -> tuple[str, str]:
     return await _create_test_pod(client, org), await _create_test_pod(client, org)
 
 
-async def _teammate(deps: BaseAgentContext, pod_id: str):
+async def _teammate(deps: ToolContext, pod_id: str):
     teammates = await _service().teammates(
         user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
     )
@@ -107,17 +109,19 @@ async def _teammate(deps: BaseAgentContext, pod_id: str):
 async def _finish_with(conversation_id: UUID, *, words: str) -> UUID:
     """End the conversation's latest run having said ``words``, as a run would."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
+        messages = Messages(uow)
+        runs = Runs(uow)
         conversation = await conversations.get_conversation(
             conversation_id, include_runs=True
         )
         run = conversation.agent_runs[-1]
-        await conversations.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(words, role=MessageRole.ASSISTANT),
         )
-        await conversations.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -128,7 +132,7 @@ async def _finish_with(conversation_id: UUID, *, words: str) -> UUID:
 
 async def _messages(conversation_id: UUID):
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        messages, _ = await ConversationRepository(uow).list_messages(
+        messages, _ = await Messages(uow).list_messages(
             conversation_id=conversation_id, limit=50
         )
     return messages
@@ -136,7 +140,7 @@ async def _messages(conversation_id: UUID):
 
 async def _set_status(conversation_id: UUID, value: ConversationStatus) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).set_conversation_status(
+        await Conversations(uow).set_conversation_status(
             conversation_id=conversation_id, status=value
         )
         await uow.commit()
@@ -170,7 +174,7 @@ async def test_an_ask_runs_as_the_person_and_its_answer_arrives_once(
     assert thread.status_code == status.HTTP_200_OK, thread.text
     body = thread.json()
     assert body["metadata"]["source"] == ASK_SOURCE
-    ask = body["metadata"][ASK_KEY]
+    ask = body["metadata"]["ask"]
     assert ask["from_conversation_id"] == str(asking)
     assert ask["for_user_id"] == fixed_test_user["id"]
     assert ask["chain"]["depth"] == 1
@@ -266,14 +270,14 @@ async def test_a_client_cannot_aim_an_answer_at_another_conversation(
         await authenticated_client.get(
             f"/pods/{billing}/conversations/{outcome.conversation_id}"
         )
-    ).json()["metadata"][ASK_KEY]
+    ).json()["metadata"]["ask"]
     forged = {**stored, "from_conversation_id": str(elsewhere)}
     response = await authenticated_client.patch(
         f"/pods/{billing}/conversations/{outcome.conversation_id}",
-        json={"metadata": {ASK_KEY: forged, "pinned": True}},
+        json={"metadata": {"ask": forged, "pinned": True}},
     )
     assert response.status_code == status.HTTP_200_OK, response.text
-    assert response.json()["metadata"][ASK_KEY] == stored
+    assert response.json()["metadata"]["ask"] == stored
     assert response.json()["metadata"]["pinned"] is True
 
 
@@ -283,13 +287,11 @@ async def test_the_first_ask_to_a_pod_needs_the_persons_ok(
 ):
     support, billing = await _two_pods(authenticated_client, fixed_test_org)
     asking = await _chat(authenticated_client, support)
-    ctx = SimpleNamespace(
-        deps=_deps(
-            user_id=UUID(fixed_test_user["id"]),
-            org_id=UUID(fixed_test_org["id"]),
-            pod_id=support,
-            conversation_id=asking,
-        )
+    ctx = _deps(
+        user_id=UUID(fixed_test_user["id"]),
+        org_id=UUID(fixed_test_org["id"]),
+        pod_id=support,
+        conversation_id=asking,
     )
     response = await ask_teammate(
         ctx,
@@ -315,13 +317,11 @@ async def test_a_pod_cannot_ask_itself_and_names_what_it_can_ask(
 ):
     support, billing = await _two_pods(authenticated_client, fixed_test_org)
     asking = await _chat(authenticated_client, support)
-    ctx = SimpleNamespace(
-        deps=_deps(
-            user_id=UUID(fixed_test_user["id"]),
-            org_id=UUID(fixed_test_org["id"]),
-            pod_id=support,
-            conversation_id=asking,
-        )
+    ctx = _deps(
+        user_id=UUID(fixed_test_user["id"]),
+        org_id=UUID(fixed_test_org["id"]),
+        pod_id=support,
+        conversation_id=asking,
     )
     itself = await ask_teammate(
         ctx, AskTeammateRequest(teammate=support, request="Hello?")
@@ -354,7 +354,7 @@ async def _approve_asks(
     )
     # The pod's assistant runs as the workload whose id is its pod's.
     deps.workload_id = UUID(str(agent_id)) if agent_id else pod_id
-    refused = await ask_teammate(SimpleNamespace(deps=deps), request)
+    refused = await ask_teammate(deps, request)
     assert refused.needs_approval is True, refused
     # The card going up, with what was refused written on it.
     approval_id = f"call-{uuid4().hex[:12]}"
@@ -516,7 +516,7 @@ async def test_who_a_pod_can_ask_is_the_other_pods_the_person_is_in(
     # pod at all. Neither is offered Billing.
     for narrowed in (
         {"type": ConversationType.TASK},
-        {"metadata": {"conversation_kind": "CHANNEL"}},
+        {"surface_kind": "CHANNEL"},
     ):
         other = await _default_agent_brief(
             pod_id=support, user_id=fixed_test_user["id"], **narrowed
@@ -547,7 +547,7 @@ async def _default_agent_brief(
     pod_id: str,
     user_id: str,
     type: ConversationType = ConversationType.CHAT,
-    metadata: dict[str, object] | None = None,
+    surface_kind: str | None = None,
 ) -> str:
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     async with uow_factory() as uow:
@@ -555,14 +555,13 @@ async def _default_agent_brief(
             pod_id=UUID(pod_id), name=DEFAULT_POD_AGENT_NAME
         )
     assert agent is not None
-    conversation = Conversation(
-        user_id=UUID(user_id), pod_id=UUID(pod_id), type=type, metadata=metadata or {}
-    )
+    conversation = Conversation(user_id=UUID(user_id), pod_id=UUID(pod_id), type=type)
     brief = await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,
         conversation=conversation,
         user_id=UUID(user_id),
         pod_id=UUID(pod_id),
+        surface_kind=surface_kind,
     )
     # Which pods may be asked depends on the conversation, so it rides in the
     # per-run part; the stable part is cached across conversations.
