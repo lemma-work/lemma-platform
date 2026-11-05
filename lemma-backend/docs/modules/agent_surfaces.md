@@ -496,16 +496,18 @@ is answered *for the pod*, in a group the pod has opened to them.
   server's alone, so nothing a client writes to the conversation changes whom
   it answers.
   What such a run may do:
-  - **Tools, by name.** Toolsets are cut to pod reads, web search and
-    messaging, and then each tool is allow-listed one by one
-    (`tools/outsider_tools`): the pod's read tools, `web_search` and
-    `ask_a_person`. `web_fetch` (it fetches inside the
-    owner's sandbox) and the pod's write tools are withheld by name, and the
-    harness's last capability (`capabilities/outsider_gate`) and the tool
-    dispatcher drop anything not on the list, however it arrived. A workspace
-    -- sandbox, host session, the owner's files -- is never opened for such a
-    run (`refuse_owner_workspace`), and a test fails until any new tool in a
-    kept toolset is classified. In a group it also has `group_history` (the
+  - **Tools, by name.** A member's run and such a run get two toolsets, and
+    each tool's policy says which it is in (`ToolPolicy.offered_to`: members,
+    anyone, or outsiders). Toolsets are cut to pod reads, web search and
+    messaging, and inside them such a run has the pod's read tools,
+    `web_search` and `ask_a_person` -- the last never offered to a member's
+    run. `web_fetch` (it fetches inside the owner's sandbox) and the pod's
+    write tools are a member's only, the catalog never offers them, and the
+    tool runtime holds the same line for a caller that built its own list;
+    no tool refuses a stranger from inside. A workspace -- sandbox, host
+    session, the owner's files -- is never opened for such a run
+    (`refuse_owner_workspace`), and a test fails until any new tool in a kept
+    toolset is classified. In a group it also has `group_history` (the
     group it sits in, from its seat, never another), and `group_records` and
     `group_add_record` for the tables the group was given (channels' "Tables
     a group was given"), read and added as the member who gave them.
