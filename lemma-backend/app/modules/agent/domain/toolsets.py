@@ -163,7 +163,7 @@ _SUB_AGENT_WITHHELD = frozenset({AgentToolset.SUBAGENTS, AgentToolset.MESSAGING}
 # All a run answering somebody outside the pod keeps, when its agent has them:
 # ``OUTSIDER_TOOLSETS`` (``domain/outsiders``). That is only the first cut --
 # the tools inside those toolsets are allowed one by one by their policy
-# (``ToolPolicy.outsider_allowed``), and the catalog drops anything else.
+# (``ToolPolicy.offered_to``), and the catalog drops anything else.
 
 
 @dataclass(frozen=True, slots=True)
