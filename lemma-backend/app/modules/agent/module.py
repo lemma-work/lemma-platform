@@ -161,6 +161,10 @@ def _register_work() -> None:
     # Every process: a pod deletion (API) writes this through `PodDeleted`.
     import app.modules.agent.events.pod_links_lifecycle  # noqa: F401
 
+    # Every process: an account deletion (API) writes this through
+    # `AccountDeleted`.
+    import app.modules.agent.events.account_deleted_work  # noqa: F401
+
     # Every process: a merge of two contacts (API, a web visitor proving an
     # email) writes this through `ContactMerged`.
     import app.modules.agent.events.contact_merged_work  # noqa: F401

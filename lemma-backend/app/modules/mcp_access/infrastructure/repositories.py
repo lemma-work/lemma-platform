@@ -232,6 +232,23 @@ class McpAccessRepository:
         )
         return int(getattr(ended, "rowcount", 0) or 0)
 
+    async def revoke_user_grants(self, *, user_id: UUID, now: datetime) -> int:
+        """End every live grant the person gave and delete their tokens -- the
+        account was deleted. How many were ended."""
+        await self._session.execute(
+            delete(McpOAuthToken).where(
+                McpOAuthToken.grant_id.in_(
+                    select(McpOAuthGrant.id).where(McpOAuthGrant.user_id == user_id)
+                )
+            )
+        )
+        ended = await self._session.execute(
+            update(McpOAuthGrant)
+            .where(McpOAuthGrant.user_id == user_id, McpOAuthGrant.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        return int(getattr(ended, "rowcount", 0) or 0)
+
     async def grant_owner(self, grant_id: UUID) -> tuple[UUID, UUID] | None:
         """(user, pod) of a live grant."""
         row = (

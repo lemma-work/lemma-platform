@@ -6,12 +6,19 @@ use std::sync::{Condvar, Mutex, PoisonError};
 struct State {
     active: bool,
     closing: bool,
+    /// Threads blocked in `wait_idle` right now. Test-only: see
+    /// `wait_for_waiter`.
+    #[cfg(test)]
+    waiters: usize,
 }
 
 #[derive(Default)]
 pub(crate) struct Lifecycle {
     state: Mutex<State>,
     idle: Condvar,
+    /// Signalled whenever a thread blocks in `wait_idle`.
+    #[cfg(test)]
+    waiting: Condvar,
 }
 
 impl Lifecycle {
@@ -82,8 +89,35 @@ impl Lifecycle {
     pub fn wait_idle(&self) {
         let mut state = self.state.lock().expect("lifecycle lock poisoned");
         while state.active {
+            #[cfg(test)]
+            {
+                state.waiters += 1;
+                self.waiting.notify_all();
+            }
             state = self.idle.wait(state).expect("lifecycle lock poisoned");
+            #[cfg(test)]
+            {
+                state.waiters -= 1;
+            }
         }
+    }
+
+    /// Wait up to `timeout` for a thread to block in `wait_idle`.
+    ///
+    /// For a test that holds an operation open to show that something waits
+    /// for it. Having spawned the waiter is not enough: on a loaded machine its
+    /// thread can first run after the operation has finished, find nothing to
+    /// wait for, and pass straight through. When this returns true the waiter
+    /// has released the lock inside `wait_idle`, so it stays blocked until the
+    /// operation finishes.
+    #[cfg(test)]
+    pub fn wait_for_waiter(&self, timeout: std::time::Duration) -> bool {
+        let state = self.state.lock().expect("lifecycle lock poisoned");
+        let (_state, waited) = self
+            .waiting
+            .wait_timeout_while(state, timeout, |state| state.waiters == 0)
+            .expect("lifecycle lock poisoned");
+        !waited.timed_out()
     }
 }
 
