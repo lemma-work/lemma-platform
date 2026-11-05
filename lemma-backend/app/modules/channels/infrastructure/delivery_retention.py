@@ -1,10 +1,14 @@
-"""How long settled pushes are kept.
+"""How long settled pushes, and the tries written before, are kept.
 
 A settled push -- ``SENT``, ``SKIPPED`` or ``DEAD``, to a member -- is deleted
 ``KEPT_FOR`` after it was made: it is a record of a notification, and nothing
 reads it once the line is old. A send to a place is kept as long as its line:
 its platform id is how a reply in a thread there finds the line it answers,
 and how a late status report finds the send.
+
+``channel_delivery_attempts`` is no longer written, but the tries written
+before still go ``KEPT_FOR`` after their delivery was made, until the
+migration that drops the table.
 """
 
 from __future__ import annotations
@@ -17,11 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import DeliveryStatus
 from app.modules.channels.infrastructure.delivery_models import (
+    ChannelDeliveryAttemptModel,
     ChannelMessageDeliveryModel,
 )
 
-#: How long a settled push is kept.
+#: How long a settled push, and any delivery's tries, are kept.
 KEPT_FOR = timedelta(days=30)
+
+_A = ChannelDeliveryAttemptModel
 
 
 def _made_before(at: datetime) -> UUID:
@@ -32,9 +39,10 @@ def _made_before(at: datetime) -> UUID:
 
 async def prune_settled(
     session: AsyncSession, *, limit: int, now: datetime | None = None
-) -> int:
-    """Delete up to ``limit`` settled pushes made more than ``KEPT_FOR`` ago;
-    how many. Ids are time-ordered, so it walks its index from the oldest."""
+) -> tuple[int, int]:
+    """Delete up to ``limit`` settled pushes made more than ``KEPT_FOR`` ago,
+    and up to ``limit`` older tries; how many of each. Ids are time-ordered,
+    so both walk their index from the oldest."""
     floor = _made_before((now or datetime.now(UTC)) - KEPT_FOR)
     d = ChannelMessageDeliveryModel
     pushes = (
@@ -58,7 +66,15 @@ async def prune_settled(
         .limit(limit)
     )
     gone = await session.execute(delete(d).where(d.id.in_(pushes)))
-    return _count(gone)
+    tries = (
+        select(_A.delivery_id)
+        .where(_A.delivery_id < floor)
+        .order_by(_A.delivery_id)
+        .limit(limit)
+        .distinct()
+    )
+    old = await session.execute(delete(_A).where(_A.delivery_id.in_(tries)))
+    return _count(gone), _count(old)
 
 
 def _count(result: object) -> int:

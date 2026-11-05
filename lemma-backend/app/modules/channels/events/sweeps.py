@@ -9,9 +9,9 @@
 * ``channels.deliveries_due`` -- every minute, a delivery that is due again
   (a failure's backoff passed, or a sender that claimed it died) is announced
   once more, so whatever sends it picks it up.
-* ``channels.deliveries_retention`` -- every hour, settled pushes older than
-  ``delivery_retention.KEPT_FOR`` are deleted, and push windows whose time
-  has passed with nothing waiting are forgotten.
+* ``channels.deliveries_retention`` -- every hour, settled pushes and the
+  tries written before older than ``delivery_retention.KEPT_FOR`` are deleted,
+  and push windows whose time has passed with nothing waiting are forgotten.
 """
 
 from __future__ import annotations
@@ -126,13 +126,14 @@ async def deliveries_due() -> None:
 @periodic_job(DELIVERIES_RETENTION, every=timedelta(hours=1))
 async def deliveries_retention() -> None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        pushes = await prune_settled(uow.session, limit=_RETENTION_BATCH)
+        pushes, tries = await prune_settled(uow.session, limit=_RETENTION_BATCH)
         windows = await PushWindows(uow.session).prune(limit=_RETENTION_BATCH)
         await uow.commit()
-    if pushes or windows:
+    if pushes or tries or windows:
         logger.info(
             "channels.deliveries.pruned.observed",
             pushes=pushes,
+            tries=tries,
             windows=windows,
-            backlog=max(pushes, windows) >= _RETENTION_BATCH,
+            backlog=max(pushes, tries, windows) >= _RETENTION_BATCH,
         )

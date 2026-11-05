@@ -325,19 +325,36 @@ class ContactChannels:
                 .values(contact_id=None, user_id=user_id, role="member")
                 .execution_options(synchronize_session=False)
             )
-            await self._mentions_become(
+            await self._questions_and_mentions_become(
                 channel_id, contact_id=contact_id, user_id=user_id
             )
             await next_rev(self.session, channel_id, channel_changed=True)
         return moved
 
-    async def _mentions_become(
+    async def _questions_and_mentions_become(
         self, channel_id: UUID, *, contact_id: UUID, user_id: UUID
     ) -> None:
-        """In one channel, the lines naming the contact name the member -- one
-        per line, so a line that already names the member drops the
-        contact's. Nothing is asked of a contact, so no question moves."""
-        mention = ChannelMentionModel
+        """In one channel, what was asked of and said about the contact is
+        the member's: their questions, and their mentions -- one per line, so a
+        line that already names the member drops the contact's. Nothing asks
+        a contact or names one any more; these are the rows from before."""
+        question, mention = ChannelQuestionModel, ChannelMentionModel
+        for column, becomes in (
+            (
+                question.awaits_contact_id,
+                {"awaits_contact_id": None, "awaits_user_id": user_id},
+            ),
+            (
+                question.answered_by_contact_id,
+                {"answered_by_contact_id": None, "answered_by_user_id": user_id},
+            ),
+        ):
+            await self.session.execute(
+                update(question)
+                .where(question.channel_id == channel_id, column == contact_id)
+                .values(**becomes)
+                .execution_options(synchronize_session=False)
+            )
         named = select(mention.message_id).where(
             mention.channel_id == channel_id, mention.user_id == user_id
         )

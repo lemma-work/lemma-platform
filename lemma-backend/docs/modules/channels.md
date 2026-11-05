@@ -577,8 +577,9 @@ foreign key to `contacts.id` in the models.
 - **Sending.** `agent_surfaces` sends and receives: it claims a delivery,
   calls the platform, and records what became of it.
 
-Nothing here is deleted automatically but what was sent: a settled push goes
-`delivery_retention.KEPT_FOR` (30 days) after it was made, and an empty push window once its time has passed
+Nothing here is deleted automatically but what was sent: a settled push, and
+any delivery's tries written before they stopped being kept, go
+`delivery_retention.KEPT_FOR` (30 days) after they were made, and an empty push window once its time has passed
 (`channels.deliveries_retention`). A send to a place stays as long as its
 line: its platform id is how a reply in a thread there finds the line it
 answers. The change log a live subscriber resumes from goes after

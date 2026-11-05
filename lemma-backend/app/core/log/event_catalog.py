@@ -716,7 +716,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'calls.socket.wind_down.failed': EventSpec('warning', frozenset({'step'})),
     'channels.changes.pruned.observed': EventSpec('info', frozenset({'backlog', 'count'})),
     'channels.deliveries.due_again.observed': EventSpec('info', frozenset({'backlog', 'count'})),
-    'channels.deliveries.pruned.observed': EventSpec('info', frozenset({'backlog', 'pushes', 'windows'})),
+    'channels.deliveries.pruned.observed': EventSpec('info', frozenset({'backlog', 'pushes', 'tries', 'windows'})),
     'channels.line.removed_by_manager.observed': EventSpec('info', frozenset({'channel_id', 'message_id', 'user_id'})),
     'channels.live.answer_relay_lost.degraded': EventSpec('warning', frozenset({'channel_id', 'error_type'})),
     'channels.live.hub_drain_failed': EventSpec('error', frozenset({'error_type', 'pod_id'})),
