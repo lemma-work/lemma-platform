@@ -32,8 +32,8 @@ channel: they are private workspaces, not shared places.
 | --- | --- |
 | `external_accounts` | An account a pod's bot speaks through -- a Slack team's or Teams tenant's bot, a Telegram bot, an inbox, a WhatsApp number, a web widget -- keyed per pod by platform, `workspace_key` and `bot_key` (`agent_surfaces`' `account_of`: a Slack or Teams account names the workspace *and* the bot, so two agents' apps in one workspace are two accounts; a WhatsApp number is keyed by its phone-number id, a Telegram bot by its id). `bot_key` is NULL until the bot's id is known; when the surface that reached the account learns it, that account is given it in place, so its places, channels and history stay one. A place belongs to an account rather than a surface, so a reinstalled bot -- the same app, so the same bot id, or the same WhatsApp number -- keeps its places; `surface_id` is the installation that reaches it now |
 | `channels` | One place per pod: `kind`, `visibility` (`PUBLIC` or `PRIVATE`; only a group may be public), a `title` and `topic`, whose it is (`member_user_id` for `DIRECT`, `contact_id` for `CONTACT`, each unique per pod), when it was archived. A contact's channel says whether its agents answer (`agents_answer`) and how long a member who stepped in holds the contact (`hand_back_after_hours`), and names its current case (`current_case_id`). The timeline's head: `last_seq`, `last_line_id`, `last_line_at`, and how many of its lines are thread replies (`replies`) |
-| `channel_cases` | A contact's channel's episodes of being answered, one open at a time (`uq_channel_cases_open`) and the open one always the channel's current case; only a contact's channel has any (the key to the channel carries its `kind`). When it opened (`opened_at`, and `opened_seq`, the line before it), where it stands (`status`: `open`, `waiting_on_contact`, `closed`, with `closed_at` and who closed it), who answers by hand (`assignee_user_id`, `assigned_at`, `assignee_last_line_at`), a call for a person (`attention_at`, `attention_reason`), the acknowledgement of this wait (`acknowledged_at`) and the first member line to the contact (`first_response_at`, `first_response_by_user_id`) |
-| `channel_case_events` | Every change to a case, in order: `opened`, `assigned`, `handed_back`, `attention`, `acknowledged`, `first_response`, `status`, `closed`, `reopened`, `merged` -- who made it and what it changed to. Time to first response, reopens and time to close are read from here |
+| `channel_cases` | A contact's channel's episodes of being answered, one open at a time (`uq_channel_cases_open`) and the open one always the channel's current case; only a contact's channel has any (the key to the channel carries its `kind`). When it opened (`opened_at`), where it stands (`status`: `open`, `waiting_on_contact`, `closed`, with `closed_at`), who answers by hand (`assignee_user_id`, `assigned_at`, `assignee_last_line_at`), a call for a person (`attention_at`, `attention_reason`) and the acknowledgement of this wait (`acknowledged_at`). Nothing reads its history, so none is kept: `opened_seq`, `first_response_at`, `first_response_by_user_id` and `closed_by_user_id` are left from before (`opened_seq` is still written while an older schema needs it) |
+| `channel_case_events` | No longer written: it held every change to a case, and nothing read it |
 | `channel_members` | Who is in a channel -- a member, a contact or an agent -- with their `role`, how a person hears of it outside the app (`notify`, `notify_via`, `muted_until`) and, for an agent, when it answers (`answers`). A person's seat keeps when they last spoke there and the name they spoke under (`last_spoke_at`, `last_name`): who has spoken in a group is read from the seats, never the lines. Every seat says why it was taken (`seated_by`, below) |
 | `channel_read_state` | How far each member has read each channel's timeline, in the channel's pod: `last_read_seq`, and how many of the lines up to it are thread replies (`read_replies`), so unread is exact and counted by number (below). Apart from the seat: a member reads a public group they never joined, and somebody named where they have no read number is given one here, at the channel's head before the line naming them |
 | `channel_sources` | The outside places a channel is fed by, in an account, keyed by chat and -- for one person's chat (`kind` `PERSON`, else `CHAT`) -- the person's platform id. Whether the platform keeps it to its members (`is_private`), how to answer it (`delivery_ref`: the reply target of what was last heard there, never what was said) and, for a chat only (a CHECK), who answers for its outsiders, its invite link and the platform's request for it |
@@ -41,11 +41,11 @@ channel: they are private workspaces, not shared places.
 | `channel_line_answers` | Which agents answer a line: one row per line and agent (`(message_id, agent_id)`; the pod's own agent is the pod's id), so several agents may answer one line, each once. The conversation it answers in, the run (`agent_run_id`, the one its turn started or joined), where it stands (`state`: `ANSWERING`, `ANSWERED`, `ENDED`) and the agent's answer line (`answer_message_id`). Hung from its line by `(message_id, channel_id)` → `channel_messages`, cascading on delete and on update, so it follows a fold |
 | `channel_threads` | A line with replies: how many (`reply_count`) and the newest one's time (`last_reply_at`), kept as each reply is written -- the root itself is never rewritten for it. Keyed to the root and its channel (`(root_id, channel_id)` → `channel_messages`), so it follows a fold |
 | `channel_changes` | The channel's change log for its live subscribers: one row per change number (`(channel_id, rev)`), naming the line it moved or none for the channel's own fields and members, stamped by the database's clock (`at`). Kept for `revisions.CHANGE_RETENTION` (14 days, `channels.changes_prune` hourly) |
-| `channel_mentions` | Who a line names -- a member, a contact or an agent: exactly what its mention parts name now (below). It carries its line's channel and `seq` and, for a member named, when they read it (`read_at`; unread while NULL, and `ix_channel_mentions_user` holds only the unread) -- held to the line's by a cascading foreign key, `(message_id, channel_id, seq)` → `channel_messages`, so they are the line's, never a copy anybody keeps |
-| `channel_questions` | A question a line puts to one person, held to its line and channel by `(message_id, channel_id)` → `channel_messages`. What asked it is typed: `asker` (`TOOL` an agent's paused `ask_user` or approval, `WORKFLOW` a workflow's form, `MESSAGE` a question one member's agent put to another), with the asking conversation (`asker_conversation_id`) or workflow run (`asker_workflow_run_id`) and what in it (`asker_key`); `ref` is the asker's idempotency key, unique per pod, never parsed. `awaits_policy` is who may answer (`ONE`: the one person). `kind` is `ASK`, `APPROVAL` or `FORM`, and `state` runs `OPEN` → `ANSWERING` → `ANSWERED`, or `CANCELLED` / `EXPIRED`, with the answer that took effect |
+| `channel_mentions` | Which members a line names: exactly what its mention parts name now (below); a contact or an agent named is neither counted nor told, so no row is written for them. It carries its line's channel and `seq` and, for a member named, when they read it (`read_at`; unread while NULL, and `ix_channel_mentions_user` holds only the unread) -- held to the line's by a cascading foreign key, `(message_id, channel_id, seq)` → `channel_messages`, so they are the line's, never a copy anybody keeps |
+| `channel_questions` | A question a line puts to one person, held to its line and channel by `(message_id, channel_id)` → `channel_messages`. What asked it is typed: `asker` (`TOOL` an agent's paused `ask_user` or approval, `WORKFLOW` a workflow's form, `MESSAGE` a question one member's agent put to another), with the asking conversation (`asker_conversation_id`) or workflow run (`asker_workflow_run_id`) and what in it (`asker_key`); `ref` is the asker's idempotency key, unique per pod, never parsed. It waits on one member (`awaits_user_id`): nothing asks a contact, so `awaits_contact_id`, `answered_by_contact_id` and `awaits_policy` are left from before. `kind` is `ASK`, `APPROVAL` or `FORM`, and `state` runs `OPEN` → `ANSWERING` → `ANSWERED`, or `CANCELLED` / `EXPIRED`, with the answer that took effect |
 | `channel_message_deliveries` | Every send of a line outside Lemma -- to a place, or a push to a member -- unique per line and target, hung from its line by `(message_id, channel_id)` and carrying the line's `seq`: `PENDING`, `SENT`, `FAILED` (due again after a backoff, no sooner than the platform's `Retry-After`), `SKIPPED` or `DEAD`. Why it is not `SENT` is `reason_code` (`DeliveryReasonCode`), which code matches on, beside `reason`, the sentence a member reads. Claimed by the database's clock, and never while an earlier line of the same channel to the same target has yet to go -- one probe of the target's due rows (`ix_cmd_due_source`, `ix_cmd_due_recipient`); a platform's status report settles it by the id noted the moment the platform answered (indexed as `md5(id)::uuid`). A push stands for the lines `from_seq` .. `seq` of its channel the member heard (`lines` of them; `urgent` when one names or asks them) |
-| `channel_delivery_attempts` | Each try of a delivery: when it began and ended, what it ended as (`outcome`, `error_code`) and the platform's status when it gave one -- so a 429 and then a send are two rows |
-| `channel_push_pending` | Per member and channel, the lines waiting to be pushed (`from_seq` .. `to_seq`, `lines`, led by `lead_seq`), when they go (`next_attempt_at`) and when the last push went (`pushed_at`) |
+| `channel_delivery_attempts` | No longer written: it held each try of a delivery, and nothing read it. A delivery keeps how it ended and how many tries it took (`attempts`) |
+| `channel_push_pending` | Per member and channel, the lines waiting to be pushed (from `from_seq`, `lines` of them, led by `lead_seq`), when they go (`next_attempt_at`) and when the last push went (`pushed_at`). `to_seq` is read by nothing, and still written while an older schema needs it |
 
 A line can be a reply in a thread (`thread_root_id`; a Slack or Teams thread
 is one here too), be edited or deleted (it keeps its place, empty), and name
@@ -365,23 +365,19 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
 (`MEMBER`, `CONTACT` or `AGENT`, an id, a name). PATCH: absent is unchanged,
 `null` clears. Creates take an `Idempotency-Key`; GETs never write.
 
-- `/channels` `GET` (kind, `visibility`, `q` -- every word, any order, in
-  the title or the name of whose own channel it is --,
-  archived, contact, assignee -- `me` or a user
+- `/channels` `GET` (kind, archived, contact, assignee -- `me` or a user
   id --, unassigned, status -- all three a contact's current case's --,
   `needs_person` -- contacts waiting on a person: open, unassigned, the agent
   off or asking for one, read from `ix_channel_cases_needs_person` and
   `ix_channels_agents_off` --, joined,
   `source_surface`; cursor) · `POST`; `/channels/me`
-  `GET` · `POST` (the caller's own channel: made when they join the pod, by
-  `POST` for a member from before); `/channels/{c}` `GET` · `PATCH`
+  `POST` (the caller's own channel: made when they join the pod, by
+  `POST` for a member from before, and returned as it is if it exists); `/channels/{c}` `GET` · `PATCH`
   (`assignee` takes `me`; a group's `answers_shared`, above) · `DELETE`
   (groups made in Lemma). A contact's
   channel carries its current case -- `case_id`, and its `status`, `assignee`
-  and `attention`; no other kind has them. `/channels/{c}/cases` `GET` (a contact's channel:
-  its cases, most recently opened first, each with its events; cursor) --
-  time to first response, reopens and time to close are read from it.
-- `/channels/{c}/members` `GET` (in the order they joined; cursor) · `POST`;
+  and `attention`; no other kind has them.
+- `/channels/{c}/members` `POST` (who is in it is on `/channels/{c}`);
   `/members/me` `POST` (join -- a private
   group too, for `channel.manage`) · `PATCH` (notify, notify_via,
   muted_until) · `DELETE` (leave);
@@ -550,11 +546,10 @@ merged one up to just before the first line they had not read in either.
 Sources, seats and the conversations working in it move (where the person
 already has a live conversation with that agent there, that one keeps the
 seat and the other leaves the channel), a client id both used is renamed on
-the moved line, the merged channel's cases join the survivor's (each one's
-`opened_seq` counted again), agents answer only if both let them, and the
-newer last line shows. Where both had an open case the survivor's goes on,
-taking the more recently assigned member, a call for a person either made and
-the earlier first response, and the merged one is closed into it (`merged`);
+the moved line, the merged channel's cases join the survivor's, agents answer
+only if both let them, and the newer last line shows. Where both had an open
+case the survivor's goes on, taking the more recently assigned member and a
+call for a person either made, and the merged one is closed into it;
 otherwise the open one, or the more recently opened, is current
 (`infrastructure/contact_channels.py`, `infrastructure/cases.py`). It also subscribes to `PodMemberAdded` (their own
 channel is made, or brought back from the archive) and `PodMemberRemoved`
@@ -582,9 +577,9 @@ foreign key to `contacts.id` in the models.
 - **Sending.** `agent_surfaces` sends and receives: it claims a delivery,
   calls the platform, and records what became of it.
 
-Nothing here is deleted automatically but what was sent: a settled push and
-every delivery's tries go `delivery_attempts.KEPT_FOR` (30 days) after they
-were made, and an empty push window once its time has passed
+Nothing here is deleted automatically but what was sent: a settled push, and
+any delivery's tries written before they stopped being kept, go
+`delivery_retention.KEPT_FOR` (30 days) after they were made, and an empty push window once its time has passed
 (`channels.deliveries_retention`). A send to a place stays as long as its
 line: its platform id is how a reply in a thread there finds the line it
 answers. The change log a live subscriber resumes from goes after

@@ -290,18 +290,12 @@ async def revise_line(
     text: str,
     parts: Sequence[Part],
     mentions: Sequence[Principal] = (),
-    mentioned_agents: Sequence[UUID] = (),
 ) -> ChannelMessage | None:
     """A line said again differently -- a platform's edit of a message heard
     there: its words and parts, and whom it names now (``named_in`` of the
     new parts). ``None`` when the line is gone or deleted."""
     return await rewrite_line(
-        uow,
-        message_id=message_id,
-        text=text,
-        parts=parts,
-        people=mentions,
-        agents=mentioned_agents,
+        uow, message_id=message_id, text=text, parts=parts, people=mentions
     )
 
 

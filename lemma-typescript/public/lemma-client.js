@@ -17350,8 +17350,6 @@ var LemmaClient = (() => {
      * what is new in it for them and its last line.
      * @param podId
      * @param kind
-     * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
-     * @param q Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.
      * @param archived
      * @param contactId Only this contact's channel.
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
@@ -17365,7 +17363,7 @@ var LemmaClient = (() => {
      * @returns ChannelListResponse Successful Response
      * @throws ApiError
      */
-    static channelList(podId, kind, visibility, q, archived = false, contactId, assignee, unassigned = false, status, needsPerson = false, joined = false, sourceSurface, cursor, limit = 50) {
+    static channelList(podId, kind, archived = false, contactId, assignee, unassigned = false, status, needsPerson = false, joined = false, sourceSurface, cursor, limit = 50) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels",
@@ -17374,8 +17372,6 @@ var LemmaClient = (() => {
         },
         query: {
           "kind": kind,
-          "visibility": visibility,
-          "q": q,
           "archived": archived,
           "contact_id": contactId,
           "assignee": assignee,
@@ -17420,29 +17416,6 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          400: `A cursor this API did not give.`,
-          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
-        }
-      });
-    }
-    /**
-     * Get My Channel
-     * The reader's own channel with the pod; 404 until it is made.
-     * @param podId
-     * @returns ChannelDetailResponse Successful Response
-     * @throws ApiError
-     */
-    static channelMeGet(podId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/channels/me",
-        path: {
-          "pod_id": podId
-        },
         errors: {
           400: `A cursor this API did not give.`,
           403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
@@ -17553,71 +17526,6 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          400: `A cursor this API did not give.`,
-          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
-        }
-      });
-    }
-    /**
-     * List Cases
-     * A contact's channel's cases, the most recently opened first, each with
-     * what happened in it: time to first response, reopens and time to close
-     * are read from here. Only a contact's channel has cases.
-     * @param podId
-     * @param channelId
-     * @param cursor
-     * @param limit
-     * @returns ChannelCasesResponse Successful Response
-     * @throws ApiError
-     */
-    static channelCaseList(podId, channelId, cursor, limit = 20) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/channels/{channel_id}/cases",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId
-        },
-        query: {
-          "cursor": cursor,
-          "limit": limit
-        },
-        errors: {
-          400: `A cursor this API did not give.`,
-          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
-        }
-      });
-    }
-    /**
-     * List Members
-     * Who is in a channel -- members, contacts and agents -- in the order
-     * they joined, a page at a time.
-     * @param podId
-     * @param channelId
-     * @param cursor
-     * @param limit
-     * @returns ChannelMemberListResponse Successful Response
-     * @throws ApiError
-     */
-    static channelMemberList(podId, channelId, cursor, limit = 100) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/channels/{channel_id}/members",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId
-        },
-        query: {
-          "cursor": cursor,
-          "limit": limit
-        },
         errors: {
           400: `A cursor this API did not give.`,
           403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
@@ -18457,10 +18365,6 @@ var LemmaClient = (() => {
             podId,
             void 0,
             // kind
-            void 0,
-            // visibility
-            void 0,
-            // q
             false,
             void 0,
             void 0,
@@ -18582,8 +18486,6 @@ var LemmaClient = (() => {
           return ChannelsService.channelList(
             podId,
             options.kind,
-            options.visibility,
-            options.q,
             (_a = options.archived) != null ? _a : false,
             options.contactId,
             options.assignee,
@@ -18622,10 +18524,6 @@ var LemmaClient = (() => {
      *  how the caller hears of it. */
     get(podId, channelId) {
       return this.client.request(() => ChannelsService.channelGet(podId, channelId));
-    }
-    /** The caller's own channel with the pod; not found until it is made. */
-    mine(podId) {
-      return this.client.request(() => ChannelsService.channelMeGet(podId));
     }
     /** The caller's own channel with the pod, made if it is not there yet. */
     openMine(podId) {
@@ -18822,37 +18720,6 @@ var LemmaClient = (() => {
             (_c = options.archived) != null ? _c : false,
             options.cursor,
             (_d = options.limit) != null ? _d : 30
-          );
-        }
-      );
-    }
-    /** A contact's channel's cases, the most recently opened first, each with
-     *  what happened in it: who answered and when, reopens, how it ended. Page
-     *  with `next_cursor`. */
-    cases(podId, channelId, options = {}) {
-      return this.client.request(
-        () => {
-          var _a;
-          return ChannelsService.channelCaseList(
-            podId,
-            channelId,
-            options.cursor,
-            (_a = options.limit) != null ? _a : 20
-          );
-        }
-      );
-    }
-    /** Who is in a channel -- members, contacts and agents -- in the order they
-     *  joined. Page with `next_cursor`. */
-    members(podId, channelId, options = {}) {
-      return this.client.request(
-        () => {
-          var _a;
-          return ChannelsService.channelMemberList(
-            podId,
-            channelId,
-            options.cursor,
-            (_a = options.limit) != null ? _a : 100
           );
         }
       );

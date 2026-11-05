@@ -171,7 +171,9 @@ async def test_a_group_keeps_an_owner_and_a_private_one_somebody(pod: Pod):
     # Its last owner leaving hands it to whoever has been in it longest.
     left = await user.delete(f"{members}/me")
     assert left.status_code == 204, left.text
-    roster = (await pod.client(pod.editor).get(members)).json()["items"]
+    roster = (await pod.client(pod.editor).get(f"{pod.base}/{crew['id']}")).json()[
+        "members"
+    ]
     assert [(m["person"]["id"], m["role"]) for m in roster] == [
         (pod.editor["id"], "owner")
     ]

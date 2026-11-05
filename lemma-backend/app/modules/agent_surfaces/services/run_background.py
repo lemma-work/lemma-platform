@@ -82,7 +82,7 @@ class RunBackground:
     def to_metadata(self) -> dict[str, object]:
         """The run's message metadata keys for this background, only those set."""
         metadata: dict[str, object] = {}
-        if self.refs is not None and (self.refs.items or self.refs.withheld):
+        if self.refs is not None and self.refs.items:
             metadata[BACKGROUND_KEY] = self.refs.model_dump(mode="json")
         if self.participants:
             metadata["channel_participants"] = [
@@ -140,7 +140,7 @@ async def run_background(
                     asker_external_id=context.message_external_user_id,
                 )
         outside = outside_names(lines)
-        refs = await _platform_refs(uow_factory, context, lines, withheld=0)
+        refs = await _platform_refs(uow_factory, context, lines)
     audience = (
         None
         if context.audience.answers_outsiders
@@ -192,14 +192,12 @@ async def _platform_refs(
     uow_factory: UnitOfWorkFactory,
     context: SurfaceChatContext,
     lines: list[dict[str, object]],
-    *,
-    withheld: int,
 ) -> BackgroundRefs | None:
     """A platform's history, read live: what the pod heard of it by reference,
     the rest as the platform gave it."""
     if lines and lines[-1].get("text") == context.event.message_text.strip():
         lines = lines[:-1]
-    if context.pod_id is None or not (lines or withheld):
+    if context.pod_id is None or not lines:
         return None
     group = await _known_group(uow_factory, context)
     heard: dict[str, BackgroundItem] = {}
@@ -229,7 +227,6 @@ async def _platform_refs(
         pod_id=context.pod_id,
         channel_id=group.channel_id if group is not None else None,
         view=BackgroundView.PLATFORM,
-        withheld=withheld,
         items=tuple(items),
     )
 
