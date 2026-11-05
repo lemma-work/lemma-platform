@@ -10,8 +10,8 @@ internals stay its own to change.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.agent_host import AGENT_HOST_PROTOCOL_VERSION
-from app.modules.agent.domain.agent_host_link import (
+from app.modules.agent.agent_host.api import (
+    AGENT_HOST_PROTOCOL_VERSION,
     AGENT_HOST_LINK_HEARTBEAT_MS,
     AGENT_HOST_LINK_MISSED_HEARTBEATS,
     REVOKED_OR_MISSING_REASON,
@@ -20,8 +20,6 @@ from app.modules.agent.domain.agent_host_link import (
     LinkErrorCode,
     LinkFrame,
     ServerFrameType,
-)
-from app.modules.agent.domain.agent_host_link_compute import (
     COMPUTE_MIN_PROTOCOL_VERSION,
     COMPUTE_PAIRING_TTL_SECONDS,
     ComputeControlBody,
@@ -35,14 +33,10 @@ from app.modules.agent.domain.agent_host_link_compute import (
     RuntimeBundleTarget,
     RuntimeGrant,
     StreamTargetKind,
-)
-from app.modules.agent.infrastructure.agent_host.channels import (
     REVOKED,
     parse_host_notice,
-)
-from app.modules.agent.services.agent_host_link_mcp import notice_stream
-from app.modules.agent.services.agent_host_link_ownership import LinkOwnership
-from app.modules.agent.services.agent_host_link_wire import (
+    notice_stream,
+    LinkOwnership,
     TRANSIENT_ERRORS,
     EmptyBody,
     LinkClose,

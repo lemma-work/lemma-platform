@@ -41,8 +41,8 @@ state, sidebar apps, composer mentions, plugin settings.
 
 `lemma_pod_get_records` and `lemma_pod_query` name `ui://lemma/table`
 (`app/modules/agent/services/pod_mcp_views.py`, the view itself in
-`pod_mcp_table_view.html` beside it, linked from the tool's row in
-`pod_mcp_tool_policy.py`).
+`pod_mcp_table_view.html` beside it, linked from the tool's `ToolPolicy.view`
+in `app/modules/agent/infrastructure/tools/pod/tools.py`).
 
 - **What it shows.** A page of records with "1–20 of 57", a query's rows in the
   order its `SELECT` chose (with "the result was cut short" when the row cap

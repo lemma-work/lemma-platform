@@ -22,7 +22,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.modules.agent.services.runtime_model_factory import (
+from app.modules.agent.infrastructure.providers.model_factory import (
     supports_token_precount,
     usage_limits_for,
 )
@@ -113,9 +113,14 @@ def test_real_provider_classes_are_classified_correctly() -> None:
     "module_path, attribute, routed_through",
     [
         (
-            "app.modules.agent.services.conversation_title_service",
+            "app.modules.agent.application.background.title",
             "_TITLE_USAGE_LIMITS",
-            "usage_limits_for",
+            "app.modules.agent.infrastructure.providers.background",
+        ),
+        (
+            "app.modules.agent.application.background.memory_pass",
+            "_PASS_USAGE_LIMITS",
+            "app.modules.agent.infrastructure.providers.background",
         ),
     ],
 )
@@ -123,17 +128,19 @@ def test_every_declared_precount_still_goes_through_the_helper(
     module_path: str, attribute: str, routed_through: str
 ) -> None:
     """These constants ask for the pre-count, so each one is only safe because
-    its call site routes it through `usage_limits_for` — directly, or through
-    `resolve_system_runtime`, which is where a caller outside `agent` hands its
+    the provider that runs its call routes it through `usage_limits_for` -- as
+    `resolve_system_runtime` does for a caller outside `agent`, which hands its
     ceiling over and gets back the part of it the model can honour. If a
-    constant stops asking, this test has become noise; if a call site stops
+    constant stops asking, this test has become noise; if the provider stops
     routing, the grep below is what notices."""
     import importlib
     import inspect
 
     module = importlib.import_module(module_path)
     assert getattr(module, attribute).count_tokens_before_request is True
-    assert routed_through in inspect.getsource(module)
+    assert "usage_limits_for" in inspect.getsource(
+        importlib.import_module(routed_through)
+    )
 
 
 def test_the_published_operation_is_where_a_caller_outside_agent_routes() -> None:
@@ -144,5 +151,7 @@ def test_the_published_operation_is_where_a_caller_outside_agent_routes() -> Non
     import inspect
 
     from app.modules.agent.contracts import model_runtime
+    from app.modules.agent.infrastructure.providers import system_model
 
-    assert "usage_limits_for" in inspect.getsource(model_runtime)
+    assert model_runtime.resolve_system_runtime is system_model.resolve_system_runtime
+    assert "usage_limits_for" in inspect.getsource(system_model)

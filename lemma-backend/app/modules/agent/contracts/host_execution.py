@@ -11,18 +11,18 @@ reached into, so the link's internals stay the agent module's to change.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.agent_host_ops import (
+from app.modules.agent.agent_host.api import (
     HOST_OFFLINE,
     HOST_OFFLINE_MESSAGE,
     AgentHostOpError,
 )
-from app.modules.agent.infrastructure.agent_host.host_execution import (
+from app.modules.agent.agent_host.api import (
     host_execution_host_id,
     host_for_host_sandbox,
     is_paired_to_any_of,
 )
-from app.modules.agent.services.agent_host_ops import AgentHostOpClient
-from app.modules.agent.services.host_execution_selection import host_folder_for
+from app.modules.agent.agent_host.api import AgentHostOpClient
+from app.modules.agent.agent_host.api import host_folder_for
 
 
 __all__ = [

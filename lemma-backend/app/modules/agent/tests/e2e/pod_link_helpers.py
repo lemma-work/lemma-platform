@@ -25,10 +25,12 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 READ_TABLE = ["datastore.table.read", "datastore.record.read"]
 READ_FOLDER = ["folder.read"]
@@ -98,8 +100,8 @@ async def task_conversation(client: AsyncClient, pod_id: str) -> UUID:
 
 def asking_deps(
     *, user_id: UUID, org_id: UUID, pod_id: str, conversation_id: UUID, **extra
-) -> BaseAgentContext:
-    return BaseAgentContext(
+) -> ToolContext:
+    return ToolContext(
         user_id=user_id,
         org_id=org_id,
         pod_id=UUID(pod_id),
@@ -109,7 +111,7 @@ def asking_deps(
     )
 
 
-async def teammate(deps: BaseAgentContext, pod_id: str) -> Teammate:
+async def teammate(deps: ToolContext, pod_id: str) -> Teammate:
     teammates = await ask_service().teammates(
         user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
     )
@@ -118,7 +120,7 @@ async def teammate(deps: BaseAgentContext, pod_id: str) -> Teammate:
 
 async def thread(conversation_id: UUID) -> Conversation:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        found = await ConversationRepository(uow).get_conversation(
+        found = await Conversations(uow).get_conversation(
             conversation_id, include_runs=True
         )
     assert found is not None
@@ -134,19 +136,21 @@ async def finish_latest_run(
 ) -> UUID:
     """End the conversation's latest run as a run would: having said ``words``."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
+        messages = Messages(uow)
+        runs = Runs(uow)
         conversation = await conversations.get_conversation(
             conversation_id, include_runs=True
         )
         assert conversation is not None
         run = conversation.agent_runs[-1]
         if words is not None:
-            await conversations.append_message(
+            await messages.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=run.id,
                 draft=MessageDraft.of_text(words, role=MessageRole.ASSISTANT),
             )
-        await conversations.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run.id,
             status=status,
             conversation_status=(
@@ -162,7 +166,7 @@ async def finish_latest_run(
 
 async def messages(conversation_id: UUID):
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        found, _ = await ConversationRepository(uow).list_messages(
+        found, _ = await Messages(uow).list_messages(
             conversation_id=conversation_id, limit=100
         )
     return found

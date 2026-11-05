@@ -18,20 +18,17 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import WorkWriter, pod_namespace
-from app.modules.agent.domain.agent_host_permissions import (
-    AgentHostPermissionRequest,
-    agent_host_permission_request,
-)
-from app.modules.agent.domain.pausing_tools import parked_suspension_of
-from app.modules.agent.domain.run_budget_pause import is_budget_pause
+from app.modules.agent.domain.pause_opening import AgentHostPermissionRequest
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE, approval_key
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
     to_json_value,
 )
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.tool_errors import safe_error_text
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -60,7 +57,7 @@ async def stage_approval_execution(
 ) -> None:
     """Hand a recorded decision to the worker, in the decision's transaction.
 
-    Written beside the decision row, so the two commit together: a process
+    Written beside the decision, so the two commit together: a process
     that dies after the commit leaves an item a worker will run, where the old
     post-commit enqueue left a decision nothing would ever carry out.
 
@@ -85,29 +82,21 @@ async def stage_approval_execution(
     )
 
 
-def runs_in_worker(
-    *,
-    kind: str,
-    tool_args: JsonObject,
-    decision: AgentRunApprovalDecision,
-    has_tool_return: bool,
-) -> bool:
+def runs_in_worker(pause: Pause) -> bool:
     """Whether this decision's follow-up work belongs in a worker item.
 
     Only an approved ``request_approval`` runs something slow: commands can
     legitimately take minutes, and keeping that inside the request made a
     browser's 30-second timeout cancel reconciliation after the decision had
-    already committed. ``ask_user``, denials, already-executed approvals,
-    budget pauses (no tool behind them) and Agent Host permissions (a queued
-    command plus a wake-up, measured in milliseconds) stay inline, since
-    deferring them would only add latency to someone who is waiting.
+    already committed. Answers, denials, already-executed approvals, budget
+    pauses (no tool behind them) and Agent Host permissions (a queued command
+    plus a wake-up, measured in milliseconds) stay inline, since deferring
+    them would only add latency to someone who is waiting.
     """
     return (
-        kind == "request_approval"
-        and decision != AgentRunApprovalDecision.DENY
-        and not has_tool_return
-        and agent_host_permission_request(tool_args) is None
-        and not is_budget_pause(tool_args)
+        pause.kind is PauseKind.APPROVAL
+        and pause.decision not in (None, AgentRunApprovalDecision.DENY)
+        and not pause.returned
     )
 
 
@@ -137,7 +126,7 @@ async def stage_agent_host_permission(
     """
     # Lazy: the dispatch repository pulls in the Agent Host infrastructure,
     # which imports back through the harnesses.
-    from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+    from app.modules.agent.agent_host.api import (
         AgentHostDispatchRepository,
     )
 
@@ -186,12 +175,14 @@ async def record_session_approvals(
         exact_command_permission_id,
         record_session_approval,
     )
-    from app.modules.agent.tools.approval_denials import (
+    from app.modules.agent.infrastructure.tools.approval.denials import (
         SANDBOX_COMMAND_TOOLS,
         answered,
         card_lends,
     )
-    from app.modules.agent.tools.authority import conversation_workload_actor_id
+    from app.modules.agent.infrastructure.tools.authority import (
+        conversation_workload_actor_id,
+    )
 
     workload_actor_id = conversation_workload_actor_id(agent_id=agent_id, pod_id=pod_id)
 
@@ -255,7 +246,9 @@ async def agent_host_permission_tool_return(
     proceeds, or does not, on its own.
     """
     # Lazy: the tool models import the tool registry, which imports back here.
-    from app.modules.agent.tools.user_interaction.models import RequestApprovalResponse
+    from app.modules.agent.infrastructure.tools.user_interaction.models import (
+        RequestApprovalResponse,
+    )
 
     host_id = await stage_agent_host_permission(
         uow, request=request, agent_run_id=agent_run_id, decision=decision
@@ -289,7 +282,7 @@ async def agent_host_permission_tool_return(
 
 async def _wake_host(host_id: UUID) -> None:
     # Lazy for the same reason as the repository above.
-    from app.modules.agent.infrastructure.agent_host.channels import poke_host
+    from app.modules.agent.agent_host.api import poke_host
 
     await poke_host(host_id)
 
@@ -299,10 +292,10 @@ async def _turn_ended_while_parked(
 ) -> bool:
     """Whether Lemma ended this run's turn because the request sat unanswered."""
     # Lazy for the same reason as the dispatch repository above.
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.runs import Runs
 
-    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
-    return run is not None and parked_suspension_of(run.metadata) is not None
+    run = await Runs(uow).get_agent_run(agent_run_id)
+    return run is not None and run.state.suspended_while_parked is not None
 
 
 async def _resume_carries_the_approval(
@@ -310,7 +303,7 @@ async def _resume_carries_the_approval(
 ) -> bool:
     """Whether the run resuming this decision will carry it to its host."""
     # Lazy for the same reason as the dispatch repository above.
-    from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+    from app.modules.agent.agent_host.api import (
         host_pre_approves,
     )
 
@@ -330,7 +323,7 @@ def _permission_decision_message(
         # Read by a resumed run, in a new turn. The ACP request it answers
         # was dropped with the turn that asked it. A host that honours
         # pre-approvals is handed this one with the resume, and allows the
-        # same action once without asking (`harnesses/agent_host/
+        # same action once without asking (`agent_host/harness/
         # pre_approvals.py`); an older one asks the person again.
         if decision == AgentRunApprovalDecision.DENY:
             return (
@@ -376,14 +369,14 @@ def _permission_decision_message(
 async def execute_approved_tool_as_user(
     *,
     uow: SqlAlchemyUnitOfWork,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     tool_name: str,
     args: dict[str, object],
     approval_id: str | None = None,
 ) -> dict[str, object]:
     """Run an approved tool outside the database transaction; never raise."""
-    # Lazy to avoid importing the tool registry back through ConversationService.
-    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+    # Lazy: the tool catalog is a large graph the pause use cases need only here.
+    from app.modules.agent.services.approval_executor import ApprovalExecutor
 
     try:
         # Approved commands may run for minutes. Release the checked-out DB
@@ -423,3 +416,43 @@ async def execute_approved_tool_as_user(
         # `httpx.HTTPStatusError` stringifies with the full URL -- a signed
         # storage link or a connector callback carrying a token in its query.
         return {"ok": False, "error": safe_error_text(exc)}
+
+
+def unconfirmed_execution_return(pause: Pause, *, claimed: bool) -> tuple[str, object]:
+    """The honest return for an approval whose execution never reported.
+
+    ``claimed``: an executor took the one-shot claim and then lost its lease --
+    killed, out of memory, partitioned -- so the tool may or may not have run,
+    and it is never run again: an approved tool runs with a person's authority,
+    and running it twice is worse than saying so. Unclaimed: it kept failing
+    before it started, so nothing ran.
+    """
+    logger.error(
+        "agent.conversation_approvals.approved_tool_never_confirmed.failed",
+        conversation_id=str(pause.conversation_id),
+        approval_id=pause.tool_call_id,
+        claimed=claimed,
+    )
+    # Lazy: the tool models import the tool registry, which imports back
+    # through these reconciliation helpers.
+    from app.modules.agent.infrastructure.tools.user_interaction.models import (
+        RequestApprovalResponse,
+    )
+
+    error = (
+        "This was approved, but the worker running it stopped before it "
+        "reported a result, and Lemma cannot re-run an approved action. "
+        "Check whether it took effect before asking again."
+        if claimed
+        else (
+            "This was approved, but Lemma could not start it, so it did not "
+            "run. Ask again if it is still needed."
+        )
+    )
+    return pause.tool_name, RequestApprovalResponse(
+        success=False,
+        error=error,
+        decision=pause.decision,
+        executed=False,
+        response=pause.response,
+    ).model_dump(mode="json")

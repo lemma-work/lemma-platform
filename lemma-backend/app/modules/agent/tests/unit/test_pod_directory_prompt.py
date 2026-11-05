@@ -27,8 +27,8 @@ import pytest
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.prompt_directories import _pod_cwd, _workspace_cwd
-from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.domain.prompt.directories import _pod_cwd, _workspace_cwd
+from app.modules.agent.domain.prompt.templates import build_agent_instructions
 from app.modules.agent.domain.workspace_location import resolve_workspace_location
 
 pytestmark = pytest.mark.unit
@@ -143,12 +143,12 @@ class TestTheDirectoryFallsBackToWhereTheAgentActuallyIs:
     answer rather than three.
     """
 
-    def _conversation(self, metadata=None):
+    def _conversation(self, cwd: str | None = None):
         return Conversation(
             id=UUID("00000000-0000-4000-8000-0000000000ab"),
             pod_id=uuid4(),
             user_id=uuid4(),
-            metadata=metadata or {},
+            cwd=cwd,
         )
 
     def test_the_workspace_fallback_matches_the_resolver(self):
@@ -165,10 +165,8 @@ class TestTheDirectoryFallsBackToWhereTheAgentActuallyIs:
         )
 
     def test_a_persisted_cwd_wins_over_any_default(self):
-        """The common case: creation stamps the directory into metadata."""
-        conversation = self._conversation(
-            {"cwd": f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"}
-        )
+        """The common case: creation stamps the directory on the row."""
+        conversation = self._conversation(f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk")
         assert (
             _workspace_cwd(SimpleNamespace(), conversation)
             == f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"
@@ -176,14 +174,10 @@ class TestTheDirectoryFallsBackToWhereTheAgentActuallyIs:
 
     def test_the_pod_fallback_shares_the_workspace_suffix(self):
         """The two filesystems mirror each other; a second derivation drifts."""
-        conversation = self._conversation(
-            {"cwd": f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"}
-        )
+        conversation = self._conversation(f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk")
         assert _pod_cwd(SimpleNamespace(), conversation) == "/me/c/2026-09-15/ly827dnk"
 
     def test_the_context_still_wins_when_it_carries_one(self):
-        conversation = self._conversation(
-            {"cwd": f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"}
-        )
+        conversation = self._conversation(f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk")
         ctx = SimpleNamespace(workspace_cwd=f"{WORKSPACE_ROOT}/somewhere/else")
         assert _workspace_cwd(ctx, conversation) == f"{WORKSPACE_ROOT}/somewhere/else"

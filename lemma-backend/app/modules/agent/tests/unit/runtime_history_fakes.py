@@ -1,6 +1,6 @@
 """One conversation's messages, read the way the runtime history queries read them.
 
-The history assembly (``services/runtime_history``) is handed the source it
+The history assembly (``domain/runtime_history``) is handed the source it
 reads, so this stands in for the repository at that seam. Its reads keep the
 queries' contracts -- which messages in no run are carried, and within which
 bounds -- and nothing else: the queries are held to the same contracts against
@@ -20,15 +20,16 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
-from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY, folded_from
-from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON, held_messages
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
-from app.modules.agent.domain.queued_messages import (
-    DURING_ACTIVE_RUN,
-    STEERED_INTO_RUN,
+from app.modules.agent.domain.folded_turns import folded_from
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.held_turns import held_messages
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import (
+    AgentRuntimeConfig,
+    MessageDraft,
+    QueueState,
 )
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig, MessageDraft
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
 )
@@ -53,6 +54,7 @@ class StoredConversation:
                 kind=draft.kind,
                 text=draft.text,
                 metadata=draft.metadata,
+                state=draft.state,
             )
         )
 
@@ -61,16 +63,17 @@ class StoredConversation:
     ) -> AgentRun:
         """A run: what started it, and the agent's answer. ``note`` is a
         member's private note, which starts a private run."""
-        marks = {PRIVATE_NOTE_KEY: True} if note else None
         run = AgentRun(
             conversation_id=self.id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
             started_at=datetime.now(timezone.utc),
-            metadata=marks,
+            state=RunState(private_note=note),
         )
         self.runs.append(run)
         self._write(
-            MessageDraft.of_text(asked, role=MessageRole.USER, metadata=marks),
+            MessageDraft.of_text(
+                asked, role=MessageRole.USER, state=MessageState(private_note=note)
+            ),
             run_id=run.id,
         )
         if answered is not None:
@@ -99,7 +102,9 @@ class StoredConversation:
             MessageDraft.of_text(
                 text,
                 role=MessageRole.USER,
-                metadata={DURING_ACTIVE_RUN: True, STEERED_INTO_RUN: str(into.id)},
+                state=MessageState(
+                    queue_state=QueueState.STEERED, steered_into_run_id=into.id
+                ),
             ),
             run_id=run.id,
         )
@@ -131,14 +136,14 @@ class StoredConversation:
         self._write(MessageDraft.of_text(text, role=MessageRole.USER), run_id=None)
 
     def folded(self, *lines: tuple[MessageRole, str]) -> UUID:
-        """What ``fold_history`` writes when a merge joins another of the
+        """What ``FoldConversations.fold`` writes when a merge joins another of the
         person's chats to this one: what they saw of it, in no run, each line
         marked with the conversation it came from. Returns that conversation."""
         other = uuid4()
         for role, text in lines:
             self._write(
                 MessageDraft.of_text(
-                    text, role=role, metadata={FOLDED_FROM_KEY: str(other)}
+                    text, role=role, state=MessageState(folded_from=other)
                 ),
                 run_id=None,
             )
@@ -168,15 +173,12 @@ class StoredConversation:
             and (after_sequence is None or message.sequence > after_sequence)
             and (before_sequence is None or message.sequence < before_sequence)
         ]
-        copies = [m for m in within if folded_from(m.metadata) is not None]
+        copies = [m for m in within if folded_from(m) is not None]
         others = [
             m
             for m in within
-            if folded_from(m.metadata) is None
-            and (
-                m.kind is MessageKind.NOTIFICATION
-                or (m.metadata or {}).get(HELD_FOR_A_PERSON) is True
-            )
+            if folded_from(m) is None
+            and (m.kind is MessageKind.NOTIFICATION or m.state.held_for_a_person)
         ]
         carried = {m.id for m in others[-limit:] + copies[-folded_limit:]}
         return [message for message in within if message.id in carried]

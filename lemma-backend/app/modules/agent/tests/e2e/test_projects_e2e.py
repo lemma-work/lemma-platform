@@ -42,7 +42,8 @@ async def test_project_groups_children_and_shares_cwd(
 ):
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
 
-    # A PROJECT with an explicit workspace cwd. The type is preserved (not coerced).
+    # A PROJECT gets a directory of its own. The type is preserved (not coerced).
+    # A cwd a client sends is a tag, not where the project works.
     project = await _create_conversation(
         authenticated_client,
         pod_id,
@@ -53,7 +54,9 @@ async def test_project_groups_children_and_shares_cwd(
         },
     )
     assert project["type"] == "PROJECT"
-    assert project["metadata"]["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
+    project_cwd = project["workspace_cwd"]
+    assert project_cwd.startswith(f"{WORKSPACE_ROOT}/c/")
+    assert project["metadata"]["cwd"] == project_cwd
 
     # A PROJECT is a root conversation: it shows in the default list and under a
     # type=PROJECT filter.
@@ -70,7 +73,7 @@ async def test_project_groups_children_and_shares_cwd(
         {"title": "task under project", "type": "CHAT", "parent_id": project["id"]},
     )
     assert child["parent_id"] == project["id"]
-    assert child["metadata"]["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
+    assert child["workspace_cwd"] == project_cwd
     # It is a normal conversation, not a spawned sub-agent.
     assert not child["metadata"].get("is_sub_agent")
 
@@ -88,9 +91,9 @@ async def test_root_conversation_records_own_cwd(authenticated_client, fixed_tes
     convo = await _create_conversation(
         authenticated_client, pod_id, {"title": "root", "type": "CHAT"}
     )
-    # cwd is always recorded in metadata; a root gets its own c/{date}/{slug} dir,
-    # sharing its suffix with the pod filesystem default (`/me/{suffix}`).
-    cwd = convo["metadata"]["cwd"]
+    # cwd is always recorded; a root gets its own c/{date}/{slug} dir, sharing
+    # its suffix with the pod filesystem default (`/me/{suffix}`).
+    cwd = convo["workspace_cwd"]
     assert cwd.startswith(f"{WORKSPACE_ROOT}/c/")
     # Counted relative to the root, so this says "c/{date}/{slug}" however
     # deep the root itself is.
@@ -104,12 +107,10 @@ async def test_a_conversation_cannot_be_filed_under_someone_elses(
     """A child inherits its parent's directory and is listed under it, so a
     parent must be the caller's own conversation in the same pod."""
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-    private_cwd = f"{WORKSPACE_ROOT}/projects/owners-private"
     owners_project = await _create_conversation(
-        authenticated_client,
-        pod_id,
-        {"title": "Owner's", "type": "PROJECT", "metadata": {"cwd": private_cwd}},
+        authenticated_client, pod_id, {"title": "Owner's", "type": "PROJECT"}
     )
+    private_cwd = owners_project["workspace_cwd"]
     teammate = await signup_user(async_client, "foreign-parent")
     member = await invite_org_member(
         authenticated_client,

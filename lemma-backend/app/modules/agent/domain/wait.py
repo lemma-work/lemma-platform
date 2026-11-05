@@ -1,13 +1,8 @@
-"""Agent conversation waits: what a suspended conversation is waiting on.
+"""What a ``wait_for`` pause waits on, and what it recorded about itself.
 
-Deliberately shape-identical to :mod:`app.modules.workflow.domain.wait` — same
-statuses, same ``external_ref`` discipline, same "the wait row is the source of
-truth, never the context" rule. Both are driven by work items written with the
-row, so the two staying alike is worth more than either being individually
-tidier.
-
-A conversation wait is *not* a schedule. A schedule is a standing rule someone
-configured; this is one suspended execution that will resolve exactly once.
+The wait is a ``Pause`` of kind WAIT (``domain/pauses``); these are its own
+fields' types. A conversation wait is *not* a schedule: a schedule is a standing
+rule someone configured; this is one suspended run that resolves exactly once.
 """
 
 from datetime import datetime, timezone
@@ -15,9 +10,7 @@ from enum import Enum
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
-
-from app.core.domain.aggregate import AggregateRoot
+from pydantic import BaseModel, BeforeValidator, ConfigDict
 
 
 class AgentWaitType(str, Enum):
@@ -40,9 +33,8 @@ class AgentWaitType(str, Enum):
     changing is what a DATASTORE trigger is for, and a second path to the same
     event is a duplication this codebase can do without.
 
-    Human pauses are also absent: they resolve through the approval-decision
-    row, which records *who* decided. Adding them would mean two sources of
-    truth for one pause.
+    Human pauses are also absent: they are pauses of their own kinds, decided
+    by a person rather than woken.
     """
 
     TIME = "TIME"
@@ -53,16 +45,6 @@ class AgentWaitType(str, Enum):
 #: Wait types whose condition nobody publishes, so the claim has to look. These
 #: re-arm between checks instead of waking; see ``AgentWaitType``.
 POLLED_WAIT_TYPES = frozenset({AgentWaitType.PROCESS})
-
-
-class AgentWaitStatus(str, Enum):
-    ACTIVE = "ACTIVE"
-    COMPLETED = "COMPLETED"
-    CANCELLED = "CANCELLED"
-    # Terminal, and the only one nobody asked for: the wake kept raising until
-    # its work item went dead. Without it a wait whose wake can never succeed
-    # stays ACTIVE and past-due forever.
-    FAILED = "FAILED"
 
 
 class AgentWaitWakeReason(str, Enum):
@@ -164,81 +146,3 @@ class WaitSpec(BaseModel):
 
     def to_json(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
-
-
-class AgentConversationWaitEntity(AggregateRoot):
-    """A queryable wait owned by a paused agent conversation."""
-
-    conversation_id: UUID
-    agent_run_id: UUID
-    pod_id: UUID
-    tool_call_id: str
-
-    wait_type: AgentWaitType = AgentWaitType.TIME
-    status: AgentWaitStatus = AgentWaitStatus.ACTIVE
-
-    external_ref: str | None = None
-    scheduled_at: datetime | None = None
-
-    # The wait request verbatim, plus whatever the resolution recorded. Stored
-    # as JSON; read it through ``wait_spec``.
-    spec: dict[str, Any] = Field(default_factory=dict)
-    completed_at: datetime | None = None
-
-    @property
-    def wait_spec(self) -> WaitSpec:
-        return WaitSpec.model_validate(self.spec or {})
-
-    def rearm(
-        self, next_at: datetime, *, unreadable_since: datetime | None = None
-    ) -> None:
-        """Push a polled wait's next check out, without waking the agent.
-
-        Each check is its own work item, so its failures are counted against
-        that item alone: a healthy wait polled for an hour does not accumulate
-        unrelated transient errors into an abandonment.
-
-        ``unreadable_since`` is carried for as long as the target keeps not
-        answering and cleared the first time it does, so only an unbroken run
-        of failed reads can wake the agent with TARGET_UNREADABLE.
-        """
-        self.scheduled_at = next_at
-        spec = self.wait_spec
-        self.spec = spec.model_copy(
-            update={
-                "poll_attempt": spec.poll_attempt + 1,
-                "unreadable_since": unreadable_since,
-            }
-        ).to_json()
-
-    # Each ending below applies only to an ACTIVE wait and says whether it
-    # did. A wait ends once: a second ending -- a stop arriving after the wake
-    # it raced -- would rewrite why it woke and when, and the history already
-    # holds the tool return the first ending wrote.
-
-    def complete(self, reason: AgentWaitWakeReason) -> bool:
-        return self._end(AgentWaitStatus.COMPLETED, woke_because=reason.value)
-
-    def cancel(self) -> bool:
-        return self._end(
-            AgentWaitStatus.CANCELLED,
-            woke_because=AgentWaitWakeReason.CANCELLED.value,
-        )
-
-    def abandon(self, error: str) -> bool:
-        """Give up after its work item ran out of attempts. Stays WAITING.
-
-        Deliberately not a wake: we could not synthesize a tool return, so there
-        is nothing truthful to hand the model. The row records why, and the error
-        log is the operator's signal — a stuck conversation is bad, but a hot
-        retry loop that hides it is worse.
-        """
-        return self._end(AgentWaitStatus.FAILED, abandoned_because=error)
-
-    def _end(self, status: AgentWaitStatus, **recorded: str) -> bool:
-        if self.status != AgentWaitStatus.ACTIVE:
-            return False
-        self.status = status
-        self.spec = {**self.spec, **recorded}
-        self.completed_at = datetime.now(timezone.utc)
-        return True

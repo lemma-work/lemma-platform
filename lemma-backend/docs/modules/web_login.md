@@ -21,7 +21,7 @@ and the session simply stays in it.
 
 ## What it does not own
 
-Driving the browser (`agent/tools/browser`) and the takeover a person signs in
+Driving the browser (`agent/infrastructure/tools/browser`) and the takeover a person signs in
 through (`workspace`). It reaches both through their public surfaces and is
 reached through `web_login/contracts`.
 

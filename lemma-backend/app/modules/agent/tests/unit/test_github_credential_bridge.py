@@ -10,11 +10,15 @@ import pytest
 
 from app.core.authorization.current import get_current_context
 from app.modules.agent.domain.workspace_location import ProjectRepo
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
-from app.modules.agent.tools.workspace_cli import github_project
-from app.modules.agent.tools.workspace_cli import workspace_cli
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_credential_bridge as bridge,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli import github_project
+from app.modules.agent.infrastructure.tools.workspace_cli import workspace_cli
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
 from app.core.domain.errors import DomainError
 from app.modules.connectors.contracts.pod_connectors import (
     ConnectionRequiredError,
@@ -62,13 +66,13 @@ class _FakeCredentialSession:
         return {"success": True}
 
 
-def _context() -> BaseAgentContext:
-    return BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+def _context() -> ToolContext:
+    return ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
 
 
 def _credential(**overrides):
     """A resolver returning one credential, recording who asked."""
-    calls: list[BaseAgentContext] = []
+    calls: list[ToolContext] = []
 
     async def _resolve(ctx):
         calls.append(ctx)
@@ -86,7 +90,7 @@ def _credential(**overrides):
 
 
 def _resolves_to_nothing():
-    calls: list[BaseAgentContext] = []
+    calls: list[ToolContext] = []
 
     async def _resolve(ctx):
         calls.append(ctx)

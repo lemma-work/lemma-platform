@@ -14,9 +14,13 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+    exec_command_internal,
+)
 from app.modules.test_support.e2e.waiters import eventually
 from sandbox_runtime.paths import RUNS_ROOT
 
@@ -65,8 +69,8 @@ async def factory(
     )
     assert granted.status_code == status.HTTP_200_OK, granted.text
 
-    def context(agent: dict, **extra) -> BaseAgentContext:
-        return BaseAgentContext(
+    def context(agent: dict, **extra) -> ToolContext:
+        return ToolContext(
             user_id=UUID(fixed_test_user["id"]),
             org_id=UUID(fixed_test_org["id"]),
             pod_id=UUID(pod_id),
@@ -87,7 +91,7 @@ async def factory(
     }
 
 
-async def _exec(ctx: BaseAgentContext, cmd: str):
+async def _exec(ctx: ToolContext, cmd: str):
     return await exec_command_internal(
         ctx, ExecCommandRequest(cmd=cmd, timeout_seconds=180)
     )

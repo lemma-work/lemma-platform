@@ -17,9 +17,11 @@ from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from uuid import uuid7
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = pytest.mark.unit
 
@@ -211,7 +213,7 @@ class TestWhenTheyTypeWhileTheAnswerIsStillComing:
                 role=MessageRole.USER,
                 kind=MessageKind.TEXT,
                 text="and then the new ones",
-                metadata={"during_active_run": True},
+                state=MessageState(queue_state=QueueState.QUEUED),
             ),
             _msg(
                 4,

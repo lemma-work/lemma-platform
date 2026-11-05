@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 from uuid import uuid7
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCapacity,
     AgentHostCommandKind,
@@ -43,7 +43,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostToolSource,
     AgentHostToolStatus,
 )
-from app.modules.agent.domain.agent_host_link import (
+from app.modules.agent.agent_host.domain.link import (
     AGENT_HOST_LINK_HEARTBEAT_MS,
     AGENT_HOST_LINK_PATH,
     LINK_CLOSE_CODES,
@@ -59,7 +59,7 @@ from app.modules.agent.domain.agent_host_link import (
     ServerFrameType,
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.harnesses.agent_host.events import (
+from app.modules.agent.agent_host.harness.events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     event_text,
@@ -322,7 +322,7 @@ def test_bulk_bytes_bounds_and_routes_are_shared() -> None:
     """What rides the link is bounded the same way on both sides, and the
     bytes that do not ride it go to the same routes, named the same way."""
     from app.core.server_limits import WS_MAX_BYTES
-    from app.modules.agent.domain import agent_host_transfer as transfer
+    from app.modules.agent.agent_host.domain import transfer
     from app.modules.workspace.providers import agent_host_ops as provider
 
     bulk = CONTRACT["bulk_bytes"]
@@ -352,7 +352,7 @@ def test_the_host_execution_capability_rides_on_hello_and_control() -> None:
 
 
 def test_the_oldest_protocol_a_host_may_speak_is_shared() -> None:
-    from app.modules.agent.domain.agent_host import MIN_AGENT_HOST_PROTOCOL_VERSION
+    from app.modules.agent.agent_host.domain.host import MIN_AGENT_HOST_PROTOCOL_VERSION
 
     assert MIN_AGENT_HOST_PROTOCOL_VERSION == CONTRACT["min_protocol_version"]
 
@@ -360,7 +360,7 @@ def test_the_oldest_protocol_a_host_may_speak_is_shared() -> None:
 def test_the_compute_role_bodies_are_the_ones_the_contract_names() -> None:
     """A connected machine's frames: the role, every body's fields, and the
     vocabularies the machine reports in."""
-    from app.modules.agent.domain import agent_host_link_compute as compute
+    from app.modules.agent.agent_host.domain import compute
 
     contract = CONTRACT["compute"]
     assert compute.LinkRole.COMPUTE.value == contract["role"]

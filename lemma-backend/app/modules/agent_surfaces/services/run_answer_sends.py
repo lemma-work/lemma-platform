@@ -34,7 +34,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.run_replies import (
+from app.modules.agent.contracts.channel_replies import (
     is_earlier_answer,
     run_reply_material,
 )

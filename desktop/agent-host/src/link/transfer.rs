@@ -9,7 +9,7 @@
 //! is this host's own and that a blob's run is one this host holds. See
 //! docs/architecture/desktop-host-execution.md §4 and
 //! docs/architecture/agent-host.md#bulk-bytes; the backend's half is
-//! `app/modules/agent/api/controllers/agent_host_transfer_controller.py`.
+//! `app/modules/agent/agent_host/controllers/transfers.py`.
 
 use std::time::Duration;
 

@@ -1,0 +1,208 @@
+"""What the rest of the agent module may use of the Agent Host.
+
+Nothing outside ``agent_host/`` imports any other file in it
+(``tests/unit/test_agent_host_boundary``). Each name resolves on first use, so
+importing this file costs nothing: a caller that only needs a status enum does
+not load the link, and the worker's harness stays out of the API process.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.modules.agent.agent_host.control.channels import (
+        notify_host_revoked as notify_host_revoked,
+        poke_host as poke_host,
+    )
+    from app.modules.agent.agent_host.control.dispatch_repository import (
+        AgentHostDispatchRepository as AgentHostDispatchRepository,
+    )
+    from app.modules.agent.agent_host.control.final_answer import (
+        store_final_answer as store_final_answer,
+    )
+    from app.modules.agent.agent_host.control.host_execution import (
+        host_execution_host_id as host_execution_host_id,
+        host_for_host_sandbox as host_for_host_sandbox,
+        is_paired_to_any_of as is_paired_to_any_of,
+    )
+    from app.modules.agent.agent_host.control.host_execution_selection import (
+        choose_host_workspace as choose_host_workspace,
+        host_folder_for as host_folder_for,
+        recorded_host_workspace as recorded_host_workspace,
+    )
+    from app.modules.agent.agent_host.control.native_commands import (
+        settle_native_commands as settle_native_commands,
+    )
+    from app.modules.agent.agent_host.control.ops import (
+        AgentHostOpClient as AgentHostOpClient,
+    )
+    from app.modules.agent.agent_host.control.recovery import (
+        cancel_abandoned_host_runs as cancel_abandoned_host_runs,
+        cleanup_retained_state as cleanup_retained_state,
+        reconcile_expired_leases as reconcile_expired_leases,
+    )
+    from app.modules.agent.agent_host.control.repository import (
+        AgentHostRepository as AgentHostRepository,
+    )
+    from app.modules.agent.agent_host.controllers import (
+        routers as routers,
+    )
+    from app.modules.agent.agent_host.controllers.schemas import (
+        AgentHostHarnessResponse as AgentHostHarnessResponse,
+    )
+    from app.modules.agent.agent_host.domain.host import (
+        AgentHostHarnessHealth as AgentHostHarnessHealth,
+        AgentHostStatus as AgentHostStatus,
+        effective_agent_host_status as effective_agent_host_status,
+    )
+    from app.modules.agent.agent_host.domain.ops import (
+        HOST_OFFLINE as HOST_OFFLINE,
+        HOST_OFFLINE_MESSAGE as HOST_OFFLINE_MESSAGE,
+        AgentHostOpError as AgentHostOpError,
+    )
+    from app.modules.agent.agent_host.domain.selections import (
+        validate_agent_host_model as validate_agent_host_model,
+        validate_agent_host_selections as validate_agent_host_selections,
+    )
+    from app.modules.agent.agent_host.harness.artifacts import (
+        PodFileAgentHostArtifactWriter as PodFileAgentHostArtifactWriter,
+    )
+    from app.modules.agent.agent_host.harness.harness import (
+        RemoteHarness as RemoteHarness,
+    )
+    from app.modules.agent.agent_host.harness.pre_approvals import (
+        host_pre_approves as host_pre_approves,
+    )
+    from app.modules.agent.agent_host.link.registry import (
+        link_registry as link_registry,
+    )
+    from app.modules.agent.agent_host.domain.host import (
+        AGENT_HOST_PROTOCOL_VERSION as AGENT_HOST_PROTOCOL_VERSION,
+    )
+    from app.modules.agent.agent_host.domain.link import (
+        AGENT_HOST_LINK_HEARTBEAT_MS as AGENT_HOST_LINK_HEARTBEAT_MS,
+        AGENT_HOST_LINK_MISSED_HEARTBEATS as AGENT_HOST_LINK_MISSED_HEARTBEATS,
+        REVOKED_OR_MISSING_REASON as REVOKED_OR_MISSING_REASON,
+        HostFrameType as HostFrameType,
+        LinkCloseCode as LinkCloseCode,
+        LinkErrorCode as LinkErrorCode,
+        LinkFrame as LinkFrame,
+        ServerFrameType as ServerFrameType,
+    )
+    from app.modules.agent.agent_host.domain.compute import (
+        COMPUTE_MIN_PROTOCOL_VERSION as COMPUTE_MIN_PROTOCOL_VERSION,
+        COMPUTE_PAIRING_TTL_SECONDS as COMPUTE_PAIRING_TTL_SECONDS,
+        ComputeControlBody as ComputeControlBody,
+        ComputeControlOkBody as ComputeControlOkBody,
+        ComputeHelloBody as ComputeHelloBody,
+        ComputePairBody as ComputePairBody,
+        ComputePairedBody as ComputePairedBody,
+        ComputeWelcomeBody as ComputeWelcomeBody,
+        MachineMode as MachineMode,
+        MachineReport as MachineReport,
+        RuntimeBundleTarget as RuntimeBundleTarget,
+        RuntimeGrant as RuntimeGrant,
+        StreamTargetKind as StreamTargetKind,
+    )
+    from app.modules.agent.agent_host.control.channels import (
+        REVOKED as REVOKED,
+        parse_host_notice as parse_host_notice,
+    )
+    from app.modules.agent.agent_host.link.mcp_relay import (
+        notice_stream as notice_stream,
+    )
+    from app.modules.agent.agent_host.link.ownership import (
+        LinkOwnership as LinkOwnership,
+    )
+    from app.modules.agent.agent_host.link.wire import (
+        TRANSIENT_ERRORS as TRANSIENT_ERRORS,
+        EmptyBody as EmptyBody,
+        LinkClose as LinkClose,
+        LinkSocket as LinkSocket,
+        LinkWriter as LinkWriter,
+        bearer_secret as bearer_secret,
+        log_host_reported_error as log_host_reported_error,
+        validation_summary as validation_summary,
+    )
+
+
+_PACKAGE = "app.modules.agent.agent_host"
+
+#: Each exported name, by the file under ``agent_host/`` that defines it.
+_EXPORTS: dict[str, str] = {
+    "notify_host_revoked": "control.channels",
+    "poke_host": "control.channels",
+    "AgentHostDispatchRepository": "control.dispatch_repository",
+    "store_final_answer": "control.final_answer",
+    "host_execution_host_id": "control.host_execution",
+    "host_for_host_sandbox": "control.host_execution",
+    "is_paired_to_any_of": "control.host_execution",
+    "choose_host_workspace": "control.host_execution_selection",
+    "host_folder_for": "control.host_execution_selection",
+    "recorded_host_workspace": "control.host_execution_selection",
+    "settle_native_commands": "control.native_commands",
+    "AgentHostOpClient": "control.ops",
+    "cancel_abandoned_host_runs": "control.recovery",
+    "cleanup_retained_state": "control.recovery",
+    "reconcile_expired_leases": "control.recovery",
+    "AgentHostRepository": "control.repository",
+    "routers": "controllers",
+    "AgentHostHarnessResponse": "controllers.schemas",
+    "AgentHostHarnessHealth": "domain.host",
+    "AgentHostStatus": "domain.host",
+    "effective_agent_host_status": "domain.host",
+    "HOST_OFFLINE": "domain.ops",
+    "HOST_OFFLINE_MESSAGE": "domain.ops",
+    "AgentHostOpError": "domain.ops",
+    "validate_agent_host_model": "domain.selections",
+    "validate_agent_host_selections": "domain.selections",
+    "PodFileAgentHostArtifactWriter": "harness.artifacts",
+    "RemoteHarness": "harness.harness",
+    "host_pre_approves": "harness.pre_approvals",
+    "link_registry": "link.registry",
+    "AGENT_HOST_PROTOCOL_VERSION": "domain.host",
+    "AGENT_HOST_LINK_HEARTBEAT_MS": "domain.link",
+    "AGENT_HOST_LINK_MISSED_HEARTBEATS": "domain.link",
+    "REVOKED_OR_MISSING_REASON": "domain.link",
+    "HostFrameType": "domain.link",
+    "LinkCloseCode": "domain.link",
+    "LinkErrorCode": "domain.link",
+    "LinkFrame": "domain.link",
+    "ServerFrameType": "domain.link",
+    "COMPUTE_MIN_PROTOCOL_VERSION": "domain.compute",
+    "COMPUTE_PAIRING_TTL_SECONDS": "domain.compute",
+    "ComputeControlBody": "domain.compute",
+    "ComputeControlOkBody": "domain.compute",
+    "ComputeHelloBody": "domain.compute",
+    "ComputePairBody": "domain.compute",
+    "ComputePairedBody": "domain.compute",
+    "ComputeWelcomeBody": "domain.compute",
+    "MachineMode": "domain.compute",
+    "MachineReport": "domain.compute",
+    "RuntimeBundleTarget": "domain.compute",
+    "RuntimeGrant": "domain.compute",
+    "StreamTargetKind": "domain.compute",
+    "REVOKED": "control.channels",
+    "parse_host_notice": "control.channels",
+    "notice_stream": "link.mcp_relay",
+    "LinkOwnership": "link.ownership",
+    "TRANSIENT_ERRORS": "link.wire",
+    "EmptyBody": "link.wire",
+    "LinkClose": "link.wire",
+    "LinkSocket": "link.wire",
+    "LinkWriter": "link.wire",
+    "bearer_secret": "link.wire",
+    "log_host_reported_error": "link.wire",
+    "validation_summary": "link.wire",
+}
+
+
+def __getattr__(name: str) -> object:
+    home = _EXPORTS.get(name)
+    if home is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{_PACKAGE}.{home}"), name)
+    globals()[name] = value
+    return value

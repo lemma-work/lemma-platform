@@ -70,7 +70,7 @@ Agent Host's; the frames are:
 the token Lemma will present to the machine's runtime (derived per connection
 from the runtime credential key, never stored) and the overlay version the
 server will push. Everything is held to `wire_contract.json` (`compute`) from
-both `agent_host_link_compute.py` and `link/protocol.rs`.
+both `agent_host/domain/compute.py` and `link/protocol.rs`.
 
 Close codes mean what they mean to an Agent Host. The agent reconnects with
 backoff after anything else, and:

@@ -5,7 +5,7 @@ calling agent's own history therefore never contains image content, which is
 what makes this safe on a text-only model — the failure it replaces is a
 provider 400 when `BinaryContent` reaches a model that cannot accept it.
 
-Fallback policy is deliberately the opposite of `conversation_title_service`'s:
+Fallback policy is deliberately the opposite of the title's (`application/background/title`):
 titles fall back to the profile default, vision must not. Falling back here
 would resolve to the same text-only model that created the problem, and the
 400 would come back wearing a different hat. If no vision-capable model is
@@ -14,28 +14,20 @@ configured, the tool says so.
 
 from __future__ import annotations
 
-from dataclasses import replace
+import os
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from uuid import UUID
+
+from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
     current_usage_context,
 )
-from app.modules.usage.contracts.metering import metering_execution
-
-import asyncio
-import os
-from collections.abc import Sequence
-from dataclasses import dataclass
-from uuid import UUID
-
-from pydantic_ai import Agent as PydanticAIAgent
-from pydantic_ai import BinaryContent
-from pydantic_ai.messages import UserContent
-from pydantic_ai.models import Model
-from pydantic_ai import UsageLimits
 
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
-from app.modules.agent.domain.errors import RuntimeUnavailableError
+from app.modules.agent.domain.vision import VisionUnavailableError
 
 logger = get_logger(__name__)
 
@@ -66,13 +58,6 @@ _DEFAULT_INSTRUCTIONS = (
     "Describe this image completely enough that someone who cannot see it "
     "could act on it. Transcribe any text, tables, or diagram labels."
 )
-
-
-_NO_IMAGE_MODEL = "No model that reads images is set up for this deployment."
-
-
-class VisionUnavailableError(RuntimeError):
-    """No vision-capable model is configured for this deployment."""
 
 
 class VisionDescriptionError(RuntimeError):
@@ -115,114 +100,39 @@ def vision_delegate_available() -> bool:
 
 async def _resolve_vision_model(
     *, organization_id: UUID | None, user_id: UUID
-) -> Model:
-    """A vision-capable pydantic-ai model, or raise.
+) -> object:
+    """A vision-capable model, or raise.
 
-    Asserts the resolved catalog entry actually declares VISION so a misconfigured
-    `VISION_MODEL` fails here -- the setting named in the log, the cause in the
-    message -- rather than as an opaque provider error several layers down.
+    Resolution (``RuntimePurpose.VISION``) asserts the catalog entry actually
+    declares VISION so a misconfigured `VISION_MODEL` fails there -- the
+    setting named in the log, the cause in the message -- rather than as an
+    opaque provider error several layers down.
     """
     model_name = configured_vision_model_name()
-
-    # AgentRuntimeConfig lives in the shared runtime module (re-exported by
-    # value_objects); only RuntimeModelCapability is defined in runtime_profiles.
-    from app.core.domain.runtime import AgentRuntimeConfig
-    from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
-    from app.modules.agent.services.runtime_model_factory import (
-        pydantic_ai_model_from_runtime_profile,
-    )
-    from app.modules.agent.services.runtime_profile_service import (
-        DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-        AgentRuntimeProfileService,
-    )
+    # Imported here: resolution reaches the profile service, which reaches
+    # back into services that import the harness -- and the background model
+    # has no place in every process's startup imports.
+    from app.modules.agent.services.background_model import BackgroundModel
+    from app.modules.agent.services.runtime_resolution import RuntimeRequest
     from app.modules.agent.services.runtime_system_profiles import (
         system_profile_configured,
     )
-    from app.modules.agent.services.workspace_model_fallback import (
-        resolve_workspace_runtime,
+
+    background = BackgroundModel()
+    resolved = await background.resolve(
+        RuntimePurpose.VISION,
+        RuntimeRequest(
+            organization_id=organization_id, user_id=user_id, model_name=model_name
+        ),
     )
-
-    if not system_profile_configured():
-        # No system model to point VISION_MODEL at: use a workspace model that
-        # declares it reads images, and only such a model.
-        workspace = await resolve_workspace_runtime(
-            organization_id=organization_id,
-            user_id=user_id,
-            model_name=model_name,
-            require_vision=True,
-        )
-        if workspace is None:
-            raise VisionUnavailableError(
-                "No AI model that reads images is set up. Mark a model as "
-                "reading images on one of the workspace's providers in "
-                "Settings \u2192 Models."
-            )
-        workspace_model = pydantic_ai_model_from_runtime_profile(
-            runtime_profile=workspace.runtime_snapshot().as_payload(),
-            runtime_credentials=workspace.credentials,
-        )
-        if workspace_model is None:
-            raise VisionUnavailableError(
-                "The workspace's image-reading model could not be built from "
-                "its provider settings."
-            )
-        return workspace_model
-
-    # The settings that fix each refusal below go to the log, for whoever runs
-    # the deployment; the person whose agent asked is told what is missing.
-    if not model_name:
-        logger.warning(
-            "agent.vision.model_not_configured.refused",
-            operator_hint="Set VISION_MODEL to a system model that reads images.",
-        )
-        raise VisionUnavailableError(_NO_IMAGE_MODEL)
-
-    try:
-        resolved = await AgentRuntimeProfileService().resolve(
-            runtime=AgentRuntimeConfig(
-                profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                model_name=model_name,
-            ),
-            organization_id=organization_id,
-            user_id=user_id,
-        )
-    except RuntimeUnavailableError:
-        # The system profile does not offer this name at all. Resolution says
-        # so in words for a teammate's pinned model, which is not what this
-        # is, and checking capabilities next would blame the wrong thing.
-        logger.warning(
-            "agent.vision.model_not_offered.refused",
-            vision_model=model_name,
-            operator_hint=(
-                "VISION_MODEL names a model the system provider does not list; "
-                "add it to the provider's model names."
-            ),
-        )
-        raise VisionUnavailableError(
-            f"The model set up to read images, {model_name}, is not offered by "
-            "this deployment."
-        ) from None
-    entry = resolved.model
-    if entry is not None and RuntimeModelCapability.VISION not in entry.capabilities:
-        logger.warning(
-            "agent.vision.model_not_vision.refused",
-            vision_model=model_name,
-            operator_hint=(
-                "Add VISION_MODEL to LEMMA_OPENAI_VISION_MODEL_NAMES, or point "
-                "it at a model that reads images."
-            ),
-        )
-        raise VisionUnavailableError(
-            f"The model set up to read images, {model_name}, is not listed as "
-            "reading images."
-        )
-    model = pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.runtime_snapshot().as_payload(),
-        runtime_credentials=resolved.credentials,
-    )
+    assert resolved is not None  # vision resolves or raises
+    model = background.build(resolved)
     if model is None:
         raise VisionUnavailableError(
             f"VISION_MODEL '{model_name}' could not be built from the runtime profile."
+            if system_profile_configured()
+            else "The workspace's image-reading model could not be built from "
+            "its provider settings."
         )
     return model
 
@@ -257,7 +167,15 @@ async def describe_images(
         organization_id=organization_id, user_id=user_id
     )
 
-    prompt: list[UserContent] = [
+    from app.modules.agent.domain.background import (
+        BackgroundCall,
+        BackgroundLimits,
+        PromptPart,
+    )
+    from app.modules.agent.domain.tools import ImagePart
+    from app.modules.agent.services.background_model import BackgroundModel
+
+    prompt: list[PromptPart] = [
         (instructions or _DEFAULT_INSTRUCTIONS).strip(),
         "",
         "Images, in order:",
@@ -265,34 +183,36 @@ async def describe_images(
     for index, image in enumerate(images, start=1):
         prompt.append(f"{index}. {image.label}")
     for image in images:
-        prompt.append(BinaryContent(data=image.data, media_type=image.media_type))
+        prompt.append(ImagePart(data=image.data, media_type=image.media_type))
 
-    agent = PydanticAIAgent(model, instructions=_SYSTEM_PROMPT)
-    try:
-        current = current_usage_context()
-        # A copy of the run's context keeps its outside audience, so a
-        # contact's image is recorded as the contact's spend, not "vision" on
-        # the allowance of the member looking after the conversation.
-        usage_context = (
-            replace(current, source_type="vision")
-            if current
-            else UsageExecutionContext(
-                user_id=user_id,
-                organization_id=organization_id,
-                pod_id=None,
-                source_type="vision",
-            )
+    current = current_usage_context()
+    # A copy of the run's context keeps its outside audience, so a contact's
+    # image is recorded as the contact's spend, not "vision" on the allowance
+    # of the member looking after the conversation.
+    usage_context = (
+        replace(current, source_type="vision")
+        if current
+        else UsageExecutionContext(
+            user_id=user_id,
+            organization_id=organization_id,
+            pod_id=None,
+            source_type="vision",
         )
-        async with (
-            metering_execution(usage_context),
-            asyncio.timeout(VISION_TIMEOUT_SECONDS),
-        ):
-            result = await agent.run(
-                prompt,
-                usage_limits=UsageLimits(
+    )
+    try:
+        answer = await BackgroundModel().ask(
+            RuntimePurpose.VISION,
+            model,
+            BackgroundCall(
+                prompt=prompt,
+                limits=BackgroundLimits(
                     request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
                 ),
-            )
+                instructions=_SYSTEM_PROMPT,
+            ),
+            usage=usage_context,
+            timeout_seconds=VISION_TIMEOUT_SECONDS,
+        )
     except TimeoutError as exc:
         raise VisionDescriptionError(
             f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s."
@@ -305,7 +225,7 @@ async def describe_images(
             "The vision model could not describe the image."
         ) from exc
 
-    description = (result.output or "").strip()
+    description = (answer.output or "").strip()
     if not description:
         raise VisionDescriptionError("The vision model returned no description.")
     return description

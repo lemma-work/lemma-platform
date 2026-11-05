@@ -4,7 +4,7 @@
 //! a request that expects an answer, `re` on the answer points back at it, and
 //! a push carries neither. The table of frames, the close codes and what each
 //! side does with them are in docs/architecture/agent-host.md#the-link; the
-//! backend's copy is `app/modules/agent/domain/agent_host_link.py`, and both
+//! backend's copy is `app/modules/agent/agent_host/domain/link.py`, and both
 //! are held to `tests/fixtures/wire_contract.json`.
 
 use serde::{Deserialize, Serialize};
@@ -343,7 +343,7 @@ pub type EventsBody = EventBatch;
 ///
 /// This host never speaks it -- it is an Agent Host, and every frame it sends
 /// is the default role. The vocabulary is declared here anyway, because this
-/// file and the backend's `agent_host_link_compute.py` are the two copies the
+/// file and the backend's `agent_host/domain/compute.py` are the two copies the
 /// wire contract holds together: a role, a body field or a mux number that one
 /// side changes and the other does not would be found here, not in a machine
 /// whose streams silently stall. The machine's own agent runs the backend's

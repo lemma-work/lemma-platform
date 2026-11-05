@@ -29,10 +29,12 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.mcp import resource_tool_name
-from app.modules.agent.services.mcp_content import tool_call_result
+from app.modules.agent.infrastructure.mcp.content import tool_call_result
 from app.modules.agent.services.poll_backoff import poll_until
-from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
-from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
+from app.modules.agent.infrastructure.providers.tool_schemas import (
+    inline_tool_schema_refs,
+)
+from app.modules.agent.infrastructure.tools.payload_limits import bounded_tool_payload
 from app.modules.function.contracts import (
     FunctionEntity,
     FunctionRunEntity,

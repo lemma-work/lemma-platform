@@ -5,7 +5,7 @@ and the ingress service is far past the size where a self-contained 70-line
 branch should still be living inside it.
 
 What a reply *means* -- which words approve, how "2" picks an option -- is the
-agent's to decide (`agent.contracts.interaction_replies`). This module keeps the
+agent's to decide (`agent.contracts.channel_words`). This module keeps the
 transport half: does the message target the pause at all, did the person ask to
 type it, and falling through to an ordinary message when it is not a decision.
 
@@ -25,11 +25,9 @@ from enum import StrEnum
 
 from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
-from app.modules.agent.contracts.interaction_replies import (
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channels import PendingInteraction
+from app.modules.agent.contracts.channel_words import (
     interpret_reply_to_pending,
     reply_plainly_answers_pending,
 )

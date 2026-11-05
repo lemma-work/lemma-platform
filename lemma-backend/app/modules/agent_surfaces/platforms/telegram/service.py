@@ -17,9 +17,8 @@ import hmac
 from typing import Any
 
 from redis.exceptions import RedisError
-from pydantic_ai.tools import RunContext
 
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -358,7 +357,7 @@ class TelegramPlatformService:
         mime_type: str,
         caption: str | None = None,
     ) -> bool:
-        """Send raw file bytes to the inbound chat (egress, no RunContext).
+        """Send raw file bytes to the inbound chat (egress).
 
         Returns True on success; False when the chat/credentials are missing so
         the caller can fall back to delivering a URL link.
@@ -469,7 +468,7 @@ class TelegramPlatformService:
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
-        """Download a single inbound Telegram attachment (no RunContext).
+        """Download a single inbound Telegram attachment.
 
         Used by inbound auto-ingest; mirrors the getFile + file-download flow of
         the former ``download_file`` tool but takes a raw attachment dict.
@@ -513,16 +512,16 @@ class TelegramPlatformService:
 
     def _telegram_metadata(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: ToolContext,
     ) -> TelegramSurfaceEventMetadata | None:
-        metadata = ctx.deps.surface_metadata
+        metadata = ctx.surface_metadata
         if isinstance(metadata, TelegramSurfaceEventMetadata):
             return metadata
         return None
 
     def _current_message_attachments(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: ToolContext,
     ) -> list[TelegramFileAttachment]:
         metadata = self._telegram_metadata(ctx)
         if metadata is None:

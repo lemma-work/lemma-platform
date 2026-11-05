@@ -1109,6 +1109,7 @@ def _import_e2e_models() -> None:
     from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
+    from app.modules.agent.agent_host.control import models as agent_host_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
     from app.modules.apps.infrastructure import models as app_models
     from app.modules.connectors.infrastructure import models as connector_models
@@ -1138,6 +1139,7 @@ def _import_e2e_models() -> None:
         workspace_models,
         machine_connection_models,
         agent_runtime_models,
+        agent_host_models,
         work_models,
         user_models,
         organization_models,

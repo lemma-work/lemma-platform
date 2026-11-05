@@ -3,16 +3,16 @@
 WhatsApp takes free-form messages from a business only within 24 hours of the
 person's last one. Past that, a message to a member goes as an approved
 template asking them to reply (``member_reach``), and the message itself is
-held here -- in the conversation's metadata, so it outlives any one worker --
-until they do. Their reply reopens the window: the transaction that writes it
+held here -- in ``surface_conversation_state``, so it outlives any one worker
+-- until they do. Their reply reopens the window: the transaction that writes it
 turns what was held into ``surface_deliveries`` rows, which the destination
 pump sends before anything else is said.
 
 Held for a week. A message nobody came back for in that time is dropped when
 they finally do, rather than delivered as if it were news.
 
-Adding and clearing are both conditional. Each write locks the conversation row
-and stamps a new ``version``; a delivery clears only the messages it sent, so a
+Adding and clearing are both conditional. Each write locks the conversation's
+row and stamps a new ``version``; a delivery clears only the messages it sent, so a
 message held while the earlier ones were going out stays held for the next
 reply instead of being cleared unsent.
 """
@@ -26,13 +26,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
-    conversation_metadata_records as metadata_records,
-)
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
 from app.modules.agent_surfaces.domain.deliveries import DeliveryContent
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
+)
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
@@ -42,9 +39,6 @@ from app.modules.agent_surfaces.services.surface_deliveries import (
 )
 
 logger = get_logger(__name__)
-
-#: The conversation metadata key the held messages are written under.
-HELD_REPLIES_KEY = "surface_held_replies"
 
 #: How long a held message is still worth delivering.
 HOLD_FOR = timedelta(days=7)
@@ -84,8 +78,8 @@ class HeldReplies(BaseModel):
 async def _held(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, for_update: bool = False
 ) -> HeldReplies | None:
-    stored = await metadata_records.conversation_metadata_record(
-        uow, conversation_id, HELD_REPLIES_KEY, for_update=for_update
+    stored = await ConversationSurfaces(uow).held_replies(
+        conversation_id, for_update=for_update
     )
     if stored is None:
         return None
@@ -132,15 +126,13 @@ async def hold_reply(
     held = await _held(uow, conversation_id, for_update=True) or HeldReplies(
         asked_at=at
     )
-    await agent_conversations.set_conversation_metadata_value(
-        uow,
+    await ConversationSurfaces(uow).set_held_replies(
         conversation_id,
-        HELD_REPLIES_KEY,
         HeldReplies(
             asked_at=at if asked else held.asked_at,
             replies=[*held.replies, HeldReply(message=message, held_at=at)],
             version=uuid4().hex,
-        ),
+        ).model_dump(mode="json"),
     )
 
 
@@ -186,14 +178,13 @@ async def stage_held_replies(
             content=DeliveryContent(text=reply.message, plain=True, purpose="held"),
         )
         staged += 1
-    await metadata_records.forget_conversation_metadata_record(
-        uow, conversation_id, HELD_REPLIES_KEY, matching=held.identity()
+    await ConversationSurfaces(uow).clear_held_replies(
+        conversation_id, matching=held.identity()
     )
     return staged
 
 
 __all__ = [
-    "HELD_REPLIES_KEY",
     "HeldReplies",
     "stage_held_replies",
     "hold_reply",

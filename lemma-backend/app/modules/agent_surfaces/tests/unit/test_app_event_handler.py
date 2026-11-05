@@ -180,7 +180,7 @@ async def test_the_channel_setup_modal_opens_with_the_connection_handed_back(
 
     adapter.open_channel_setup_modal = _open_modal
     monkeypatch.setattr(
-        "app.modules.agent.contracts.conversations_for_surfaces.surface_agent_identity",
+        "app.modules.agent.contracts.channels.surface_agent_identity",
         AsyncMock(return_value=None),
     )
 
@@ -240,7 +240,7 @@ async def test_a_channel_setting_that_could_not_be_saved_is_reported_in_the_chan
         _pick_configuration_surface=AsyncMock(return_value=(surface, None)),
     )
     monkeypatch.setattr(
-        "app.modules.agent.contracts.conversations_for_surfaces.surface_agent_identity",
+        "app.modules.agent.contracts.channels.surface_agent_identity",
         AsyncMock(return_value=None),
     )
     handler = _handler(

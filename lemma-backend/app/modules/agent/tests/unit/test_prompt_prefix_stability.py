@@ -20,14 +20,17 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.run_context_prompt import task_list_section
+from app.modules.agent.domain.prompt.templates import build_agent_instructions
+from app.modules.agent.domain.prompt.run_context import task_list_section
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-from app.modules.agent.capabilities.prompt_caching import (
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
     _ANTHROPIC_CACHE_TTL,
-    PromptCachingCapability,
+    PromptCaching as PromptCachingCapability,
 )
-from app.modules.agent.tools.toolset_selection import resolve_toolset_names
+from app.modules.agent.domain.toolsets import (
+    resolve_toolset_names,
+)
+from app.modules.agent.domain.todos import Todo
 
 pytestmark = pytest.mark.unit
 
@@ -37,7 +40,7 @@ def _conversation(todo: str | None = "Render the video") -> Conversation:
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": todo, "done": False}]} if todo else {},
+        todos=[Todo(content=todo)] if todo else [],
     )
 
 
@@ -72,9 +75,7 @@ class TestNothingThatChangesBetweenRunsIsInTheSystemPrompt:
 
     def test_a_checklist_update_leaves_the_system_prompt_byte_identical(self) -> None:
         before = _conversation("Render the video")
-        after = before.model_copy(
-            update={"metadata": {"todos": [{"content": "Render", "done": True}]}}
-        )
+        after = before.model_copy(update={"todos": [Todo(content="Render", done=True)]})
 
         assert self._instructions(before) == self._instructions(after)
 
@@ -128,7 +129,7 @@ class TestAnthropicCachesToolDefinitionsToo:
 def test_no_heading_is_said_twice_across_the_prompt_and_the_run_context() -> None:
     """The todo guidance and the stored list both opened `# Task list`, so the
     model read one section title over two different things."""
-    from app.modules.agent.domain.run_context_prompt import render_run_context
+    from app.modules.agent.domain.prompt.run_context import render_run_context
 
     conversation = _conversation()
     run_toolsets, _ = resolve_toolset_names(None, conversation)

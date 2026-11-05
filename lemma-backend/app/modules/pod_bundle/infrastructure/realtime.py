@@ -1,6 +1,6 @@
 """Transient realtime publishing for pod bundle job progress.
 
-Best-effort by design (mirrors ``app/modules/agent/services/realtime.py``):
+Best-effort by design (mirrors ``app/modules/agent/infrastructure/live.py``):
 event delivery never gates job progress. The durable picture is always the
 Redis state document — SSE subscribers get a ``snapshot`` frame on connect
 and use ``seq`` to discard stale live frames, so a dropped publish costs at

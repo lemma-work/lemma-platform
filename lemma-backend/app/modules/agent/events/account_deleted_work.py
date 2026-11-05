@@ -23,9 +23,9 @@ from app.core.infrastructure.work import (
     facts,
     registry as default_registry,
 )
-from app.modules.agent.infrastructure.agent_host.channels import notify_host_revoked
-from app.modules.agent.infrastructure.agent_host.repository import (
+from app.modules.agent.agent_host.api import (
     AgentHostRepository,
+    notify_host_revoked,
 )
 from app.modules.identity.contracts.account_facts import AccountDeleted
 

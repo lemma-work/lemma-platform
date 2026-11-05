@@ -51,8 +51,6 @@ class AgentRunFinished(Fact):
     #: run id, a pod-ask id), so its subscriber can key on it.
     parent_ref: str | None = None
     origin: AgentRunOrigin
-    #: Whether the conversation has a surface to answer on.
-    has_reply_target: bool = False
     started_at: datetime | None = None
 
     def work_namespace(self) -> str:

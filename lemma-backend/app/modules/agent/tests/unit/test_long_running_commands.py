@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecCommandResult,
 )
@@ -67,7 +67,9 @@ def test_process_id_explains_how_to_wait_for_it() -> None:
 
 def test_exec_command_docstring_teaches_waiting_not_looping() -> None:
     """This docstring is the model's primary instruction for long commands."""
-    from app.modules.agent.tools.workspace_cli.pydantic_adapter import exec_command
+    from app.modules.agent.infrastructure.tools.workspace_cli.tools import (
+        exec_command,
+    )
 
     doc = exec_command.__doc__ or ""
     assert "completed: false" in doc
@@ -80,7 +82,7 @@ def test_exec_command_docstring_teaches_waiting_not_looping() -> None:
 
 
 def test_workspace_prompt_covers_long_commands() -> None:
-    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+    from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
 
     prompt = load_workspace_cli_prompt()
     assert "Long-running commands" in prompt
