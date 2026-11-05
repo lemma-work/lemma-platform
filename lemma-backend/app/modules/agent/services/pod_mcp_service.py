@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
@@ -40,6 +40,23 @@ from app.core.log.log import get_logger
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
     tool_call_result,
+)
+from app.modules.agent.services.pod_mcp_agent_tools import (
+    agent_tools,
+    is_agent_tool,
+    offers_agents,
+)
+from app.modules.agent.services.pod_mcp_agents import PodAgentAsks
+from app.modules.agent.services.pod_mcp_functions import (
+    PodFunctions,
+    function_tools,
+    is_function_tool,
+    offers_functions,
+)
+from app.modules.agent.services.pod_mcp_workflows import (
+    WRITING_TOOLS as WORKFLOW_WRITING_TOOLS,
+    PodWorkflows,
+    is_workflow_tool,
 )
 from app.modules.agent.services.pod_mcp_apps import (
     app_tools,
@@ -74,6 +91,14 @@ from app.modules.mcp_access.contracts import (
 logger = get_logger(__name__)
 
 _NIL_CONVERSATION_ID = UUID(int=0)
+
+
+class OutsideToolCall(Protocol):
+    """How each of the outside-only tool families answers a call."""
+
+    def __call__(
+        self, name: str, arguments: dict[str, object], *, principal: McpPrincipal
+    ) -> Awaitable[CallToolResult]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +169,9 @@ class PodMCPService:
     ) -> None:
         self.uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         self.dispatcher = AgentToolDispatcher(self.uow_factory)
+        self.agent_asks = PodAgentAsks(self.uow_factory)
+        self.functions = PodFunctions(self.uow_factory)
+        self.workflows = PodWorkflows(self.uow_factory)
         self._verify_session = verify_session
         self._principal_lookups = principal_lookups
 
@@ -169,6 +197,18 @@ class PodMCPService:
                 self.uow_factory, pod_id=pod_id, user_id=caller.principal.user_id
             )
             listed += app_tools(apps)
+        principal = caller.principal
+        if principal is None:
+            return listed
+        if offers_agents(principal):
+            listed += agent_tools(
+                await self.agent_asks.agents(pod_id=pod_id, user_id=principal.user_id)
+            )
+        if offers_functions(principal):
+            listed += function_tools(
+                await self.functions.functions(pod_id=pod_id, user_id=principal.user_id)
+            )
+        listed += await self.workflows.tools(principal)
         return listed
 
     async def call_tool(
@@ -185,6 +225,46 @@ class PodMCPService:
         )
         if is_app_tool(name):
             return await self._call_app_tool(caller, name, arguments, pod_id=pod_id)
+        if is_agent_tool(name):
+            return await self._call_outside_tool(
+                caller,
+                name,
+                arguments,
+                allowed=offers_agents(caller.principal),
+                call=self.agent_asks.call,
+                refusal=(
+                    "Asking the pod's agents needs a connection allowed to change "
+                    "things: they act as you. Reconnect it and allow that."
+                ),
+            )
+        if is_function_tool(name):
+            return await self._call_outside_tool(
+                caller,
+                name,
+                arguments,
+                allowed=offers_functions(caller.principal),
+                call=self.functions.call,
+                refusal=(
+                    "Running the pod's functions needs a connection allowed to "
+                    "change things. Reconnect it and allow that."
+                ),
+            )
+        if is_workflow_tool(name):
+            # Each tool needs its own scope, as every pod tool does
+            # (`caller.may_call`): reading a run or a waiting form is reading.
+            needed = Scope.WRITE if name in WORKFLOW_WRITING_TOOLS else Scope.READ
+            return await self._call_outside_tool(
+                caller,
+                name,
+                arguments,
+                allowed=caller.principal is not None
+                and needed in caller.principal.scopes,
+                call=self.workflows.call,
+                refusal=(
+                    f"This connection was not granted {needed.value}. Reconnect "
+                    "it and allow that access to use this."
+                ),
+            )
         tool_name = normalize_local_mcp_tool_name(name)
         if not caller.may_call(tool_name, arguments):
             _audit(caller, tool_name, outcome="refused")
@@ -244,6 +324,32 @@ class PodMCPService:
         )
         _audit(caller, name, outcome="failed" if result.is_error else "ok")
         return result
+
+    async def _call_outside_tool(
+        self,
+        caller: _Caller,
+        name: str,
+        arguments: Mapping[str, object] | None,
+        *,
+        allowed: bool,
+        call: OutsideToolCall,
+        refusal: str,
+    ) -> CallToolResult:
+        """One of the tools only an outside client's connection is offered:
+        refused, audited, or answered."""
+        if caller.principal is None or not allowed:
+            _audit(caller, name, outcome="refused")
+            return tool_call_error(name, PermissionError(refusal))
+        # A `finally` rather than a catch-all: a call that raises is audited as
+        # failed like any other, and still reaches the client as an error.
+        outcome: Literal["ok", "failed"] = "failed"
+        try:
+            result = await call(name, dict(arguments or {}), principal=caller.principal)
+            if not result.is_error:
+                outcome = "ok"
+            return result
+        finally:
+            _audit(caller, name, outcome=outcome)
 
     async def _require_caller(
         self, *, pod_id: UUID, token: str, principal: McpPrincipal | None = None

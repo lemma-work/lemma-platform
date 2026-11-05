@@ -97,7 +97,8 @@ fn client_request(request: Value) -> io::Result<()> {
     let paths = LocalPaths::discover()?;
     let token = std::fs::read_to_string(&paths.token)?;
     let stream = LocalSocketStream::connect(paths.socket_name()?)?;
-    let (receive, mut send) = stream.split();
+    // `&Stream` is `Read` and `Write`; one borrow writes, another reads.
+    let mut send = &stream;
     writeln!(
         send,
         "{}",
@@ -111,7 +112,7 @@ fn client_request(request: Value) -> io::Result<()> {
         .get("cmd")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let mut reader = BufReader::new(receive);
+    let mut reader = BufReader::new(&stream);
     while let Some(line) = read_bounded_line(&mut reader)? {
         println!("{line}");
         let Ok(event) = serde_json::from_str::<Value>(&line) else {

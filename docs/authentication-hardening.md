@@ -117,7 +117,7 @@ POST normalized provider events to `/auth/email/bounces` using this JSON body:
 }
 ```
 
-Set `X-Lemma-Timestamp` to the current Unix timestamp and `X-Lemma-Signature` to `sha256=<hex>`, where the hex value is `HMAC-SHA256(secret, timestamp + "." + exact_request_body)`. Timestamps outside five minutes and altered bodies are rejected. `soft_bounce` is accepted but never deactivates an account; only `hard_bounce` does.
+Set `X-Lemma-Timestamp` to the current Unix timestamp and `X-Lemma-Signature` to `sha256=<hex>`, where the hex value is `HMAC-SHA256(secret, timestamp + "." + exact_request_body)`. Timestamps outside five minutes and altered bodies are rejected. A body over 1 MiB is refused with `413` before its signature is checked, on both bounce endpoints; a signed body that is not a valid event is refused with `400`. `soft_bounce` is accepted but never deactivates an account; only `hard_bounce` does.
 
 Hard bounces deactivate the unique matching active Lemma user and revoke its sessions. Repeated provider deliveries are idempotent because an inactive user needs no further update. Soft bounces and events for unknown addresses do not deactivate anyone. The user row is the single source of truth for delivery eligibility; there is no separate email-suppression table.
 
