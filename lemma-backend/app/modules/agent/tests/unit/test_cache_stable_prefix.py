@@ -33,6 +33,7 @@ the compaction left, and make no second summary call.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -749,6 +750,31 @@ async def test_every_request_starts_with_the_one_before(protocol: Protocol) -> N
     assert [sent.run for sent in played.sent] == [1, 1, 2, 3, 3, 3, 4]
     breaks = await _breaks(played, protocol)
     assert not breaks, "\n\n".join(str(item) for item in breaks)
+
+
+async def test_every_tool_result_is_sent_with_when_it_came_back() -> None:
+    """Noted on every request, from the result's stored time: the same bytes in
+    the run that made it and in every run that replays it from storage."""
+    played = await _play()
+
+    rendered: dict[str, set[str]] = {}
+    for sent in played.sent:
+        for message in sent.messages:
+            for part in getattr(message, "parts", ()):
+                if isinstance(part, ToolReturnPart) and part.outcome == "success":
+                    rendered.setdefault(part.tool_call_id, set()).add(
+                        part.model_response_str()
+                    )
+    # A result from the run, a pause's answer read back on resume, and results
+    # a later run replays.
+    assert {"call_look", _ASK_ID, "call_bulk_1"} <= rendered.keys()
+    for call_id, texts in rendered.items():
+        assert len(texts) == 1, (call_id, texts)
+        (text,) = texts
+        assert re.match(
+            r"<notes>Returned \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \(UTC\)\.</notes>\n\n",
+            text,
+        ), text
 
 
 def _responses(messages: Sequence[ModelMessage]) -> list[str]:
