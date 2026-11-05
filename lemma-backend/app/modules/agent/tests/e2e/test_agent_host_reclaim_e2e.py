@@ -30,7 +30,7 @@ from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
@@ -44,14 +44,14 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
     MessageKind,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.event_stream import (
+from app.modules.agent.agent_host.control.event_stream import (
     agent_host_event_stream,
     run_events_stream_key,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     RemoteHarness,
 )
 from app.modules.agent.infrastructure.models import MessageModel
@@ -61,7 +61,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
     paired_machine,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
@@ -127,7 +127,7 @@ class _Worker:
             ),
             conversation=self.conversation,
             messages=[],
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=self.conversation.user_id,
                 pod_id=self.conversation.pod_id,
                 conversation_id=self.conversation.id,

@@ -26,10 +26,7 @@ from app.core.authorization.outside_text import (
     note_outside_text,
 )
 from app.modules.agent.domain.entities import Message
-
-#: Tools whose results are lines of the pod's channels, each marked by whether
-#: somebody outside the pod wrote it.
-_CHANNEL_READS = frozenset({"channel_read", "channel_search"})
+from app.modules.agent.infrastructure.tools.messaging.models import CHANNEL_READ_TOOLS
 
 
 def carries_outside_text(messages: Iterable[Message]) -> bool:
@@ -56,7 +53,7 @@ def _reads_outside(message: Message) -> bool:
         return True
     result = message.tool_result
     return (
-        message.tool_name in _CHANNEL_READS
+        message.tool_name in CHANNEL_READ_TOOLS
         and isinstance(result, Mapping)
         and _any_outside(result.get("lines"))
     )

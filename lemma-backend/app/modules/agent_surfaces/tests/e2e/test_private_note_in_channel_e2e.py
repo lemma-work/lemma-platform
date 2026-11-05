@@ -18,7 +18,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.private_notes import PRIVATE_NOTE_REQUEST_KEY
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     run_scripted_agent_run,
@@ -76,7 +76,7 @@ async def test_a_private_notes_answer_card_and_resource_stay_out_of_the_channel(
             "/messages/append",
             json={
                 "content": "What should we tell them about the date?",
-                "metadata": {PRIVATE_NOTE_KEY: True},
+                "metadata": {PRIVATE_NOTE_REQUEST_KEY: True},
             },
         )
     assert noted.status_code == status.HTTP_200_OK, noted.text

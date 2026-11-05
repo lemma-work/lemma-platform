@@ -16,9 +16,8 @@ from uuid import uuid4, uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host_permissions import (
-    permission_approval_tool_args,
-)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE, approval_key
 from app.modules.agent.services import approval_reconciliation
@@ -85,51 +84,57 @@ class TestTheItem:
         assert captured["concurrency_key"] == key
 
 
+def _decided(
+    kind: PauseKind, decision: AgentRunApprovalDecision, *, returned: bool = False
+) -> Pause:
+    pause = Pause(
+        conversation_id=uuid4(),
+        run_id=uuid4(),
+        pod_id=uuid4(),
+        tool_call_id="call-9",
+        tool_name="request_approval",
+        kind=kind,
+        returned=returned,
+    )
+    pause.resolve(decision, by=uuid4())
+    return pause
+
+
 class TestWhatRunsInTheWorker:
     """Only work that can outlive a caller's deadline belongs in a worker."""
 
     def test_an_approved_tool_runs_in_the_worker(self) -> None:
         assert runs_in_worker(
-            kind="request_approval",
-            tool_args={"tool_name": "exec_command"},
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            has_tool_return=False,
+            _decided(PauseKind.APPROVAL, AgentRunApprovalDecision.APPROVE_ONCE)
         )
 
     def test_a_denial_stays_inline(self) -> None:
         """A denial runs nothing; deferring it would only delay the agent."""
         assert not runs_in_worker(
-            kind="request_approval",
-            tool_args={"tool_name": "exec_command"},
-            decision=AgentRunApprovalDecision.DENY,
-            has_tool_return=False,
+            _decided(PauseKind.APPROVAL, AgentRunApprovalDecision.DENY)
         )
 
     def test_ask_user_stays_inline(self) -> None:
         """Answers perform no external work at all."""
         assert not runs_in_worker(
-            kind="ask_user",
-            tool_args={},
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            has_tool_return=False,
+            _decided(PauseKind.QUESTION, AgentRunApprovalDecision.APPROVE_ONCE)
         )
 
     def test_an_already_executed_approval_stays_inline(self) -> None:
         """A tool return means the tool already ran, so all that is left is the
         cheap self-heal -- and handing it to a worker risks running it twice."""
         assert not runs_in_worker(
-            kind="request_approval",
-            tool_args={"tool_name": "exec_command"},
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            has_tool_return=True,
+            _decided(
+                PauseKind.APPROVAL,
+                AgentRunApprovalDecision.APPROVE_ONCE,
+                returned=True,
+            )
         )
 
-    def test_an_agent_host_permission_stays_inline(self) -> None:
-        """It queues a command and pokes a host -- milliseconds -- while someone
-        watches the agent wait for their answer."""
-        assert not runs_in_worker(
-            kind="request_approval",
-            tool_args=permission_approval_tool_args({}, request_id="call-9"),
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            has_tool_return=False,
-        )
+    def test_an_agent_host_permission_or_a_budget_stays_inline(self) -> None:
+        """A permission queues a command and pokes a host -- milliseconds --
+        while someone watches the agent wait; a budget runs no tool at all."""
+        for kind in (PauseKind.HOST_PERMISSION, PauseKind.BUDGET):
+            assert not runs_in_worker(
+                _decided(kind, AgentRunApprovalDecision.APPROVE_ONCE)
+            )

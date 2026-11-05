@@ -1,0 +1,294 @@
+"""The backstop for messages no run ever read.
+
+`PendingUserMessagesCapability` normally gets there first: it claims a mid-run
+message and steers it into the run already answering, so nothing is left owing
+by the time that run ends. These cover what it cannot reach — an Agent Host
+harness that cannot steer, a steer that did not land, and a run that died before
+draining — where the person is otherwise waiting on an answer that never comes.
+"""
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
+
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
+from app.modules.agent.domain.entities import AgentRun, Conversation
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    AgentRuntimeConfig,
+    ConversationStatus,
+)
+from app.modules.agent.application.turns.follow_up import StartQueuedFollowUp
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import RunTrigger
+
+
+def _runtime() -> AgentRuntimeConfig:
+    return AgentRuntimeConfig(profile_id="user:harness", model_name="claude-sonnet-4-5")
+
+
+def _run(conversation_id, status=AgentRunStatus.RUNNING) -> AgentRun:
+    return AgentRun(
+        conversation_id=conversation_id,
+        status=status,
+        agent_runtime=_runtime(),
+        started_at=datetime.now(timezone.utc),
+    )
+
+
+def _coordinator(
+    *,
+    queued: int,
+    active_run: AgentRun | None = None,
+    notes: int = 0,
+    finished_state: RunState | None = None,
+    queues: dict | None = None,
+):
+    """The use case over a fake queue.
+
+    ``queued`` messages wait behind the finished run, ``notes`` of them private
+    notes, the oldest of them a note when there are any. ``queues`` adds other
+    runs' queues, by id, as ``(messages, notes)``.
+    """
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+        agent_runtime=_runtime(),
+    )
+    finished = _run(conversation.id, AgentRunStatus.COMPLETED)
+    finished.state = finished_state or RunState()
+    created = _run(conversation.id)
+    waiting = {finished.id: (queued, notes), **(queues or {})}
+
+    async def count(run_id, *, notes=None, after_sequence=None):
+        total, of_notes = waiting.get(run_id, (0, 0))
+        return total if notes is None else of_notes if notes else total - of_notes
+
+    async def earliest(run_id, *, after_sequence=None):
+        total, of_notes = waiting.get(run_id, (0, 0))
+        return None if not total else bool(of_notes)
+
+    repository = SimpleNamespace(
+        count_queued_user_messages=AsyncMock(side_effect=count),
+        earliest_queued_is_note=AsyncMock(side_effect=earliest),
+        lock_conversation=AsyncMock(),
+        get_active_agent_run_for_update=AsyncMock(return_value=active_run),
+        get_agent_run=AsyncMock(return_value=finished),
+        create_agent_run=AsyncMock(return_value=created),
+        claim_queued_user_messages=AsyncMock(return_value=[]),
+        # A run that ended by asking: its question is still unanswered.
+        get_latest_agent_run_for_conversation=AsyncMock(return_value=finished),
+        get_conversation_status=AsyncMock(return_value=ConversationStatus.WAITING),
+        # The run asked one question, still unanswered.
+        pending=AsyncMock(
+            return_value=[SimpleNamespace(tool_call_id="call-1", run_id=finished.id)]
+        ),
+        mark_queued_waiting_on_answer=AsyncMock(return_value=[]),
+    )
+    uow = SimpleNamespace(
+        collect_events=MagicMock(), commit=AsyncMock(), session=RecordingWorkSession()
+    )
+    coordinator = StartQueuedFollowUp(
+        uow,
+        agent_repository=SimpleNamespace(),
+        supersede=SimpleNamespace(supersede=AsyncMock(return_value=[])),
+        usage_service=None,
+    )
+    wire_repositories(coordinator, repository)
+    return coordinator, conversation, repository, uow, finished, created
+
+
+@pytest.mark.asyncio
+async def test_a_message_queued_behind_a_busy_run_gets_its_own_turn() -> None:
+    coordinator, conversation, repository, uow, finished, created = _coordinator(
+        queued=3
+    )
+
+    started = await coordinator.start(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    assert started is not None
+    run_id, superseded = started
+    assert run_id == created.id
+    # Frames come back rather than going out: the caller publishes them once
+    # the pooled connection is handed back.
+    assert superseded == []
+    # No message is appended: the messages already exist, unanswered.
+    assert repository.create_agent_run.await_args.kwargs["state"] == RunState(
+        trigger=RunTrigger.FOLLOW_UP, queued_behind_run_id=finished.id
+    )
+    # The turn is written in the same transaction as the run it executes.
+    turn = uow.session.item("agent.turn")
+    assert turn["dedup_key"] == f"agent-run:{created.id}"
+    assert turn["concurrency_key"] == f"conversation:{conversation.id}"
+    uow.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_the_followup_claims_the_queue_it_answers() -> None:
+    """Every queued message, claimed by the run that will answer it.
+
+    The claim is what an Agent Host dispatch reads to put all of them in the
+    prompt -- not only the newest -- and the claimed messages come back so the
+    person's client can stop drawing them as queued.
+    """
+    coordinator, conversation, repository, _uow, finished, created = _coordinator(
+        queued=2
+    )
+    claimed = [SimpleNamespace(id=uuid4()), SimpleNamespace(id=uuid4())]
+    repository.claim_queued_user_messages.return_value = claimed
+
+    started = await coordinator.start(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    assert started is not None
+    _run_id, frames = started
+    assert frames == claimed
+    call = repository.claim_queued_user_messages.await_args
+    assert call.args == (finished.id,)
+    assert call.kwargs == {
+        "into_run_id": created.id,
+        "notes": False,
+        "after_sequence": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_nothing_queued_starts_nothing() -> None:
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=0
+    )
+
+    assert (
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+        is None
+    )
+    repository.create_agent_run.assert_not_awaited()
+    # Established without taking the conversation lock, which is the whole cost
+    # on the overwhelmingly common path.
+    repository.lock_conversation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_followup_run_cannot_itself_recur() -> None:
+    """The queued messages belong to the finished run, never to the new one.
+
+    So the next completion asks about a run whose queue is empty, and the chain
+    stops on its own rather than needing a depth counter.
+    """
+    coordinator, conversation, repository, _uow, finished, created = _coordinator(
+        queued=3
+    )
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+
+    asked = {
+        call.args[0] for call in repository.earliest_queued_is_note.await_args_list
+    }
+    assert asked == {finished.id}
+    assert created.id != finished.id
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_ended_by_asking_a_question_is_left_alone() -> None:
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=2
+    )
+    conversation.status = ConversationStatus.WAITING
+
+    assert (
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+        is None
+    )
+    # Starting a turn here would auto-deny the question before the person saw
+    # it; their answer starts a run that picks the queue up anyway.
+    repository.create_agent_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_someone_typing_first_takes_the_turn_instead() -> None:
+    conversation_id = uuid4()
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=2, active_run=_run(conversation_id)
+    )
+
+    assert (
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+        is None
+    )
+    repository.create_agent_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_stop_that_marked_no_boundary_starts_nothing() -> None:
+    """Stop means stop for everything said before it. A stopped run that did
+    not record where Stop fell -- one stopped before the mark existed -- has no
+    "after", so nothing behind it starts a turn. What was said after a marked
+    Stop is answered; that half needs real sequences and is in the e2e suite
+    (`test_conversation_lifecycle_races_e2e`)."""
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=2
+    )
+    finished.status = AgentRunStatus.STOPPED
+
+    assert (
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+        is None
+    )
+    repository.create_agent_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_note_queued_behind_a_run_is_answered_where_nobody_else_sees() -> None:
+    """Its follow-up is private, so the answer stays in Lemma."""
+    coordinator, conversation, repository, _uow, finished, created = _coordinator(
+        queued=1, notes=1
+    )
+
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+
+    state = repository.create_agent_run.await_args.kwargs["state"]
+    assert state.private_note is True
+    assert repository.claim_queued_user_messages.await_args.kwargs["notes"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_kind_a_followup_did_not_answer_is_remembered_for_the_next() -> None:
+    """A note and a message for the platform never share a run."""
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=2, notes=1
+    )
+
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+
+    state = repository.create_agent_run.await_args.kwargs["state"]
+    # The oldest was a note, so this one answers notes; the other message waits.
+    assert state.private_note is True
+    assert state.queued_leftovers_behind == [finished.id]
+
+
+@pytest.mark.asyncio
+async def test_what_an_earlier_run_left_waiting_is_answered_next() -> None:
+    earlier = uuid4()
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=0,
+        finished_state=RunState(queued_leftovers_behind=[earlier]),
+        queues={earlier: (1, 0)},
+    )
+
+    started = await coordinator.start(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    assert started is not None
+    state = repository.create_agent_run.await_args.kwargs["state"]
+    assert state.private_note is False
+    assert state.queued_behind_run_id == earlier
+    assert repository.claim_queued_user_messages.await_args.args == (earlier,)

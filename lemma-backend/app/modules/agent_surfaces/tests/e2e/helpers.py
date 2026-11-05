@@ -682,8 +682,8 @@ async def fake_speech_provider(monkeypatch):
     """Deterministic TTS so ``say`` can be scripted as a real tool call without
     a real speech-provider credential. Delivery/format negotiation still runs
     for real — only synthesis is faked."""
-    import app.modules.agent.tools.speech.provider as speech_provider_module
-    import app.modules.agent.tools.speech.speech as speech_module
+    import app.modules.agent.infrastructure.tools.speech.provider as speech_provider_module
+    import app.modules.agent.infrastructure.tools.speech.speech as speech_module
 
     class _FakeSpeechProvider:
         async def synthesize(

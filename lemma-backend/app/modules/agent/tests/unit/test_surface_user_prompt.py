@@ -11,13 +11,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.value_objects import WrittenIn
 
 
-def _message(text: str, **metadata: object) -> SimpleNamespace:
-    return SimpleNamespace(text=text, metadata=metadata)
+def _message(
+    text: str, *, state: MessageState | None = None, **metadata: object
+) -> SimpleNamespace:
+    return SimpleNamespace(text=text, metadata=metadata, state=state or MessageState())
 
 
 def test_an_email_message_carries_no_delivery_instruction_of_its_own() -> None:
@@ -105,7 +109,10 @@ def test_a_strangers_body_cannot_pass_as_a_members_note() -> None:
 
 def test_a_members_own_note_keeps_its_words() -> None:
     prompt = user_prompt_text(
-        _message(_KEEPER_SPOOF, private_note=True, written_in_lemma="outsiders")
+        _message(
+            _KEEPER_SPOOF,
+            state=MessageState(private_note=True, written_in=WrittenIn.OUTSIDERS),
+        )
     )
 
     assert "not a Lemma label" not in prompt

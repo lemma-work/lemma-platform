@@ -13,14 +13,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from pydantic_ai import UsageLimits
-from pydantic_ai.capabilities import AgentCapability
-from pydantic_ai.output import OutputSpec
-from pydantic_ai.toolsets import AbstractToolset
-
 from app.modules.agent.domain.run_budget import RunSpend
 from app.modules.agent.domain.run_notices import RunNotices
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
+from app.modules.agent.domain.tools import ToolSpec
 from app.modules.agent.domain.value_objects import (
     DEFAULT_HISTORY_HARD_TOKEN_CEILING,
     DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES,
@@ -30,15 +26,13 @@ from app.modules.agent.domain.value_objects import (
 
 
 @dataclass(slots=True)
-class HarnessOptions[DepsT = object]:
-    """Dependency-injected options for one harness execution."""
+class HarnessOptions:
+    """Dependency-injected options for one harness execution, in Lemma's types."""
 
     model_name: str
-    toolsets: list[AbstractToolset[DepsT]] = field(default_factory=list)
-    # Remote harnesses use MCP; only the in-process harness consumes capabilities.
-    capabilities: list[AgentCapability[DepsT]] = field(default_factory=list)
-    usage_limits: UsageLimits | None = None
-    output_type: OutputSpec[object] | None = None
+    #: The run's tools (``services/tool_catalog``): the in-process harness
+    #: builds its toolsets from them, a remote one names them in its run spec.
+    tools: list[ToolSpec] = field(default_factory=list)
     model_settings: JsonObject | None = None
     #: Request parameters for the history-compaction call: the run's own,
     #: turned down to low effort and a summary-sized output cap. See

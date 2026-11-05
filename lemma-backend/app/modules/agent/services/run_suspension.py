@@ -16,7 +16,7 @@ means STOPPED or WAITING.
 
 A turn parked on a person (``ask_user``, an approval, an ACP permission
 request) is ended the same way once it has waited past the parked window
-(``harnesses/agent_host/parked_window.py``); :func:`run_suspended_while_parked`
+(``agent_host/harness/parked_window.py``); :func:`run_suspended_while_parked`
 is its read-back, keyed on the mark that window writes on the run.
 """
 
@@ -25,19 +25,15 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.pausing_tools import (
-    ParkedSuspension,
-    parked_suspension_of,
-)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.run_state import ParkedSuspension
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.domain.wait import AgentConversationWaitEntity
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.api import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 
 
 async def suspend_remote_run(
@@ -62,7 +58,7 @@ async def run_suspended_on(
     uow: SqlAlchemyUnitOfWork,
     *,
     agent_run_id: UUID,
-) -> AgentConversationWaitEntity | None:
+) -> Pause | None:
     """The wait this run stopped for, if it stopped for one.
 
     Read at the end of a remote run to tell a turn that finished from one that
@@ -72,7 +68,8 @@ async def run_suspended_on(
     and which of those happens is a race between a poke and a model deciding to
     stop talking. Neither answers the question being asked.
     """
-    return await AgentConversationWaitRepository(uow).find_active_for_run(agent_run_id)
+    waits = await Pauses(uow).pending(run_id=agent_run_id, kinds=(PauseKind.WAIT,))
+    return waits[0] if waits else None
 
 
 async def run_suspended_while_parked(
@@ -88,7 +85,7 @@ async def run_suspended_while_parked(
     this is what says the run is in fact waiting. ``None`` once a Stop has been
     requested on top: Stop means stop, and wins.
     """
-    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+    run = await Runs(uow).get_agent_run(agent_run_id)
     if run is None or run.status != AgentRunStatus.RUNNING:
         return None
-    return parked_suspension_of(run.metadata)
+    return run.state.suspended_while_parked

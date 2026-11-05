@@ -41,11 +41,9 @@ from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.contact_conversations import hold_outside_turn
-from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channels import hold_outside_turn
+from app.modules.agent.contracts import channels as agent_channels
 from app.modules.agent_surfaces.services.contact_acknowledgement import (
     acknowledge_contact,
 )
@@ -275,9 +273,7 @@ async def _courtesy_line(
     from, carried by its delivery like any line: the contact's rules are held
     to it, and an email carries the footer and ``List-Unsubscribe``. Whether
     it was posted -- ``False`` outside a contact's channel."""
-    channel_id = await channel_conversations.channel_of_conversation(
-        uow, conversation_id
-    )
+    channel_id = await agent_channels.channel_of_conversation(uow, conversation_id)
     channel = await channel_by_id(uow, channel_id) if channel_id else None
     if (
         channel is None
@@ -346,9 +342,7 @@ async def _keep_for_a_member(
         metadata=metadata,
         reply=acknowledged,
     )
-    channel_id = await channel_conversations.channel_of_conversation(
-        uow, conversation_id
-    )
+    channel_id = await agent_channels.channel_of_conversation(uow, conversation_id)
     if channel_id is not None:
         await call_for_person(
             uow,
@@ -394,9 +388,7 @@ async def _tell_member(
     del text
     if await pod_member_id(uow, pod_id, member) is None:
         return False
-    channel_id = await channel_conversations.channel_of_conversation(
-        uow, conversation_id
-    )
+    channel_id = await agent_channels.channel_of_conversation(uow, conversation_id)
     if channel_id is not None:
         await call_for_person(
             uow, channel_id=channel_id, reason="The monthly cap on answering contacts"

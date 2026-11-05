@@ -15,7 +15,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.contracts.contact_conversations import (
+from app.modules.agent.contracts.contacts import (
     ConversationCursor,
     ExportedConversation,
     export_contact_conversations,

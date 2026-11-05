@@ -41,8 +41,11 @@ async def reconcile_agent_host_dispatch() -> None:
     leases whose heartbeat lapsed, which otherwise stay non-terminal forever and
     are never collected by retention.
     """
-    from app.modules.agent.infrastructure.agent_host import recovery
-    from app.modules.agent.infrastructure.agent_host.channels import poke_host
+    from app.modules.agent.agent_host.api import (
+        cancel_abandoned_host_runs,
+        poke_host,
+        reconcile_expired_leases,
+    )
 
     # Only database trouble is swallowed here: it is the transient failure this
     # sweep expects, and the next tick is five minutes away. Anything else is a
@@ -63,10 +66,10 @@ async def reconcile_agent_host_dispatch() -> None:
     # every five minutes.
     try:
         async with _uow() as uow:
-            host_ids = await recovery.cancel_abandoned_host_runs(uow.session)
+            host_ids = await cancel_abandoned_host_runs(uow.session)
             await uow.commit()
         async with _uow() as uow:
-            await recovery.reconcile_expired_leases(uow.session)
+            await reconcile_expired_leases(uow.session)
             await uow.commit()
     except SQLAlchemyError:
         logger.error(
@@ -87,11 +90,11 @@ async def cleanup_agent_host_retained_state() -> None:
     accumulated for the lifetime of the deployment and consumed pairing codes
     were never purged.
     """
-    from app.modules.agent.infrastructure.agent_host import recovery
+    from app.modules.agent.agent_host.api import cleanup_retained_state
 
     try:
         async with _uow() as uow:
-            await recovery.cleanup_retained_state(uow.session)
+            await cleanup_retained_state(uow.session)
             await uow.commit()
     except SQLAlchemyError:
         logger.error(

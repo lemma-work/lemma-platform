@@ -21,21 +21,20 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
 )
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
-from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
+from app.modules.agent.agent_host.domain.host import (
+    AgentHostEventType,
+    AgentHostRunState,
+)
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
-from app.modules.agent.infrastructure.agent_host.event_stream import (
+from app.modules.agent.agent_host.control.event_stream import (
     StreamBatch,
     StreamedEvent,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host import (
-    harness as harness_module,
-)
-from app.modules.agent.infrastructure.harnesses.agent_host import (
-    harness_events as harness_events_module,
-)
-from app.modules.agent.infrastructure.agent_host.recovery import BusyHost
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import RemoteHarness
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness import harness as harness_module
+from app.modules.agent.agent_host.harness import harness_events as harness_events_module
+from app.modules.agent.agent_host.control.recovery import BusyHost
+from app.modules.agent.agent_host.harness.harness import RemoteHarness
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
 
@@ -77,7 +76,7 @@ def _sleeping_since(*, tool_call_id: str):
 
     async def _lookup(uow, *, agent_run_id):
         del uow, agent_run_id
-        return SimpleNamespace(tool_call_id=tool_call_id)
+        return SimpleNamespace(tool_call_id=tool_call_id, tool_name="wait_for")
 
     return _lookup
 

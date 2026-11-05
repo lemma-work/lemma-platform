@@ -28,30 +28,31 @@ from fastapi import status
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandState,
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host.channels import poke_host
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.channels import poke_host
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.session_memory import (
+from app.modules.agent.agent_host.control.session_memory import (
     remember_provider_session,
     resume_session_id,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.agent_host.recovery import HOST_REVOKED_DETAIL
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control.recovery import HOST_REVOKED_DETAIL
+from app.modules.agent.agent_host.control.repository_common import (
     INSTALLATION_REVOKED_MESSAGE,
 )
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostRunLeaseModel,
 )
-from app.modules.agent.services import agent_host_link_session, agent_host_link_store
+from app.modules.agent.agent_host.link import session as agent_host_link_session
+from app.modules.agent.agent_host.link import store as agent_host_link_store
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     HostLink,
     app_of,

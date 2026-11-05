@@ -17,7 +17,7 @@ from __future__ import annotations
 import httpx2
 import pytest
 
-from app.modules.agent.services import runtime_model_factory as factory
+from app.modules.agent.infrastructure.providers import model_factory as factory
 
 
 @pytest.fixture(autouse=True)

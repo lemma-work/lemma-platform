@@ -26,9 +26,11 @@ from pydantic_ai.settings import ModelSettings
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-from app.modules.agent.infrastructure.harnesses import mock_model
-from app.modules.agent.services import runtime_model_factory as factory
-from app.modules.agent.services.model_stream_budget import ModelStreamBudgetTransport
+from app.modules.agent.infrastructure.harness.lemma import mock_model
+from app.modules.agent.infrastructure.providers import model_factory as factory
+from app.modules.agent.infrastructure.providers.model_stream_budget import (
+    ModelStreamBudgetTransport,
+)
 
 
 @pytest.fixture

@@ -26,7 +26,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts.run_observer import RunObserver
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentEvent
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 logger = get_logger(__name__)
 
@@ -53,7 +53,7 @@ async def _deliver(
 async def notify_run_started(
     observer: RunObserver | None,
     conversation: Conversation,
-    ctx: ConversationContext,
+    ctx: ToolContext,
     agent_run_id: UUID,
 ) -> bool:
     """True when the observer accepted the start.
@@ -78,7 +78,7 @@ async def notify_event(
     observer: RunObserver | None,
     event: AgentEvent,
     conversation: Conversation,
-    ctx: ConversationContext,
+    ctx: ToolContext,
     agent_run_id: UUID,
 ) -> None:
     if observer is None:
@@ -96,7 +96,7 @@ async def notify_event(
 async def notify_run_finished(
     observer: RunObserver | None,
     conversation: Conversation,
-    ctx: ConversationContext,
+    ctx: ToolContext,
     agent_run_id: UUID,
 ) -> None:
     if observer is None:

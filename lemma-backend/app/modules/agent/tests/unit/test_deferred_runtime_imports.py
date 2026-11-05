@@ -34,7 +34,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 
@@ -46,7 +46,7 @@ def _a_system_model_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every path here is the system-model one.
 
     Without a system provider these settings resolve against the workspace
-    instead, which `test_workspace_model_fallback.py` covers; pinning it here
+    instead, which `test_runtime_resolution.py` covers; pinning it here
     keeps these tests about the imports rather than about whichever provider
     keys the machine running them happens to have.
     """
@@ -90,7 +90,7 @@ class TestVisionModelResolution:
                 ),
             ),
             patch(
-                "app.modules.agent.services.runtime_model_factory."
+                "app.modules.agent.infrastructure.providers.model_factory."
                 "pydantic_ai_model_from_runtime_profile",
                 return_value=sentinel,
             ),
@@ -208,7 +208,7 @@ class TestVisionModelResolution:
                 ),
             ),
             patch(
-                "app.modules.agent.services.runtime_model_factory."
+                "app.modules.agent.infrastructure.providers.model_factory."
                 "pydantic_ai_model_from_runtime_profile",
                 return_value=None,
             ),
@@ -242,7 +242,7 @@ class TestVisionModelResolution:
                 new=AsyncMock(return_value=resolved_without_entry),
             ),
             patch(
-                "app.modules.agent.services.runtime_model_factory."
+                "app.modules.agent.infrastructure.providers.model_factory."
                 "pydantic_ai_model_from_runtime_profile",
                 return_value=sentinel,
             ),
@@ -321,7 +321,9 @@ class TestSummarizationModelResolution:
         own (expensive) model. Silently returning `fallback` means the operator
         configured a cheap model and kept paying for the expensive one.
         """
-        from app.modules.agent.services import summarization_model
+        from app.modules.agent.infrastructure.providers import (
+            summarization as summarization_model,
+        )
 
         monkeypatch.setenv("HISTORY_SUMMARIZATION_MODEL", "deepseek-v4-flash")
         configured = object()
@@ -336,7 +338,7 @@ class TestSummarizationModelResolution:
                 ),
             ),
             patch(
-                "app.modules.agent.services.runtime_model_factory."
+                "app.modules.agent.infrastructure.providers.model_factory."
                 "pydantic_ai_model_from_runtime_profile",
                 return_value=configured,
             ),
@@ -358,7 +360,10 @@ def test_every_deferred_import_in_these_modules_resolves() -> None:
     """
     import importlib
 
-    from app.modules.agent.services import summarization_model, vision_service
+    from app.modules.agent.services import vision_service
+    from app.modules.agent.infrastructure.providers import (
+        summarization as summarization_model,
+    )
 
     failures: list[str] = []
     for module in (vision_service, summarization_model):

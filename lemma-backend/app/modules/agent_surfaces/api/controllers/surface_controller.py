@@ -102,20 +102,20 @@ async def _resolve_surface_reach(
 
 async def _resolve_agent_id_filter(
     *,
-    session,
+    uow,
     pod_id: UUID,
     agent_name: str | None,
 ) -> UUID | None:
     """Resolve an optional ``agent_name`` list filter to an agent id."""
     if not agent_name:
         return None
-    return await agent_id_for_name(session, pod_id=pod_id, name=agent_name)
+    return await agent_id_for_name(uow, pod_id=pod_id, name=agent_name)
 
 
-async def _resolve_agent_display_name(session, agent_id: UUID | None) -> str | None:
+async def _resolve_agent_display_name(uow, agent_id: UUID | None) -> str | None:
     if agent_id is None:
         return None
-    return await agent_name_for_id(session, agent_id)
+    return await agent_name_for_id(uow, agent_id)
 
 
 @router.get(
@@ -142,7 +142,7 @@ async def list_surfaces(
     cursor = parse_uuid_page_token(page_token)
 
     agent_id_filter = await _resolve_agent_id_filter(
-        session=uow.session,
+        uow=uow,
         pod_id=pod_id,
         agent_name=agent_name,
     )
@@ -177,7 +177,7 @@ async def list_surfaces(
 
     # One lookup for the page's agents, and one for its reaches, rather than
     # one of each per row.
-    agent_names = await agent_names_for_ids(uow.session, named)
+    agent_names = await agent_names_for_ids(uow, named)
     reaches = await _resolve_surface_reaches(readable, service=service, uow=uow)
     visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = [
         (
@@ -259,9 +259,7 @@ async def create_surface(
     platform has to belong to a different agent: one agent reaches a platform in
     one place — one Slack app, one WhatsApp number, one Telegram bot."""
     agent_name_id = (
-        await agent_id_for_name(
-            uow.session, pod_id=pod_id, name=request.default_agent_name
-        )
+        await agent_id_for_name(uow, pod_id=pod_id, name=request.default_agent_name)
         if request.default_agent_name
         else None
     )
@@ -348,7 +346,7 @@ async def get_surface(
         agent_id=surface.agent_id,
         action=Permissions.AGENT_READ,
     )
-    agent_name = await _resolve_agent_display_name(uow.session, surface.agent_id)
+    agent_name = await _resolve_agent_display_name(uow, surface.agent_id)
     reach = await _resolve_surface_reach(surface, service=service, uow=uow)
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
@@ -383,9 +381,7 @@ async def update_surface(
     expires. The caller must be able to use that connector and its account."""
     update_agent_id = "default_agent_name" in request.model_fields_set
     agent_name_id = (
-        await agent_id_for_name(
-            uow.session, pod_id=pod_id, name=request.default_agent_name
-        )
+        await agent_id_for_name(uow, pod_id=pod_id, name=request.default_agent_name)
         if request.default_agent_name
         else None
     )
@@ -449,7 +445,7 @@ async def update_surface(
     resolved_agent_name = (
         request.default_agent_name
         if agent_name_id
-        else await _resolve_agent_display_name(uow.session, updated.agent_id)
+        else await _resolve_agent_display_name(uow, updated.agent_id)
     )
     reach = await _resolve_surface_reach(updated, service=service, uow=uow)
     connection = await connection_resolver.for_surface(

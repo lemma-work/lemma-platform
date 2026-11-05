@@ -17,7 +17,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.domain.runtime import AgentRuntimeConfig
-from app.modules.agent.domain.agent_host_selections import (
+from app.modules.agent.agent_host.api import (
     validate_agent_host_selections,
 )
 from app.modules.agent.domain.errors import RuntimeProfileValidationError

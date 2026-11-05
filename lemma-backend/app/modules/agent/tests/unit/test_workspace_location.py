@@ -6,8 +6,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.conversations.start import StartConversation
 from app.modules.agent.domain.workspace_location import (
     ProjectRepo,
     generate_cwd_slug,
@@ -16,8 +17,8 @@ from app.modules.agent.domain.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
 )
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     workspace_runtime_context,
 )
 from sandbox_runtime.paths import WORKSPACE_ROOT
@@ -46,11 +47,12 @@ def test_legacy_conversation_without_cwd_resolves_stably():
     assert first.cwd.endswith(conversation.id.hex[:8])
 
 
-def test_conversation_metadata_overrides_cwd_and_workspace():
+def test_the_recorded_cwd_and_workspace_override_the_defaults():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": f"{WORKSPACE_ROOT}/project", "workspace_name": "research"},
+        cwd=f"{WORKSPACE_ROOT}/project",
+        workspace_name="research",
     )
 
     location = resolve_workspace_location(conversation)
@@ -59,27 +61,31 @@ def test_conversation_metadata_overrides_cwd_and_workspace():
     assert location.workspace_id == "research"
 
 
-def test_nested_workspace_block_takes_precedence():
+def test_a_workspace_id_wins_over_its_name():
     conversation = Conversation(
-        pod_id=uuid4(),
-        user_id=uuid4(),
-        metadata={
-            "workspace": {"id": "ws-7", "cwd": f"{WORKSPACE_ROOT}/ws7"},
-            "cwd": "/ignored",
-        },
+        pod_id=uuid4(), user_id=uuid4(), workspace_id="ws-7", workspace_name="x"
+    )
+
+    assert resolve_workspace_location(conversation).workspace_id == "ws-7"
+
+
+def test_a_cwd_written_into_metadata_moves_nothing():
+    """Where a conversation works is its own column; a client's tag is not it."""
+    conversation = Conversation(
+        pod_id=uuid4(), user_id=uuid4(), metadata={"cwd": "/etc", "workspace_id": "x"}
     )
 
     location = resolve_workspace_location(conversation)
 
-    assert location.workspace_id == "ws-7"
-    assert location.cwd == f"{WORKSPACE_ROOT}/ws7"
+    assert location.cwd.startswith(f"{WORKSPACE_ROOT}/c/")
+    assert location.workspace_id == "default"
 
 
 def test_pod_cwd_mirrors_persisted_workspace_cwd_under_me():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": f"{WORKSPACE_ROOT}/c/2026-07-02/ab3f2k7q"},
+        cwd=f"{WORKSPACE_ROOT}/c/2026-07-02/ab3f2k7q",
     )
 
     assert resolve_pod_cwd(conversation) == "/me/c/2026-07-02/ab3f2k7q"
@@ -89,7 +95,7 @@ def test_pod_cwd_mirrors_overridden_workspace_cwd():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": f"{WORKSPACE_ROOT}/project"},
+        cwd=f"{WORKSPACE_ROOT}/project",
     )
 
     assert resolve_pod_cwd(conversation) == "/me/project"
@@ -104,9 +110,9 @@ def test_a_context_without_a_conversation_falls_back_to_the_project_root():
     bridge, carries a *nil* conversation id, so the directory it named was all
     zeroes. The root is the honest answer to "no conversation".
     """
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
-    ctx = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+    ctx = ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
 
     assert ctx.get_workspace_cwd() == WORKSPACE_ROOT
     assert "/conversations/" not in ctx.get_workspace_cwd()
@@ -130,13 +136,13 @@ def test_python_runtime_identity_tracks_conversation_working_directory():
         "agent_name": "builder",
     }
     first = workspace_runtime_context(
-        BaseAgentContext(
+        ToolContext(
             **common,
             workspace_cwd=f"{WORKSPACE_ROOT}/conversations/first",
         )
     )
     second = workspace_runtime_context(
-        BaseAgentContext(
+        ToolContext(
             **common,
             workspace_cwd=f"{WORKSPACE_ROOT}/conversations/second",
         )
@@ -147,7 +153,7 @@ def test_python_runtime_identity_tracks_conversation_working_directory():
     assert first.default_python_session_id != second.default_python_session_id
 
 
-class _StubConversationRepository:
+class _StubConversations:
     def __init__(self, conversations: dict) -> None:
         self._conversations = conversations
 
@@ -156,12 +162,12 @@ class _StubConversationRepository:
 
 
 def _service(conversations: dict):
-    return ConversationService(
-        uow=None,  # type: ignore[arg-type]
-        conversation_repository=_StubConversationRepository(  # type: ignore[arg-type]
-            conversations
+    return wire_repositories(
+        StartConversation(
+            None,  # type: ignore[arg-type]
+            agent_repository=None,  # type: ignore[arg-type]
         ),
-        agent_repository=None,  # type: ignore[arg-type]
+        _StubConversations(conversations),
     )
 
 
@@ -206,7 +212,7 @@ async def test_subagent_shell_and_python_runtimes_use_the_inherited_directory():
 
     contexts = [
         workspace_runtime_context(
-            BaseAgentContext(
+            ToolContext(
                 user_id=conversation.user_id,
                 pod_id=conversation.pod_id,
                 conversation_id=conversation.id,
@@ -286,14 +292,14 @@ def test_a_project_never_names_the_account_it_clones_as():
     )
 
     assert repo == ProjectRepo(owner="acme", repo="web")
-    assert repo.as_metadata() == {"owner": "acme", "repo": "web"}
+    assert repo.to_json() == {"owner": "acme", "repo": "web"}
 
 
 def test_repo_metadata_derives_the_working_directory():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"repo": {"owner": "acme", "repo": "web", "ref": "main"}},
+        repo=ProjectRepo(owner="acme", repo="web", ref="main"),
     )
 
     location = resolve_workspace_location(conversation)
@@ -309,10 +315,8 @@ def test_an_explicit_cwd_still_wins_over_the_repo_directory():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={
-            "repo": {"owner": "acme", "repo": "web"},
-            "cwd": f"{WORKSPACE_ROOT}/somewhere-else",
-        },
+        repo=ProjectRepo(owner="acme", repo="web"),
+        cwd=f"{WORKSPACE_ROOT}/somewhere-else",
     )
 
     location = resolve_workspace_location(conversation)
@@ -322,44 +326,33 @@ def test_an_explicit_cwd_still_wins_over_the_repo_directory():
     assert location.repo is not None
 
 
-async def test_creating_against_a_repo_stamps_the_directory_and_a_filterable_name():
+async def test_creating_against_a_repo_stamps_its_directory():
     conversation = Conversation(
-        pod_id=uuid4(),
-        user_id=uuid4(),
-        metadata={"repo": {"owner": "acme", "repo": "web.git"}},
+        pod_id=uuid4(), user_id=uuid4(), repo=ProjectRepo(owner="acme", repo="web")
     )
     service = _service({})
 
     await service._apply_inherited_cwd(conversation, parent_id=None)
 
-    assert conversation.metadata["cwd"] == f"{WORKSPACE_ROOT}/repos/acme/web"
-    # Rewritten from the parsed form, not stored as the client sent it.
-    assert conversation.metadata["repo"] == {"owner": "acme", "repo": "web"}
-    # Flat, because conversation listing filters metadata by JSONB containment
-    # over string values only — a nested key cannot be queried.
-    assert conversation.metadata["repo_full_name"] == "acme/web"
+    assert conversation.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
 
 
-async def test_an_unusable_repo_leaves_the_conversation_on_a_scratchpad():
-    conversation = Conversation(
-        pod_id=uuid4(),
-        user_id=uuid4(),
-        metadata={"repo": {"owner": "../etc", "repo": "passwd"}},
-    )
+async def test_a_root_conversation_gets_a_scratchpad_of_its_own():
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
     service = _service({})
 
     await service._apply_inherited_cwd(conversation, parent_id=None)
 
-    assert "repo" not in conversation.metadata
-    assert "repo_full_name" not in conversation.metadata
-    assert conversation.metadata["cwd"].startswith(f"{WORKSPACE_ROOT}/c/")
+    assert conversation.repo is None
+    assert conversation.cwd is not None
+    assert conversation.cwd.startswith(f"{WORKSPACE_ROOT}/c/")
 
 
 async def test_a_subagent_inherits_the_parent_project():
     parent = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"repo": {"owner": "acme", "repo": "web", "ref": "main"}},
+        repo=ProjectRepo(owner="acme", repo="web", ref="main"),
     )
     service = _service({})
     await service._apply_inherited_cwd(parent, parent_id=None)
@@ -371,4 +364,4 @@ async def test_a_subagent_inherits_the_parent_project():
     child_location = resolve_workspace_location(child)
     assert child_location.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
     assert child_location.repo == resolve_workspace_location(parent).repo
-    assert child.metadata["repo_full_name"] == "acme/web"
+    assert child.repo == parent.repo

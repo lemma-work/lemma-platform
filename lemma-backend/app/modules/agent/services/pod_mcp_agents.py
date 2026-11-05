@@ -49,12 +49,12 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    ConversationRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.agent.services.mcp_content import tool_call_result
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.mcp.content import tool_call_result
+from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.pod_mcp_agent_tools import (
     AGENT_ANSWER,
     ASK_AGENT,
@@ -66,19 +66,14 @@ from app.modules.agent.services.pod_mcp_agent_tools import (
     askable_agents,
     resolve_agent,
 )
-from app.modules.agent.services.pause_questions import (
-    REQUEST_APPROVAL,
-    Pause,
-    shown,
-    undecided_pauses,
-)
+from app.modules.agent.domain.pauses import APPROVAL_KINDS, Pause
+from app.modules.agent.services.pause_questions import shown, undecided_pauses
 from app.modules.agent.services.poll_backoff import poll_until
-from app.modules.agent.tools.tool_payload_limits import (
+from app.modules.agent.infrastructure.tools.payload_limits import (
     bounded_tool_payload,
     bounded_tool_text,
 )
 from app.modules.mcp_access.contracts import McpPrincipal
-from app.modules.usage.contracts.execution import build_usage_service
 
 _POLL_SECONDS = 1.0
 
@@ -264,7 +259,7 @@ def read_answer(
 def _waiting_on(pause: Pause) -> WaitingOn:
     text, _ = shown(pause)
     return WaitingOn(
-        kind="approval" if pause.kind == REQUEST_APPROVAL else "question", text=text
+        kind="approval" if pause.kind in APPROVAL_KINDS else "question", text=text
     )
 
 
@@ -312,6 +307,31 @@ class ConversationReads(Protocol):
     ) -> tuple[list[Message], int | None]: ...
 
 
+class _ConversationReads:
+    """``ConversationReads`` over the conversation and message repositories."""
+
+    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+        self._conversations = Conversations(uow)
+        self._messages = Messages(uow)
+
+    async def lock_conversation(self, conversation_id: UUID) -> None:
+        await self._conversations.lock_conversation(conversation_id)
+
+    async def get_conversation(
+        self, conversation_id: UUID, *, include_runs: bool = False
+    ) -> Conversation | None:
+        return await self._conversations.get_conversation(
+            conversation_id, include_runs=include_runs
+        )
+
+    async def list_messages(
+        self, *, conversation_id: UUID, limit: int
+    ) -> tuple[list[Message], int | None]:
+        return await self._messages.list_messages(
+            conversation_id=conversation_id, limit=limit
+        )
+
+
 #: The agents a person may ask in a pod, by pod and person.
 AgentLister = Callable[[UUID, UUID], Awaitable[list[AskableAgent]]]
 
@@ -332,7 +352,7 @@ class PodAgentAsks:
         self._conversation_url = conversation_url or _lemma_conversation_url
 
     def _conversations(self, uow: SqlAlchemyUnitOfWork) -> ConversationReads:
-        return (self._conversation_reads or ConversationRepository)(uow)
+        return (self._conversation_reads or _ConversationReads)(uow)
 
     async def agents(self, *, pod_id: UUID, user_id: UUID) -> list[AskableAgent]:
         return await self._list_agents(pod_id, user_id)
@@ -458,26 +478,20 @@ class PodAgentAsks:
         As the person, under their own authorization in this pod: the same
         checks, limits and conversation a chat they start in Lemma gets.
         """
-        service = ConversationService(
-            uow=uow,
-            conversation_repository=ConversationRepository(uow),
-            agent_repository=AgentRepository(uow),
-            usage_service=build_usage_service(uow),
-        )
         context = await create_authorization_data_service(uow).build_user_context(
             user_id=principal.user_id, pod_id=principal.pod_id
         )
         token = set_current_context(context)
         try:
             if conversation is None:
-                conversation = await service.create_conversation(
+                conversation = await StartConversation.build(uow).start(
                     pod_id=principal.pod_id,
                     agent_name=agent.conversation_agent_name,
                     user_id=principal.user_id,
                     instructions=INSTRUCTIONS,
                     metadata={CONNECTION_KEY: connection_mark(principal)},
                 )
-            await service.add_user_message_and_start_run(
+            await SendMessage.build(uow).send(
                 conversation_id=conversation.id,
                 user_id=principal.user_id,
                 content=content,
