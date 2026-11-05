@@ -25,6 +25,9 @@ export interface Contact {
     handles: ContactHandle[];
     /** Known only by the browser they wrote from: nobody has vouched for them yet. */
     anonymous: boolean;
+    /** Their own chat with the space, opened straight from them; null until
+     *  they first write. */
+    channelId: string | null;
 }
 
 export type WidgetAnswer = "off" | "known" | "anyone";
@@ -82,6 +85,7 @@ export function readContact(wire: ContactResponse): Contact {
                 strength: identity.strength,
             })),
         anonymous: wire.is_anonymous ?? false,
+        channelId: wire.channel_id ?? null,
     };
 }
 

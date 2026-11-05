@@ -20,7 +20,6 @@ import {
     type WebWidget,
     type WidgetDraft,
 } from "@/data/contacts";
-import { channelApi } from "@/channels/api";
 import { SearchIcon } from "@/ui/icons";
 import { ContactQueue } from "@/channels/contact-queue";
 import { ContactBots } from "./contact-bots";
@@ -292,30 +291,21 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
 }
 
 /** A contact's channel: everything they and the space's agents said, where
- *  an editor can step in. Found when asked for, since a contact who has
- *  never written has none. */
+ *  an editor can step in. The contact says which it is, so it opens at once;
+ *  one who has never written has none. */
 function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; onLeave: () => void }) {
-    const [state, setState] = useState<"idle" | "finding" | "none" | "failed">("idle");
-    const open = async () => {
-        setState("finding");
-        try {
-            const found = await channelApi(pod.id).list({ kind: "CONTACT", archived: false, contactId: contact.id, limit: 1 });
-            const channel = found.items[0];
-            if (!channel) { setState("none"); return; }
-            setState("idle");
-            onLeave();
-            goTo(channelHref(pod.id, channel.id));
-        } catch {
-            setState("failed");
-        }
+    const [none, setNone] = useState(false);
+    const open = () => {
+        if (!contact.channelId) { setNone(true); return; }
+        onLeave();
+        goTo(channelHref(pod.id, contact.channelId));
     };
     return (
         <div className="csheet__actions">
-            <button type="button" className="ghost-pill" disabled={state === "finding"} onClick={() => void open()}>
-                {state === "finding" ? "Finding it…" : "Open their chat"}
+            <button type="button" className="ghost-pill" onClick={open}>
+                Open their chat
             </button>
-            {state === "none" && <p role="status">They have no chat yet: it starts when they first write.</p>}
-            {state === "failed" && <p role="alert">Couldn’t find their chat. Try again.</p>}
+            {none && <p role="status">They have no chat yet: it starts when they first write.</p>}
         </div>
     );
 }
