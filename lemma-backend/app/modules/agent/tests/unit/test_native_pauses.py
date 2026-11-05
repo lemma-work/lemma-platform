@@ -11,6 +11,7 @@ the log, as it does any answer.
 from __future__ import annotations
 
 import asyncio
+import json
 from uuid import uuid4
 
 import pytest
@@ -31,6 +32,9 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
     MessageDraft,
     MessageKind,
+)
+from app.modules.agent.infrastructure.harness.lemma.tool_return_times import (
+    without_return_time,
 )
 from app.modules.agent.tests.unit.test_cache_stable_prefix import (
     Model,
@@ -168,8 +172,9 @@ async def test_two_pauses_and_a_slow_sibling_in_one_step() -> None:
     )
 
     resumed = model.sent[-1].messages[-1]
+    # As the model reads them, after the note of when each came back.
     answered = {
-        part.tool_call_id: part.content
+        part.tool_call_id: json.loads(without_return_time(part.content))
         for part in resumed.parts
         if hasattr(part, "tool_call_id") and hasattr(part, "content")
     }
