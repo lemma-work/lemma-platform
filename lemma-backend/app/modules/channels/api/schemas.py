@@ -187,8 +187,8 @@ class ChannelResponse(BaseModel):
     case_id: UUID | None = Field(
         default=None,
         description=(
-            "A contact's channel: its current case, the one `status`, "
-            "`assignee` and `attention` are read from (`/cases` lists them all)."
+            "A contact's channel: its case, the one `status`, `assignee` and "
+            "`attention` are read from. A channel keeps one case."
         ),
     )
     assignee: PersonRef | None = Field(
