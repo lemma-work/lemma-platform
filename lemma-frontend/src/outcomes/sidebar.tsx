@@ -213,7 +213,7 @@ export function markOf(row: SideRow): ReactNode {
 export function kindOf(row: SideRow): string {
     if (row.kind === "automation") return row.runs && row.runs > 1 ? `Automation · ${row.runs} runs` : "Automation";
     if (row.kind === "table") return "Table, changed lately";
-    if (row.kind === "line") return "Your own line";
+    if (row.kind === "line") return "Your own chat";
     const places = row.platforms.map(channelName).join(", ");
     if (row.kind === "shared") return places ? "Group on " + places : "Shared chat";
     return places ? "Chat from " + places : "Chat";

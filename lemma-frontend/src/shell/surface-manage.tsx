@@ -42,7 +42,7 @@ export function SurfaceManage({ pod, surface, onBack, onSaved, onLeave }: {
     /* Who answers here: the space, or an agent with a channel of its own. */
     const bot = surface.mine ? pod.name : surface.agentName || pod.name;
     return <div className="surface-setup smanage">
-        <button className="linkish smanage__back" onClick={onBack}><BackIcon size={14} aria-hidden="true" /> All channels</button>
+        <button className="linkish smanage__back" onClick={onBack}><BackIcon size={14} aria-hidden="true" /> Back</button>
         <div className="smanage__head">
             <ChannelIcon platform={surface.platform} size={32} />
             <div className="smanage__title">

@@ -137,7 +137,7 @@ function Overview() {
                                 {healthDetail(data)} Quit and reopen Lemma to restart it, or use Lemma → Recovery… in the menu bar.
                             </p>
                         )}
-                        <SettingRow name="Start at login" consequence={`Lemma opens when you sign in to ${noun}, so conversations and channels keep answering.`}>
+                        <SettingRow name="Start at login" consequence={`Lemma opens when you sign in to ${noun}, so every chat keeps being answered.`}>
                             <input
                                 type="checkbox"
                                 className="thismac-switch"

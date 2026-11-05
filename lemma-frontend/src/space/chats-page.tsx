@@ -192,7 +192,7 @@ function SharedRow({ pod, channel, title, onOpen }: { pod: Pod; channel: Channel
     const count = badge(channel.unread.lines);
     const places = channel.sources.map((one) => placeName(one));
     const cameFrom = channel.kind === "DIRECT"
-        ? "Your private line with " + (pod.teammate?.name || pod.name)
+        ? "Your private chat with " + (pod.teammate?.name || pod.name)
         : places.length ? sayList(places) : "Shared chat";
     return (
         <tr tabIndex={0} onClick={onOpen} onKeyDown={event => { if (event.key === "Enter") onOpen(); }}>
