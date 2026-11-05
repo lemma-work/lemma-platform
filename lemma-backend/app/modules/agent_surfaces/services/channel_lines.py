@@ -6,10 +6,11 @@ and the background a later run is handed. Written as the message enters the
 person's conversation. The agent's answer is a line too, posted before it is
 sent and carried by its delivery (``run_reply_lines``).
 
-A group's messages are written earlier too, by ``group_log``, as they arrive:
+A group's messages are written earlier, by ``group_log``, as they arrive:
 most of a group is not said to the bot, and all of it is what "what did we
-decide yesterday?" asks about. The same platform message is one line however
-many times it is written.
+decide yesterday?" asks about. The turn that takes one up adds to that line
+and writes no other. The same platform message is one line however many
+times it arrives.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from app.modules.channels.contracts import (
     Sender,
     Source,
     SourceKind,
+    answered_in,
     post,
     source_by_id,
     source_for,
@@ -152,6 +154,13 @@ async def note_heard(
 ) -> None:
     """The message this run answers, as its sender's line in the channel.
 
+    Written once. A group's message is a line from the moment it arrived
+    (``group_log``): the turn only says which conversation answers it, and who
+    said it where the log could not name them (``answered_in``). Anything the
+    log did not write -- a person's own chat, a voice note with no words until
+    the turn hears them, a group's first message before the pod knew the
+    group -- is written here.
+
     ``text`` is what the conversation is given -- a voice note's words, not
     the empty body it arrived with.
     """
@@ -167,6 +176,21 @@ async def note_heard(
         if contact_id is not None
         else Sender.member(context.message_user_id, display_name=name)
     )
+    external_message_id = context.message_external_message_id
+    if (
+        source.kind is SourceKind.CHAT
+        and external_message_id is not None
+        and await answered_in(
+            uow,
+            channel_id=source.channel_id,
+            source_id=source.id,
+            external_message_id=external_message_id,
+            conversation_id=context.conversation_id,
+            sender=sender,
+        )
+        is not None
+    ):
+        return
     event = context.event
     said = await LineMarkup(uow).read(
         event,
@@ -184,14 +208,14 @@ async def note_heard(
             parts=said.parts,
             source_id=source.id,
             conversation_id=context.conversation_id,
-            external_message_id=context.message_external_message_id,
+            external_message_id=external_message_id,
             external_thread_id=event.external_thread_id,
             # A Slack or Teams thread is a thread here too.
             thread_root_id=await _thread_root(
                 uow,
                 source,
                 external_thread_id=event.external_thread_id,
-                external_message_id=context.message_external_message_id,
+                external_message_id=external_message_id,
             ),
             # What answers this line in place: its thread, the message replied to.
             reply_ref=reply_ref_of(event),

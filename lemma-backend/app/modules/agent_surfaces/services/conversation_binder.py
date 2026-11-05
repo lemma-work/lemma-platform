@@ -113,7 +113,8 @@ class ConversationBinder:
             home=home_of(place, user_id=user_id, contact_id=contact_id),
         )
         # How to answer the place: its reply target, never what was said.
-        await self.seats.heard_at(source.id, reply_ref_of(parsed))
+        # When it was heard is the message's line's to say, once it is one.
+        await self.seats.addressed_at(source.id, reply_ref_of(parsed))
         conversation_id, title = await self._persons_conversation(
             source=source,
             surface=surface,

@@ -310,9 +310,15 @@ observer renders them on the surface and a submission resumes the run.
   different agent or person. There is no inactivity reset; the per-surface
   `dm_conversation_reset_after_hours` field is accepted and ignored. This is
   the only place a surface decides which conversation a message joins.
-- **Every line lands on the channel's timeline** (`services/channel_lines.py`):
-  the message a run answers, as it enters the conversation, and every answer
-  the platform took, said by the agent for the person it answered. Platform
+- **Every line lands on the channel's timeline** (`services/channel_lines.py`),
+  once: the message a run answers, and every answer the platform took, said by
+  the agent for the person it answered. A group's message is its line from the
+  moment it arrives (the group log); the turn that takes it up only sets the
+  conversation answering it, and who said it where the log could not name them
+  (`channels.contracts.answered_in`). Any other message is written as it enters
+  the conversation. Only the line says when the place was last heard
+  (`channel_sources.last_inbound_at`); binding a message keeps only how to
+  answer the place (`delivery_ref`). Platform
   markup is read once, there (`domain/markup.py`, `services/line_markup.py`):
   Slack's `<@U…>` and `<url|label>`, Teams' `<at>` entities, Telegram's
   entities and WhatsApp's `@number` become `@Name` in the text and mention and
