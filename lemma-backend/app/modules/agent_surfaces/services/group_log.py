@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 
+from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
@@ -193,6 +194,9 @@ class GroupLog:
                 ),
                 mentions=said.mentions,
                 mentioned_agents=said.agents,
+                # The bot that heard it answers it itself, if it does: put to
+                # it, or answering every line there (``route_resolver``).
+                door_agent_id=_door_agent(surfaces, group),
             )
         return wrote or bool(known)
 
@@ -393,3 +397,11 @@ async def _participants(
         )
         for speaker in recent
     )
+
+
+def _door_agent(surfaces: Sequence[AgentSurfaceEntity], group: Source) -> UUID | None:
+    """The agent of the bot this group's line came through."""
+    for surface in surfaces:
+        if surface.id == group.surface_id:
+            return effective_agent_id(surface.agent_id, pod_id=surface.pod_id)
+    return None

@@ -36,7 +36,7 @@ from app.modules.agent.contracts.channel_replies import (
     run_reply_material,
 )
 from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
-from app.modules.agent.domain.private_notes import LEMMA_CHANNEL
+from app.modules.agent.domain.private_notes import HEARD_IN_CHANNEL, LEMMA_CHANNEL
 from app.modules.agent.domain.run_places import ASKED_IN_PLACE_KEY, place_source
 from app.modules.agent.domain.value_objects import QueueState
 from app.modules.agent.infrastructure.models.conversation import (
@@ -304,8 +304,10 @@ async def _lines_read_by(
     uow: SqlAlchemyUnitOfWork, run_id: UUID, conversation_id: UUID
 ) -> _Read:
     """The lines whose words this run read -- the one that started it and
-    any steered into it, oldest first: a line written in Lemma by its id, one
-    heard on a platform by where it was heard and its id there.
+    any steered into it, oldest first: a line a turn started from the
+    channel by its id (written in Lemma, or heard and answered by an agent
+    other than its door's), one a door took up by where it was heard and its
+    id there.
 
     Not a message that joined it and was never read: the run that delivers it
     answers it (``StartQueuedFollowUp``).
@@ -336,7 +338,7 @@ async def _lines_read_by(
     heard_lines: dict[UUID, ChannelMessage] = {}
     for source, line_id, place, external_message_id, _ in rows:
         heard_at = place_source(place)
-        if source == LEMMA_CHANNEL and line_id:
+        if source in (LEMMA_CHANNEL, HEARD_IN_CHANNEL) and line_id:
             try:
                 lines.append(UUID(line_id))
             except ValueError:

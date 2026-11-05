@@ -65,6 +65,13 @@ PRIVATE_NOTE_IN_DM_LABEL = (
 #: platform's guidance, tools, files or progress.
 LEMMA_CHANNEL = "lemma_channel"
 
+#: What a turn started by a line heard on a platform says it came from, when
+#: the agent answering it is not the bot it came through: one the line names,
+#: or one answering every line in the channel (``channels.domain.answering``).
+#: Started from the channel, but not written in Lemma: its run answers at the
+#: line's place (``asked_at_source``).
+HEARD_IN_CHANNEL = "channel_heard"
+
 #: A message's ``source`` when the platform handed something back rather than
 #: anybody saying it, and what the run it starts was triggered by.
 _HANDED_BACK_TRIGGERS: dict[str, RunTrigger] = {

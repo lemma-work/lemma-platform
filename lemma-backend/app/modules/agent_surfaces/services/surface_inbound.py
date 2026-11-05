@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 )
 from app.modules.agent_surfaces.services.surface_candidates import (
     admitted_surfaces,
+    answering_unasked,
     fan_in_candidates,
 )
 from app.modules.agent_surfaces.services.created_groups import created_group_surfaces
@@ -184,6 +185,12 @@ class SurfaceInboundMixin:
         )
 
         candidates = await admitted_surfaces(surfaces, parsed, seats=self.router.seats)
+        if not candidates:
+            candidates = await answering_unasked(
+                surfaces, parsed, seats=self.router.seats
+            )
+            if candidates:
+                parsed = parsed.model_copy(update={"unasked": True})
         if not candidates:
             return await self._prepare_unrouted_platform_context(
                 platform=platform,
@@ -470,6 +477,19 @@ class SurfaceInboundMixin:
                     self.uow, surface
                 ),
             )
+        # Whether the sender is a member of this surface's pod -- asked once,
+        # and handed to everything after that decides on it.
+        member = (
+            resolved_user.internal_user_id is not None
+            and await self.router.matches_user(
+                surfaces=[surface], resolved_user=resolved_user
+            )
+            is not None
+        )
+        if parsed.unasked and not member:
+            # Let in only because its agent answers every line there -- a
+            # member's line only: nobody else is answered, or refused.
+            return None
         outside = await answer_outside_the_pod(
             uow=self.uow,
             router=self.router,
@@ -487,13 +507,18 @@ class SurfaceInboundMixin:
             adapter=adapter,
             resolved_user=resolved_user,
             agent_display_name=fallback_agent_display_name,
+            member=member,
         )
         # A sender with no internal user always gets a refusal, so the second
         # arm is only there to narrow the type for what follows.
         if refusal is not None or user_id is None:
             return refusal
 
-        route = await self.router.resolve_route(surface=surface, parsed=parsed)
+        # A member of the pod: answered here when they put it to the bot, or
+        # when its agent answers every line in the group.
+        route = await self.router.resolve_route(
+            surface=surface, parsed=parsed, member=member
+        )
         if route is None:
             return surface_setup_context(
                 surface=surface,
@@ -530,6 +555,7 @@ class SurfaceInboundMixin:
         adapter: SurfacePlatformAdapterPort,
         resolved_user: ResolvedSurfaceUser,
         agent_display_name: str,
+        member: bool,
     ) -> AgentSurfaceContext | None:
         """The reply owed to a sender who cannot start a run here, else ``None``.
 
@@ -552,13 +578,7 @@ class SurfaceInboundMixin:
                 agent_display_name=agent_display_name,
                 confirmation=confirmation,
             )
-        if (
-            await self.router.matches_user(
-                surfaces=[surface],
-                resolved_user=resolved_user,
-            )
-            is None
-        ):
+        if not member:
             logger.debug(
                 "agent_surfaces.ingress_service.agent_surface_resolved_user_not.observed",
                 surface_type=surface.surface_type,

@@ -1,9 +1,12 @@
-"""A member writing in Lemma's own channels, answered by the pod's agents.
+"""A member's line in a channel, answered by the pod's agents.
 
 Lemma is one more place to talk to the pod. Channels decides which agents
-answer a member's line (``ChannelMessagePosted.answering_agent_ids``: those it
-names, those in the channel that answer every line, and in the member's own
-channel the pod's agent); this module does the answering. Each agent answers in
+answer a member's line, by one rule wherever it was typed
+(``ChannelMessagePosted.answering_agent_ids``: those it names, those in the
+channel that answer every line, and in the member's own channel the pod's
+agent); this module does the answering. A line heard on a platform is
+answered at its door by the bot it came through (``agent_surfaces``); any
+other agent the rule names for it starts here, and answers at its place. Each agent answers in
 the member's own conversation with it in that channel -- with the member's
 access, like any turn they start -- and its answer comes back as a line in the
 thread of the line it answers, said for them.
@@ -46,6 +49,7 @@ from app.modules.agent.contracts.channel_replies import (
     answer_line_client_id,
 )
 from app.modules.agent.domain.private_notes import (
+    HEARD_IN_CHANNEL,
     LEMMA_CHANNEL,
     PRIVATE_NOTE_REQUEST_KEY,
 )
@@ -90,7 +94,6 @@ from app.modules.channels.contracts.lines import (
 )
 
 logger = get_logger(__name__)
-
 #: The most lines of the channel a run answering a line is shown.
 IN_APP_CONTEXT_LINES = 30
 
@@ -138,13 +141,12 @@ async def answer_line(
 
 
 def _answerable(line: ChannelMessage) -> bool:
-    """A member's own line written in Lemma -- wherever it was carried -- still
-    there. One heard on a platform is answered there. A members' note is
-    answered too, by the agents it names, as a note (``channel_answer_lines``)."""
+    """A member's own line, still there -- written in Lemma, wherever it was
+    carried, or heard on a platform. A members' note is answered too, by the
+    agents it names, as a note (``channel_answer_lines``)."""
     return (
         line.sender.kind is SenderKind.MEMBER
         and line.sender.user_id is not None
-        and not line.heard_outside
         and not line.is_deleted
     )
 
@@ -190,7 +192,11 @@ async def _answer_as(
             agent_id=agent_id,
             agent_name=agent_name,
         )
-        if await _answering_another_thread(uow, channel, line, conversation_id):
+        if not line.heard_outside and await _answering_another_thread(
+            uow, channel, line, conversation_id
+        ):
+            # A heard line keeps to its place instead: a run asked there takes
+            # it in, and one asked anywhere else leaves it for its own turn.
             raise LineWaits(line.id)
         await start_answering(
             uow,
@@ -210,6 +216,8 @@ async def _answer_as(
             require_execute_grant=False,
             client_message_id=turn_client_id(line.id),
             kind=RunKind.CHANNEL,
+            # Heard on a platform: answered there (``domain/run_places``).
+            asked_at=line.source_id,
         )
         # The run that answers it: the one this turn started, or the one
         # already going that it joined.
@@ -328,10 +336,16 @@ def turn_metadata(
     channel: Channel, line: ChannelMessage, background: Sequence[ChannelMessage]
 ) -> dict[str, object]:
     metadata: dict[str, object] = {
-        "source": LEMMA_CHANNEL,
         "channel_id": str(channel.id),
         "channel_message_id": str(line.id),
     }
+    if line.heard_outside:
+        # Read back as the line heard at its place (``run_answers``).
+        metadata["source"] = HEARD_IN_CHANNEL
+        if line.external_message_id:
+            metadata["external_message_id"] = line.external_message_id
+    else:
+        metadata["source"] = LEMMA_CHANNEL
     if line.members_only:
         # A note among members: its answer is one too, and nothing said for
         # it is repeated anywhere it would be carried.
@@ -346,7 +360,11 @@ def turn_metadata(
         metadata[BACKGROUND_KEY] = BackgroundRefs(
             pod_id=channel.pod_id,
             channel_id=channel.id,
-            view=BackgroundView.MEMBER_IN_LEMMA,
+            # Heard in a group: what a member's run there is shown, answered
+            # where everybody in it reads the answer.
+            view=BackgroundView.MEMBER_IN_GROUP
+            if line.heard_outside
+            else BackgroundView.MEMBER_IN_LEMMA,
             user_id=line.sender.user_id,
             items=refs_of(background),
         ).model_dump(mode="json")
