@@ -74,6 +74,8 @@ from app.modules.channels.contracts import (
     SenderKind,
     Source,
     background,
+    is_outside,
+    not_held,
     post,
     speakers_in,
 )
@@ -340,9 +342,8 @@ async def group_background(
     )
     outside_authors: list[str] = []
     for line in lines:
-        from_agent = line.sender.kind is SenderKind.AGENT
         author = line.sender.display_name
-        if not from_agent and line.sender.user_id not in members and author:
+        if is_outside(line.sender, held=members) and author:
             outside_authors.append(author)
     participants = (
         await _participants(uow, group=group, membership=membership, asker=asker)
@@ -388,7 +389,7 @@ async def _participants(
     return tuple(
         SurfaceGroupParticipant(
             name=" ".join(str(speaker.name or "").split()),
-            in_pod=speaker.principal.user_id in members,
+            in_pod=not not_held(speaker.principal.user_id, held=members),
         )
         for speaker in recent
     )

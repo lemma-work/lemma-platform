@@ -542,10 +542,13 @@ is answered *for the pod*, in a group the pod has opened to them.
   their runs never pause.
 - **Files** they send are not saved -- the owner's space is the only place they
   could go -- and the run is told so.
-- **Limits**: `SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES` and
-  `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`, counted in Redis and failing
-  closed. Only a turn that runs is charged to the group, so one person looping
-  cannot spend everybody's day. A member opens at most
+- **Limits**: one limiter for every door (`ContactTurnLimiter`):
+  `SURFACE_CONTACT_TURNS_PER_PERSON_PER_10_MINUTES` per person in the pod,
+  counted together wherever they write -- a group, a private chat, email, a
+  web chat -- and a day's ceiling per place: `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`
+  for a group, `SURFACE_CONTACT_TURNS_PER_SURFACE_PER_DAY` for a bot or a web
+  widget. Counted in Redis and failing closed. Only a turn that runs is
+  charged to the place, so one person looping cannot spend everybody's day. A member opens at most
   `OPENS_PER_MEMBER_PER_DAY` WhatsApp groups on one bot a day, and only one who
   may configure the bot may open any.
 - **The bot's own switch.** `config.groups.answers_outsiders` on a surface,
