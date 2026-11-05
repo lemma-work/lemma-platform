@@ -2,9 +2,9 @@
 
 A member's question spends the pod's model budget on the pod's own business. A
 stranger's spends it on theirs, in a chat where one person can keep asking, or
-where somebody the pod never met added the bot. So there are two ceilings: one
-per person per group, which stops one person looping, and one per group per day,
-which caps what a whole group can cost.
+where somebody the pod never met added the bot. So there are two ceilings
+(``ContactTurnLimiter``): one per person, which stops one person looping, and
+one per place per day, which caps what a whole group can cost.
 
 Fixed windows in Redis, for the reasons ``notification_rate_limiter`` gives. It
 fails **closed**, where that limiter fails open: that one guards colleagues, and
@@ -30,59 +30,67 @@ _TEN_MINUTES = 600
 _DAY = 86_400
 
 
-class OutsiderTurnLimiter:
-    def __init__(self, *, redis=None) -> None:
-        self._redis = redis
-
-    async def allow(self, *, group_id: UUID, sender_external_id: str) -> bool:
-        """Count this turn and say whether it may run.
-
-        The group's day is charged only for turns that will run. A person over
-        their own limit is refused before it, so one person looping cannot use
-        up everybody else's allowance in the group.
-        """
-        client = self._redis or get_redis()
-        person_limit = surface_settings.surface_outsider_turns_per_person_per_10_minutes
-        group_limit = surface_settings.surface_outsider_turns_per_group_per_day
-        try:
-            per_person = await incr_with_ttl(
-                client, f"outsider:turns:{group_id}:{sender_external_id}", _TEN_MINUTES
-            )
-            if per_person > person_limit:
-                self._refused(group_id, per_person=True)
-                return False
-            per_group = await incr_with_ttl(client, f"outsider:turns:{group_id}", _DAY)
-        except (RedisError, OSError) as exc:
-            logger.warning(
-                "agent_surfaces.outsider_limits.unavailable.degraded",
-                error_type=type(exc).__name__,
-            )
-            return False
-        if per_group > group_limit:
-            self._refused(group_id, per_person=False)
-            return False
-        return True
-
-    @staticmethod
-    def _refused(group_id: UUID, *, per_person: bool) -> None:
-        logger.info(
-            "agent_surfaces.outsider_limits.exceeded.observed",
-            group_id=str(group_id),
-            per_person=per_person,
-            per_group=not per_person,
-        )
+def person_in(pod_id: UUID, who: str) -> str:
+    """The one name a person outside the pod is counted under in it, whichever
+    door they came in by: the handle they are a contact by (``kind:value``),
+    or a web visitor's session."""
+    return f"{pod_id}:{who}"
 
 
 class ContactTurnLimiter:
-    """How often contacts may put a bot to work, and how fast it meets new ones.
+    """How often people outside a pod may put its bot to work, and how fast it
+    meets new ones -- one limiter, whatever the door: a private chat, an email,
+    a group, a web chat.
 
-    The same fixed windows, failing closed, as ``OutsiderTurnLimiter``, for the
-    same reason: a contact going unanswered while Redis is away costs nothing,
-    and their message is still in the chat for a member to answer.
+    Two ceilings per turn. One per person in the pod (``person_in``), the same
+    window wherever they write from, so asking in the group and then privately
+    does not double what one person may spend. And one per place a day -- a
+    group, a bot, a web widget -- which caps what a whole group or a flood can
+    cost. The place's day is charged only for turns that will run: a person
+    over their own limit is refused before it, so one person looping cannot
+    use up everybody else's allowance there.
     """
 
     def __init__(self, *, redis=None) -> None:
         self._redis = redis
+
+    async def allow(self, *, person: str, place: UUID, place_per_day: int) -> bool:
+        """Count this turn and say whether it may run.
+
+        ``person`` is who asked (``person_in``); ``place`` the group, bot or
+        widget the turn is charged to, at most ``place_per_day`` a day.
+        """
+        client = self._redis or get_redis()
+        person_limit = surface_settings.surface_contact_turns_per_person_per_10_minutes
+        try:
+            per_person = await incr_with_ttl(
+                client, f"contact:turns:person:{person}", _TEN_MINUTES
+            )
+            if per_person > person_limit:
+                self._refused(place, per_person=True)
+                return False
+            per_place = await incr_with_ttl(client, f"contact:turns:{place}", _DAY)
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "agent_surfaces.contact_limits.unavailable.degraded",
+                error_type=type(exc).__name__,
+            )
+            return False
+        if per_place > place_per_day:
+            self._refused(place, per_person=False)
+            return False
+        return True
+
+    async def allow_visitor(
+        self, *, pod_id: UUID, widget_id: UUID, session_id: UUID
+    ) -> bool:
+        """``allow`` for a web chat visitor: counted by their session, charged
+        to the widget at a bot's daily ceiling."""
+        return await self.allow(
+            person=person_in(pod_id, f"web:{session_id}"),
+            place=widget_id,
+            place_per_day=surface_settings.surface_contact_turns_per_surface_per_day,
+        )
 
     async def allow_new_contact(self, *, surface_id: UUID) -> bool:
         """Count one stranger becoming a contact of this bot today."""
@@ -105,37 +113,11 @@ class ContactTurnLimiter:
             return False
         return True
 
-    async def allow(self, *, surface_id: UUID, contact_id: UUID) -> bool:
-        """Count this contact's turn and say whether it may run."""
-        client = self._redis or get_redis()
-        person_limit = surface_settings.surface_contact_turns_per_person_per_10_minutes
-        surface_limit = surface_settings.surface_contact_turns_per_surface_per_day
-        try:
-            per_person = await incr_with_ttl(
-                client, f"contact:turns:{surface_id}:{contact_id}", _TEN_MINUTES
-            )
-            if per_person > person_limit:
-                self._refused(surface_id, per_person=True)
-                return False
-            per_surface = await incr_with_ttl(
-                client, f"contact:turns:{surface_id}", _DAY
-            )
-        except (RedisError, OSError) as exc:
-            logger.warning(
-                "agent_surfaces.contact_limits.unavailable.degraded",
-                error_type=type(exc).__name__,
-            )
-            return False
-        if per_surface > surface_limit:
-            self._refused(surface_id, per_person=False)
-            return False
-        return True
-
     @staticmethod
-    def _refused(surface_id: UUID, *, per_person: bool) -> None:
+    def _refused(place: UUID, *, per_person: bool) -> None:
         logger.info(
             "agent_surfaces.contact_limits.exceeded.observed",
-            surface_id=str(surface_id),
+            place_id=str(place),
             per_person=per_person,
         )
 
@@ -186,20 +168,6 @@ class WebWidgetLimiter:
                 f"web:sessions:{widget_id}",
                 _DAY,
                 surface_settings.surface_web_sessions_per_widget_per_day,
-            ),
-        )
-
-    async def allow_turn(self, *, widget_id: UUID, session_id: UUID) -> bool:
-        return await self._within(
-            (
-                f"web:turns:{widget_id}:{session_id}",
-                _TEN_MINUTES,
-                surface_settings.surface_contact_turns_per_person_per_10_minutes,
-            ),
-            (
-                f"web:turns:{widget_id}",
-                _DAY,
-                surface_settings.surface_contact_turns_per_surface_per_day,
             ),
         )
 

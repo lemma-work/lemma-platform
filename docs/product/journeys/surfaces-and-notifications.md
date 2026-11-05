@@ -346,6 +346,28 @@ is answered *for the pod*.
 
 **Contracts:** `surface.webhook.handle_platform`
 
+### PS-SURF-054 — A member's run asks before acting on what somebody outside the pod wrote
+**Status:** planned
+
+> Proven at module level by `agent/tests/e2e/test_channel_tools_e2e.py`
+> (`test_a_member_since_gone_reads_as_outside_wherever_the_line_is_read`) and
+> `pod/tests/e2e/test_outside_text_gate_e2e.py`. A scenario needs a group chat
+> with somebody outside the pod in it, which the suite does not yet hold.
+
+- When a member's run is handed, or reads, what somebody outside the pod wrote
+  -- a contact, or a member who has since left the pod -- the system shall mark
+  those words as theirs.
+- While a member's run has such words in front of it, the system shall ask the
+  member before the run does anything beyond reading and writing the pod's own
+  records and files.
+- The system shall decide who is outside the pod one way for every reading: a
+  line the run was handed as background and the same line read from the
+  channel shall both ask the member first, or neither shall.
+- If the system cannot tell whether somebody is still in the pod, it shall
+  treat them as outside.
+
+**Contracts:** `agent.conversation.approval.list`, `agent.conversation.approval.resolve`
+
 ### PS-SURF-017 — A person can say something to the agent without the group reading it
 **Status:** planned
 

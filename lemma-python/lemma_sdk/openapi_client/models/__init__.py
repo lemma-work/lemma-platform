@@ -126,18 +126,13 @@ _NAME_TO_MODULE = {
     'CallConfigResponseEnginesItem': 'call_config_response_engines_item',
     'CallResponse': 'call_response',
     'CallResponseEnginesItem': 'call_response_engines_item',
-    'CaseEventResponse': 'case_event_response',
-    'CaseEventResponseValue': 'case_event_response_value',
-    'CaseResponse': 'case_response',
     'ChannelAnswerRequest': 'channel_answer_request',
     'ChannelAnswerRequestAnswer': 'channel_answer_request_answer',
-    'ChannelCasesResponse': 'channel_cases_response',
     'ChannelCreateRequest': 'channel_create_request',
     'ChannelDetailResponse': 'channel_detail_response',
     'ChannelEditRequest': 'channel_edit_request',
     'ChannelKind': 'channel_kind',
     'ChannelListResponse': 'channel_list_response',
-    'ChannelMemberListResponse': 'channel_member_list_response',
     'ChannelMemberResponse': 'channel_member_response',
     'ChannelMessageResponse': 'channel_message_response',
     'ChannelMessageResponseVisibility': 'channel_message_response_visibility',
@@ -888,18 +883,13 @@ if TYPE_CHECKING:
     from .call_config_response_engines_item import CallConfigResponseEnginesItem
     from .call_response import CallResponse
     from .call_response_engines_item import CallResponseEnginesItem
-    from .case_event_response import CaseEventResponse
-    from .case_event_response_value import CaseEventResponseValue
-    from .case_response import CaseResponse
     from .channel_answer_request import ChannelAnswerRequest
     from .channel_answer_request_answer import ChannelAnswerRequestAnswer
-    from .channel_cases_response import ChannelCasesResponse
     from .channel_create_request import ChannelCreateRequest
     from .channel_detail_response import ChannelDetailResponse
     from .channel_edit_request import ChannelEditRequest
     from .channel_kind import ChannelKind
     from .channel_list_response import ChannelListResponse
-    from .channel_member_list_response import ChannelMemberListResponse
     from .channel_member_response import ChannelMemberResponse
     from .channel_message_response import ChannelMessageResponse
     from .channel_message_response_visibility import ChannelMessageResponseVisibility
@@ -1663,18 +1653,13 @@ __all__ = [
     'CallConfigResponseEnginesItem',
     'CallResponse',
     'CallResponseEnginesItem',
-    'CaseEventResponse',
-    'CaseEventResponseValue',
-    'CaseResponse',
     'ChannelAnswerRequest',
     'ChannelAnswerRequestAnswer',
-    'ChannelCasesResponse',
     'ChannelCreateRequest',
     'ChannelDetailResponse',
     'ChannelEditRequest',
     'ChannelKind',
     'ChannelListResponse',
-    'ChannelMemberListResponse',
     'ChannelMemberResponse',
     'ChannelMessageResponse',
     'ChannelMessageResponseVisibility',

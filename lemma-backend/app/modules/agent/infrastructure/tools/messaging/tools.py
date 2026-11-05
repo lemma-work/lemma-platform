@@ -35,10 +35,15 @@ from app.modules.agent.domain.asked_questions import (
     line_client_id,
     message_ref,
 )
-from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.private_notes import defuse_lemma_labels
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.tools import ReplayClass, ToolGroup, ToolPolicy, tool
+from app.modules.agent.domain.tools import (
+    ReplayClass,
+    ToolAudience,
+    ToolGroup,
+    ToolPolicy,
+    tool,
+)
 from app.modules.agent.services.outside_text import note_outside_text_read
 from app.modules.agent.infrastructure.tools.messaging.models import (
     ChannelListRequest,
@@ -91,15 +96,6 @@ def _uow() -> SqlAlchemyUnitOfWork:
     return SessionUnitOfWorkFactory(async_session_maker)()
 
 
-def _refused_to_outsiders(deps: ToolContext) -> str | None:
-    if run_audience(deps).answers_outsiders:
-        return (
-            "You are answering somebody outside the pod. When they need a "
-            "person, use `ask_a_person`."
-        )
-    return None
-
-
 def line_sender_name(line: ChannelMessage) -> str:
     """Who said a line, as the agent reads it."""
     sender = line.sender
@@ -125,11 +121,15 @@ def _summary(
     *,
     reader_id: UUID,
     in_direct: bool,
+    said_outside: frozenset[UUID],
     question: Question | None = None,
 ) -> LineSummary:
+    """``said_outside`` is which lines the pod's rule marks as said outside it
+    (``channels``' ``said_outside``), so a read marks exactly what the
+    background a run is given marks."""
     hidden = withheld_from(line, user_id=reader_id, in_their_direct=in_direct)
     asked = question or line.question
-    outside = line.sender.kind is SenderKind.CONTACT
+    outside = line.id in said_outside
     text = None if hidden or line.is_deleted else line.text
     return LineSummary(
         id=line.id,
@@ -187,8 +187,6 @@ async def channel_post(
     deps = ctx
     if deps.pod_id is None:
         return ChannelPostResponse(success=False, error="Only inside a pod.")
-    if refused := _refused_to_outsiders(deps):
-        return ChannelPostResponse(success=False, error=refused)
     if (request.to is None) == (request.channel_id is None):
         return ChannelPostResponse(
             success=False, error="Give exactly one of `to` or `channel_id`."
@@ -350,8 +348,6 @@ async def channel_read(
     deps = ctx
     if deps.pod_id is None:
         return ChannelReadResponse(success=False, error="Only inside a pod.")
-    if refused := _refused_to_outsiders(deps):
-        return ChannelReadResponse(success=False, error=refused)
     if request.asked_by_me:
         return await _asked_by_me(deps, limit=request.limit)
     if request.channel_id is None:
@@ -367,9 +363,12 @@ async def channel_read(
         lines = await channel_reads.page_lines(
             uow, channel_id=channel.id, limit=request.limit
         )
+        outside = await channel_reads.said_outside(uow, pod_id=deps.pod_id, lines=lines)
     in_direct = channel.kind is ChannelKind.DIRECT
     summaries = [
-        _summary(line, reader_id=deps.user_id, in_direct=in_direct)
+        _summary(
+            line, reader_id=deps.user_id, in_direct=in_direct, said_outside=outside
+        )
         for line in lines
         if not line.is_deleted
     ]
@@ -400,8 +399,15 @@ async def _asked_by_me(deps: ToolContext, *, limit: int) -> ChannelReadResponse:
             (question, await channel_reads.line_by_id(uow, question.message_id))
             for question in asked
         ]
+    # Each is this run's own question: an agent's line, never outside.
     summaries = [
-        _summary(line, reader_id=deps.user_id, in_direct=True, question=question)
+        _summary(
+            line,
+            reader_id=deps.user_id,
+            in_direct=True,
+            said_outside=frozenset(),
+            question=question,
+        )
         for question, line in lines
         if line is not None
     ]
@@ -424,8 +430,6 @@ async def channel_search(
     deps = ctx
     if deps.pod_id is None:
         return ChannelSearchResponse(success=False, error="Only inside a pod.")
-    if refused := _refused_to_outsiders(deps):
-        return ChannelSearchResponse(success=False, error=refused)
     async with _uow() as uow:
         viewer = await _viewer(uow, deps)
         found = await channel_reads.search_lines(
@@ -437,8 +441,14 @@ async def channel_search(
                 uow, viewer=viewer, kind=ChannelKind.DIRECT
             )
         }
+        outside = await channel_reads.said_outside(uow, pod_id=deps.pod_id, lines=found)
     summaries = [
-        _summary(line, reader_id=deps.user_id, in_direct=line.channel_id in own)
+        _summary(
+            line,
+            reader_id=deps.user_id,
+            in_direct=line.channel_id in own,
+            said_outside=outside,
+        )
         for line in found
         if not withheld_from(
             line, user_id=deps.user_id, in_their_direct=line.channel_id in own
@@ -456,8 +466,6 @@ async def channel_list(
     deps = ctx
     if deps.pod_id is None:
         return ChannelListResponse(success=False, error="Only inside a pod.")
-    if refused := _refused_to_outsiders(deps):
-        return ChannelListResponse(success=False, error=refused)
     try:
         kind = ChannelKind(request.kind.upper()) if request.kind else None
     except ValueError:
@@ -502,12 +510,16 @@ SPECS = (
     tool(list_pod_members, ToolGroup.MESSAGING, _READ),
     tool(list_teammates, ToolGroup.MESSAGING, _READ),
     tool(ask_teammate, ToolGroup.MESSAGING, ToolPolicy(deferrable=True)),
-    # The one a stranger's run keeps: flagging the channel for the member who
-    # looks after it to step in.
+    # A stranger's run's one messaging tool, and never a member's: flagging
+    # the channel for the member who looks after it to step in.
     tool(
         ask_a_person,
         ToolGroup.MESSAGING,
-        ToolPolicy(deferrable=True, outsider_allowed=True, replay=ReplayClass.KEYED),
+        ToolPolicy(
+            deferrable=True,
+            offered_to=ToolAudience.OUTSIDERS,
+            replay=ReplayClass.KEYED,
+        ),
     ),
 )
 

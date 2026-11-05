@@ -3,7 +3,7 @@
 A toolset is a bundle, and trusting one is how ``web_fetch`` -- which opens the
 conversation owner's sandbox -- reached strangers: it rides in WEB_SEARCH beside
 ``web_search``. So the question is asked of each tool, on its policy
-(``ToolPolicy.outsider_allowed``), and these tests hold the line by name:
+(``ToolPolicy.offered_to``), and these tests hold the line by name:
 
 * the decision record: exactly these tools are allowed, ``web_fetch`` and the
   writes nowhere among them;
@@ -31,6 +31,7 @@ from app.modules.agent.domain.outsiders import (
     OutsiderRunRefused,
     refuse_owner_workspace,
 )
+from app.modules.agent.domain.tools import ToolAudience
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.infrastructure.harness.lemma.capabilities import (
     harness_capabilities,
@@ -92,6 +93,10 @@ def _kept_specs() -> list:
     ]
 
 
+def _offered_to_strangers(spec) -> bool:
+    return spec.policy.offered(answers_outsiders=True)
+
+
 def test_the_kept_toolsets_are_exactly_these():
     """Widening this is a decision about strangers, not a side effect."""
     assert OUTSIDER_TOOLSETS == {
@@ -103,12 +108,12 @@ def test_the_kept_toolsets_are_exactly_these():
 
 def test_exactly_the_decided_tools_are_allowed():
     """A tool added to a kept toolset is withheld until somebody allows it."""
-    allowed = {spec.name for spec in _kept_specs() if spec.policy.outsider_allowed}
+    allowed = {spec.name for spec in _kept_specs() if _offered_to_strangers(spec)}
     assert allowed == ALLOWED
 
 
 def test_web_fetch_and_the_writes_are_withheld():
-    withheld = {spec.name for spec in _kept_specs() if not spec.policy.outsider_allowed}
+    withheld = {spec.name for spec in _kept_specs() if not _offered_to_strangers(spec)}
     assert {"web_fetch", "pod_write_record", "pod_write_file", "pod_edit_file"} <= (
         withheld
     )
@@ -170,6 +175,45 @@ async def test_an_assembled_strangers_run_is_offered_only_the_allow_list():
     assert offered <= ALLOWED, sorted(offered - ALLOWED)
     assert "web_fetch" not in offered
     assert "ask_a_person" in offered
+
+
+@pytest.mark.anyio
+async def test_a_members_run_is_offered_none_of_the_strangers_own_tools():
+    """Two toolsets, not one with refusals in it: calling a member in has
+    nothing to do on a member's run, whose person is already here."""
+    deps = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        org_id=uuid4(),
+        conversation_id=uuid4(),
+        is_pod_default_agent=True,
+    )
+    conversation = Conversation(
+        id=deps.conversation_id, user_id=deps.user_id, pod_id=deps.pod_id
+    )
+
+    specs = await specs_for(
+        agent=None,
+        conversation=conversation,
+        ctx=deps,
+        surface=ToolSurface.IN_PROCESS,
+        uow_factory=lambda: SimpleNamespace(),
+    )
+
+    names = {spec.name for spec in specs}
+    assert "channel_post" in names
+    # Read from each tool's own policy, not through ``offered``, which the
+    # catalog already filtered on: a wrong ``offered`` would pass that twice.
+    strangers_own = {
+        spec.name
+        for spec in _kept_specs()
+        if spec.policy.offered_to is ToolAudience.OUTSIDERS
+    }
+    assert {"ask_a_person", "contact_records", "group_history"} <= strangers_own
+    assert not names & strangers_own
+    assert not [
+        spec.name for spec in specs if spec.policy.offered_to is ToolAudience.OUTSIDERS
+    ]
 
 
 @pytest.mark.anyio

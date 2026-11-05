@@ -116,10 +116,9 @@ sequenceDiagram
 sends it, and records the outcome on it (`services/delivery_outcome.py`).
 Every outcome but `SENT` carries a `DeliveryReasonCode` beside the sentence a
 member reads (`Outcome.code`): code that decides by why a delivery stands
-where it does reads the code, never the sentence. Each try is a
-`channel_delivery_attempts` row, begun at the claim and ended with the outcome
-and the platform's HTTP status when it gave one (`SendOutcome.provider_status`,
-read from a platform client's own error too). A `401` refuses the bot, not the
+where it does reads the code, never the sentence. A failed send keeps the
+platform's HTTP status when it gave one (`SendOutcome.provider_status`, read
+from a platform client's own error too). A `401` refuses the bot, not the
 message: its surface carries the reason as `problem` (`surface_problems`, in
 Redis) -- as it does a webhook the platform refused -- its `/setup` is not
 ready, and a contact the bot was writing to waits on a person; a send that
@@ -497,16 +496,18 @@ is answered *for the pod*, in a group the pod has opened to them.
   server's alone, so nothing a client writes to the conversation changes whom
   it answers.
   What such a run may do:
-  - **Tools, by name.** Toolsets are cut to pod reads, web search and
-    messaging, and then each tool is allow-listed one by one
-    (`tools/outsider_tools`): the pod's read tools, `web_search` and
-    `ask_a_person`. `web_fetch` (it fetches inside the
-    owner's sandbox) and the pod's write tools are withheld by name, and the
-    harness's last capability (`capabilities/outsider_gate`) and the tool
-    dispatcher drop anything not on the list, however it arrived. A workspace
-    -- sandbox, host session, the owner's files -- is never opened for such a
-    run (`refuse_owner_workspace`), and a test fails until any new tool in a
-    kept toolset is classified. In a group it also has `group_history` (the
+  - **Tools, by name.** A member's run and such a run get two toolsets, and
+    each tool's policy says which it is in (`ToolPolicy.offered_to`: members,
+    anyone, or outsiders). Toolsets are cut to pod reads, web search and
+    messaging, and inside them such a run has the pod's read tools,
+    `web_search` and `ask_a_person` -- the last never offered to a member's
+    run. `web_fetch` (it fetches inside the owner's sandbox) and the pod's
+    write tools are a member's only, the catalog never offers them, and the
+    tool runtime holds the same line for a caller that built its own list;
+    no tool refuses a stranger from inside. A workspace -- sandbox, host
+    session, the owner's files -- is never opened for such a run
+    (`refuse_owner_workspace`), and a test fails until any new tool in a kept
+    toolset is classified. In a group it also has `group_history` (the
     group it sits in, from its seat, never another), and `group_records` and
     `group_add_record` for the tables the group was given (channels' "Tables
     a group was given"), read and added as the member who gave them.
@@ -541,10 +542,13 @@ is answered *for the pod*, in a group the pod has opened to them.
   their runs never pause.
 - **Files** they send are not saved -- the owner's space is the only place they
   could go -- and the run is told so.
-- **Limits**: `SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES` and
-  `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`, counted in Redis and failing
-  closed. Only a turn that runs is charged to the group, so one person looping
-  cannot spend everybody's day. A member opens at most
+- **Limits**: one limiter for every door (`ContactTurnLimiter`):
+  `SURFACE_CONTACT_TURNS_PER_PERSON_PER_10_MINUTES` per person in the pod,
+  counted together wherever they write -- a group, a private chat, email, a
+  web chat -- and a day's ceiling per place: `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`
+  for a group, `SURFACE_CONTACT_TURNS_PER_SURFACE_PER_DAY` for a bot or a web
+  widget. Counted in Redis and failing closed. Only a turn that runs is
+  charged to the place, so one person looping cannot spend everybody's day. A member opens at most
   `OPENS_PER_MEMBER_PER_DAY` WhatsApp groups on one bot a day, and only one who
   may configure the bot may open any.
 - **The bot's own switch.** `config.groups.answers_outsiders` on a surface,

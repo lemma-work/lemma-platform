@@ -50,7 +50,10 @@ from app.modules.agent_surfaces.services.channel_places import (
     find_or_open,
 )
 from app.modules.agent_surfaces.services.contact_keepers import answers
-from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
+from app.modules.agent_surfaces.services.outsider_limits import (
+    ContactTurnLimiter,
+    WebWidgetLimiter,
+)
 from app.modules.agent_surfaces.services.visitor_access import Visitor
 from app.modules.agent_surfaces.services.widget_directory import widget_by_key
 from app.modules.channels.contracts import ContactsHome, Source, source_for
@@ -94,9 +97,13 @@ class WebChat:
         uow_factory: UnitOfWorkFactory,
         *,
         limiter: WebWidgetLimiter | None = None,
+        turns: ContactTurnLimiter | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.limiter = limiter or WebWidgetLimiter()
+        #: How often a visitor may put the bot to work: the one limiter every
+        #: door for people outside the pod counts turns with.
+        self.turns = turns or ContactTurnLimiter()
 
     async def widget_for_key(self, public_key: str) -> WebWidget:
         widget = await widget_by_key(public_key, uow_factory=self.uow_factory)
@@ -136,8 +143,10 @@ class WebChat:
             )
         if widget.answer is WidgetAnswer.KNOWN and not visitor.session.is_vouched:
             raise refused("Verify your email to chat", 403, "not_a_contact")
-        if not await self.limiter.allow_turn(
-            widget_id=widget.id, session_id=visitor.session.session_id
+        if not await self.turns.allow_visitor(
+            pod_id=widget.pod_id,
+            widget_id=widget.id,
+            session_id=visitor.session.session_id,
         ):
             raise refused("Too many messages. Try again later.", 429, "rate_limited")
         owner = widget.looked_after_by

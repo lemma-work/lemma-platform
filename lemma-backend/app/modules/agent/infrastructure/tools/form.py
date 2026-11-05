@@ -24,6 +24,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.tools import (
     ReplayClass,
+    ToolAudience,
     ToolGroup,
     ToolPolicy,
     ToolSpec,
@@ -164,6 +165,6 @@ def form_specs(
         tool(
             fill_form,
             ToolGroup.FORM,
-            ToolPolicy(outsider_allowed=True, replay=ReplayClass.SAFE),
+            ToolPolicy(offered_to=ToolAudience.OUTSIDERS, replay=ReplayClass.SAFE),
         ),
     )
