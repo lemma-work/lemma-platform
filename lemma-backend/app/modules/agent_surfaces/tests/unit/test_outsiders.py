@@ -178,7 +178,7 @@ def _door(
             return [POD] if owner_in_pod else [uuid4()]
         return [POD] if member_of_pod else [uuid4()]
 
-    async def _allow(*, group_id, sender_external_id):
+    async def _allow(*, person, place, place_per_day):
         return allow
 
     door = OutsiderDoor(
@@ -482,27 +482,58 @@ class _Counters:
 async def test_one_person_looping_does_not_spend_the_groups_day(monkeypatch):
     from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.services.outsider_limits import (
-        OutsiderTurnLimiter,
+        ContactTurnLimiter,
+        person_in,
     )
 
     monkeypatch.setattr(
-        surface_settings, "surface_outsider_turns_per_person_per_10_minutes", 2
+        surface_settings, "surface_contact_turns_per_person_per_10_minutes", 2
     )
-    monkeypatch.setattr(surface_settings, "surface_outsider_turns_per_group_per_day", 3)
     counters = _Counters()
-    limiter = OutsiderTurnLimiter(redis=counters)
-    group_id = uuid4()
+    limiter = ContactTurnLimiter(redis=counters)
+    pod_id, group_id = uuid4(), uuid4()
 
-    looping = [
-        await limiter.allow(group_id=group_id, sender_external_id="777")
-        for _ in range(5)
-    ]
+    def asks(who: str):
+        return limiter.allow(
+            person=person_in(pod_id, who), place=group_id, place_per_day=3
+        )
+
+    looping = [await asks("TELEGRAM:777") for _ in range(5)]
 
     assert looping == [True, True, False, False, False]
     # Only the two turns that ran were charged to the group, so another
     # person in it is still answered.
-    assert counters.values[f"outsider:turns:{group_id}"] == 2
-    assert await limiter.allow(group_id=group_id, sender_external_id="778")
+    assert counters.values[f"contact:turns:{group_id}"] == 2
+    assert await asks("TELEGRAM:778")
+
+
+async def test_one_person_has_one_window_whichever_door_they_ask_by(monkeypatch):
+    """Asking in the group and then privately -- or on the web chat -- does not
+    double what one person may spend: every door counts them together."""
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.services.outsider_limits import (
+        ContactTurnLimiter,
+        person_in,
+    )
+
+    monkeypatch.setattr(
+        surface_settings, "surface_contact_turns_per_person_per_10_minutes", 2
+    )
+    limiter = ContactTurnLimiter(redis=_Counters())
+    pod_id, group_id, bot_id = uuid4(), uuid4(), uuid4()
+    person = person_in(pod_id, "WHATSAPP:+15550100")
+
+    in_the_group = await limiter.allow(person=person, place=group_id, place_per_day=9)
+    in_private = await limiter.allow(person=person, place=bot_id, place_per_day=9)
+    once_more = await limiter.allow(person=person, place=bot_id, place_per_day=9)
+
+    assert (in_the_group, in_private, once_more) == (True, True, False)
+    # The same handle in another pod is somebody else's to count.
+    assert await limiter.allow(
+        person=person_in(uuid4(), "WHATSAPP:+15550100"),
+        place=bot_id,
+        place_per_day=9,
+    )
 
 
 async def test_a_bot_switched_off_for_outsiders_answers_none_of_them():

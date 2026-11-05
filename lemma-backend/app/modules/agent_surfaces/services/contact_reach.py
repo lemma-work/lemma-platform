@@ -8,10 +8,11 @@ whether the platform lets a business write there now.
 number*: Meta keeps the window per number and customer, and past it takes
 only pre-approved templates, which are not built here. So the fact is the
 place's ``last_inbound_at`` (``channel_sources``, one row per account and
-contact handle), not the handle's, which any of the pod's numbers stamps.
-Where no place exists yet -- a member writing first -- the handle's is the best
-fact there is. Telegram has no window (a bot only ever writes to somebody who
-wrote first), email none, a web chat none (it waits for their next visit).
+contact handle), the only record of when they last wrote. Where no place
+exists yet -- a member writing first -- they have never written to that
+number, so the window never opened. Telegram has no window (a bot only ever
+writes to somebody who wrote first), email none, a web chat none (it waits for
+their next visit).
 """
 
 from __future__ import annotations

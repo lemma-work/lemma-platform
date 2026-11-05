@@ -121,11 +121,15 @@ def _summary(
     *,
     reader_id: UUID,
     in_direct: bool,
+    said_outside: frozenset[UUID],
     question: Question | None = None,
 ) -> LineSummary:
+    """``said_outside`` is which lines the pod's rule marks as said outside it
+    (``channels``' ``said_outside``), so a read marks exactly what the
+    background a run is given marks."""
     hidden = withheld_from(line, user_id=reader_id, in_their_direct=in_direct)
     asked = question or line.question
-    outside = line.sender.kind is SenderKind.CONTACT
+    outside = line.id in said_outside
     text = None if hidden or line.is_deleted else line.text
     return LineSummary(
         id=line.id,
@@ -359,9 +363,12 @@ async def channel_read(
         lines = await channel_reads.page_lines(
             uow, channel_id=channel.id, limit=request.limit
         )
+        outside = await channel_reads.said_outside(uow, pod_id=deps.pod_id, lines=lines)
     in_direct = channel.kind is ChannelKind.DIRECT
     summaries = [
-        _summary(line, reader_id=deps.user_id, in_direct=in_direct)
+        _summary(
+            line, reader_id=deps.user_id, in_direct=in_direct, said_outside=outside
+        )
         for line in lines
         if not line.is_deleted
     ]
@@ -392,8 +399,15 @@ async def _asked_by_me(deps: ToolContext, *, limit: int) -> ChannelReadResponse:
             (question, await channel_reads.line_by_id(uow, question.message_id))
             for question in asked
         ]
+    # Each is this run's own question: an agent's line, never outside.
     summaries = [
-        _summary(line, reader_id=deps.user_id, in_direct=True, question=question)
+        _summary(
+            line,
+            reader_id=deps.user_id,
+            in_direct=True,
+            said_outside=frozenset(),
+            question=question,
+        )
         for question, line in lines
         if line is not None
     ]
@@ -427,8 +441,14 @@ async def channel_search(
                 uow, viewer=viewer, kind=ChannelKind.DIRECT
             )
         }
+        outside = await channel_reads.said_outside(uow, pod_id=deps.pod_id, lines=found)
     summaries = [
-        _summary(line, reader_id=deps.user_id, in_direct=line.channel_id in own)
+        _summary(
+            line,
+            reader_id=deps.user_id,
+            in_direct=line.channel_id in own,
+            said_outside=outside,
+        )
         for line in found
         if not withheld_from(
             line, user_id=deps.user_id, in_their_direct=line.channel_id in own

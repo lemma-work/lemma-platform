@@ -334,9 +334,10 @@ class ContactOutreach:
             else reach_for(
                 source.platform,
                 address=handle.value,
-                # The place's own window where it has been heard from; a place
-                # just opened has only the handle's.
-                last_inbound_at=source.last_inbound_at or handle.last_inbound_at,
+                # The place's own window: a platform's is kept per number the
+                # contact wrote to, and a place just opened was never written
+                # to -- they wrote to another, if anywhere.
+                last_inbound_at=source.last_inbound_at,
             )
         )
         if reach is None:

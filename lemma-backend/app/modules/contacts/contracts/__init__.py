@@ -64,7 +64,6 @@ __all__ = [
     "lock_answered_contacts_count",
     "normalize_handle",
     "note_answered",
-    "note_inbound",
     "note_never_answered",
     "open_anonymous_contact",
     "open_contact",
@@ -263,15 +262,6 @@ async def note_never_answered(
     them: they no longer take a place in the count. Whether they had one."""
     return await ContactRepository(uow.session).note_never_answered(
         pod_id=pod_id, contact_id=contact_id
-    )
-
-
-async def note_inbound(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, kind: IdentityKind, value: str
-) -> None:
-    """Record that a contact just wrote from this handle."""
-    await ContactRepository(uow.session).note_inbound(
-        pod_id=pod_id, kind=kind, value=value
     )
 
 
