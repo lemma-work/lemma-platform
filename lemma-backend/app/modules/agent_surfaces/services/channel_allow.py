@@ -19,10 +19,8 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
 from app.modules.agent_surfaces.domain.surface_config import SurfaceChannelRoute
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
 from app.modules.agent_surfaces.services.group_registry import adopt_connected_channel
+from app.modules.channels.contracts.places import place_stopped
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,5 +96,5 @@ async def take_back_channel(
         ]
         await surfaces.update(surface)
     if allowed.group_created and allowed.group_id is not None:
-        await SurfaceGroupRepository(uow.session).bot_removed(allowed.group_id)
+        await place_stopped(uow, allowed.group_id)
     await uow.commit()

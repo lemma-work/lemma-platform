@@ -1,26 +1,14 @@
-import { LoadingRows } from "@/ui/loading";
-import { Surfaces, useSurfaces } from "@/shell/surfaces";
 import {
-    AgentIcon, EditIcon, ExternalIcon, ChatIcon, BrowserIcon, CheckCircleIcon, ClockIcon,
+    AgentIcon, ChatIcon, BrowserIcon, CheckCircleIcon, ClockIcon,
     ConnectorIcon, GlobeIcon, ImageIcon, LibraryIcon, MemoryIcon, QuestionIcon,
     SparkleIcon, TerminalIcon, ToolIcon, VoiceIcon,
 } from "@/ui/icons";
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { initialsOf, saidAbout, source } from "@/data";
-import type { Member, Profile, Pod, Surface } from "@/data";
+import type { Member, Profile, Surface } from "@/data";
 import { Mark } from "@/shell/mark";
 import { identityGenes } from "@/identity/seeded-identity";
 import { pressSlot } from "@/identity/palette";
-import { AgentsView } from "./agents-view";
 import { capabilityList, type ToolsetIcon } from "./colleagues";
-import { SkillsView } from "@/skills/skills-view";
-import { StandingWork } from "@/schedule/standing-work";
-import { WorkflowsView } from "@/workflow/workflows-view";
-import { AtTheDoor } from "@/shell/at-the-door";
-import { RunsOn } from "@/shell/runs-on";
-import { WhoCanJoin } from "@/shell/who-can-join";
-import { AddPeopleButton } from "@/shell/add-people";
 
 /** The teammate's own page.
  *
@@ -31,10 +19,6 @@ import { AddPeopleButton } from "@/shell/add-people";
  *  toolsets, the schedules it keeps, the apps it runs, the addresses it
  *  answers on. No invented endorsements, no numbers with nothing behind them.
  *  A section with nothing in it says so rather than showing a placeholder. */
-
-/** How many conversations the first page of the list holds — the page size
- *  `listConversations` asks for. A page this full may have more behind it. */
-const CONVERSATION_PAGE = 25;
 
 function monthOf(iso: string): string {
     if (!iso) return "";
@@ -319,13 +303,10 @@ function Reach({ me }: { me: Profile }) {
 function Section({
     title,
     meta,
-    action,
     children,
 }: {
     title: string;
     meta?: string;
-    /** A control that acts on the whole section, at the end of its head. */
-    action?: ReactNode;
     children: React.ReactNode;
 }) {
     return (
@@ -333,7 +314,6 @@ function Section({
             <div className="pcard__head">
                 <h3>{title}</h3>
                 {meta && <span className="meta">{meta}</span>}
-                {action}
             </div>
             {children}
         </section>
@@ -536,89 +516,11 @@ export interface Subject {
     me: Profile;
     reach: Surface[];
     members: Member[];
-    /** Omitted for a candidate: nobody has talked to them yet, and a zero
-     *  there reads as a dead product rather than as an empty one. */
-    /** `talksMore`: there are more conversations than `talks` counts. The
-     *  count is one page of the list, not a total, and says so ("25+"). */
-    stats?: { talks: number; talksMore: boolean; people: number };
     issued?: boolean;
-    /** The hero's primary control, and the chips beside it. */
+    /** The hero's primary control. */
     action: ReactNode;
-    channels?: ReactNode;
     /** What sits under the badge. */
     aside?: ReactNode;
-    /** What this teammate is run on. Absent for a candidate on the hiring
-     *  floor — nothing has been hired, so there is nothing to set it on yet. */
-    runsOn?: ReactNode;
-    /** Who may let themselves in, rendered — a node for the same reason
-     *  `runsOn` is, and absent on the hiring floor for the same reason: a
-     *  candidate has no door yet. It is drawn under the roster, where the
-     *  question it answers gets asked. */
-    joining?: ReactNode;
-    /** Who is waiting to be let in, rendered — a node for the same reason
-     *  `joining` and `agents` are: the section reads its own list, owns its
-     *  own refusal, and draws nothing at all for the many people who may not
-     *  read it. Absent on a candidate, who has no pod for anybody to knock
-     *  on. */
-    knocking?: ReactNode;
-    /** The way to add somebody to the roster, rendered — it asks the server
-     *  whether this person may, and draws nothing when they may not. Absent on
-     *  a candidate, who has nobody to add anybody to. */
-    addPeople?: ReactNode;
-    /** Type over the name. Absent where the name is not this person's to
-     *  change — a candidate's name is set at the moment of hiring, and that
-     *  field is on the hiring floor. */
-    onRename?: (name: string) => Promise<void>;
-    onOpenProject?: (tabId: string) => void;
-    onRetryProfile?: () => void;
-    /** The other agents in this pod. Absent for a candidate: nothing has been
-     *  hired, so there is nobody for it to hand work to yet. */
-    /** The pod's agents, rendered. A node rather than data, the way
-     *  `channels` and `runsOn` already are: this view stays presentational and
-     *  the section fetches its own list, with its own cache and its own
-     *  failure — a section that cannot load should not take the page. */
-    agents?: ReactNode;
-    /** The skills, rendered — a node for the same reason `agents` is. The deck
-     *  costs one listing plus a file per skill, holds its own cache and its own
-     *  failure, and a section that cannot load must not take the page.
-     *
-     *  Absent on a listing: a candidate has no pod, so there is no `/skills`
-     *  to read and an empty deck would be a claim about nothing. */
-    skills?: ReactNode;
-    /** The schedules, rendered. A node rather than data, for the same reason
-     *  `agents` is: the section reads its own list, holds its own pending and
-     *  failure, and can pause one without the whole profile refetching.
-     *
-     *  Absent on a listing, where `me.commitments` is drawn instead — a
-     *  candidate's schedules are a description of what would arrive, and there
-     *  is nothing there yet to pause or retry. */
-    standing?: ReactNode;
-    /** The workflows, rendered, for the same reason `agents` and `standing`
-     *  are nodes: the section reads its own list and owns its own failure.
-     *
-     *  Here rather than in a tab, and the Agents tab that was built and pulled
-     *  this week is the argument: permanent furniture on every teammate, for a
-     *  list most pods have three rows of. "What runs the same way twice" is
-     *  the same question as "what is this teammate made of", and that question
-     *  is already this page.
-     *
-     *  Absent on a listing — a candidate has no runs, and an empty run history
-     *  reads as a product that does not work rather than as one nobody has
-     *  hired yet. */
-    flows?: ReactNode;
-    /** Still arriving, and — separately — could not be read at all.
-     *
-     *  These were both `undefined` colleagues, which rendered as no section.
-     *  The file already said a section that cannot load should not take the
-     *  page with it; it took *itself* away instead, with no trace, so a failed
-     *  request and a teammate that genuinely works alone were the same blank
-     *  space. A request that fails has to say so — it is the only way anybody
-     *  can tell which of the two they are looking at. */
-    colleaguesPending?: boolean;
-    colleaguesProblem?: string | null;
-    onRetryColleagues?: () => void;
-    /** Open one's own conversation — where it gets changed. */
-    onDiscussAgent?: (name: string) => void;
     /** Said instead of "no apps yet" when this is a listing rather than a
      *  pod: an empty section on a candidate means *comes with none*, which
      *  is a different sentence from *has not made one yet*. */
@@ -640,101 +542,8 @@ export function headlineFor(me: Profile): string {
     return me.headline || (derived.length ? "Keeps " + derived.join(", ") : "Give me a responsibility and we’ll get started.");
 }
 
-/** The name, and typing over it.
- *
- *  Renaming happens here rather than in a settings screen because the name is
- *  not a setting: it is the largest word on the teammate's own page, and the
- *  place people try to change a name is the place the name is. So the display
- *  type doubles as the field — same size, same tracking, a rule under it while
- *  it is open — and the pencil only appears under the pointer, so a page being
- *  read is still a page of facts.
- *
- *  One save path. Enter and clicking away both blur, blur is what writes, and
- *  Escape sets a flag on its way out so the blur it causes knows it was a
- *  cancel. Two of these — a save on Enter and a save on blur — is how a rename
- *  gets sent twice.
- *
- *  The typed name shows immediately and stays until the write comes back. A
- *  name that snaps to the old one for as long as a request takes reads as a
- *  rejection, and this one is almost never rejected.
- */
-function HeroName({ name, onRename }: { name: string; onRename?: (next: string) => Promise<void> }) {
-    const [draft, setDraft] = useState<string | null>(null);
-    const [pending, setPending] = useState<string | null>(null);
-    const [problem, setProblem] = useState<string | null>(null);
-    const cancelled = useRef(false);
-    const field = useId();
-
-    async function save(typed: string) {
-        const clean = typed.trim();
-        setDraft(null);
-        /* An empty field is a cancel, not a request to be called nothing. */
-        if (!clean || clean === name || !onRename) return;
-        setPending(clean);
-        setProblem(null);
-        try {
-            await onRename(clean);
-        } catch (trouble) {
-            setProblem(saidAbout(trouble, "That name would not save."));
-        } finally {
-            setPending(null);
-        }
-    }
-
-    const shown = pending ?? name;
-
-    return (
-        <>
-            <h2 className="hero__name">
-                {draft !== null ? (
-                    <input
-                        id={field}
-                        className="hero__field"
-                        autoFocus
-                        aria-label="Name"
-                        /* Sized to what is in it, so the badge beside the
-                           name does not travel to the far edge the moment
-                           the field opens. `field-sizing` does this exactly
-                           where it exists; `size` is the approximation
-                           everywhere else, and being a character or two wide
-                           is not something anybody reads as wrong. */
-                        size={Math.max(draft.length, 2)}
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        onFocus={(event) => event.currentTarget.select()}
-                        onBlur={(event) => {
-                            if (cancelled.current) { cancelled.current = false; setDraft(null); return; }
-                            void save(event.target.value);
-                        }}
-                        onKeyDown={(event) => {
-                            if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
-                            if (event.key === "Escape") { event.preventDefault(); cancelled.current = true; event.currentTarget.blur(); }
-                        }}
-                    />
-                ) : onRename ? (
-                    <button
-                        className="hero__rename"
-                        title={"Rename " + shown}
-                        onClick={() => { setProblem(null); cancelled.current = false; setDraft(shown); }}
-                    >
-                        <span>{shown}</span>
-                        <EditIcon size={17} aria-hidden="true" />
-                    </button>
-                ) : shown}
-                {/* No badge beside the name. It said "an agent, not a person"
-                    to a reader who is on an agent's profile, in an app whose
-                    every teammate is one — and the whole page is already that
-                    sentence: the creature, the lanyard, the AGENT printed on
-                    the card. A mark that repeats what surrounds it is a mark
-                    that is only in the way of the name. */}
-            </h2>
-            {problem && <p className="hero__problem" role="alert">{problem}</p>}
-        </>
-    );
-}
-
 export function ProfileView({ subject, initialSection }: { subject: Subject; initialSection?: string }) {
-    const { me, seed, name, orgName, reach, members, stats } = subject;
+    const { me, seed, name, orgName, reach, members } = subject;
     const pane = useRef<HTMLDivElement>(null);
     useEffect(() => {
         if (!initialSection || !pane.current) return;
@@ -748,13 +557,9 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
     const candidate = subject.emptyVoice === "candidate";
     const headline = headlineFor(me);
     const sections = [
-        subject.agents && ["agents", "Agents"],
-        subject.runsOn && ["runs on", "Runs on"],
-        subject.skills && ["skills", "Skills"],
         [candidate ? "work to set up" : "schedules", "Schedules"],
         [candidate ? "apps to build together" : "apps", "Apps"],
-        subject.flows && ["workflows", "Workflows"],
-        (members.length > 0 || subject.joining || subject.knocking) && ["people with access", "People with access"],
+        members.length > 0 && ["people with access", "People with access"],
     ].filter((entry): entry is string[] => Array.isArray(entry));
 
     return (
@@ -762,9 +567,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
             <div className="profile">
                 {Boolean(me.unavailable?.length) && (
                     <p className="empty-row profile__load-error" role="alert">
-                        Some profile details couldn’t be loaded. {subject.onRetryProfile && (
-                            <button className="linkish" onClick={subject.onRetryProfile}>Try again</button>
-                        )}
+                        Some profile details couldn’t be loaded.
                     </p>
                 )}
                 <div className="profile__main">
@@ -782,7 +585,9 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                                 {reach.length > 0 && <span className="hero__oncall">REACHABLE</span>}
                             </div>
                             <div className="hero__lede">
-                                <HeroName name={name} onRename={subject.onRename} />
+                                {/* No badge beside the name: the whole page
+                                    already says this is an agent. */}
+                                <h2 className="hero__name">{name}</h2>
                                 <p id={descriptionId} className="hero__headline" data-collapsed={headline.length > 180 && !descriptionOpen || undefined}>{headline}</p>
                                 {headline.length > 180 && <button className="linkish hero__description-toggle" aria-expanded={descriptionOpen} aria-controls={descriptionId} onClick={() => setDescriptionOpen(!descriptionOpen)}>
                                     {descriptionOpen ? "Show less" : "Read full description"}
@@ -797,17 +602,8 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                             </div>
                         </div>
                         <div className="hero__body">
-                            {stats && (
-                                <p className="hero__stats">
-                                    <b>{stats.talks}{stats.talksMore && "+"}</b>{" "}
-                                    {stats.talks === 1 && !stats.talksMore ? "conversation" : "conversations"} ·{" "}
-                                    <b>{stats.people}</b> {stats.people === 1 ? "person" : "people"} with access
-                                </p>
-                            )}
-
                             <div className="hero__acts">
                                 {subject.action}
-                                {subject.channels}
                             </div>
                         </div>
                     </section>
@@ -824,48 +620,22 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                     {/* About is gone. It carried the teammate's own `about`
                         and, far more often, the sentence saying there was not
                         one — and what it was reaching for is now said twice
-                        over on this same page: the headline under the name,
-                        and each agent's instruction in full under Agents. A
+                        over on this same page: the headline under the name. A
                         section whose commonest state is an apology for being
                         empty is a section the page is better without. */}
 
-                    {subject.runsOn && (
-                        /* Directly under About, not at the foot of the page.
-                           It is the only thing here anybody changes, and what
-                           a teammate thinks with belongs beside its own
-                           account of itself rather than below the furniture. */
-                        <Section title="Runs on" meta="what it thinks with">
-                            {subject.runsOn}
-                        </Section>
-                    )}
-
-                    {/* Two sections where there was one, because there were two
-                        different things under that one heading and neither of
-                        them was a skill. The toolsets are what it may reach
-                        for; the skills are what it has been taught. And
-                        `me.permits` — `allowed_actions` — is gone from this
-                        page entirely: those are *your* permissions on an agent
-                        row, not a fact about the teammate, and the Agents
-                        detail already lists them under "You may". */}
+                    {/* `me.permits` — `allowed_actions` — is not on this page:
+                        those are *your* permissions on an agent row, not a
+                        fact about the teammate. */}
                     <Section title="What it can reach for" meta={candidate ? "tools to consider for this job" : "tools available to the agent answering here"}>
                         <Reach me={me} />
                     </Section>
-
-                    {/* Absent on the hiring floor, where there is no pod to
-                        read a `/skills` folder out of. A candidate showing an
-                        empty deck would be reporting a fact about a pod that
-                        does not exist yet. */}
-                    {subject.skills && (
-                        <Section title="Skills" meta="what it has been taught">
-                            {subject.skills}
-                        </Section>
-                    )}
 
                     <Section
                         title={candidate ? "Work to set up" : "Schedules"}
                         meta={me.commitments.length ? (candidate ? "suggested schedules" : "scheduled work") : undefined}
                     >
-                        {subject.standing ?? (me.unavailable?.includes("schedules") ? <p className="empty-row">Couldn’t load schedules.</p> : me.commitments.length === 0 ? (
+                        {me.unavailable?.includes("schedules") ? <p className="empty-row">Couldn’t load schedules.</p> : me.commitments.length === 0 ? (
                             <p className="empty-row">
                                 {candidate
                                     ? "Set a schedule together once the job is ready."
@@ -889,7 +659,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                                     </li>
                                 ))}
                             </ul>
-                        ))}
+                        )}
                     </Section>
 
                     <Section
@@ -905,57 +675,21 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         ) : (
                             <div className="projects">
                                 {me.projects.map((project) => (
-                                    <button
-                                        className="project"
-                                        key={project.id}
-                                        disabled={!subject.onOpenProject}
-                                        onClick={() => subject.onOpenProject?.(project.tabId)}
-                                    >
+                                    <button className="project" key={project.id} disabled>
                                         <span className="project__name">{project.name}</span>
                                         {project.description && (
                                             <span className="project__detail">{project.description}</span>
                                         )}
-                                        <span className="project__status">
-                                            {project.status || "app"} {subject.onOpenProject && <ExternalIcon size={14} />}
-                                        </span>
+                                        <span className="project__status">{project.status || "app"}</span>
                                     </button>
                                 ))}
                             </div>
                         )}
                     </Section>
 
-                    {/* Agents live here rather than in a tab of their own. A
-                        permanent tab per teammate, for a list most pods have
-                        three rows of, was a lot of furniture for something you
-                        look at when you are already asking what this teammate
-                        is made of — which is this page. */}
-                    {subject.agents && (
-                        <Section title="Agents" meta="what it hands work to">
-                            {subject.agents}
-                        </Section>
-                    )}
-
-                    {subject.flows && (
-                        <Section title="Workflows" meta="repeatable steps for the job">
-                            {subject.flows}
-                        </Section>
-                    )}
-
-
-                    {/* The roster and the door, in one section. Who is here
-                        is the question that raises who else could be, and an
-                        access rule kept anywhere else is a rule nobody reads
-                        until somebody is already in. */}
-                    {(members.length > 0 || subject.joining || subject.knocking) && (
-                        <Section
-                            title="People with access"
-                            meta={members.length > 0 ? "who can ask, and what each may do" : undefined}
-                            action={subject.addPeople}
-                        >
-                            {members.length === 0 && (
-                                <p className="empty-row">Nobody here but you yet.</p>
-                            )}
-                            {members.length > 0 && <ul className="roster">
+                    {members.length > 0 && (
+                        <Section title="People with access" meta="who can ask, and what each may do">
+                            <ul className="roster">
                                 {members.map((member) => (
                                     <li key={member.id}>
                                         <span className={"face" + (member.kind === "teammate" ? " face--teammate" : "")}>
@@ -968,13 +702,7 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                                         <span className="roster__can">{member.can}</span>
                                     </li>
                                 ))}
-                            </ul>}
-                            {/* Between the two on purpose: who is here, who
-                                is asking, who could. Reading the door rule
-                                first and finding the queue underneath it puts
-                                the decision after the policy that caused it. */}
-                            {subject.knocking}
-                            {subject.joining}
+                            </ul>
                         </Section>
                     )}
                 </div>
@@ -994,209 +722,5 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                 </aside>
             </div>
         </div>
-    );
-}
-
-export function ProfilePane({
-    initialSection,
-    openAgentName,
-    onOpenAgentName,
-    onAskFor,
-    pod,
-    orgName,
-    others,
-    onOpenTab,
-    onPickPod,
-    onMessage,
-    onFile,
-    onDiscussAgent,
-    onDiscussWorkflow,
-    onAddPeople,
-}: {
-    initialSection?: string;
-    pod: Pod;
-    orgName: string;
-    others: Pod[];
-    onOpenTab: (tabId: string) => void;
-    onPickPod: (podId: string) => void;
-    onMessage: () => void;
-    /** Put a pod file on the stage as a tab of its own — the same handler the
-     *  Library is given, for the same reason: a path is handed up and the
-     *  shell decides what a tab is.
-     *
-     *  Optional because the shell does not pass one here yet. Where it is
-     *  absent a skill opens inside its own section instead, which is the same
-     *  drill-down the Agents and Workflows sections on this page already do.
-     *  Passing `onFile={openFile}` from the shell is all it takes to make a
-     *  skill open as a file tab like any other file. */
-    onFile?: (path: string) => void;
-    /** Open an agent's own conversation — the place it gets changed. */
-    onDiscussAgent?: (name: string) => void;
-    /** And a workflow's, for the same reason: the shape is read here and
-     *  changed by asking. Separate from `onDiscussAgent` rather than one
-     *  `(kind, name)` prop because `ProfileView` hands each straight to the
-     *  section that uses it, and a section taking a kind it must always pass
-     *  the same value for is a parameter that only exists to be ignored. */
-    onDiscussWorkflow?: (name: string) => void;
-    /** Which agent to land expanded, when search sent somebody here. */
-    openAgentName?: string | null;
-    onOpenAgentName?: (name: string | null) => void;
-    /** Put a request to this teammate in the composer, on the conversation
-     *  tab, ready to be read and sent. The shell owns which conversation is
-     *  open and owns the composer, so it does the filling. */
-    onAskFor?: (text: string) => void;
-    /** Open the people dialog. The shell owns it, because the header's faces
-     *  open the same one. */
-    onAddPeople?: () => void;
-}) {
-
-    const queryClient = useQueryClient();
-
-    const profile = useQuery({
-        queryKey: ["profile", pod.id],
-        queryFn: () => source.getProfile(pod.id),
-        staleTime: 5 * 60_000,
-    });
-
-    /* The rail, the header, the badge and the masthead all read the pod out
-       of one list, so the new name is written into that list rather than
-       waited for: a refetch has to match a key and beat a stale time, and
-       until it lands the page the rename happened on is the one page still
-       showing the old name. The refetch still runs behind it.
-
-       The teammate's name follows the pod's only where it *was* the pod's —
-       a pod whose front agent has a name of its own keeps it. */
-    const rename = useMutation({
-        mutationFn: (name: string) => source.renamePod(pod.id, name),
-        onSuccess: (_answer, name) => {
-            queryClient.setQueryData(["pods", pod.orgId], (old: Pod[] | undefined) =>
-                old?.map((entry) => entry.id !== pod.id ? entry : {
-                    ...entry,
-                    name,
-                    teammate: entry.teammate.name === entry.name
-                        ? { ...entry.teammate, name, initials: initialsOf(name) }
-                        : entry.teammate,
-                }),
-            );
-            void queryClient.invalidateQueries({ queryKey: ["pods"] });
-            /* And the roster, which is a second query and the one that wins:
-               the shell spreads pod detail *over* the listed pod, so a
-               teammate name patched into the list alone is overwritten by a
-               five-minute-stale copy of the old one — the rail would say the
-               new name while the roster under it said the old. */
-            void queryClient.invalidateQueries({ queryKey: ["pod-detail", pod.id] });
-        },
-    });
-
-    /* Surfaces are already on screen elsewhere in this pod, so they come from
-       the same cache. So do conversations: the sidebar's first page, under its
-       key, rather than the same request again under one of its own. That list
-       drops the cursor, so "is there more" is read from the page being full —
-       wrong only for a space with exactly one page's worth, which says "25+". */
-    const surfaces = useSurfaces(pod.id);
-    const conversations = useQuery({
-        queryKey: ["conversations", pod.id],
-        queryFn: () => source.listConversations(pod.id),
-        staleTime: 60_000,
-    });
-
-    if (profile.isError) {
-        return (
-            <div className="pane"><div className="pane__inner">
-                <p className="empty-row">Couldn’t load this profile. <button className="linkish" onClick={() => void profile.refetch()}>Try again</button></p>
-            </div></div>
-        );
-    }
-
-    if (!profile.data) {
-        return (
-            <div className="pane"><div className="pane__inner">
-                <LoadingRows label={"Loading " + pod.name + "’s profile"} rows={4} />
-            </div></div>
-        );
-    }
-
-    const reach = (surfaces.data ?? []).filter(
-        (surface) => surface.mine && surface.active !== false && Boolean(surface.handle),
-    );
-
-    return (
-        <ProfileView
-            initialSection={initialSection}
-            subject={{
-                seed: pod.id,
-                name: pod.name,
-                iconUrl: pod.iconUrl,
-                orgName,
-                me: profile.data,
-                onRetryProfile: () => { void profile.refetch(); },
-                reach,
-                members: pod.members,
-                stats: conversations.isSuccess
-                    ? { talks: conversations.data.length, talksMore: conversations.data.length >= CONVERSATION_PAGE, people: pod.members.length }
-                    : undefined,
-                onOpenProject: onOpenTab,
-                onDiscussAgent,
-                action: (
-                    <button className="btn btn--primary hero__message" onClick={onMessage}>
-                        <ChatIcon size={16} aria-hidden="true" /><span>Message</span>
-                    </button>
-                ),
-                agents: (
-                    <AgentsView
-                        podId={pod.id}
-                        orgId={pod.orgId}
-                        teammate={pod.teammate?.name ?? pod.name}
-                        embedded
-                        open={openAgentName ?? null}
-                        onOpen={(name) => onOpenAgentName?.(name)}
-                        onDiscussAgent={onDiscussAgent}
-                    />
-                ),
-                skills: (
-                    <SkillsView
-                        podId={pod.id}
-                        teammate={pod.teammate?.name ?? pod.name}
-                        onFile={onFile}
-                        onCreate={onAskFor && (() => onAskFor(
-                            "Write me a new skill. Use the lemma-skill-creator skill: decide its triggers, "
-                            + "write the instructions, and publish it under /skills. Ask me what it should do first."
-                        ))}
-                    />
-                ),
-                standing: <StandingWork podId={pod.id} teammate={pod.teammate?.name ?? pod.name} />,
-                flows: (
-                    <WorkflowsView
-                        podId={pod.id}
-                        teammate={pod.teammate?.name ?? pod.name}
-                        onDiscuss={onDiscussWorkflow}
-                    />
-                ),
-                channels: <Surfaces pod={pod} expanded />,
-                runsOn: <RunsOn podId={pod.id} orgId={pod.orgId} />,
-                joining: <WhoCanJoin podId={pod.id} orgName={orgName} />,
-                knocking: <AtTheDoor podId={pod.id} teammate={pod.teammate?.name ?? pod.name} />,
-                addPeople: onAddPeople && <AddPeopleButton podId={pod.id} onOpen={onAddPeople} />,
-                onRename: rename.mutateAsync,
-                aside: others.length > 0 ? (
-                    <section className="pcard">
-                        <div className="pcard__head"><h3>Also in {orgName}</h3></div>
-                        <ul className="alsolist">
-                            {others.slice(0, 6).map((other) => (
-                                <li key={other.id}>
-                                    <button onClick={() => onPickPod(other.id)}>
-                                        <Mark seed={other.id} name={other.name} icon={other.iconUrl} size={26} />
-                                        <span className="alsolist__body">
-                                            <span className="alsolist__name">{other.name}</span>
-                                            <span className="alsolist__sub">{other.subtitle}</span>
-                                        </span>
-                                    </button>
-                                </li>
-                            ))}
-                        </ul>
-                    </section>
-                ) : undefined,
-            }}
-        />
     );
 }

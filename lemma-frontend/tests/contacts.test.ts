@@ -144,6 +144,6 @@ test("a visitor who left no address is written to in their chat on the website",
     assert.deepEqual(writableHandles({ handles: [web, email] }), [email]);
     assert.deepEqual(writableHandles({ handles: [{ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }] }), []);
     assert.equal(outreachSaid({ status: "SENT", platform: "WEB", reason: null }), "In their chat on your website, for when they next open it.");
-    assert.equal(outreachSaid({ status: "PENDING", platform: "WEB", reason: null }), "In their channel, on its way to their chat on your website.");
-    assert.equal(outreachSaid({ status: "SENT", platform: "RESEND", reason: null }), "Sent by email. It is in their channel.");
+    assert.equal(outreachSaid({ status: "PENDING", platform: "WEB", reason: null }), "Saved here, on its way to their chat on your website.");
+    assert.equal(outreachSaid({ status: "SENT", platform: "RESEND", reason: null }), "Sent by email. It is in their chat here.");
 });

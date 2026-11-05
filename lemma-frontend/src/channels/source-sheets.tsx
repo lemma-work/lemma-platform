@@ -123,9 +123,9 @@ function Arrived({ pod, channel, onOpen }: { pod: Pod; channel: Channel; onOpen:
         <div className="gsheet__status gsheet__status--done" role="status">
             <CheckIcon size={16} aria-hidden="true" />
             <span className="gsheet__status-text">
-                {channelTitle(channel, pod.name)} is connected, with its own channel here.
+                {channelTitle(channel, pod.name)} is connected, with its own chat here.
             </span>
-            <button type="button" className="pill-button" onClick={onOpen}>Open channel</button>
+            <button type="button" className="pill-button" onClick={onOpen}>Open chat</button>
         </div>
     );
 }
@@ -291,7 +291,7 @@ function StartWhatsApp({ pod, bot, surface, onClose, onOpenGroup }: {
                     <p className="gsheet__fine">Anyone with the link can join, so send it only to the people you mean.</p>
                     <div className="gsheet__foot">
                         <button type="button" className="ghost-pill" onClick={onClose}>Done</button>
-                        <button type="button" className="pill-button" onClick={() => onOpenGroup(group.channelId)}>Open channel</button>
+                        <button type="button" className="pill-button" onClick={() => onOpenGroup(group.channelId)}>Open chat</button>
                     </div>
                 </div>
             </Modal>
@@ -305,14 +305,14 @@ function StartWhatsApp({ pod, bot, surface, onClose, onOpenGroup }: {
                 <div className="gsheet">
                     {slow ? (
                         <p className="gsheet__status" role="status">
-                            WhatsApp is taking longer than usual. {name} shows up in Channels once it is ready, so you can close this.
+                            WhatsApp is taking longer than usual. {name} shows up in Chats once it is ready, so you can close this.
                         </p>
                     ) : (
                         <Waiting>WhatsApp is making the group. Its link appears here in a few seconds.</Waiting>
                     )}
                     <div className="gsheet__foot">
                         <button type="button" className="ghost-pill" onClick={onClose}>Close</button>
-                        <button type="button" className="pill-button" onClick={() => onOpenGroup(group.channelId)}>Open channel</button>
+                        <button type="button" className="pill-button" onClick={() => onOpenGroup(group.channelId)}>Open chat</button>
                     </div>
                 </div>
             </Modal>
@@ -415,7 +415,7 @@ function AddTelegram({ pod, bot, surface, started, onClose, onOpenGroup }: {
                 <ol className="gsheet__steps gsheet__steps--dots">
                     <li data-at={step === 1 || undefined} data-done={step > 1 || undefined}>Telegram asks which group. Pick one you run, or make a new one there.</li>
                     <li data-done={step > 2 || undefined}>{bot} joins and says hello, so everyone knows it is there.</li>
-                    <li data-done={step > 3 || undefined}>The group shows up in Channels, with you answering for anyone outside {pod.name}.</li>
+                    <li data-done={step > 3 || undefined}>The group shows up in Chats, with you answering for anyone outside {pod.name}.</li>
                 </ol>
                 {problem && <p className="gsheet__problem" role="alert">{problem}</p>}
                 {found ? <Arrived pod={pod} channel={found} onOpen={() => onOpenGroup(found.id)} />

@@ -30,7 +30,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate, SurfaceGroup
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
@@ -40,7 +40,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.services.verified_surface_identity import (
     resolve_shared_verified_identity,
 )
-from app.modules.channels.contracts import Principal
+from app.modules.channels.contracts import Principal, Source
 from app.modules.contacts.contracts import (
     ContactRef,
     IdentityKind,
@@ -56,7 +56,7 @@ _PROVED_ON_SHARED_BOT = frozenset(
 
 async def who_moved(
     uow: SqlAlchemyUnitOfWork,
-    group: SurfaceGroup,
+    group: Source,
     update: ParsedGroupUpdate,
     *,
     joining: bool,
@@ -79,7 +79,7 @@ async def who_moved(
 
 
 async def _account_holder(
-    uow: SqlAlchemyUnitOfWork, group: SurfaceGroup, update: ParsedGroupUpdate
+    uow: SqlAlchemyUnitOfWork, group: Source, update: ParsedGroupUpdate
 ) -> UUID | None:
     external_id = update.external_user_id
     assert external_id is not None  # who_moved
@@ -96,7 +96,7 @@ async def _account_holder(
 
 
 async def _known_contact(
-    uow: SqlAlchemyUnitOfWork, group: SurfaceGroup, update: ParsedGroupUpdate
+    uow: SqlAlchemyUnitOfWork, group: Source, update: ParsedGroupUpdate
 ) -> ContactRef | None:
     """The pod's contact for this account, if it has one. Never opened here."""
     external_id = update.external_user_id

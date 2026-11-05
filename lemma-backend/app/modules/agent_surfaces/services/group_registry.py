@@ -23,10 +23,9 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
     SurfaceLifecycleKind,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
 from app.modules.agent_surfaces.services.group_log import keeps_group_log
+from app.modules.agent_surfaces.domain.groups import group_place
+from app.modules.channels.contracts.places import adopt_place, set_place_owner
 
 logger = get_logger(__name__)
 
@@ -52,15 +51,13 @@ async def adopt_joined_group(
         or not keeps_group_log(surface.surface_type.value)
     ):
         return None
-    groups = SurfaceGroupRepository(uow.session)
-    group, created = await groups.ensure_noting_creation(
+    group, created = await adopt_place(
+        uow,
         pod_id=surface.pod_id,
-        surface=surface,
-        external_channel_id=channel_id,
-        title=parsed.channel_title,
+        place=group_place(surface, chat=channel_id, title=parsed.channel_title),
     )
     if group.owner_user_id is None and owner_user_id is not None:
-        await groups.set_owner(group.id, owner_user_id)
+        await set_place_owner(uow, group.id, owner_user_id)
     logger.info(
         "agent_surfaces.group_registry.group_adopted.observed",
         surface_id=str(surface.id),
@@ -89,13 +86,11 @@ async def adopt_connected_channel(
     """
     if not channel_id:
         return None
-    groups = SurfaceGroupRepository(uow.session)
-    group, created = await groups.ensure_noting_creation(
+    group, created = await adopt_place(
+        uow,
         pod_id=surface.pod_id,
-        surface=surface,
-        external_channel_id=channel_id,
-        is_private=is_private,
+        place=group_place(surface, chat=channel_id, title=None, is_private=is_private),
     )
     if group.owner_user_id is None and owner_user_id is not None:
-        await groups.set_owner(group.id, owner_user_id)
+        await set_place_owner(uow, group.id, owner_user_id)
     return group.id, created

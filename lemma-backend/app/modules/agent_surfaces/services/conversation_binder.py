@@ -39,6 +39,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface
 from app.modules.agent_surfaces.services.channel_places import (
     ChannelSeats,
     ChannelSeatsInDatabase,
+    find_or_open,
     home_of,
     place_of,
 )
@@ -170,35 +171,42 @@ class ConversationBinder:
                 agent_name=route.agent_name,
                 user_id=user_id,
             )
-            await self.seats.lock_person(
+
+            # Another message from them may have opened it while they were
+            # being authorized.
+            async def still_kept(found: UUID) -> tuple[UUID, str | None] | None:
+                if await self._keeps(found, user_id=user_id, contact_id=contact_id):
+                    return found, None
+                return None
+
+            async def opening() -> tuple[UUID, str | None]:
+                opened = await agent_conversations.open_surface_conversation(
+                    self.uow,
+                    pod_id=route.pod_id,
+                    agent_name=route.agent_name,
+                    user_id=user_id,
+                    contact_id=contact_id,
+                    channel_id=source.channel_id,
+                    title=_title(
+                        parsed, fallback=f"{surface.surface_type.value} Conversation"
+                    ),
+                    started_on=surface.surface_type.value,
+                    # Checked above, so nothing between the lock and the
+                    # insert releases the connection.
+                    require_execute_grant=False,
+                )
+                return opened.id, opened.title
+
+            return await find_or_open(
+                self.seats,
                 channel_id=source.channel_id,
                 pod_id=route.pod_id,
                 agent_id=route.agent_id,
-                person_id=contact_id or user_id,
-            )
-            # Another message from them may have opened it while they were
-            # being authorized.
-            found = await self._kept(
-                source=source, user_id=user_id, contact_id=contact_id, route=route
-            )
-            if found is not None:
-                return found, None
-            opened = await agent_conversations.open_surface_conversation(
-                self.uow,
-                pod_id=route.pod_id,
-                agent_name=route.agent_name,
                 user_id=user_id,
                 contact_id=contact_id,
-                channel_id=source.channel_id,
-                title=_title(
-                    parsed, fallback=f"{surface.surface_type.value} Conversation"
-                ),
-                started_on=surface.surface_type.value,
-                # Checked above, so nothing between the lock and the insert
-                # releases the connection.
-                require_execute_grant=False,
+                found=still_kept,
+                opening=opening,
             )
-            return opened.id, opened.title
         finally:
             reset_current_context(token)
 
@@ -224,12 +232,22 @@ class ConversationBinder:
         )
         if found is None:
             return None
-        conversation = await agent_conversations.surface_conversation(self.uow, found)
-        if conversation is not None and await owned_or_moved(
+        return (
+            found
+            if await self._keeps(found, user_id=user_id, contact_id=contact_id)
+            else None
+        )
+
+    async def _keeps(
+        self, conversation_id: UUID, *, user_id: UUID, contact_id: UUID | None
+    ) -> bool:
+        """Whether ``user_id`` keeps this conversation -- or it moves to them."""
+        conversation = await agent_conversations.surface_conversation(
+            self.uow, conversation_id
+        )
+        return conversation is not None and await owned_or_moved(
             self.uow, conversation, user_id, contact_id=contact_id
-        ):
-            return found
-        return None
+        )
 
     async def _note_surface(
         self,

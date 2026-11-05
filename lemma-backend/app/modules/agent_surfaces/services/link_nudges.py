@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.pod.contracts.directory import PodDirectoryPage, list_pod_members
 
@@ -38,7 +38,7 @@ Notice = Callable[..., Awaitable[object]]
 async def nudge_lookalikes(
     uow: SqlAlchemyUnitOfWork,
     *,
-    group: SurfaceGroup,
+    group: Source,
     contact_id: UUID,
     name: str | None,
     directory: Directory | None = None,
