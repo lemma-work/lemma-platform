@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
+from app.core.live.signals import signal_after_commit
 from app.modules.workflow.domain.ports import WorkflowRunWaitRepository
 from app.modules.workflow.domain.wait import (
     WorkflowRunWaitEntity,
@@ -24,6 +25,12 @@ class SqlAlchemyWorkflowRunWaitRepository(WorkflowRunWaitRepository):
 
     def _to_entity(self, model: WorkflowRunWaitModel) -> WorkflowRunWaitEntity:
         return model.to_entity()
+
+    def _signal(self, wait: WorkflowRunWaitEntity) -> None:
+        """A form waiting on a person, or no longer: the `org` topic reads its
+        pod's waits again once this commits (`services/org_waits.py`)."""
+        if wait.wait_type is WorkflowRunWaitType.HUMAN:
+            signal_after_commit(self.session, wait.pod_id, {"k": "wait"})
 
     async def create(self, wait: WorkflowRunWaitEntity) -> WorkflowRunWaitEntity:
         model = WorkflowRunWaitModel(
@@ -46,6 +53,7 @@ class SqlAlchemyWorkflowRunWaitRepository(WorkflowRunWaitRepository):
         )
         self.session.add(model)
         await self.session.flush()
+        self._signal(wait)
         return self._to_entity(model)
 
     async def update(self, wait: WorkflowRunWaitEntity) -> WorkflowRunWaitEntity:
@@ -59,6 +67,7 @@ class SqlAlchemyWorkflowRunWaitRepository(WorkflowRunWaitRepository):
             )
         )
         await self.session.execute(stmt)
+        self._signal(wait)
         if wait.status is not WorkflowRunWaitStatus.ACTIVE:
             # Its expiry would only be claimed to find the wait resolved.
             from app.modules.workflow.execution.wait_work import cancel_wait_expire

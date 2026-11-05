@@ -51,10 +51,18 @@ def _resource_names():
     )
 
 
+def _live():
+    from app.core.live.topics import LiveContribution
+    from app.modules.workflow.services.org_waits import AssignedWaits
+
+    return LiveContribution(org_states=(AssignedWaits(),))
+
+
 module = LemmaModule(
     name="workflow",
     resource_names=_resource_names,
     routers=_routers,
+    live=_live,
     register_work=_register_work,
     register_periodic_work=_register_periodic_work,
 )

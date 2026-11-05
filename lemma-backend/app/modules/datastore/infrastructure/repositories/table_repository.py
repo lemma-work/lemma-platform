@@ -4,10 +4,12 @@ from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
 from app.core.authorization.permissions import Permissions
+from app.core.live.signals import signal_after_commit
 from app.core.authorization.sql_actions import (
     allowed_actions_contains,
     allowed_actions_expr,
@@ -52,6 +54,12 @@ def _not_reserved():
     return ~DatastoreTable.table_name.startswith(RESERVED_TABLE_PREFIX, autoescape=True)
 
 
+def _listed_moved(session: AsyncSession, pod_id: UUID) -> None:
+    """The pod's table list may have moved: the `org` topic reads it again
+    once this commits (`services/live/org_tables.py`)."""
+    signal_after_commit(session, pod_id, {"k": "tables"})
+
+
 class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepositoryPort):
     """Persistence for table metadata (the application DB)."""
 
@@ -60,6 +68,7 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
         self.session.add(instance)
         await self.session.flush()
         self._collect_events(entity)
+        _listed_moved(self.session, instance.pod_id)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[DatastoreTableEntity]:
@@ -97,6 +106,7 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
 
         await self.session.flush()
         self._collect_events(entity)
+        _listed_moved(self.session, instance.pod_id)
         return instance.to_entity()
 
     async def delete_entity(self, entity: DatastoreTableEntity) -> bool:
@@ -107,6 +117,7 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
         if not instance:
             return False
         self._collect_events(entity)
+        _listed_moved(self.session, instance.pod_id)
         await self.session.delete(instance)
         return True
 

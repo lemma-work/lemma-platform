@@ -7,6 +7,7 @@ from uuid import UUID, uuid7
 
 from sqlalchemy import delete, desc, func, select, update
 from sqlalchemy.dialects.postgresql import Insert, insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -17,6 +18,7 @@ from app.core.authorization.sql_actions import (
 )
 from app.core.infrastructure.db.sql_text import starts_with
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.live.signals import signal_after_commit
 from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.events import AppCreatedEvent
@@ -83,6 +85,12 @@ def release_prefix_statement(app_id: UUID, prefix: str):
     )
 
 
+def _listed_moved(session: AsyncSession, pod_id: UUID) -> None:
+    """The pod's app list may have moved: the `org` topic reads it again once
+    this commits (`services/org_apps.py`)."""
+    signal_after_commit(session, pod_id, {"k": "apps"})
+
+
 class AppRepository(AppRepositoryPort):
     def __init__(
         self,
@@ -97,6 +105,7 @@ class AppRepository(AppRepositoryPort):
         )
         self.session.add(model)
         await self.session.flush()
+        _listed_moved(self.session, model.pod_id)
         # `AppEntity` is a plain BaseModel carrying its own `id`, so it cannot be
         # promoted to an AggregateRoot without a field collision. Collected here,
         # which is the single write path behind all three creation routes.
@@ -247,12 +256,15 @@ class AppRepository(AppRepositoryPort):
             )
 
         await self.session.flush()
+        _listed_moved(self.session, model.pod_id)
         return model.to_entity()
 
     async def delete(self, id: UUID) -> bool:
-        stmt = delete(AppModel).where(AppModel.id == id)
-        result = await self.session.execute(stmt)
-        return result.rowcount > 0
+        stmt = delete(AppModel).where(AppModel.id == id).returning(AppModel.pod_id)
+        pods = list((await self.session.execute(stmt)).scalars())
+        for pod_id in pods:
+            _listed_moved(self.session, pod_id)
+        return bool(pods)
 
     async def get_for_update(self, app_id: UUID) -> AppEntity | None:
         model = (

@@ -64,11 +64,7 @@ from app.modules.channels.services.live.answers import (
     answering_of,
     as_uuid,
 )
-from app.modules.channels.services.live.events import (
-    Head,
-    heads_of,
-    typing_event,
-)
+from app.modules.channels.services.live.events import Head, heads_of, typing_event
 from app.modules.channels.services.live.inbox_feed import InboxFeed
 from app.modules.channels.services.live.instruments import (
     backoff,
@@ -78,7 +74,11 @@ from app.modules.channels.services.live.instruments import (
     hub_resyncs,
 )
 from app.modules.channels.services.live.readers import visible_channel
-from app.modules.channels.services.live.subscriptions import ChannelSub, InboxSub
+from app.modules.channels.services.live.subscriptions import (
+    ChannelSub,
+    InboxSocket,
+    InboxSub,
+)
 from app.modules.channels.services.live.timeline import (
     gap_since,
     plan_changes,
@@ -325,7 +325,7 @@ class ChannelsHub:
             sub.connection.offer_events(sub.id, head.cursor, gap, previous_cursor=since)
 
     async def join_inbox(
-        self, connection: LiveConnection, subscription_id: str, *, caller: Caller
+        self, connection: InboxSocket, subscription_id: str, *, caller: Caller
     ) -> InboxSub:
         self._joining += 1
         self.idle_since = None

@@ -57,6 +57,15 @@ def _register_work() -> None:
     import app.modules.identity.events.identity_work  # noqa: F401
 
 
+def _live():
+    from app.core.live.topics import LiveContribution
+    from app.modules.identity.services.live_directory import OrganizationPodDirectory
+
+    # The organization is identity's: which of its pods a user is shown is
+    # answered here for the `org` topic.
+    return LiveContribution(org_directory=OrganizationPodDirectory())
+
+
 @asynccontextmanager
 async def _close_user_cache(app):
     """API process: close identity module Redis clients on shutdown."""
@@ -107,6 +116,7 @@ async def _configure_supertokens(context):
 module = LemmaModule(
     name="identity",
     routers=_routers,
+    live=_live,
     register_work=_register_work,
     api_lifespans=(_close_user_cache,),
     worker_lifespans=(_configure_supertokens,),

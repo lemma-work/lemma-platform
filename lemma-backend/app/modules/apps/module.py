@@ -41,8 +41,16 @@ def _resource_names():
     )
 
 
+def _live():
+    from app.core.live.topics import LiveContribution
+    from app.modules.apps.services.org_apps import PodApps
+
+    return LiveContribution(org_states=(PodApps(),))
+
+
 module = LemmaModule(
     name="apps",
+    live=_live,
     resource_names=_resource_names,
     routers=_routers,
     register_periodic_work=_register_periodic_work,

@@ -14,6 +14,8 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.live.signals import signal_after_commit
+
 from app.modules.agent.domain.value_objects import (
     TERMINAL_AGENT_RUN_STATUSES,
     AgentRunFinishResult,
@@ -191,6 +193,9 @@ async def update_conversation_status(
     conversation = await session.get(ConversationModel, conversation_id)
     if conversation is None:
         return
+    # Whether it is running is what the `org` topic tells
+    # (`services/org_runs.py`): it reads again once this commits.
+    signal_after_commit(session, conversation.pod_id, {"k": "run"})
     conversation.status = status.value
     # A run starting (every wake starts one) or ending is activity; a
     # cancelled wait or a repaired status is not. Same UPDATE either way.

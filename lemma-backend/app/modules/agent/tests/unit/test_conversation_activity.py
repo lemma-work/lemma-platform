@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -55,6 +56,9 @@ class _Session:
     def __init__(self, conversation, run=None) -> None:
         self.conversation = conversation
         self.run = run
+        # Where a status move leaves its live signal until the commit, which
+        # never comes here: an unbound session holds it and goes nowhere.
+        self.sync_session = Session()
 
     async def get(self, _model, _id):
         return self.conversation
@@ -84,6 +88,7 @@ def _repository(session) -> ConversationRepository:
 
 def _conversation():
     return SimpleNamespace(
+        pod_id=uuid4(),
         status=ConversationStatus.COMPLETED.value,
         output_data=None,
         last_activity_at=_LONG_AGO,

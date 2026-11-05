@@ -205,8 +205,14 @@ class ReadCall:
 
 
 def live_contribution() -> LiveContribution:
+    from app.modules.channels.services.live.org_contacts import ContactsWaiting
+    from app.modules.channels.services.live.org_relay import InboxRelay
+
     return LiveContribution(
-        topics=(ChannelTopic(), InboxTopic()), calls=(TypingCall(), ReadCall())
+        topics=(ChannelTopic(), InboxTopic()),
+        calls=(TypingCall(), ReadCall()),
+        org_relays=(InboxRelay(),),
+        org_states=(ContactsWaiting(),),
     )
 
 
