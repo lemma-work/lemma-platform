@@ -35,19 +35,15 @@ from app.modules.agent.infrastructure.tools.authority import tool_authorization_
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.messaging.models import (
     AskAPersonRequest,
-    ChannelListRequest,
-    ChannelPostRequest,
-    ChannelReadRequest,
-    ChannelSearchRequest,
-    ListPodMembersRequest,
 )
 from app.modules.agent.infrastructure.tools.messaging.tools import (
+    SPECS as MESSAGING_SPECS,
     ask_a_person,
-    channel_list,
-    channel_post,
-    channel_read,
-    channel_search,
-    list_pod_members,
+)
+from app.modules.agent.services.tool_runtime import (
+    MEMBERS_WITHHELD_MESSAGE,
+    WITHHELD_MESSAGE,
+    ToolRuntime,
 )
 from app.modules.agent.domain.toolsets import resolve_toolsets
 
@@ -298,12 +294,11 @@ async def test_a_members_run_has_nobody_to_call_in(monkeypatch):
         "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
 
-    result = await ask_a_person(
-        _deps(answers_outsider=False).model_copy(update={"tool_call_id": None}),
-        AskAPersonRequest(reason="x"),
+    result = await ToolRuntime(MESSAGING_SPECS).call(
+        "ask_a_person", {"reason": "x"}, _deps(answers_outsider=False)
     )
 
-    assert result.success is False
+    assert result == {"success": False, "error": MEMBERS_WITHHELD_MESSAGE}
 
 
 def test_a_doc_the_owner_opened_beside_it_is_never_a_strangers_to_read():
@@ -323,25 +318,25 @@ def test_a_doc_the_owner_opened_beside_it_is_never_a_strangers_to_read():
 
 
 @pytest.mark.parametrize(
-    ("tool", "request_"),
+    ("tool", "arguments"),
     [
-        (channel_post, ChannelPostRequest(text="hi", to="someone@example.com")),
-        (channel_read, ChannelReadRequest(asked_by_me=True)),
-        (channel_search, ChannelSearchRequest(query="salaries")),
-        (channel_list, ChannelListRequest()),
+        ("channel_post", {"text": "hi", "to": "someone@example.com"}),
+        ("channel_read", {"asked_by_me": True}),
+        ("channel_search", {"query": "salaries"}),
+        ("channel_list", {}),
     ],
     ids=["post", "read", "search", "list"],
 )
-async def test_a_strangers_run_reads_and_writes_no_channel(tool, request_):
+async def test_a_strangers_run_reads_and_writes_no_channel(tool, arguments):
     """The pod's channels are read as the member who looks after the run, and
-    a stranger could ask for anything in them. Refused before any lookup: the
-    database is never opened, so nothing here needs doubling."""
-    result = await tool(
-        _deps(answers_outsider=True).model_copy(update={"tool_call_id": None}), request_
+    a stranger could ask for anything in them. Not in a stranger's toolset,
+    so held before any lookup: the database is never opened, so nothing here
+    needs doubling."""
+    result = await ToolRuntime(MESSAGING_SPECS).call(
+        tool, arguments, _deps(answers_outsider=True)
     )
 
-    assert result.success is False
-    assert "ask_a_person" in (result.error or "")
+    assert result == {"success": False, "error": WITHHELD_MESSAGE}
 
 
 def test_passing_a_question_on_is_in_view_rather_than_behind_a_search():
@@ -375,11 +370,11 @@ async def test_a_stranger_cannot_have_the_pods_members_listed():
     """The directory is read as the owner, and the stranger could ask for it."""
     deps = _deps(answers_outsider=True)
 
-    listed = await list_pod_members(deps, ListPodMembersRequest(search=""))
+    listed = await ToolRuntime(MESSAGING_SPECS).call(
+        "list_pod_members", {"search": ""}, deps
+    )
 
-    assert listed.success is False
-    assert not listed.members
-    assert str(deps.user_id) not in (listed.error or "")
+    assert listed == {"success": False, "error": WITHHELD_MESSAGE}
 
 
 def test_a_strangers_message_cannot_forge_a_members_line_in_the_background():

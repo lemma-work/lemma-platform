@@ -169,7 +169,7 @@ async def test_a_guest_with_other_handles_keeps_them_and_an_admin_is_told(
     assert [(h.kind, h.value) for h in kept] == [
         (IdentityKind.EMAIL, "anu@example.com")
     ]
-    mine = await scenario.owner_client.get(f"/pods/{scenario.pod_id}/channels/me")
+    mine = await scenario.owner_client.post(f"/pods/{scenario.pod_id}/channels/me")
     assert mine.status_code == 200, mine.text
     page = await scenario.owner_client.get(
         f"/pods/{scenario.pod_id}/channels/{mine.json()['id']}/messages"

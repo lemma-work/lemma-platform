@@ -1,12 +1,12 @@
 """A contact's cases: who answers them by hand, where it stands, whether it
-asks for a person -- one episode at a time, every change recorded.
+asks for a person -- one episode at a time.
 
 A contact's channel is made with its first case. A line written after its
 current case closed opens the next one, which keeps whoever answered the last
 by hand (the hand-back window still lets them go). A member reopening a closed
 case by hand -- setting its status, or assigning somebody -- reopens that
-same case. Every change appends a ``channel_case_events`` row, and a change
-the channel's readers see is announced as the channel's (``touch_channel``).
+same case. A change the channel's readers see is announced as the channel's
+(``touch_channel``).
 
 Every writer holds the channel's row lock before the case's -- a post already
 does, anything else takes it first -- so writers never wait on each other the
@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid7
 
-from sqlalchemy import CompoundSelect, Select, and_, func, select, union_all, update
+from sqlalchemy import CompoundSelect, Select, and_, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.util import identity_key
 from sqlalchemy.orm.attributes import set_committed_value
@@ -32,12 +32,7 @@ from app.modules.channels.domain.entities import (
     ContactStatus,
     SenderKind,
 )
-from app.modules.channels.infrastructure.message_models import ChannelMessageModel
-from app.modules.channels.infrastructure.models import (
-    ChannelCaseEventModel,
-    ChannelCaseModel,
-    ChannelModel,
-)
+from app.modules.channels.infrastructure.models import ChannelCaseModel, ChannelModel
 from app.modules.channels.infrastructure.revisions import set_on_head, touch_channel
 from app.modules.channels.infrastructure.rows import MAX_LINES, now
 
@@ -63,8 +58,7 @@ class CaseRepository:
 
     async def after_line(self, channel: Channel, message: ChannelMessage) -> None:
         """A line in a contact's channel moves its case: a member writing to
-        the contact steps in -- assigned if nobody is, their first response
-        noted -- and waits on them, and their next wait is acknowledged afresh;
+        the contact steps in -- assigned if nobody is -- and waits on them, and their next wait is acknowledged afresh;
         the contact writing opens it again. A line after the case closed opens
         the next. Called by the post, which holds the channel's lock."""
         if channel.kind is not ChannelKind.CONTACT or message.members_only:
@@ -80,7 +74,7 @@ class CaseRepository:
         if member is not None:
             shown = self._member_wrote(case, member, at=message.created_at) or shown
         else:
-            shown = self._status(case, _OPEN, by=None) or shown
+            shown = self._status(case, _OPEN) or shown
         await self.session.flush()
         if shown:
             await touch_channel(self.session, channel.id)
@@ -92,7 +86,7 @@ class CaseRepository:
         if case.assignee_user_id is None:
             # Of two members writing to an unanswered contact at once, the
             # first takes it: the post holds the channel's lock.
-            shown = self._assign(case, user_id, by=user_id)
+            shown = self._assign(case, user_id)
         if case.assignee_user_id == user_id and (
             case.assignee_last_line_at is None or at > case.assignee_last_line_at
         ):
@@ -102,50 +96,39 @@ class CaseRepository:
             case.attention_at = None
             case.attention_reason = None
             shown = True
-        if case.first_response_at is None:
-            case.first_response_at = at
-            case.first_response_by_user_id = user_id
-            self._note(case, "first_response", by=user_id)
         if case.acknowledged_at is not None:
             case.acknowledged_at = None
-        return (
-            self._status(case, ContactStatus.WAITING_ON_CONTACT.value, by=user_id)
-            or shown
-        )
+        return self._status(case, ContactStatus.WAITING_ON_CONTACT.value) or shown
 
     # -- by hand, or by an agent ---------------------------------------------------
 
-    async def assign(
-        self, channel_id: UUID, user_id: UUID | None, *, by: UUID | None = None
-    ) -> None:
+    async def assign(self, channel_id: UUID, user_id: UUID | None) -> None:
         """Somebody answers this contact by hand now, or nobody does. Being
         assigned answers a call for a person, and opens the case."""
         await self._lock_channel(channel_id)
         if user_id is None:
             case = await self._current(channel_id)
-            shown = case is not None and self._assign(case, None, by=by)
+            shown = case is not None and self._assign(case, None)
         else:
-            case = await self._reopened(channel_id, by=by)
+            case = await self._reopened(channel_id)
             if case is None:
                 return
-            shown = self._assign(case, user_id, by=by)
-            shown = self._status(case, _OPEN, by=by) or shown
+            shown = self._assign(case, user_id)
+            shown = self._status(case, _OPEN) or shown
         await self.session.flush()
         if shown:
             await touch_channel(self.session, channel_id)
 
-    async def set_status(
-        self, channel_id: UUID, status: ContactStatus, *, by: UUID | None
-    ) -> None:
+    async def set_status(self, channel_id: UUID, status: ContactStatus) -> None:
         """Close the case, or set where an open one stands -- reopening it if
         it was closed."""
         await self._lock_channel(channel_id)
         if status is ContactStatus.CLOSED:
             case = await self._current(channel_id)
-            shown = case is not None and self._close(case, by=by)
+            shown = case is not None and self._close(case)
         else:
-            case = await self._reopened(channel_id, by=by)
-            shown = case is not None and self._status(case, status.value, by=by)
+            case = await self._reopened(channel_id)
+            shown = case is not None and self._status(case, status.value)
         await self.session.flush()
         if shown:
             await touch_channel(self.session, channel_id)
@@ -170,7 +153,6 @@ class CaseRepository:
         # The agent answers them again: nobody is waited on.
         case.attention_at = None
         case.attention_reason = None
-        self._note(case, "handed_back", user_id=str(user_id))
         await self.session.flush()
         await touch_channel(self.session, channel_id)
         return True
@@ -185,7 +167,6 @@ class CaseRepository:
             return False
         case, opened = live
         case.acknowledged_at = now()
-        self._note(case, "acknowledged")
         await self.session.flush()
         if opened:
             await touch_channel(self.session, channel_id)
@@ -202,9 +183,8 @@ class CaseRepository:
         if case.attention_at is None:
             case.attention_at = now()
             case.attention_reason = (reason or None) and reason[:255]
-            self._note(case, "attention", reason=case.attention_reason)
             shown = True
-        shown = self._status(case, _OPEN, by=None) or shown
+        shown = self._status(case, _OPEN) or shown
         await self.session.flush()
         if shown:
             await touch_channel(self.session, channel_id)
@@ -228,7 +208,7 @@ class CaseRepository:
         """The merged channel's cases join the survivor's, both rows locked by
         the caller. Where both have an open case, the survivor's goes on: it
         takes the more recently assigned member, a call for a person either
-        made, the earlier first response, and stays open if either was; the
+        made, and stays open if either was; the
         other is closed into it. Otherwise whichever is open -- or, neither,
         the more recently opened -- is the survivor's current case."""
         theirs = await self._for_update(merged.current_case_id)
@@ -236,8 +216,7 @@ class CaseRepository:
         if _is_open(theirs) and _is_open(ours):
             assert theirs is not None and ours is not None
             _absorb(ours, theirs)
-            self._close(theirs, by=None)
-            self._note(ours, "merged", case_id=str(theirs.id))
+            self._close(theirs)
         merged.current_case_id = None
         await self.session.flush()
         case = ChannelCaseModel
@@ -252,23 +231,6 @@ class CaseRepository:
             head.current_case_id = current.id
             set_committed_value(head, "current_case", current)
         await self.session.flush()
-        await self._renumber(head.id)
-
-    async def _renumber(self, channel_id: UUID) -> None:
-        """A case opens after the line before it: counted again once the
-        lines of both channels are numbered as one."""
-        case, line = ChannelCaseModel, ChannelMessageModel
-        before = (
-            select(func.coalesce(func.max(line.seq), 0))
-            .where(line.channel_id == channel_id, line.created_at < case.opened_at)
-            .scalar_subquery()
-        )
-        await self.session.execute(
-            update(case)
-            .where(case.channel_id == channel_id)
-            .values(opened_seq=before)
-            .execution_options(synchronize_session="fetch")
-        )
 
     # -- the case a writer works on ----------------------------------------------------
 
@@ -327,9 +289,7 @@ class CaseRepository:
         await self._name_current(channel_id, case)
         return case, True
 
-    async def _reopened(
-        self, channel_id: UUID, *, by: UUID | None
-    ) -> ChannelCaseModel | None:
+    async def _reopened(self, channel_id: UUID) -> ChannelCaseModel | None:
         """The current case, reopened if it was closed: a member acting on a
         closed case by hand takes it up again."""
         head = await self._head(channel_id)
@@ -343,8 +303,6 @@ class CaseRepository:
         elif case.closed_at is not None:
             case.status = _OPEN
             case.closed_at = None
-            case.closed_by_user_id = None
-            self._note(case, "reopened", by=by)
         return case
 
     def _new(
@@ -372,13 +330,6 @@ class CaseRepository:
             case.assigned_at = after.assigned_at
             case.assignee_last_line_at = after.assignee_last_line_at
         self.session.add(case)
-        self._note(
-            case,
-            "opened",
-            seq=seq,
-            after=str(after.id) if after is not None else None,
-            assignee=str(case.assignee_user_id) if case.assignee_user_id else None,
-        )
         return case
 
     async def _name_current(self, channel_id: UUID, case: ChannelCaseModel) -> None:
@@ -391,11 +342,9 @@ class CaseRepository:
             set_committed_value(row, "current_case_id", case.id)
             set_committed_value(row, "current_case", case)
 
-    # -- what changes, and its record ----------------------------------------------------
+    # -- what changes ---------------------------------------------------------------------
 
-    def _assign(
-        self, case: ChannelCaseModel, user_id: UUID | None, *, by: UUID | None
-    ) -> bool:
+    def _assign(self, case: ChannelCaseModel, user_id: UUID | None) -> bool:
         if case.assignee_user_id == user_id:
             return False
         case.assignee_user_id = user_id
@@ -404,40 +353,21 @@ class CaseRepository:
         if user_id is not None:
             case.attention_at = None
             case.attention_reason = None
-        self._note(case, "assigned", by=by, user_id=str(user_id) if user_id else None)
         return True
 
-    def _status(self, case: ChannelCaseModel, status: str, *, by: UUID | None) -> bool:
+    def _status(self, case: ChannelCaseModel, status: str) -> bool:
         if case.status == status:
             return False
-        self._note(case, "status", by=by, status=status, was=case.status)
         case.status = status
         return True
 
-    def _close(self, case: ChannelCaseModel, *, by: UUID | None) -> bool:
+    def _close(self, case: ChannelCaseModel) -> bool:
         if case.closed_at is not None:
             return False
         case.status = _CLOSED
         case.closed_at = now()
-        case.closed_by_user_id = by
         case.acknowledged_at = None
-        self._note(case, "closed", by=by)
         return True
-
-    def _note(
-        self,
-        case: ChannelCaseModel,
-        kind: str,
-        *,
-        by: UUID | None = None,
-        **value: object,
-    ) -> None:
-        shown = {key: each for key, each in value.items() if each is not None}
-        self.session.add(
-            ChannelCaseEventModel(
-                case=case, kind=kind, actor_user_id=by, value=shown or None
-            )
-        )
 
 
 def narrowed_by_case(
@@ -521,12 +451,6 @@ def _absorb(ours: ChannelCaseModel, theirs: ChannelCaseModel) -> None:
         ours.status = _OPEN
     if ours.acknowledged_at is None:
         ours.acknowledged_at = theirs.acknowledged_at
-    if theirs.first_response_at is not None and (
-        ours.first_response_at is None
-        or theirs.first_response_at < ours.first_response_at
-    ):
-        ours.first_response_at = theirs.first_response_at
-        ours.first_response_by_user_id = theirs.first_response_by_user_id
 
 
 def _current_of(

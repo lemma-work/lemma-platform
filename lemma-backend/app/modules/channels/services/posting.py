@@ -218,7 +218,6 @@ class Timeline:
             self.session,
             message=message,
             people=post.mentions,
-            agents=post.mentioned_agents,
             fresh=True,
         )
 

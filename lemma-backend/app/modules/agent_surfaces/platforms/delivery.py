@@ -111,8 +111,8 @@ class SendOutcome:
     #: A call ended in a way that does not say whether the platform took it
     #: (a read timeout, a dropped connection after the request went out).
     ambiguous: bool = False
-    #: The HTTP status of the last failure the platform answered with, as a
-    #: delivery's try records it (``channel_delivery_attempts``).
+    #: The HTTP status of the last failure the platform answered with: a 401
+    #: says the bot's own credentials were refused (``surface_problems``).
     provider_status: str | None = None
     #: The block this one is inside: what is noted here is noted there too.
     parent: SendOutcome | None = field(default=None, repr=False, compare=False)

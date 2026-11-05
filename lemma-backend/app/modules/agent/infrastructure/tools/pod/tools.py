@@ -19,6 +19,7 @@ from app.modules.agent.domain.replay import request_body
 from app.modules.agent.domain.tools import (
     ReplayClass,
     ToolAccess,
+    ToolAudience,
     ToolGroup,
     ToolPolicy,
     ToolSpec,
@@ -308,7 +309,7 @@ def _read(
         title=title,
         view=view,
         open_world=open_world,
-        outsider_allowed=True,
+        offered_to=ToolAudience.ANYONE,
         replay=ReplayClass.SAFE,
     )
 

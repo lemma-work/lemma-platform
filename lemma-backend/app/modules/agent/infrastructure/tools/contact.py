@@ -24,6 +24,7 @@ from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.tools import (
     ReplayClass,
+    ToolAudience,
     ToolGroup,
     ToolPolicy,
     ToolSpec,
@@ -197,11 +198,11 @@ def contact_specs(
         tool(
             contact_records,
             ToolGroup.CONTACT,
-            ToolPolicy(outsider_allowed=True, replay=ReplayClass.SAFE),
+            ToolPolicy(offered_to=ToolAudience.OUTSIDERS, replay=ReplayClass.SAFE),
         ),
         tool(
             contact_function,
             ToolGroup.CONTACT,
-            ToolPolicy(outsider_allowed=True, replay=ReplayClass.KEYED),
+            ToolPolicy(offered_to=ToolAudience.OUTSIDERS, replay=ReplayClass.KEYED),
         ),
     )

@@ -127,7 +127,7 @@ async def _timeline(session: AsyncSession, channel_id: UUID) -> list[tuple[int, 
     return [(int(seq), body) for seq, body in rows]
 
 
-async def test_a_merged_contacts_channel_and_everything_naming_them_move_over(
+async def test_a_merged_contacts_channel_and_what_hangs_from_its_lines_move_over(
     scenario, db_session: AsyncSession
 ):
     await scenario.create_org_with_pod(name_prefix="Channel fold")
@@ -147,9 +147,9 @@ async def test_a_merged_contacts_channel_and_everything_naming_them_move_over(
             ref="e2e:fold",
             asker=await an_asker(pod_id, owner),
             question={"prompt": "Which order?"},
-            awaits=Principal.contact(merged),
+            awaits=Principal.member(owner),
         ),
-        mentions=[Principal.contact(merged)],
+        mentions=[Principal.member(owner)],
     )
     assert asked is not None
     await _merge(db_session, merged=merged, into=survivor)
@@ -177,18 +177,15 @@ async def test_a_merged_contacts_channel_and_everything_naming_them_move_over(
     assert said is not None and said.sender_contact_id == survivor
     question = await db_session.get(ChannelQuestionModel, asked.id)
     assert question is not None
-    assert (question.channel_id, question.awaits_contact_id) == (
-        kept.channel_id,
-        survivor,
-    )
+    assert (question.channel_id, question.awaits_user_id) == (kept.channel_id, owner)
     mention = await db_session.scalar(
         select(ChannelMentionModel).where(ChannelMentionModel.message_id == asked.id)
     )
     assert mention is not None
     # The mention takes its line's new number: unread mentions count by it.
-    assert (mention.channel_id, mention.contact_id, mention.seq) == (
+    assert (mention.channel_id, mention.user_id, mention.seq) == (
         kept.channel_id,
-        survivor,
+        owner,
         3,
     )
     source = await db_session.get(ChannelSourceModel, folded.id)
@@ -436,7 +433,7 @@ async def test_a_fold_numbers_both_timelines_by_when_said_and_keeps_what_was_rea
         uow,
         channel_id=kept.channel_id,
         line=NewLine(sender=Sender.member(owner), text="kept, later"),
-        mentions=[Principal.contact(survivor)],
+        mentions=[Principal.member(owner)],
     )
     await post(
         uow,
