@@ -99,6 +99,15 @@ class SurfaceDelivery:
         self.credential_resolver = credential_resolver
         self.seats = seats or ChannelSeatsInDatabase(uow)
 
+    async def _asked_at(
+        self, conversation_id: UUID, run_id: UUID | None
+    ) -> UUID | None:
+        """The platform place an outbound message keeps to: its own run's,
+        or -- sent by no run -- the conversation's latest run's."""
+        if run_id is not None:
+            return await channel_replies.run_asked_at(self.uow, run_id)
+        return await channel_replies.latest_run_asked_at(self.uow, conversation_id)
+
     async def egress_credentials(
         self,
         surface: AgentSurfaceEntity,
@@ -129,7 +138,11 @@ class SurfaceDelivery:
         return await agent_name_for_surface(self.uow, surface)
 
     async def resolve_egress_target(
-        self, conversation_id: UUID, *, at: Source | None = None
+        self,
+        conversation_id: UUID,
+        *,
+        at: Source | None = None,
+        run_id: UUID | None = None,
     ) -> SurfaceEgressTarget | None:
         """Where an outbound message for this conversation goes, and through what.
 
@@ -139,18 +152,19 @@ class SurfaceDelivery:
         (never raises) when there is none, or it cannot be written to, so
         callers in the agent-run path treat egress as best-effort.
 
-        A run asked on a platform keeps to the place it was asked, so its
-        typing, progress and cards show where its answer will go, whoever
-        writes from somewhere else meanwhile.
+        What a run sends -- its typing, progress and cards -- names the run
+        (``run_id``) and goes to the place that run was asked, whoever writes
+        from somewhere else meanwhile and whatever newer run the conversation
+        has since started: a paused email run's card stays in the email even
+        once a WhatsApp message has opened a turn of its own. A message no run
+        sends goes where the conversation's latest run was asked.
         """
         address = (
             ReplyAddress(source=at, ref=at.delivery_ref)
             if at is not None
             else await self.seats.reply_address(
                 conversation_id,
-                at_source_id=await channel_replies.latest_run_asked_at(
-                    self.uow, conversation_id
-                ),
+                at_source_id=await self._asked_at(conversation_id, run_id),
             )
         )
         if address is None:

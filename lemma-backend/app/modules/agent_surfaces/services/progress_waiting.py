@@ -121,6 +121,7 @@ class ProgressWaitingMixin:
                     # is what is being asked.
                     delivered = await service.send_sign_in_prompt_for_conversation(
                         conversation_id=conversation.id,
+                        run_id=self._run_files.agent_run_id,
                         tool_call_id=tool_call_id or None,
                         narration=narration,
                     )
@@ -175,6 +176,7 @@ class ProgressWaitingMixin:
         try:
             return await service.send_prompt_as_text_for_conversation(
                 conversation_id=conversation.id,
+                run_id=self._run_files.agent_run_id,
                 kind=kind,
                 tool_call_id=tool_call_id or None,
             )

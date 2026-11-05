@@ -319,6 +319,17 @@ class Runs(UnitOfWorkRepository):
             )
         ).scalar_one_or_none()
 
+    async def run_asked_at(self, agent_run_id: UUID) -> UUID | None:
+        """The channel source this run was asked at, if any
+        (``domain/run_places``); one key of one row."""
+        return place_source(
+            await self.session.scalar(
+                select(AgentRunModel.run_metadata[ASKED_IN_PLACE_KEY].astext).where(
+                    AgentRunModel.id == agent_run_id
+                )
+            )
+        )
+
     async def latest_run_asked_at(self, conversation_id: UUID) -> UUID | None:
         """The channel source the conversation's latest run was asked at, if
         any (``domain/run_places``); one key of one row."""

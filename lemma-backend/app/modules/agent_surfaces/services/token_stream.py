@@ -54,6 +54,7 @@ class TokenStreamMixin:
                 service = self.egress_factory(uow)
                 result = await service.progress.append_streamed_text(
                     conversation_id=conversation.id,
+                    run_id=self._run_files.agent_run_id,
                     progress_handle=None,
                     text="",
                 )
@@ -127,6 +128,7 @@ class TokenStreamMixin:
                 service = self.egress_factory(uow)
                 result = await service.progress.append_streamed_text(
                     conversation_id=conversation.id,
+                    run_id=self._run_files.agent_run_id,
                     progress_handle=self._progress_handle,
                     text=pending,
                 )

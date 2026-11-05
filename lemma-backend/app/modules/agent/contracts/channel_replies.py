@@ -98,14 +98,26 @@ async def run_reply_material(
     )
 
 
+async def run_asked_at(uow: SqlAlchemyUnitOfWork, agent_run_id: UUID) -> UUID | None:
+    """The platform place a run was asked at, if any.
+
+    What the run shows while it works -- typing, progress, its cards -- goes
+    where its answer will: to the place it was asked, not to wherever somebody
+    wrote from while it worked, nor to where a newer run of the same
+    conversation was asked (``domain/run_places``). None for a run asked
+    nowhere in particular.
+    """
+    return await Runs(uow).run_asked_at(agent_run_id)
+
+
 async def latest_run_asked_at(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> UUID | None:
     """The platform place the conversation's latest run was asked at, if any.
 
-    What the run shows while it works -- typing, progress, its cards -- goes
-    where its answer will: to the place it was asked, not to wherever somebody
-    wrote from while it worked (``domain/run_places``). None for a run asked
+    For a message no run sends -- a reply to a tapped card, a note to the
+    member -- which goes where the conversation is now being answered. What a
+    run sends reads its own place (``run_asked_at``). None for a run asked
     nowhere in particular, or no run.
     """
     return await Runs(uow).latest_run_asked_at(conversation_id)
@@ -119,6 +131,7 @@ __all__ = [
     "earlier_answer_client_id",
     "is_earlier_answer",
     "latest_run_asked_at",
+    "run_asked_at",
     "run_reply_material",
     "visible_messages",
 ]
