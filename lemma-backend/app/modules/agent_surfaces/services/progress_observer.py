@@ -292,6 +292,7 @@ class SurfaceAgentRunProgressObserver(
                 service = self.egress_factory(uow)
                 await service.progress.clear_progress(
                     conversation_id=conversation_id,
+                    run_id=self._run_files.agent_run_id,
                     progress_handle=handle,
                 )
         except _delivery_errors():
@@ -457,5 +458,6 @@ class SurfaceAgentRunProgressObserver(
             service = self.egress_factory(uow)
             return await service.progress.show_typing(
                 conversation_id=conversation_id,
+                run_id=self._run_files.agent_run_id,
                 metadata=metadata,
             )

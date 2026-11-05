@@ -116,8 +116,9 @@ class RunPrivacy(BaseModel):
     """Where a run answers, carried on to every run that continues it.
 
     A resume, a retry, a follow-up: each continues answering what the earlier
-    run answered, so each answers where it would have -- a note's in Lemma --
-    and for whom it would have (``domain/private_notes``).
+    run answered, so each answers where it would have -- a note's in Lemma,
+    a platform's at the place it was asked -- and for whom it would have
+    (``domain/private_notes``).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -128,6 +129,10 @@ class RunPrivacy(BaseModel):
     asked_in_lemma: bool = False
     #: A message typed in Lemma into a platform's conversation started it.
     written_in: WrittenIn | None = None
+    #: The channel source the message that started it was heard at: it answers
+    #: there, whoever writes from somewhere else while it works
+    #: (``domain/run_places``).
+    asked_at_source: UUID | None = None
 
 
 class RunState(RunPrivacy):
@@ -163,6 +168,7 @@ class RunState(RunPrivacy):
             private_note=self.private_note,
             asked_in_lemma=self.asked_in_lemma,
             written_in=self.written_in,
+            asked_at_source=self.asked_at_source,
         )
 
     @property

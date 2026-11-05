@@ -23,6 +23,7 @@ from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.run_places import AnswerScope
 from app.modules.agent.domain.run_state import RunPrivacy, RunState
 from app.modules.agent.domain.value_objects import MessageDraft, RunTrigger
 from app.modules.agent.infrastructure.db.messages import Messages
@@ -160,11 +161,11 @@ async def start_resume_run(
         return None
     paused_run = await runs.get_agent_run(paused_run_id)
     privacy = paused_run.state.privacy if paused_run else RunPrivacy()
-    notes = privacy.private_note
-    # A resume answers one kind, like a follow-up turn: the other kind
+    scope = AnswerScope.of_run(privacy)
+    # A resume answers one scope, like a follow-up turn: every other scope
     # waits for the turn after it, which has to know where to look.
     leftovers = await queued_messages.count_queued_user_messages(
-        paused_run_id, notes=not notes
+        paused_run_id, beside=scope
     )
     resume_run = await runs.create_agent_run(
         conversation_id=conversation.id,
@@ -174,7 +175,8 @@ async def start_resume_run(
             trigger=trigger,
             kind=paused_run.state.kind if paused_run else RunKind.CHAT,
             resumed_tool_call_id=resumed_tool_call_id,
-            # A note that paused for an approval finishes where it began.
+            # A note that paused for an approval finishes where it began, and
+            # a run asked on a platform answers there.
             **privacy.model_dump(),
             queued_leftovers_behind=[paused_run_id] if leftovers else [],
         ),
@@ -183,7 +185,7 @@ async def start_resume_run(
     # answer: claimed into it, so a host carries it in the prompt and the
     # follow-up after this run does not answer it a second time.
     claimed = await queued_messages.claim_queued_user_messages(
-        paused_run_id, into_run_id=resume_run.id, notes=notes
+        paused_run_id, into_run_id=resume_run.id, scope=scope
     )
     await stage_agent_turn(
         uow,

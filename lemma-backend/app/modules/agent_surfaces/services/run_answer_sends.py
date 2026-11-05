@@ -229,7 +229,7 @@ class RunAnswerSends:
         if remainder is None and display.sealed:
             remainder = ""
         if remainder is not None and await self._close(
-            delivery, conversation_id, display, remainder
+            delivery, run_id, conversation_id, display, remainder
         ):
             await forget_live_display(run_id)
             logger.info(
@@ -238,7 +238,7 @@ class RunAnswerSends:
                 sealed=display.sealed,
             )
             return Outcome.delivered(platform, external_message_id=display.message_id)
-        await self._take_down(conversation_id, display)
+        await self._take_down(run_id, conversation_id, display)
         await forget_live_display(run_id)
         # The stream is gone: its id no longer says the answer arrived, should
         # this sender die before the answer is posted in its place.
@@ -250,6 +250,7 @@ class RunAnswerSends:
     async def _close(
         self,
         delivery: Delivery,
+        run_id: UUID,
         conversation_id: UUID,
         display: LiveDisplay,
         remainder: str,
@@ -265,6 +266,7 @@ class RunAnswerSends:
             async with self.uow_factory() as uow:
                 return await self.egress_for(uow).progress.finish_with_answer(
                     conversation_id=conversation_id,
+                    run_id=run_id,
                     progress_handle=display.handle,
                     message=remainder,
                     already_streamed=bool(display.streamed.strip()),
@@ -277,12 +279,16 @@ class RunAnswerSends:
             )
             return False
 
-    async def _take_down(self, conversation_id: UUID, display: LiveDisplay) -> None:
+    async def _take_down(
+        self, run_id: UUID, conversation_id: UUID, display: LiveDisplay
+    ) -> None:
         """Remove a stream the answer will not close, before posting the answer."""
         try:
             async with self.uow_factory() as uow:
                 await self.egress_for(uow).progress.clear_progress(
-                    conversation_id=conversation_id, progress_handle=display.handle
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    progress_handle=display.handle,
                 )
         except send_errors():
             logger.warning(

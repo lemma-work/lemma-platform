@@ -25,6 +25,7 @@ from app.modules.agent.infrastructure.db.conversation_activity import (
     touch_activity as _touch_activity,
 )
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
+from app.modules.agent.infrastructure.models.typed_state import with_place
 
 #: How far back to look for a transcript of the file `listen` was asked for.
 #: Bounded because a long-running chat holds thousands of messages and the
@@ -84,7 +85,7 @@ class Messages(UnitOfWorkRepository):
                 if draft.tool_result is not None
                 else None
             ),
-            message_metadata=draft.metadata,
+            message_metadata=with_place(draft.metadata, draft.state),
             **MessageModel.state_values(draft.state),
         )
         self.session.add(model)

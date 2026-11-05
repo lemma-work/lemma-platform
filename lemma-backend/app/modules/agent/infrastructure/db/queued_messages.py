@@ -19,9 +19,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 
 from app.modules.agent.domain.entities import Message as MessageEntity
+from app.modules.agent.domain.run_places import ASKED_IN_PLACE_KEY, AnswerScope
 from app.modules.agent.domain.value_objects import (
     UNANSWERED_QUEUE_STATES,
     AgentRunStatus,
@@ -39,7 +40,8 @@ def in_order(rows) -> list[MessageEntity]:
 def unclaimed_queued_messages(
     agent_run_id: UUID,
     *,
-    notes: bool | None = None,
+    scope: AnswerScope | None = None,
+    beside: AnswerScope | None = None,
     as_run: bool = False,
     after_sequence: int | None = None,
 ):
@@ -51,13 +53,15 @@ def unclaimed_queued_messages(
     answers both questions that matter: what to steer in next, and what is
     still owed an answer once the run ends.
 
-    ``as_run`` keeps to messages of the run's own kind, which is what may be
-    steered into it: a private note must not shape an answer that goes to the
-    platform, and a message meant for the platform must not be answered where
-    nobody on it will see. ``notes`` asks for one kind outright -- for a
-    follow-up turn, which has not started yet. Steering also needs the run to
-    still be answering: a message sent after Stop must not be taken into the
-    run being stopped, where nothing would answer it.
+    ``as_run`` keeps to messages in the run's own scope, which is what may be
+    steered into it (``domain/run_places``): a private note must not shape an
+    answer that goes to the platform, a message meant for the platform must
+    not be answered where nobody on it will see, and a message said at one
+    place must not be answered at another. ``scope`` asks for one scope
+    outright -- for a follow-up turn, which has not started yet -- and
+    ``beside`` for everything else. Steering also needs the run to still be
+    answering: a message sent after Stop must not be taken into the run being
+    stopped, where nothing would answer it.
 
     ``after_sequence`` keeps to messages sent after that point -- after Stop,
     for the turn that answers what was said once the person had stopped.
@@ -72,23 +76,47 @@ def unclaimed_queued_messages(
             else ()
         ),
     )
-    if notes is not None:
-        return (*criteria, _is_note() if notes else ~_is_note())
+    if scope is not None:
+        return (*criteria, _in_scope(scope.notes, scope.place))
+    if beside is not None:
+        return (*criteria, ~_in_scope(beside.notes, beside.place))
     if as_run:
         run = (
-            select(AgentRunModel.private_note.label("private"), AgentRunModel.status)
+            select(
+                AgentRunModel.private_note.label("private"),
+                AgentRunModel.run_metadata[ASKED_IN_PLACE_KEY].astext.label("place"),
+                AgentRunModel.status,
+            )
             .where(AgentRunModel.id == agent_run_id)
             .subquery()
         )
         answering = (
             select(run.c.private).where(run.c.status == AgentRunStatus.RUNNING.value)
         ).scalar_subquery()
-        return (*criteria, _is_note() == answering)
+        asked_at = select(run.c.place).scalar_subquery()
+        return (*criteria, _in_scope(answering, asked_at))
     return criteria
 
 
 def _is_note():
     return MessageModel.private_note
+
+
+def _message_place():
+    """Where a message was asked, as stored with it (``domain/run_places``)."""
+    return MessageModel.message_metadata[ASKED_IN_PLACE_KEY].astext
+
+
+def _in_scope(notes, place):
+    """In this scope: a note or not, as ``notes`` says, and said at ``place``
+    -- or nowhere in particular, which is every place's. A ``place`` of None
+    is a run asked nowhere in particular, which takes only those. Both sides
+    are the strings the server stored; nothing is built here."""
+    said_at = _message_place()
+    at_place = said_at.is_(None)
+    if place is not None:
+        at_place = or_(at_place, func.coalesce(said_at == place, False))
+    return and_(_is_note() == notes, at_place)
 
 
 class QueuedMessages(UnitOfWorkRepository):
@@ -98,10 +126,11 @@ class QueuedMessages(UnitOfWorkRepository):
         self,
         agent_run_id: UUID,
         *,
-        notes: bool | None = None,
+        beside: AnswerScope | None = None,
         after_sequence: int | None = None,
     ) -> int:
-        """How many of this run's queued messages are still unanswered.
+        """How many of this run's queued messages are still unanswered --
+        ``beside`` one scope, those of any other.
 
         Counted over ``ix_agent_message_run_sequence`` rather than loading the
         run's messages, and asked once when a run ends -- so the answer is
@@ -115,28 +144,36 @@ class QueuedMessages(UnitOfWorkRepository):
             await self.session.scalar(
                 select(func.count()).where(
                     *unclaimed_queued_messages(
-                        agent_run_id, notes=notes, after_sequence=after_sequence
+                        agent_run_id, beside=beside, after_sequence=after_sequence
                     )
                 )
             )
             or 0
         )
 
-    async def earliest_queued_is_note(
+    async def earliest_queued_scope(
         self, agent_run_id: UUID, *, after_sequence: int | None = None
-    ) -> bool | None:
-        """Whether the oldest unanswered message queued behind this run is a
-        private note; None when nothing is queued. A follow-up turn answers one
-        kind, and the oldest message decides which goes first."""
-        flag = await self.session.scalar(
-            select(MessageModel.private_note)
-            .where(
-                *unclaimed_queued_messages(agent_run_id, after_sequence=after_sequence)
+    ) -> AnswerScope | None:
+        """The scope of the oldest unanswered message queued behind this run --
+        a note or not, and where it was said; None when nothing is queued. A
+        follow-up turn answers one scope, and the oldest message decides which
+        goes first."""
+        found = (
+            await self.session.execute(
+                select(MessageModel.private_note, _message_place())
+                .where(
+                    *unclaimed_queued_messages(
+                        agent_run_id, after_sequence=after_sequence
+                    )
+                )
+                .order_by(MessageModel.sequence)
+                .limit(1)
             )
-            .order_by(MessageModel.sequence)
-            .limit(1)
-        )
-        return None if flag is None else bool(flag)
+        ).first()
+        if found is None:
+            return None
+        notes, place = found
+        return AnswerScope(notes=bool(notes), place=place or None)
 
     async def claim_queued_user_messages(
         self,
@@ -144,7 +181,7 @@ class QueuedMessages(UnitOfWorkRepository):
         *,
         into_run_id: UUID | None = None,
         message_ids: list[UUID] | None = None,
-        notes: bool | None = None,
+        scope: AnswerScope | None = None,
         as_run: bool = False,
         after_sequence: int | None = None,
     ) -> list[MessageEntity]:
@@ -174,7 +211,7 @@ class QueuedMessages(UnitOfWorkRepository):
                 .where(
                     *unclaimed_queued_messages(
                         agent_run_id,
-                        notes=notes,
+                        scope=scope,
                         as_run=as_run,
                         after_sequence=after_sequence,
                     ),

@@ -16,6 +16,7 @@ import pytest
 
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import AgentRun, Conversation
+from app.modules.agent.domain.run_places import IN_LEMMA, AnswerScope
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
@@ -40,19 +41,39 @@ def _run(conversation_id, status=AgentRunStatus.RUNNING) -> AgentRun:
     )
 
 
+def _scopes(
+    queued: int, notes: int = 0, places: list[str | None] | None = None
+) -> list[AnswerScope]:
+    """``queued`` messages, oldest first: the first ``notes`` of them private
+    notes, each said at its place in ``places`` (nowhere in particular when
+    left out)."""
+    said_at = places or [None] * queued
+    return [
+        AnswerScope(notes=index < notes, place=said_at[index])
+        for index in range(queued)
+    ]
+
+
+def _in(scope: AnswerScope, message: AnswerScope) -> bool:
+    """The rule the query keeps: a note or not alike, and the same place or none."""
+    return message.notes == scope.notes and message.place in (None, scope.place)
+
+
 def _coordinator(
     *,
     queued: int,
     active_run: AgentRun | None = None,
     notes: int = 0,
+    places: list[str | None] | None = None,
     finished_state: RunState | None = None,
     queues: dict | None = None,
 ):
     """The use case over a fake queue.
 
     ``queued`` messages wait behind the finished run, ``notes`` of them private
-    notes, the oldest of them a note when there are any. ``queues`` adds other
-    runs' queues, by id, as ``(messages, notes)``.
+    notes, the oldest of them a note when there are any, each said at its
+    place in ``places``. ``queues`` adds other runs' queues, by id, as
+    ``(messages, notes)``.
     """
     conversation = Conversation(
         pod_id=uuid4(),
@@ -64,19 +85,24 @@ def _coordinator(
     finished = _run(conversation.id, AgentRunStatus.COMPLETED)
     finished.state = finished_state or RunState()
     created = _run(conversation.id)
-    waiting = {finished.id: (queued, notes), **(queues or {})}
+    waiting = {
+        finished.id: _scopes(queued, notes, places),
+        **{run_id: _scopes(*queue) for run_id, queue in (queues or {}).items()},
+    }
 
-    async def count(run_id, *, notes=None, after_sequence=None):
-        total, of_notes = waiting.get(run_id, (0, 0))
-        return total if notes is None else of_notes if notes else total - of_notes
+    async def count(run_id, *, beside=None, after_sequence=None):
+        scopes = waiting.get(run_id, [])
+        if beside is None:
+            return len(scopes)
+        return sum(1 for scope in scopes if not _in(beside, scope))
 
     async def earliest(run_id, *, after_sequence=None):
-        total, of_notes = waiting.get(run_id, (0, 0))
-        return None if not total else bool(of_notes)
+        scopes = waiting.get(run_id, [])
+        return scopes[0] if scopes else None
 
     repository = SimpleNamespace(
         count_queued_user_messages=AsyncMock(side_effect=count),
-        earliest_queued_is_note=AsyncMock(side_effect=earliest),
+        earliest_queued_scope=AsyncMock(side_effect=earliest),
         lock_conversation=AsyncMock(),
         get_active_agent_run_for_update=AsyncMock(return_value=active_run),
         get_agent_run=AsyncMock(return_value=finished),
@@ -156,7 +182,7 @@ async def test_the_followup_claims_the_queue_it_answers() -> None:
     assert call.args == (finished.id,)
     assert call.kwargs == {
         "into_run_id": created.id,
-        "notes": False,
+        "scope": AnswerScope(notes=False, place=None),
         "after_sequence": None,
     }
 
@@ -189,9 +215,7 @@ async def test_the_followup_run_cannot_itself_recur() -> None:
     )
     await coordinator.start(conversation=conversation, completed_run_id=finished.id)
 
-    asked = {
-        call.args[0] for call in repository.earliest_queued_is_note.await_args_list
-    }
+    asked = {call.args[0] for call in repository.earliest_queued_scope.await_args_list}
     assert asked == {finished.id}
     assert created.id != finished.id
 
@@ -256,7 +280,9 @@ async def test_a_note_queued_behind_a_run_is_answered_where_nobody_else_sees() -
 
     state = repository.create_agent_run.await_args.kwargs["state"]
     assert state.private_note is True
-    assert repository.claim_queued_user_messages.await_args.kwargs["notes"] is True
+    assert repository.claim_queued_user_messages.await_args.kwargs[
+        "scope"
+    ] == AnswerScope(notes=True, place=None)
 
 
 @pytest.mark.asyncio
@@ -292,3 +318,40 @@ async def test_what_an_earlier_run_left_waiting_is_answered_next() -> None:
     assert state.private_note is False
     assert state.queued_behind_run_id == earlier
     assert repository.claim_queued_user_messages.await_args.args == (earlier,)
+
+
+@pytest.mark.asyncio
+async def test_what_was_said_at_another_place_is_answered_there_next() -> None:
+    """Said on WhatsApp while a run answered an email: its own turn, asked on
+    WhatsApp, which answers there; what was said by email waits for the next."""
+    whatsapp, email = uuid4(), uuid4()
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=3, places=[str(whatsapp), None, str(email)]
+    )
+
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+
+    state = repository.create_agent_run.await_args.kwargs["state"]
+    assert state.asked_at_source == whatsapp
+    assert state.private_note is False
+    # The message from nowhere in particular goes with it; the email waits.
+    assert state.queued_leftovers_behind == [finished.id]
+    assert repository.claim_queued_user_messages.await_args.kwargs[
+        "scope"
+    ] == AnswerScope(notes=False, place=str(whatsapp))
+
+
+@pytest.mark.asyncio
+async def test_a_line_from_lemma_queued_behind_a_platform_run_is_answered_in_lemma() -> (
+    None
+):
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=1, places=[IN_LEMMA]
+    )
+
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
+
+    state = repository.create_agent_run.await_args.kwargs["state"]
+    assert state.asked_in_lemma is True
+    assert state.asked_at_source is None
+    assert state.queued_leftovers_behind == []

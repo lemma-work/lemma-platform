@@ -77,7 +77,9 @@ def history_and_prompt(
     test are this run's own; see `pydantic_ai_thinking`.
     """
     ordered = _without_unanswered_thoughts(
-        sorted(messages, key=lambda message: message.sequence)
+        _after_the_run_they_waited_for(
+            sorted(messages, key=lambda message: message.sequence)
+        )
     )
     user_prompt: str | None = None
     history_messages = list(ordered)
@@ -127,6 +129,58 @@ def rows_to_messages(rows: Sequence[object]) -> list[ModelMessage]:
     reasoning as it was sent, and a row's is the safe thing to drop.
     """
     return _to_pydantic_ai_messages(rows, PendingThoughts(None))
+
+
+def _after_the_run_they_waited_for(ordered: list[Message]) -> list[Message]:
+    """``ordered``, with each message a later turn answered after the run it
+    waited for.
+
+    A message said while a run worked, and not taken into it -- said at
+    another place, or a note beside an answer for the platform
+    (``domain/run_places``) -- is stored where it was typed, inside that run,
+    and claimed by the follow-up turn that answers it (``steered_into_run_id``).
+    Shown where it was typed, the follow-up found it above the answer of the
+    run it never joined, and nothing of its own to answer: the question read
+    as answered already. So it goes after the last of what that run said,
+    where the turn that read it began. A message of a paused run's queue is
+    there already -- after the question the run paused on -- and stays.
+    """
+    last_said: dict[UUID, int] = {}
+    last_of: dict[UUID, int] = {}
+    for index, message in enumerate(ordered):
+        if message.agent_run_id is None:
+            continue
+        last_of[message.agent_run_id] = index
+        if message.role is MessageRole.ASSISTANT:
+            last_said[message.agent_run_id] = index
+    waited: dict[int, list[Message]] = {}
+    for index, message in enumerate(ordered):
+        run_id = message.agent_run_id
+        if (
+            run_id is not None
+            and _claimed_by_a_later_run(message, run_id)
+            and last_said.get(run_id, -1) > index
+        ):
+            waited.setdefault(last_of[run_id], []).append(message)
+    if not waited:
+        return ordered
+    moved = {id(message) for each in waited.values() for message in each}
+    placed: list[Message] = []
+    for index, message in enumerate(ordered):
+        if id(message) not in moved:
+            placed.append(message)
+        placed.extend(waited.get(index, ()))
+    return placed
+
+
+def _claimed_by_a_later_run(message: Message, run_id: UUID) -> bool:
+    """A person's message queued behind ``run_id`` that another run read."""
+    claimed_by = message.state.steered_into_run_id
+    return (
+        message.role is MessageRole.USER
+        and claimed_by is not None
+        and claimed_by != run_id
+    )
 
 
 def _without_unanswered_thoughts(ordered: list[Message]) -> list[Message]:
