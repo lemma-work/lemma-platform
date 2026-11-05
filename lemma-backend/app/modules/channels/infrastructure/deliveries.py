@@ -3,9 +3,7 @@
 A delivery row is made once per line and target (a place, or a member pushed
 to) before anything is sent. A worker claims a due row, sends, and records
 the outcome on the same row -- so a retried job finds ``SENT`` and stops,
-and a failure is retried with backoff until it is ``DEAD``. Each claim opens
-a row in ``channel_delivery_attempts`` and the outcome closes it, so the tries
-that led to the outcome stay visible.
+and a failure is retried with backoff until it is ``DEAD``.
 
 A claim is held for ``CLAIM_LEASE`` and stamps ``claimed_at``; every outcome
 clears it. A claim that lapsed with ``claimed_at`` still set is a send nobody
@@ -56,10 +54,6 @@ from app.modules.channels.domain.entities import (
 )
 from app.modules.channels.infrastructure.delivery_models import (
     ChannelMessageDeliveryModel,
-)
-from app.modules.channels.infrastructure.delivery_attempts import (
-    try_ended,
-    try_started,
 )
 from app.modules.channels.infrastructure.revisions import touch_line, touch_lines
 from app.modules.channels.infrastructure.rows import MAX_LINES, delivery_entity
@@ -220,7 +214,6 @@ class DeliveryRepository:
         )
         if row is None:
             return None
-        await try_started(self.session, row.id)
         return delivery_entity(row)
 
     async def lapsed(self, delivery_id: UUID) -> Delivery | None:
@@ -259,10 +252,6 @@ class DeliveryRepository:
         )
         if row is None:
             return None
-        await try_ended(
-            self.session, row.id, DeliveryStatus.FAILED, DeliveryReasonCode.INTERRUPTED
-        )
-        await try_started(self.session, row.id)
         return delivery_entity(row)
 
     async def interrupted(self, delivery_id: UUID) -> Delivery | None:
@@ -296,7 +285,6 @@ class DeliveryRepository:
         if row is None:
             return None
         entity = delivery_entity(row)
-        await try_ended(self.session, row.id, entity.status, entity.reason_code)
         await self._shown_again([(row.message_id, row.source_id)])
         return entity
 
@@ -328,11 +316,10 @@ class DeliveryRepository:
         code: DeliveryReasonCode | None,
         reason: str | None,
         platform: str | None,
-        provider_status: str | None,
         **values: object,
     ) -> Delivery | None:
-        """Record an outcome, and end the try that led to it; the delivery as
-        it now stands, or ``None`` when something else settled it first."""
+        """Record an outcome: the delivery as it now stands, or ``None`` when
+        something else settled it first."""
         row = await self.session.scalar(
             update(_D)
             .where(_D.id == delivery_id, _settleable())
@@ -349,9 +336,6 @@ class DeliveryRepository:
         )
         if row is None:
             return None
-        await try_ended(
-            self.session, delivery_id, status, code, provider_status=provider_status
-        )
         await self._shown_again([(row.message_id, row.source_id)])
         return delivery_entity(row)
 
@@ -361,7 +345,6 @@ class DeliveryRepository:
         *,
         platform: str,
         external_message_id: str | None,
-        provider_status: str | None = None,
         reason: str | None = None,
     ) -> None:
         await self._settle(
@@ -370,7 +353,6 @@ class DeliveryRepository:
             code=None,
             reason=reason,
             platform=platform,
-            provider_status=provider_status,
             external_message_id=func.coalesce(
                 external_message_id, _D.external_message_id
             ),
@@ -385,7 +367,6 @@ class DeliveryRepository:
         code: DeliveryReasonCode,
         reason: str,
         platform: str | None,
-        provider_status: str | None = None,
     ) -> Delivery | None:
         """Not sent, on purpose."""
         return await self._settle(
@@ -394,7 +375,6 @@ class DeliveryRepository:
             code=code,
             reason=reason,
             platform=platform,
-            provider_status=provider_status,
             next_attempt_at=None,
         )
 
@@ -406,7 +386,6 @@ class DeliveryRepository:
         reason: str,
         platform: str | None,
         retry_after: float | None = None,
-        provider_status: str | None = None,
     ) -> Delivery:
         """It did not go: due again after backoff -- at least as long as the
         platform asked (``retry_after``, seconds) -- or DEAD after the last try."""
@@ -418,7 +397,6 @@ class DeliveryRepository:
             code=code,
             reason=reason,
             platform=platform,
-            provider_status=provider_status,
             next_attempt_at=None if dead else func.now() + wait,
         )
         # ``None``: a platform's report settled it meanwhile; that stands.
@@ -431,7 +409,6 @@ class DeliveryRepository:
         code: DeliveryReasonCode,
         reason: str,
         platform: str | None,
-        provider_status: str | None = None,
     ) -> None:
         """Given up now, not after backoff: trying again repeats what the
         person already has (half a long message), or meets the same refusal."""
@@ -441,14 +418,13 @@ class DeliveryRepository:
             code=code,
             reason=reason,
             platform=platform,
-            provider_status=provider_status,
             next_attempt_at=None,
         )
 
     async def retry(self, delivery_id: UUID) -> Delivery | None:
         """A member asked to try a failed or given-up delivery again, now: one
-        more try, counted with the others (its tries are its attempt rows), so
-        failing again on the last gives it up. Why it failed is cleared until
+        more try, counted with the others (``attempts``), so failing again on
+        the last gives it up. Why it failed is cleared until
         this try says."""
         row = await self.session.scalar(
             update(_D)

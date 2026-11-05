@@ -533,7 +533,7 @@ async def _change_contact(
             uow, channel.pod_id, assignee, Permissions.CONTACT_READ
         ):
             raise unprocessable("Only a member who may see contacts can be assigned")
-        await cases.assign(channel.id, assignee, by=caller.user_id)
+        await cases.assign(channel.id, assignee)
         # Seated, so the contact's lines reach them: unread, inbox and push.
         await MemberRepository(uow.session).add_person(
             channel,
@@ -542,10 +542,10 @@ async def _change_contact(
             added_by_user_id=caller.user_id,
         )
     elif handing_back or "assignee" in named:
-        await cases.assign(channel.id, None, by=caller.user_id)
+        await cases.assign(channel.id, None)
     if "status" in named:
         assert body.status is not None
-        await cases.set_status(channel.id, body.status, by=caller.user_id)
+        await cases.set_status(channel.id, body.status)
     await ChannelRepository(uow.session).change(channel.id, values)
 
 

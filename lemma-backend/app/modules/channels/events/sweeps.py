@@ -9,9 +9,9 @@
 * ``channels.deliveries_due`` -- every minute, a delivery that is due again
   (a failure's backoff passed, or a sender that claimed it died) is announced
   once more, so whatever sends it picks it up.
-* ``channels.deliveries_retention`` -- every hour, settled pushes and every
-  delivery's tries older than ``delivery_attempts.KEPT_FOR`` are deleted, and
-  push windows whose time has passed with nothing waiting are forgotten.
+* ``channels.deliveries_retention`` -- every hour, settled pushes older than
+  ``delivery_retention.KEPT_FOR`` are deleted, and push windows whose time
+  has passed with nothing waiting are forgotten.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from app.core.infrastructure.work import facts
 from app.core.infrastructure.work.periodic_jobs import periodic_job
 from app.core.log.log import get_logger
 from app.modules.channels.contracts.deliveries import due_fact
-from app.modules.channels.infrastructure.delivery_attempts import prune_settled
+from app.modules.channels.infrastructure.delivery_retention import prune_settled
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
 from app.modules.channels.infrastructure.push_windows import PushWindows
 from app.modules.channels.services.questions import (
@@ -126,14 +126,13 @@ async def deliveries_due() -> None:
 @periodic_job(DELIVERIES_RETENTION, every=timedelta(hours=1))
 async def deliveries_retention() -> None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        pushes, tries = await prune_settled(uow.session, limit=_RETENTION_BATCH)
+        pushes = await prune_settled(uow.session, limit=_RETENTION_BATCH)
         windows = await PushWindows(uow.session).prune(limit=_RETENTION_BATCH)
         await uow.commit()
-    if pushes or tries or windows:
+    if pushes or windows:
         logger.info(
             "channels.deliveries.pruned.observed",
             pushes=pushes,
-            tries=tries,
             windows=windows,
-            backlog=max(pushes, tries, windows) >= _RETENTION_BATCH,
+            backlog=max(pushes, windows) >= _RETENTION_BATCH,
         )

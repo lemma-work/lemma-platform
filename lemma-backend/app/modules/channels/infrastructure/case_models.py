@@ -4,9 +4,12 @@ and what happened in it.
 A contact's channel has one *current* case (``channels.current_case_id``) and
 at most one open one, which is always the current one. A line written after
 the current case closed opens the next; a member reopening a closed case by
-hand keeps it. Every change to a case appends a ``channel_case_events`` row, so
-time to first response, reopens and resolution time are read, not guessed.
-Only a contact's channel has cases: the foreign key carries the channel's kind.
+hand keeps it. Only a contact's channel has cases: the foreign key carries the
+channel's kind.
+
+Nothing reads a case's history, so none is kept: ``channel_case_events``,
+``first_response_at``, ``first_response_by_user_id`` and ``closed_by_user_id``
+are no longer written, and go with the migration that drops them.
 """
 
 from __future__ import annotations
@@ -115,8 +118,10 @@ class ChannelCaseModel(UUIDAuditBase):
         server_default=text("'CONTACT'"),
     )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    #: The channel's newest line when it opened: the case is the lines after.
-    opened_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: The channel's newest line when it opened. Nothing reads it; it is still
+    #: written, for code running against a schema before 0070, where it is
+    #: NOT NULL.
+    opened_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="open", server_default=text("'open'")
     )
@@ -157,7 +162,7 @@ class ChannelCaseModel(UUIDAuditBase):
 
 
 class ChannelCaseEventModel(Base):
-    """One change to a case, in the order it happened."""
+    """One change to a case, in the order it happened. No longer written."""
 
     __tablename__ = "channel_case_events"
     __table_args__ = (

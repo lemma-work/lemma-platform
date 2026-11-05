@@ -16,7 +16,7 @@ from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -43,10 +43,7 @@ from app.modules.agent_surfaces.tests.e2e.test_channel_deliveries_e2e import (
 )
 from app.modules.channels.contracts import DeliveryReasonCode, DeliveryStatus
 from app.modules.channels.infrastructure.message_models import ChannelMessageModel
-from app.modules.channels.infrastructure.models import (
-    ChannelDeliveryAttemptModel,
-    ChannelMemberModel,
-)
+from app.modules.channels.infrastructure.models import ChannelMemberModel
 from app.modules.channels.tests.e2e.push_support import (
     run_pushes,
     waiting,
@@ -105,17 +102,6 @@ async def _pushes_to(line_id: str, user_id: str) -> list:
 async def _push_to(line_id: str, user_id: str):
     [push] = await _pushes_to(line_id, user_id)
     return push
-
-
-async def _tries(delivery_id: UUID) -> list[tuple[str | None, str | None]]:
-    a = ChannelDeliveryAttemptModel
-    async with async_session_maker() as session:
-        rows = await session.execute(
-            select(a.outcome, a.error_code)
-            .where(a.delivery_id == delivery_id)
-            .order_by(a.n)
-        )
-    return [(outcome, code) for outcome, code in rows]
 
 
 @pytest.fixture
@@ -317,10 +303,6 @@ async def test_a_push_is_charged_to_the_budget_once_however_often_it_is_tried(
     await _due_now(push.id)
     await _deliver(push.id)
 
-    assert (await _row(push.id)).attempts == 2
+    again = await _row(push.id)
+    assert (again.attempts, again.reason_code) == (2, DeliveryReasonCode.TRANSIENT)
     assert await _charged(pod_id, colleague["id"]) == charged == 1
-    # Each try is kept: the first failed and why, the second likewise.
-    assert await _tries(push.id) == [
-        ("FAILED", DeliveryReasonCode.TRANSIENT.value),
-        ("FAILED", DeliveryReasonCode.TRANSIENT.value),
-    ]

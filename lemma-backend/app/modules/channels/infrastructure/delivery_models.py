@@ -1,10 +1,11 @@
 """Tables for sending a channel's lines outside Lemma.
 
 ``channel_message_deliveries`` is every send of a line to a place, or push to
-a member, unique per line and target; ``channel_delivery_attempts`` each try
-of one, so a send that met a 429 and then went shows both. A member's pushes
-are coalesced first: ``channel_push_pending`` holds, per member and channel,
-the lines waiting to be pushed, and one delivery goes per window.
+a member, unique per line and target; ``channel_delivery_attempts``, each try
+of one, is no longer written -- nothing read it -- and goes with the migration
+that drops it. A member's pushes are coalesced first:
+``channel_push_pending`` holds, per member and channel, the lines waiting to
+be pushed, and one delivery goes per window.
 
 A delivery hangs from its line by ``(message_id, channel_id)``, so a line that
 moves channel (a contact's channel folded into another) takes its deliveries
@@ -188,10 +189,7 @@ class ChannelMessageDeliveryModel(UUIDAuditBase):
 
 class ChannelDeliveryAttemptModel(Base):
     """One try of a delivery: when it began and ended, and what it ended as.
-
-    Written as the sender claims it (``n`` is the delivery's ``attempts``) and
-    finished with the outcome, so a lapsed claim is a try with no end.
-    """
+    No longer written."""
 
     __tablename__ = "channel_delivery_attempts"
     __table_args__ = (
@@ -222,9 +220,9 @@ class ChannelDeliveryAttemptModel(Base):
 class ChannelPushPendingModel(Base):
     """The lines of one channel waiting to be pushed to one member.
 
-    One row per member and channel. A line they hear is folded in
-    (``from_seq`` .. ``to_seq``, ``lines`` of them, led by ``lead_seq`` -- the
-    newest that names or asks them, else the newest); ``next_attempt_at`` is
+    One row per member and channel. A line they hear is folded in (from
+    ``from_seq``, ``lines`` of them, led by ``lead_seq`` -- the newest that
+    names or asks them, else the newest); ``next_attempt_at`` is
     when they go as one push. Once pushed the row stays empty, with
     ``pushed_at``, until the window after it has passed: a line in that
     window waits for its end rather than going alone.
@@ -234,8 +232,7 @@ class ChannelPushPendingModel(Base):
     __table_args__ = (
         CheckConstraint(
             "(lines = 0) = (from_seq IS NULL) AND (from_seq IS NULL) = "
-            "(to_seq IS NULL) AND (to_seq IS NULL) = (lead_seq IS NULL) AND "
-            "(lead_seq IS NULL) = (next_attempt_at IS NULL)",
+            "(lead_seq IS NULL) AND (lead_seq IS NULL) = (next_attempt_at IS NULL)",
             name="ck_channel_push_pending_window",
         ),
         ForeignKeyConstraint(
@@ -257,6 +254,8 @@ class ChannelPushPendingModel(Base):
     )
     pod_id: Mapped[UUID] = mapped_column(nullable=False)
     from_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: The newest line folded in. Nothing reads it; it is still written, for
+    #: code running against a schema before 0070, whose check holds it.
     to_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lead_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lines: Mapped[int] = mapped_column(
@@ -271,6 +270,7 @@ class ChannelPushPendingModel(Base):
     pushed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: When the row was made; no longer moved by a change, which nothing read.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

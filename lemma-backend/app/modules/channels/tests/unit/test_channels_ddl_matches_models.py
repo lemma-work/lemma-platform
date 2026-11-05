@@ -1,8 +1,9 @@
 """Migration ``0058_channels`` creates the channels tables exactly as the
-models declare them, and each later migration adds its column exactly as the
-model declares it. The e2e suites build their schema from the models; a
-deploy runs the migrations. A column, constraint or index in one and not the
-other is a difference every test passes over."""
+models declare them, each later migration adds its column exactly as the
+model declares it, and each one that changes a column or constraint changes it
+to what the model declares. The e2e suites build their schema from the
+models; a deploy runs the migrations. A column, constraint or index in one and
+not the other is a difference every test passes over."""
 
 from __future__ import annotations
 
@@ -22,6 +23,9 @@ _MIGRATION = _VERSIONS / "2026-10-17_channels_0058.py"
 #: The migrations after 0058 that add a column to one of its tables: each
 #: names it as ``TABLE`` and ``COLUMN`` (its DDL).
 _ADDED_LATER = (_VERSIONS / "2026-10-21_answers_shared_0061.py",)
+#: The migrations after 0058 that change one of its tables' statements: each
+#: names them as ``CHANGED``, ``(table, text in 0058, what it becomes)``.
+_CHANGED_LATER = (_VERSIONS / "2026-11-05_channels_unwritten_0069.py",)
 
 
 def _load(path: Path):
@@ -45,13 +49,24 @@ def _added_later(table: str) -> list[str]:
     ]
 
 
+def _changed_later(table: str) -> list[tuple[str, str]]:
+    """What later migrations change in ``table``'s 0058 statements, in order."""
+    return [
+        (_normal(before), _normal(after))
+        for module in map(_load, _CHANGED_LATER)
+        for changed, before, after in module.CHANGED
+        if changed == table
+    ]
+
+
 def _normal(ddl: str) -> str:
     text = " ".join(ddl.split())
     return re.sub(r"\s*([(),])\s*", r"\1", text)
 
 
 def _statements_for(table: str, ddl: str) -> set[str]:
-    """The migration's CREATE TABLE and CREATE INDEX statements for ``table``."""
+    """The migration's CREATE TABLE and CREATE INDEX statements for ``table``,
+    as the migrations after it left them."""
     found: set[str] = set()
     for statement in ddl.split(";"):
         normal = _normal(statement)
@@ -59,6 +74,11 @@ def _statements_for(table: str, ddl: str) -> set[str]:
             rf"CREATE (UNIQUE )?INDEX \w+ ON {table}( USING \w+)?\(", normal
         ):
             found.add(normal)
+    for before, after in _changed_later(table):
+        changed = {statement for statement in found if before in statement}
+        assert len(changed) == 1, f"0058 says {before!r} of {table} once"
+        [statement] = changed
+        found = (found - changed) | {statement.replace(before, after, 1)}
     return found
 
 
