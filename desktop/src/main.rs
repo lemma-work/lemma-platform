@@ -103,7 +103,7 @@ mod artifact_install;
 use interprocess::local_socket::GenericFilePath;
 #[cfg(windows)]
 use interprocess::local_socket::GenericNamespaced;
-use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
+use interprocess::local_socket::{prelude::*, Name};
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 /// Port `cargo tauri dev` serves `frontendDist` on. A packaged build has no
