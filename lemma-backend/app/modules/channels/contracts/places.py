@@ -108,10 +108,22 @@ async def addressed_at(
 
 
 async def reply_address(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+    uow: SqlAlchemyUnitOfWork,
+    conversation_id: UUID,
+    *,
+    at_source_id: UUID | None = None,
 ) -> ReplyAddress | None:
-    """Where this conversation's answer goes, or None if it is said nowhere."""
-    found = await SourceRepository(uow.session).reply_address(conversation_id)
+    """Where this conversation's answer goes, or None if it is said nowhere.
+
+    ``at_source_id`` keeps it to the place a run was asked at, whoever has
+    written from elsewhere since: the latest line said there, else -- nobody
+    there has spoken in this conversation yet -- the place's last word. None
+    once the place is gone."""
+    sources = SourceRepository(uow.session)
+    found = await sources.reply_address(conversation_id, at_source_id=at_source_id)
+    if found is None and at_source_id is not None:
+        asked = await sources.get(at_source_id)
+        found = (asked, asked.delivery_ref) if asked is not None else None
     return ReplyAddress(source=found[0], ref=found[1]) if found else None
 
 

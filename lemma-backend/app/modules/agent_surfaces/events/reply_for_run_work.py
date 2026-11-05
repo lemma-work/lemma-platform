@@ -5,7 +5,8 @@ in the transaction that finished the run: once a run has an outcome, the reply
 it owes is on record. It is the only way a run's answer reaches a surface: the
 run's observer only shows progress.
 
-The answer is posted as the agent's line at the place the run was asked, with
+The answer is posted as the agent's line at the place the run was asked --
+the one its run was stamped with, not wherever the person wrote last -- with
 a delivery to that place (``services/run_reply_lines``), which the channel
 delivery executor sends -- finishing a live stream in place, carrying the
 run's held files, offering a retry on a failure notice -- and records with
@@ -67,12 +68,21 @@ def owes_a_reply(fact: AgentRunFinished) -> bool:
 
 
 async def post_run_answer(ctx: FastContext, payload: RunReplyPayload) -> None:
+    """The run's answer, at the place it was asked.
+
+    A run asked on a platform answers there, whoever has written from
+    somewhere else since: their message waited for a turn of its own
+    (``agent.domain.run_places``). A run asked nowhere in particular answers
+    where the conversation was last written to.
+    """
     material = await run_reply_material(ctx.uow, payload.run_id)
-    if material is None or material.private:
+    if material is None or material.private or material.asked_in_lemma:
         return
-    if await _answered_in_lemma(ctx, payload):
+    if material.asked_at is None and await _answered_in_lemma(ctx, payload):
         return
-    address = await reply_address(ctx.uow, payload.conversation_id)
+    address = await reply_address(
+        ctx.uow, payload.conversation_id, at_source_id=material.asked_at
+    )
     if address is None:
         return
     await post_run_reply(

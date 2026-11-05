@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from typing import Literal
+from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.outsiders import Audience
@@ -75,6 +76,12 @@ LEMMA_CHANNEL = "lemma_channel"
 #: say where a turn was asked; only the run can. A run asked in Lemma is
 #: answered in Lemma: no platform's guidance, tools, files or progress.
 ASKED_IN_LEMMA_KEY = "asked_in_lemma"
+
+#: The same for a platform: on a message heard there, and on the run it
+#: starts, the channel source it was heard at -- so the run answers there,
+#: whoever writes from somewhere else while it works (``domain/run_places``).
+#: The server's alone to write.
+ASKED_AT_SOURCE_KEY = "asked_at_source"
 
 WrittenIn = Literal["group", "outsiders"]
 IN_GROUP: WrittenIn = "group"
@@ -151,13 +158,21 @@ def _written_in(metadata: Mapping[str, object] | None) -> WrittenIn | None:
     return None
 
 
-def run_metadata_for(message_metadata: Mapping[str, object] | None) -> JsonObject:
-    """The metadata a run started by this message is created with."""
+def run_metadata_for(
+    message_metadata: Mapping[str, object] | None, *, asked_at: UUID | None = None
+) -> JsonObject:
+    """The metadata a run started by this message is created with.
+
+    ``asked_at`` is the platform place it was heard at, from the server: the
+    message's own metadata is the sender's, and never says where to answer.
+    """
     metadata: JsonObject = {"source": "user_message"}
     if is_private_note(message_metadata):
         metadata[PRIVATE_NOTE_KEY] = True
     if (message_metadata or {}).get("source") == LEMMA_CHANNEL:
         metadata[ASKED_IN_LEMMA_KEY] = True
+    elif asked_at is not None:
+        metadata[ASKED_AT_SOURCE_KEY] = str(asked_at)
     if written_in := _written_in(message_metadata):
         metadata[WRITTEN_IN_LEMMA_KEY] = written_in
     return metadata
@@ -201,14 +216,17 @@ def privacy_of(run_metadata: Mapping[str, object] | None) -> JsonObject:
     """The marks a run carries on to the run that continues it.
 
     A resume, a retry, a follow-up: each continues answering what the earlier
-    run answered, so each answers where it would have -- a note's in Lemma --
-    and for whom it would have.
+    run answered, so each answers where it would have -- a note's in Lemma,
+    a platform's at the place it was asked -- and for whom it would have.
     """
     marks: JsonObject = {}
     if run_is_private(run_metadata):
         marks[PRIVATE_NOTE_KEY] = True
     if asked_in_lemma(run_metadata):
         marks[ASKED_IN_LEMMA_KEY] = True
+    asked_at = (run_metadata or {}).get(ASKED_AT_SOURCE_KEY)
+    if isinstance(asked_at, str) and asked_at:
+        marks[ASKED_AT_SOURCE_KEY] = asked_at
     if written_in := _written_in(run_metadata):
         marks[WRITTEN_IN_LEMMA_KEY] = written_in
     return marks

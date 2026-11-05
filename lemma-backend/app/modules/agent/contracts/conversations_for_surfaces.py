@@ -262,12 +262,13 @@ async def start_surface_turn(
     content: str,
     agent_name: str | None = None,
     message_metadata: dict[str, object] | None = None,
+    asked_at: UUID | None = None,
 ) -> UUID | None:
     """Record an inbound message and start the run that answers it.
 
     Returns the run's id, or ``None`` if no new run was needed -- a message
-    arriving while one is already going is handed to that run rather than
-    starting a second.
+    arriving while one is already going joins that run rather than starting a
+    second. ``asked_at`` is the place it was heard at (``domain/run_places``).
     """
     result = await _service(uow).add_user_message_and_start_run(
         conversation_id=conversation_id,
@@ -276,6 +277,7 @@ async def start_surface_turn(
         pod_id=pod_id,
         agent_name=agent_name,
         message_metadata=message_metadata,
+        asked_at=asked_at,
     )
     return result.agent_run_id if result.started_new_run else None
 

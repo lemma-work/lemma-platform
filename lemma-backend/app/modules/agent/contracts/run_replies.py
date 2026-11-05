@@ -10,8 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.domain.private_notes import asked_in_lemma, run_is_private
+from app.modules.agent.domain.run_places import asked_at_source
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     answers_before_steers,
@@ -30,6 +33,11 @@ class RunReplyMaterial:
     #: What it answered before the person said more, oldest first: each a
     #: message of its own, ahead of the final answer (``domain/steered_answers``).
     earlier: tuple[str, ...] = ()
+    #: The platform place it was asked at, which its answer goes to; None for
+    #: a run asked nowhere in particular (``domain/run_places``).
+    asked_at: UUID | None = None
+    #: Asked in Lemma's own channels, and answered there.
+    asked_in_lemma: bool = False
 
 
 def answer_line_client_id(run_id: UUID) -> str:
@@ -75,7 +83,28 @@ async def run_reply_material(
         error=run.error,
         private=run_is_private(run.run_metadata),
         earlier=tuple(await answers_before_steers(uow.session, agent_run_id=run_id)),
+        asked_at=asked_at_source(run.run_metadata),
+        asked_in_lemma=asked_in_lemma(run.run_metadata),
     )
+
+
+async def latest_run_asked_at(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> UUID | None:
+    """The platform place the conversation's latest run was asked at, if any.
+
+    What the run shows while it works -- typing, progress, its cards -- goes
+    where its answer will: to the place it was asked, not to wherever somebody
+    wrote from while it worked (``domain/run_places``). None for a run asked
+    nowhere in particular, or no run.
+    """
+    run_metadata = await uow.session.scalar(
+        select(AgentRunModel.run_metadata)
+        .where(AgentRunModel.conversation_id == conversation_id)
+        .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+        .limit(1)
+    )
+    return asked_at_source(run_metadata)
 
 
 __all__ = [
@@ -83,5 +112,6 @@ __all__ = [
     "answer_line_client_id",
     "earlier_answer_client_id",
     "is_earlier_answer",
+    "latest_run_asked_at",
     "run_reply_material",
 ]

@@ -88,7 +88,9 @@ class ChannelSeats(Protocol):
 
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID: ...
 
-    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None: ...
+    async def reply_address(
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
+    ) -> ReplyAddress | None: ...
 
     async def person_places(
         self,
@@ -177,8 +179,12 @@ class ChannelSeatsInDatabase:
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:
         return (await direct_channel(self.uow, pod_id=pod_id, user_id=user_id)).id
 
-    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None:
-        return await places.reply_address(self.uow, conversation_id)
+    async def reply_address(
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
+    ) -> ReplyAddress | None:
+        return await places.reply_address(
+            self.uow, conversation_id, at_source_id=at_source_id
+        )
 
     async def person_places(
         self,

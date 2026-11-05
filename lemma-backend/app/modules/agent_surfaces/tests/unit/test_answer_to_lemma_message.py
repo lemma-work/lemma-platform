@@ -55,10 +55,15 @@ def _group_message() -> ParsedInboundSurfaceEvent:
 
 @pytest.fixture(autouse=True)
 def conversation(monkeypatch):
-    """The conversation's owner, doubled on `agent`'s contract: it reads a row."""
+    """The conversation's owner, doubled on `agent`'s contract: it reads a row.
+    Its latest run was asked at no place of its own."""
     monkeypatch.setattr(
         f"{_CONVERSATIONS}.surface_conversation",
         AsyncMock(return_value=surface_conversation()),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.run_replies.latest_run_asked_at",
+        AsyncMock(return_value=None),
     )
 
 

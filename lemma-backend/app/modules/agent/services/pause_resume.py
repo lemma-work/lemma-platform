@@ -23,7 +23,8 @@ from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
 )
-from app.modules.agent.domain.private_notes import privacy_of, run_is_private
+from app.modules.agent.domain.private_notes import privacy_of
+from app.modules.agent.domain.run_places import AnswerKind
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
@@ -336,11 +337,11 @@ class PauseResume:
         repository = self.conversation_repository
         paused_run = await repository.get_agent_run(paused_run_id)
         paused_metadata = paused_run.metadata if paused_run else None
-        notes = run_is_private(paused_metadata)
-        # A resume answers one kind, like a follow-up turn: the other kind
+        kind = AnswerKind.of_run(paused_metadata)
+        # A resume answers one kind, like a follow-up turn: every other kind
         # waits for the turn after it, which has to know where to look.
         leftovers = await repository.count_queued_user_messages(
-            paused_run_id, notes=not notes
+            paused_run_id, beside=kind
         )
         resume_run = await repository.create_agent_run(
             conversation_id=conversation.id,
@@ -358,7 +359,7 @@ class PauseResume:
         # answer: claimed into it, so a host carries it in the prompt and the
         # follow-up after this run does not answer it a second time.
         claimed = await repository.claim_queued_user_messages(
-            paused_run_id, into_run_id=resume_run.id, notes=notes
+            paused_run_id, into_run_id=resume_run.id, kind=kind
         )
         await stage_agent_turn(
             self.uow,

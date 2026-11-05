@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Message as MessageEntity
@@ -31,7 +31,13 @@ from app.modules.agent.domain.queued_messages import (
     STEERED_INTO_RUN,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.private_notes import (
+    ASKED_AT_SOURCE_KEY,
+    ASKED_IN_LEMMA_KEY,
+    LEMMA_CHANNEL,
+    PRIVATE_NOTE_KEY,
+)
+from app.modules.agent.domain.run_places import IN_LEMMA, AnswerKind
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 
 
@@ -50,7 +56,8 @@ def in_order(rows) -> list[MessageEntity]:
 def unclaimed_queued_messages(
     agent_run_id: UUID,
     *,
-    notes: bool | None = None,
+    kind: AnswerKind | None = None,
+    beside: AnswerKind | None = None,
     as_run: bool = False,
     after_sequence: int | None = None,
 ):
@@ -68,12 +75,14 @@ def unclaimed_queued_messages(
     non-boolean under that key, and a miscount is the better failure.
 
     ``as_run`` keeps to messages of the run's own kind, which is what may be
-    steered into it: a private note must not shape an answer that goes to the
-    platform, and a message meant for the platform must not be answered where
-    nobody on it will see. ``notes`` asks for one kind outright -- for a
-    follow-up turn, which has not started yet. Steering also needs the run to
-    still be answering: a message sent after Stop must not be taken into the
-    run being stopped, where nothing would answer it.
+    steered into it (``domain/run_places``): a private note must not shape an
+    answer that goes to the platform, a message meant for the platform must
+    not be answered where nobody on it will see, and a message said at one
+    place must not be answered at another. ``kind`` asks for one kind
+    outright -- for a follow-up turn, which has not started yet -- and
+    ``beside`` for everything else. Steering also needs the run to still be
+    answering: a message sent after Stop must not be taken into the run being
+    stopped, where nothing would answer it.
 
     ``after_sequence`` keeps to messages sent after that point -- after Stop,
     for the turn that answers what was said once the person had stopped.
@@ -89,15 +98,21 @@ def unclaimed_queued_messages(
             else ()
         ),
     )
-    if notes is not None:
-        return (*criteria, _is_note() if notes else ~_is_note())
+    if kind is not None:
+        return (*criteria, _of_kind(kind.notes, kind.place))
+    if beside is not None:
+        return (*criteria, ~_of_kind(beside.notes, beside.place))
     if as_run:
+        metadata = AgentRunModel.run_metadata
         run = (
             select(
-                func.coalesce(
-                    AgentRunModel.run_metadata[PRIVATE_NOTE_KEY].astext == "true",
-                    False,
-                ).label("private"),
+                func.coalesce(metadata[PRIVATE_NOTE_KEY].astext == "true", False).label(
+                    "private"
+                ),
+                _place_of(
+                    metadata[ASKED_AT_SOURCE_KEY].astext,
+                    metadata[ASKED_IN_LEMMA_KEY].astext == "true",
+                ).label("place"),
                 AgentRunModel.status,
             )
             .where(AgentRunModel.id == agent_run_id)
@@ -106,7 +121,8 @@ def unclaimed_queued_messages(
         answering = (
             select(run.c.private).where(run.c.status == AgentRunStatus.RUNNING.value)
         ).scalar_subquery()
-        return (*criteria, _is_note() == answering)
+        asked_at = select(run.c.place).scalar_subquery()
+        return (*criteria, _of_kind(answering, asked_at))
     return criteria
 
 
@@ -114,6 +130,30 @@ def _is_note():
     return func.coalesce(
         MessageModel.message_metadata[PRIVATE_NOTE_KEY].astext == "true", False
     )
+
+
+def _place_of(asked_at_source, in_lemma):
+    """A place as ``domain/run_places`` names it: a source's id, or Lemma."""
+    return func.coalesce(asked_at_source, case((in_lemma, IN_LEMMA)))
+
+
+def _message_place():
+    metadata = MessageModel.message_metadata
+    return _place_of(
+        metadata[ASKED_AT_SOURCE_KEY].astext,
+        metadata["source"].astext == LEMMA_CHANNEL,
+    )
+
+
+def _of_kind(notes, place):
+    """Of this kind: a note or not, as ``notes`` says, and said at ``place``
+    -- or nowhere in particular, which is every place's. A ``place`` of None
+    is a run asked nowhere in particular, which takes only those."""
+    said_at = _message_place()
+    at_place = said_at.is_(None)
+    if place is not None:
+        at_place = or_(at_place, func.coalesce(said_at == place, False))
+    return and_(_is_note() == notes, at_place)
 
 
 class QueuedMessageRepository:

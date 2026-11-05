@@ -296,6 +296,9 @@ async def _start_turn(
         pod_id=context.pod_id,
         agent_name=context.agent_name,
         message_metadata=metadata,
+        # Where it was said: the run answers there, and a run already going
+        # that was asked somewhere else leaves it for a turn of its own.
+        asked_at=context.source_id,
     )
     # Only a turn that starts supersedes: a message arriving while a run is
     # going joins that run, and the pauses it holds stay open.

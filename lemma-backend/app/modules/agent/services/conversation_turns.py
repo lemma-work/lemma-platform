@@ -22,10 +22,7 @@ from app.modules.agent.services.usage_preflight import assert_usage_preflight_al
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import (
-    PRIVATE_NOTE_KEY,
-    run_metadata_for,
-)
+from app.modules.agent.domain.private_notes import run_metadata_for
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.ports import (
     AgentRepository,
@@ -150,13 +147,17 @@ class TurnCoordinator:
         typed_in_lemma: bool = False,
         client_message_id: str | None = None,
         supersede_pauses: bool = True,
+        asked_at: UUID | None = None,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it.
 
         The conversation is already loaded and access-checked by the caller --
         this is the half that needs the lock. ``typed_in_lemma`` is the caller
         saying a person typed this in Lemma's own composer, rather than a chat
-        platform, a sub-agent or a reply delivery handing it on.
+        platform, a sub-agent or a reply delivery handing it on. ``asked_at``
+        is a surface saying which platform place it heard the message at: the
+        run it starts answers there, and a run already going takes it in only
+        if it was asked there too (``domain/run_places``).
 
         ``client_message_id`` is the sender's id for this send: a second send
         with the same id is the first one retried, and gets the first one's run
@@ -218,7 +219,11 @@ class TurnCoordinator:
         started_new_run = active_run is None and held is None
         if started_new_run:
             active_run = await self._create_run(
-                conversation, agent, user_id=user_id, message_metadata=message_metadata
+                conversation,
+                agent,
+                user_id=user_id,
+                message_metadata=message_metadata,
+                asked_at=asked_at,
             )
         answering_run_id = active_run.id if active_run is not None else None
         if held is not None:
@@ -237,6 +242,7 @@ class TurnCoordinator:
                     conversation,
                     joins_a_run=not started_new_run,
                     client_message_id=client_message_id,
+                    asked_at=asked_at,
                 ),
             ),
         )
@@ -288,6 +294,7 @@ class TurnCoordinator:
         *,
         user_id: UUID,
         message_metadata: dict[str, object] | None,
+        asked_at: UUID | None,
     ) -> AgentRun:
         selected_agent_runtime = await turn_runtime(self.uow, conversation, agent)
         await self.runtime_check(
@@ -303,7 +310,7 @@ class TurnCoordinator:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
-            metadata=run_metadata_for(message_metadata),
+            metadata=run_metadata_for(message_metadata, asked_at=asked_at),
         )
 
     async def start_queued_followup(
@@ -370,7 +377,7 @@ class TurnCoordinator:
         )
         if queue is None:
             return None
-        answering, notes = queue
+        answering, kind = queue
 
         await self.conversation_repository.lock_conversation(conversation.id)
         if await self.conversation_repository.get_active_agent_run_for_update(
@@ -392,7 +399,7 @@ class TurnCoordinator:
             self.conversation_repository,
             sources,
             answering=answering,
-            notes=notes,
+            kind=kind,
             after_sequence=stopped_after,
         )
         agent_runtime = (
@@ -411,8 +418,9 @@ class TurnCoordinator:
             metadata={
                 "source": "queued_messages",
                 "queued_behind_agent_run_id": str(answering),
-                # One kind per run: a note's answer stays in Lemma.
-                **({PRIVATE_NOTE_KEY: True} if notes else {}),
+                # One kind per run: a note's answer stays in Lemma, and an
+                # answer goes to the place its messages were said.
+                **kind.run_marks(),
                 **({LEFTOVERS_KEY: leftovers} if leftovers else {}),
             },
         )
@@ -423,7 +431,7 @@ class TurnCoordinator:
         claimed = await self.conversation_repository.claim_queued_user_messages(
             answering,
             into_run_id=followup_run.id,
-            notes=notes,
+            kind=kind,
             after_sequence=stopped_after,
         )
         # Resolved from the conversation, as it is for every run nobody named

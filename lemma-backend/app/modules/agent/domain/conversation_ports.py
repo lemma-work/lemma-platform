@@ -19,6 +19,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation, Message
+from app.modules.agent.domain.run_places import AnswerKind
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     ConversationStatus,
@@ -56,13 +57,13 @@ class QueuedMessages(Protocol):
         self,
         agent_run_id: UUID,
         *,
-        notes: bool | None = None,
+        beside: AnswerKind | None = None,
         after_sequence: int | None = None,
     ) -> int: ...
 
-    async def earliest_queued_is_note(
+    async def earliest_queued_kind(
         self, agent_run_id: UUID, *, after_sequence: int | None = None
-    ) -> bool | None: ...
+    ) -> AnswerKind | None: ...
 
 
 class PausesHoldingATurn(Protocol):

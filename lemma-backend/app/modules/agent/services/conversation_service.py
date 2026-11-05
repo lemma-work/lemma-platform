@@ -306,12 +306,14 @@ class ConversationService(ConversationPauses):
         require_execute_grant: bool = True,
         typed_in_lemma: bool = False,
         client_message_id: str | None = None,
+        asked_at: UUID | None = None,
     ) -> AgentRunStartResult:
         """Store a message and start, or join, the run that answers it.
 
         A person's own send and a new conversation's first message go through
         `send_window`; a chat platform's next line in a thread does not (people
         say "yes" twice, and its delivery id already catches redeliveries).
+        ``asked_at`` is the platform place a surface heard it at.
         """
         # Once, here, so creating the conversation and checking it against the
         # expected agent read the same answer.
@@ -327,6 +329,7 @@ class ConversationService(ConversationPauses):
             require_execute_grant=require_execute_grant,
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
+            asked_at=asked_at,
         )
         if not typed_in_lemma and conversation_id is not None:
             return await start()
@@ -351,6 +354,7 @@ class ConversationService(ConversationPauses):
         require_execute_grant: bool,
         typed_in_lemma: bool,
         client_message_id: str | None,
+        asked_at: UUID | None,
     ) -> AgentRunStartResult:
         conversation = await self._get_or_create_conversation_for_message(
             conversation_id=conversation_id,
@@ -390,6 +394,7 @@ class ConversationService(ConversationPauses):
             message_metadata=message_metadata,
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
+            asked_at=asked_at,
         )
 
     async def send_from_lemma(

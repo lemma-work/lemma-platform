@@ -269,7 +269,8 @@ class SurfaceTurnStarter:
         # routinely several webhooks on a chat surface, so "I'll get to this"
         # was mostly the agent talking to itself about its own plumbing -- and
         # it is no longer true: `PendingUserMessagesCapability` steers these
-        # into the run already going, which answers all of them at once.
+        # into the run already going -- those said where it was asked; one said
+        # elsewhere waits for a turn of its own (`agent.domain.run_places`).
         try:
             async with self.write_scope() as uow:
                 finished = await write_inbound_message(

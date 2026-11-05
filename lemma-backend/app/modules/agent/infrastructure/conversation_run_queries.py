@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.run_places import AnswerKind
 from app.modules.agent.domain.conversation_metadata import (
     MANUAL_RETRY_SOURCE,
     SOURCE_KEY,
@@ -286,10 +286,11 @@ class ConversationRunQueriesMixin:
         self,
         agent_run_id: UUID,
         *,
-        notes: bool | None = None,
+        beside: AnswerKind | None = None,
         after_sequence: int | None = None,
     ) -> int:
-        """How many of this run's queued messages are still unanswered.
+        """How many of this run's queued messages are still unanswered --
+        ``beside`` one kind, those of any other.
 
         Counted over ``ix_agent_message_run_sequence`` rather than loading the
         run's messages, and asked once when a run ends -- so the answer is
@@ -303,33 +304,31 @@ class ConversationRunQueriesMixin:
             await self.session.scalar(
                 select(func.count()).where(
                     *unclaimed_queued_messages(
-                        agent_run_id, notes=notes, after_sequence=after_sequence
+                        agent_run_id, beside=beside, after_sequence=after_sequence
                     )
                 )
             )
             or 0
         )
 
-    async def earliest_queued_is_note(
+    async def earliest_queued_kind(
         self, agent_run_id: UUID, *, after_sequence: int | None = None
-    ) -> bool | None:
-        """Whether the oldest unanswered message queued behind this run is a
-        private note; None when nothing is queued. A follow-up turn answers one
-        kind, and the oldest message decides which goes first."""
-        flag = await self.session.scalar(
-            select(
-                func.coalesce(
-                    MessageModel.message_metadata[PRIVATE_NOTE_KEY].astext == "true",
-                    False,
-                )
-            )
+    ) -> AnswerKind | None:
+        """The kind of the oldest unanswered message queued behind this run --
+        a note or not, and where it was said; None when nothing is queued. A
+        follow-up turn answers one kind, and the oldest message decides which
+        goes first."""
+        metadata = await self.session.scalar(
+            select(MessageModel.message_metadata)
             .where(
                 *unclaimed_queued_messages(agent_run_id, after_sequence=after_sequence)
             )
             .order_by(MessageModel.sequence)
             .limit(1)
         )
-        return None if flag is None else bool(flag)
+        if metadata is None:
+            return None
+        return AnswerKind.of_message(metadata if isinstance(metadata, dict) else {})
 
     async def claim_queued_user_messages(
         self,
@@ -337,7 +336,7 @@ class ConversationRunQueriesMixin:
         *,
         into_run_id: UUID | None = None,
         message_ids: list[UUID] | None = None,
-        notes: bool | None = None,
+        kind: AnswerKind | None = None,
         as_run: bool = False,
         after_sequence: int | None = None,
     ) -> list[MessageEntity]:
@@ -367,7 +366,7 @@ class ConversationRunQueriesMixin:
                 .where(
                     *unclaimed_queued_messages(
                         agent_run_id,
-                        notes=notes,
+                        kind=kind,
                         as_run=as_run,
                         after_sequence=after_sequence,
                     ),

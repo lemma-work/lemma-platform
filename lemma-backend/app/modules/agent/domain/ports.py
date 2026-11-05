@@ -21,6 +21,7 @@ from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.run_places import AnswerKind
 from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
     PendingInteractionCursor,
@@ -242,13 +243,13 @@ class ConversationRepository(Protocol):
         self,
         agent_run_id: UUID,
         *,
-        notes: bool | None = None,
+        beside: AnswerKind | None = None,
         after_sequence: int | None = None,
     ) -> int: ...
 
-    async def earliest_queued_is_note(
+    async def earliest_queued_kind(
         self, agent_run_id: UUID, *, after_sequence: int | None = None
-    ) -> bool | None: ...
+    ) -> AnswerKind | None: ...
 
     async def claim_queued_user_messages(
         self,
@@ -256,7 +257,7 @@ class ConversationRepository(Protocol):
         *,
         into_run_id: UUID | None = None,
         message_ids: list[UUID] | None = None,
-        notes: bool | None = None,
+        kind: AnswerKind | None = None,
         as_run: bool = False,
         after_sequence: int | None = None,
     ) -> list[Message]: ...

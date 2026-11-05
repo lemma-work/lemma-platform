@@ -30,6 +30,7 @@ from app.modules.agent.domain.conversation_ports import (
     PausesHoldingATurn,
 )
 from app.modules.agent.domain.private_notes import (
+    ASKED_AT_SOURCE_KEY,
     NOTE_IN_DM_KEY,
     WRITTEN_IN_LEMMA_KEY,
     is_private_note,
@@ -71,13 +72,15 @@ def user_message_metadata(
     *,
     joins_a_run: bool,
     client_message_id: str | None,
+    asked_at: UUID | None = None,
 ) -> dict[str, object]:
     """What a user message is stored with.
 
     The server's keys go on *after* the caller's are filtered, not before: a
     surface builds this dict out of webhook fields and a client sends it in a
     request body, and neither gets a vote on which run the message belongs to,
-    whether it has been delivered, or which send it is a retry of.
+    whether it has been delivered, which send it is a retry of, or where it
+    was said (``asked_at``, the platform place a surface heard it at).
     """
     metadata = {
         key: value
@@ -86,9 +89,18 @@ def user_message_metadata(
         # `synthetic` marks a notice history assembly writes, which is read as
         # Lemma's own and never defused; it is never stored, so a stored one
         # could only be a caller imitating it.
-        and key not in {"author_user_id", "agent_run_id", NOTE_IN_DM_KEY, "synthetic"}
+        and key
+        not in {
+            "author_user_id",
+            "agent_run_id",
+            NOTE_IN_DM_KEY,
+            ASKED_AT_SOURCE_KEY,
+            "synthetic",
+        }
     }
     metadata[DURING_ACTIVE_RUN] = joins_a_run
+    if asked_at is not None:
+        metadata[ASKED_AT_SOURCE_KEY] = str(asked_at)
     if client_message_id is not None:
         metadata[CLIENT_MESSAGE_ID] = client_message_id
     if is_private_note(metadata) and note_in_member_dm(conversation):

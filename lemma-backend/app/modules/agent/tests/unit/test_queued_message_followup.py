@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import AgentRun, Conversation
+from app.modules.agent.domain.run_places import IN_LEMMA, AnswerKind
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
@@ -37,19 +38,38 @@ def _run(conversation_id, status=AgentRunStatus.RUNNING) -> AgentRun:
     )
 
 
+def _kinds(
+    queued: int, notes: int = 0, places: list[str | None] | None = None
+) -> list[AnswerKind]:
+    """``queued`` messages, oldest first: the first ``notes`` of them private
+    notes, each said at its place in ``places`` (nowhere in particular when
+    left out)."""
+    said_at = places or [None] * queued
+    return [
+        AnswerKind(notes=index < notes, place=said_at[index]) for index in range(queued)
+    ]
+
+
+def _of(kind: AnswerKind, message: AnswerKind) -> bool:
+    """The rule the query keeps: a note or not alike, and the same place or none."""
+    return message.notes == kind.notes and message.place in (None, kind.place)
+
+
 def _coordinator(
     *,
     queued: int,
     active_run: AgentRun | None = None,
     notes: int = 0,
+    places: list[str | None] | None = None,
     finished_metadata: dict | None = None,
     queues: dict | None = None,
 ):
     """A coordinator over a fake queue.
 
     ``queued`` messages wait behind the finished run, ``notes`` of them private
-    notes, the oldest of them a note when there are any. ``queues`` adds other
-    runs' queues, by id, as ``(messages, notes)``.
+    notes, the oldest of them a note when there are any, each said at its
+    place in ``places``. ``queues`` adds other runs' queues, by id, as
+    ``(messages, notes)``.
     """
     conversation = Conversation(
         pod_id=uuid4(),
@@ -61,19 +81,24 @@ def _coordinator(
     finished = _run(conversation.id, AgentRunStatus.COMPLETED)
     finished.metadata = finished_metadata or {}
     created = _run(conversation.id)
-    waiting = {finished.id: (queued, notes), **(queues or {})}
+    waiting = {
+        finished.id: _kinds(queued, notes, places),
+        **{run_id: _kinds(*queue) for run_id, queue in (queues or {}).items()},
+    }
 
-    async def count(run_id, *, notes=None, after_sequence=None):
-        total, of_notes = waiting.get(run_id, (0, 0))
-        return total if notes is None else of_notes if notes else total - of_notes
+    async def count(run_id, *, beside=None, after_sequence=None):
+        kinds = waiting.get(run_id, [])
+        if beside is None:
+            return len(kinds)
+        return sum(1 for kind in kinds if not _of(beside, kind))
 
     async def earliest(run_id, *, after_sequence=None):
-        total, of_notes = waiting.get(run_id, (0, 0))
-        return None if not total else bool(of_notes)
+        kinds = waiting.get(run_id, [])
+        return kinds[0] if kinds else None
 
     repository = SimpleNamespace(
         count_queued_user_messages=AsyncMock(side_effect=count),
-        earliest_queued_is_note=AsyncMock(side_effect=earliest),
+        earliest_queued_kind=AsyncMock(side_effect=earliest),
         lock_conversation=AsyncMock(),
         get_active_agent_run_for_update=AsyncMock(return_value=active_run),
         get_agent_run=AsyncMock(return_value=finished),
@@ -149,7 +174,7 @@ async def test_the_followup_claims_the_queue_it_answers() -> None:
     assert call.args == (finished.id,)
     assert call.kwargs == {
         "into_run_id": created.id,
-        "notes": False,
+        "kind": AnswerKind(notes=False, place=None),
         "after_sequence": None,
     }
 
@@ -186,9 +211,7 @@ async def test_the_followup_run_cannot_itself_recur() -> None:
         conversation=conversation, completed_run_id=finished.id
     )
 
-    asked = {
-        call.args[0] for call in repository.earliest_queued_is_note.await_args_list
-    }
+    asked = {call.args[0] for call in repository.earliest_queued_kind.await_args_list}
     assert asked == {finished.id}
     assert created.id != finished.id
 
@@ -261,7 +284,9 @@ async def test_a_note_queued_behind_a_run_is_answered_where_nobody_else_sees() -
 
     metadata = repository.create_agent_run.await_args.kwargs["metadata"]
     assert metadata["private_note"] is True
-    assert repository.claim_queued_user_messages.await_args.kwargs["notes"] is True
+    assert repository.claim_queued_user_messages.await_args.kwargs[
+        "kind"
+    ] == AnswerKind(notes=True, place=None)
 
 
 @pytest.mark.asyncio
@@ -299,3 +324,44 @@ async def test_what_an_earlier_run_left_waiting_is_answered_next() -> None:
     assert "private_note" not in metadata
     assert metadata["queued_behind_agent_run_id"] == str(earlier)
     assert repository.claim_queued_user_messages.await_args.args == (earlier,)
+
+
+@pytest.mark.asyncio
+async def test_what_was_said_at_another_place_is_answered_there_next() -> None:
+    """Said on WhatsApp while a run answered an email: its own turn, asked on
+    WhatsApp, which answers there; what was said by email waits for the next."""
+    whatsapp, email = str(uuid4()), str(uuid4())
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=3, places=[whatsapp, None, email]
+    )
+
+    await coordinator.start_queued_followup(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
+    assert metadata["asked_at_source"] == whatsapp
+    assert "private_note" not in metadata
+    # The message from nowhere in particular goes with it; the email waits.
+    assert metadata["queued_leftovers_behind"] == [str(finished.id)]
+    assert repository.claim_queued_user_messages.await_args.kwargs[
+        "kind"
+    ] == AnswerKind(notes=False, place=whatsapp)
+
+
+@pytest.mark.asyncio
+async def test_a_line_from_lemma_queued_behind_a_platform_run_is_answered_in_lemma() -> (
+    None
+):
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=1, places=[IN_LEMMA]
+    )
+
+    await coordinator.start_queued_followup(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
+    assert metadata["asked_in_lemma"] is True
+    assert "asked_at_source" not in metadata
+    assert "queued_leftovers_behind" not in metadata

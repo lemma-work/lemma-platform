@@ -123,7 +123,11 @@ A run answering a line in Lemma answers the lines whose words it read
 
 A message the person sends while a run is finishing is steered into it
 (`capabilities/pending_user_messages`), and the run goes on to answer that
-too. The answer it had already written is then not the run's final answer --
+too -- if it is of the run's kind: a note or not alike, and said at the place
+the run was asked or at none (`domain/run_places`). One said elsewhere waits
+for the follow-up turn that claims it, which is asked where it was said, and
+that turn reads it after the answer of the run it waited for
+(`pydantic_ai_history`), not above it. The answer it had already written is then not the run's final answer --
 its output is still the last -- but it was an answer: the pydantic-ai node
 loop marks it `answered_before_steer` when the request that sent the run on
 carries the person's words rather than a retry (`domain/steered_answers`).
