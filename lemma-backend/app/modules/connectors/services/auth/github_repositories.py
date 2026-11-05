@@ -124,10 +124,12 @@ async def _repository_pages(
     *,
     max_pages: int,
 ) -> AsyncIterator[tuple[list[InstallationRepository], bool]]:
-    """Each page of the installation's repositories, and whether it was full.
+    """Each page of the installation's repositories, and whether more follow.
 
-    A full last page means the walk stopped at ``max_pages`` with more
-    possibly behind it.
+    GitHub states how many there are (`total_count`), so a list that ends
+    exactly on a full page is known to end there. A last page that still says
+    "more" means the walk stopped at ``max_pages`` with repositories unread.
+    A page without the count falls back to "a full page may have more".
     """
     url = (
         f"{_USER_INSTALLATIONS_URL}/{quote(str(installation_id), safe='')}/repositories"
@@ -144,9 +146,14 @@ async def _repository_pages(
         payload = response.json()
         found = payload.get("repositories") if isinstance(payload, dict) else None
         items = found if isinstance(found, list) else []
-        full = len(items) >= _PER_PAGE
-        yield [repository for repository in map(_repository, items) if repository], full
-        if not full:
+        total = payload.get("total_count") if isinstance(payload, dict) else None
+        more = (
+            total > page * _PER_PAGE
+            if isinstance(total, int)
+            else len(items) >= _PER_PAGE
+        )
+        yield [repository for repository in map(_repository, items) if repository], more
+        if not more:
             return
 
 
@@ -190,13 +197,13 @@ async def installation_repositories(
     whether that was all of them.
     """
     repositories: list[InstallationRepository] = []
-    last_full = False
+    more = False
     async with _asking_github(), _http(client) as http:
-        async for page, last_full in _repository_pages(
+        async for page, more in _repository_pages(
             http, access_token, installation_id, max_pages=_MAX_LISTING_PAGES
         ):
             repositories.extend(page)
-    return RepositoryListing(repositories=tuple(repositories), complete=not last_full)
+    return RepositoryListing(repositories=tuple(repositories), complete=not more)
 
 
 async def installation_repository(
@@ -253,13 +260,13 @@ async def installation_repository(
         if choice.covers_every_repository or repository.private:
             return repository
         wanted = repository.full_name.lower()
-        last_full = False
-        async for page, last_full in _repository_pages(
+        more = False
+        async for page, more in _repository_pages(
             http, access_token, installation_id, max_pages=_MAX_COVERAGE_PAGES
         ):
             if any(covered.full_name.lower() == wanted for covered in page):
                 return repository
-        if last_full:
+        if more:
             raise GithubRepositoryUncheckedError(
                 repository.full_name, installed_on=choice.account_login
             )

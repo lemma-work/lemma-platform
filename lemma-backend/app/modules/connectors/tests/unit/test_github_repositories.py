@@ -82,7 +82,9 @@ class _GitHub:
             page = int(request.url.params.get("page", "1"))
             per_page = int(request.url.params["per_page"])
             chunk = self.listed[(page - 1) * per_page : page * per_page]
-            return httpx.Response(200, json={"repositories": chunk})
+            return httpx.Response(
+                200, json={"total_count": len(self.listed), "repositories": chunk}
+            )
         return httpx.Response(404)
 
 
@@ -286,6 +288,32 @@ async def test_listing_pages_through_the_installation_and_stops_at_its_bound():
     assert listing.repositories[0] == InstallationRepository(
         owner="acme", name="repo-0", private=True, default_branch="main"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_list_ending_exactly_on_the_bound_is_complete():
+    """GitHub's count says there is no sixth page, so none is implied."""
+    github = _GitHub(listed=[_repo("acme", f"repo-{n}") for n in range(500)])
+
+    async with github.client() as client:
+        listing = await installation_repositories(_TOKEN, _INSTALLATION, client=client)
+
+    assert len(listing.repositories) == 500
+    assert listing.complete is True
+
+
+@pytest.mark.asyncio
+async def test_a_selection_of_exactly_the_walk_bound_refuses_with_its_remedy():
+    """Read to the end, so "not installed" and its manage link are the answer,
+    not "could not be checked"."""
+    github = _GitHub(
+        repo=_public_web(),
+        installations=[_installation(selection="selected")],
+        listed=[_repo("acme", f"other-{n}") for n in range(1000)],
+    )
+
+    with pytest.raises(GithubRepositoryNotInstalledError):
+        await _covered(github)
 
 
 @pytest.mark.asyncio
