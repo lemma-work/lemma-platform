@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     NO_CHAT,
+    agentKey,
+    agentView,
     ageOf,
     answersHere,
     chatItems,
@@ -645,4 +647,11 @@ test("an automation that ran many times is one line, with how many runs and its 
     const reviewer = work.find((row) => row.title === "Reviewer");
     assert.deepEqual(reviewer?.view, { name: "run", podId: "p1", runId: "r2" }, "it opens its newest run");
     assert.equal(reviewer?.running, true, "one of its runs is still going");
+});
+
+test("an agent row that arrived without a name opens nothing, and keys apart from its twin", () => {
+    assert.deepEqual(agentView("p1", { name: "billing", broken: false }), { name: "agent", podId: "p1", agent: "billing" });
+    assert.equal(agentView("p1", { name: "", broken: true }), null, "its address would end at agent/ and open the settings instead");
+    assert.notEqual(agentKey({ id: "" }, 0), agentKey({ id: "" }, 1), "two nameless rows share an empty id");
+    assert.equal(agentKey({ id: "a1" }, 3), "a1");
 });

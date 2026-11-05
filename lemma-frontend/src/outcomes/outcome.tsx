@@ -329,8 +329,8 @@ function PeopleIn({ pod, actions }: { pod: Pod; actions: FrameActions }) {
     );
 }
 
-/** Where people reach it besides here: the numbers and addresses that
- *  answer as this Lemma. */
+/** Where it answers besides here: the numbers and addresses that answer as
+ *  this Lemma. */
 function ReachedOn({ pod, actions }: { pod: Pod; actions: FrameActions }) {
     const surfaces = useQuery({ queryKey: ["outcome-surfaces", pod.id], queryFn: () => source.listSurfaces(pod.id), staleTime: 5 * 60_000, retry: false });
     const on = (surfaces.data ?? []).filter((surface) => surface.active);

@@ -969,3 +969,16 @@ export function sameOpen(a: ChatOpen, b: ChatOpen): boolean {
     if (a.kind === "none" || b.kind === "none") return true;
     return a.podId === b.podId && (a as { id: string | null }).id === (b as { id: string | null }).id;
 }
+
+/** An agent row's page, or none for a row that arrived without a name: its
+ *  address would end at `agent/` and land on the Lemma's settings, while the
+ *  row itself says there is nothing to open. */
+export function agentView(podId: string, agent: { name: string; broken: boolean }): View | null {
+    return agent.broken ? null : { name: "agent", podId, agent: agent.name };
+}
+
+/** A key for an agent row. Two nameless rows share an empty id, so the
+ *  position keys them apart. */
+export function agentKey(agent: { id: string }, at: number): string {
+    return agent.id || `unnamed-${at}`;
+}
