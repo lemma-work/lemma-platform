@@ -103,7 +103,8 @@ async def test_what_was_heard_is_kept_as_how_to_answer_the_place():
     # The place's reply target, never what was said there.
     assert source.delivery_ref == reply_ref_of(event)
     assert source.delivery_ref["message_text"] == ""
-    assert source.last_inbound_at is not None
+    # When it was heard is the message's line's to say, not the binding's.
+    assert source.last_inbound_at is None
 
 
 async def test_the_person_is_authorized_then_locked_then_looked_for_again():

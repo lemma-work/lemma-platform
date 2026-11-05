@@ -292,6 +292,11 @@ async def test_a_client_in_the_group_is_answered_there_from_what_is_public(
     said = [line.text for line in lines]
     assert f"@{BUSINESS_NUMBER} what can you tell me?" in said
     assert "I can share the price list." in said
+    # The question is one line: written as it arrived, then taken up by the
+    # run's conversation -- not written again when the turn began.
+    [asked] = [line for line in lines if line.external_message_id == "wamid.g1"]
+    assert asked.conversation_id == context.conversation_id
+    assert asked.sender.contact_id is not None
 
 
 @pytest.mark.parametrize("called", ["the pod's name", "Lem"])

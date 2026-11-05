@@ -145,6 +145,7 @@ __all__ = [
     "member_of",
     "acknowledge",
     "agent_names",
+    "answered_in",
     "named_in",
     "names_of",
     "post",
@@ -254,6 +255,31 @@ async def post(
             deliver_to=deliver_to,
             pod_agent_id=effective_agent_id(None, pod_id=channel.pod_id),
         ),
+    )
+
+
+async def answered_in(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    channel_id: UUID,
+    source_id: UUID,
+    external_message_id: str,
+    conversation_id: UUID,
+    sender: Sender,
+) -> ChannelMessage | None:
+    """A platform message already a line -- a group's, written as it arrived
+    -- now taken up by a conversation: the conversation answering it, and who
+    said it if the line could not name them, are set on the line. ``None``
+    when the message is no line at this place, for the caller to post."""
+    channel = await ChannelRepository(uow.session).get(channel_id)
+    if channel is None:
+        return None
+    return await Timeline(uow).answered_in(
+        channel,
+        source_id=source_id,
+        external_message_id=external_message_id,
+        conversation_id=conversation_id,
+        sender=sender,
     )
 
 
