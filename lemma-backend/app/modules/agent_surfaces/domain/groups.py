@@ -16,7 +16,9 @@ nobody to answer for a stranger's turn, so outsiders are not answered at all --
 members still are.
 
 A group is a shared place of a GROUP channel (``app.modules.channels``): the
-place's row keeps the group's settings, and its id is the group's. What is
+place's row (``Source``) keeps the group's settings, and its id is the group's.
+There is no second type for it here: a surface reads and writes a group through
+``channels.contracts.places``. What is
 said in it is the channel's timeline. Each member's turn runs in their own
 conversation, so without it the bot would know only what was said to it; on
 platforms whose history cannot be fetched -- Telegram, WhatsApp -- it is the
@@ -25,78 +27,48 @@ only record there is.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from enum import StrEnum
-from uuid import UUID
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from app.core.domain.entity import Entity
-from app.modules.channels.contracts import Source
+from app.modules.agent_surfaces.domain.external_accounts import account_of
+from app.modules.channels.contracts import Place, Source, SourceKind
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 
 
-class SurfaceGroup(Entity):
-    """One group, on one surface: a shared place, as the surface reads it."""
+def group_place(
+    surface: AgentSurfaceEntity,
+    *,
+    chat: str | None,
+    title: str | None,
+    is_private: bool = True,
+) -> Place:
+    """A group chat as the surface that is in it names it: a shared place of
+    its account. ``chat`` is None for a group still being made."""
+    return Place(
+        surface_id=surface.id,
+        platform=surface.surface_type.value,
+        account=account_of(surface),
+        kind=SourceKind.CHAT,
+        external_channel_id=chat,
+        external_user_id=None,
+        title=title,
+        is_private=is_private,
+    )
 
-    #: The group's channel.
-    channel_id: UUID
-    pod_id: UUID
-    surface_id: UUID
-    platform: str
-    #: None only while a group the bot asked the platform to create is still
-    #: being made (WhatsApp creates groups asynchronously; see ``request_id``).
-    external_channel_id: str | None = None
-    title: str | None = None
-    owner_user_id: UUID | None = None
-    answers_outsiders: bool = True
-    #: The platform's id for a creation still in flight, which the confirmation
-    #: echoes back. Kept once the group exists, to recognise a replayed one.
-    request_id: str | None = None
-    #: The link people join by, where joining is by link (WhatsApp).
-    invite_link: str | None = None
-    #: A Slack channel shared with another company. There, and only there, a
-    #: Slack sender outside the pod is an outsider to answer; inside one's own
-    #: workspace they are a colleague to invite.
-    shared_externally: bool = False
-    #: When somebody last said something in it.
-    last_inbound_at: datetime | None = None
 
-    @property
-    def is_pending(self) -> bool:
-        """Asked for, and not yet confirmed by the platform."""
-        return self.external_channel_id is None
-
-    @property
-    def welcomes_outsiders(self) -> bool:
-        """Whether a stranger's question here gets an answer.
-
-        Both halves, because either alone is not enough: the switch says the
-        pod wants it, the owner is who answers for it.
-        """
-        return self.answers_outsiders and self.owner_user_id is not None
-
-    @classmethod
-    def of(cls, source: Source) -> SurfaceGroup:
-        """The group a shared place is. Only a place on a surface is one."""
-        if source.surface_id is None:
-            raise ValueError("A group is a place on a surface")
-        return cls(
-            id=source.id,
-            channel_id=source.channel_id,
-            pod_id=source.pod_id,
-            surface_id=source.surface_id,
-            platform=source.platform,
-            external_channel_id=source.external_channel_id,
-            title=source.title,
-            owner_user_id=source.owner_user_id,
-            answers_outsiders=source.answers_outsiders,
-            request_id=source.request_id,
-            invite_link=source.invite_link,
-            shared_externally=source.shared_externally,
-            last_inbound_at=source.last_inbound_at,
-            created_at=source.created_at or datetime.now(timezone.utc),
-            updated_at=source.updated_at or datetime.now(timezone.utc),
-        )
+def as_group(source: Source | None) -> Source | None:
+    """``source`` if it is a group a surface is in; a person's place is not."""
+    if (
+        source is None
+        or source.kind is not SourceKind.CHAT
+        or source.surface_id is None
+    ):
+        return None
+    return source
 
 
 class GroupUpdateKind(StrEnum):

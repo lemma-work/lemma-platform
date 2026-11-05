@@ -149,10 +149,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.remove` | Remove Table Grant |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
-| GET | `/pods/{pod_id}/channels/me` | `channel.me.get` | Get My Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
-| GET | `/pods/{pod_id}/channels/{channel_id}/cases` | `channel.case.list` | List Cases |
-| GET | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.list` | List Members |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | `channel.message.file` | Line File |

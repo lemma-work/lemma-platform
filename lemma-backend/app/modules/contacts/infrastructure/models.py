@@ -99,8 +99,9 @@ class ContactIdentityModel(UUIDAuditBase):
     verified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    #: When the contact last wrote from this handle. WhatsApp allows a business
-    #: to write freely only within 24 hours of it.
+    #: No longer written or read: when a contact last wrote is the place's
+    #: (``channel_sources.last_inbound_at``). Kept until a contract migration
+    #: drops it.
     last_inbound_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

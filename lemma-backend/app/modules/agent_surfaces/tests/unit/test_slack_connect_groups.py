@@ -26,7 +26,8 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
+from app.modules.test_support.group_sources import a_group
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
 from app.modules.agent_surfaces.services.workspace_channels import (
@@ -129,7 +130,7 @@ def held(monkeypatch):
     return teams
 
 
-def _door(group: SurfaceGroup) -> OutsiderDoor:
+def _door(group: Source) -> OutsiderDoor:
     async def _get(*, surface_id, external_channel_id):
         return group
 
@@ -137,7 +138,7 @@ def _door(group: SurfaceGroup) -> OutsiderDoor:
         # The group's owner is in the pod; nobody else here is.
         return [POD] if user_id == group.owner_user_id else []
 
-    async def _allow(*, group_id, sender_external_id):
+    async def _allow(*, person, place, place_per_day):
         return True
 
     door = OutsiderDoor(
@@ -145,12 +146,12 @@ def _door(group: SurfaceGroup) -> OutsiderDoor:
         membership=SimpleNamespace(get_user_pod_ids=_pod_ids),
         limiter=SimpleNamespace(allow=_allow),
     )
-    door.groups = SimpleNamespace(get=_get)
+    door.group_at = _get
     return door
 
 
-def _slack_group(*, shared: bool) -> SurfaceGroup:
-    return SurfaceGroup(
+def _slack_group(*, shared: bool) -> Source:
+    return a_group(
         channel_id=uuid4(),
         pod_id=POD,
         surface_id=uuid4(),

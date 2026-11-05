@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.tools import ReplayClass, ToolGroup, ToolPolicy, tool
 from app.modules.agent.infrastructure.tools.messaging.models import (
@@ -40,10 +39,8 @@ async def answer_question(
     they did not give you.
     """
     deps = ctx
-    if deps.pod_id is None or run_audience(deps).answers_outsiders:
-        return AnswerQuestionResponse(
-            success=False, error="Only a member's questions are answered here."
-        )
+    if deps.pod_id is None:
+        return AnswerQuestionResponse(success=False, error="Only inside a pod.")
     try:
         await channel_questions.answer(
             SessionUnitOfWorkFactory(async_session_maker),

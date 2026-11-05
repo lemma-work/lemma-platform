@@ -269,7 +269,7 @@ test("a part that cannot be drawn is said under its line, not a timeline that ca
     const broken = { type: "file", path: "/me/x", name: { not: "text" }, mimeType: "text/plain", size: 1, fileId: "f2" };
     try {
         await view.draw(createElement(Timeline, timelineProps([line(1, { parts: [broken] }), line(2)]) as never));
-        assert.match(view.body(), /Couldn’t show what this line shares/);
+        assert.match(view.body(), /Couldn’t show what this message shares/);
         assert.match(view.body(), /line 1/);
         assert.match(view.body(), /line 2/);
     } finally {
@@ -508,13 +508,13 @@ test("an answer only its asker can see says so, and is shared with the channel a
     try {
         await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: answer as never })));
         assert.match(view.body(), /Only you can see this — it used your access/);
-        await act(async () => { buttons().find((button) => button.textContent === "Share with channel")!.click(); });
+        await act(async () => { buttons().find((button) => button.textContent === "Share with the chat")!.click(); });
         assert.equal(shared.length, 0, "shared before it was confirmed");
         assert.match(view.body(), /Everyone in this chat will read it/);
         await act(async () => { buttons().find((button) => button.textContent === "Keep private")!.click(); });
         assert.equal(buttons().some((button) => button.textContent === "Share"), false);
 
-        await act(async () => { buttons().find((button) => button.textContent === "Share with channel")!.click(); });
+        await act(async () => { buttons().find((button) => button.textContent === "Share with the chat")!.click(); });
         await act(async () => { buttons().find((button) => button.textContent === "Share")!.click(); });
         await view.flush();
         assert.deepEqual(shared[0], ["c1", "l7"]);
@@ -534,7 +534,7 @@ test("somebody else reads that the agent answered the asker privately, with no w
         await view.draw(createElement("ol", null, createElement(LineView, { podId: "pod", channel: channel as never, line: theirs as never })));
         assert.match(view.body(), /Bolt answered Priya privately/);
         assert.doesNotMatch(view.body(), /Only you can see this/);
-        assert.equal([...view.dom.window.document.querySelectorAll("button")].some((button) => button.textContent === "Share with channel"), false);
+        assert.equal([...view.dom.window.document.querySelectorAll("button")].some((button) => button.textContent === "Share with the chat"), false);
     } finally {
         await view.close();
     }

@@ -21,7 +21,7 @@ its members (``is_private``).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from typing import Protocol
 from uuid import UUID
 
@@ -120,6 +120,44 @@ class ChannelSeats(Protocol):
         sender_external_id: str | None = None,
         external_thread_id: str | None = None,
     ) -> UUID | None: ...
+
+
+async def find_or_open[R](
+    seats: ChannelSeats,
+    *,
+    channel_id: UUID,
+    pod_id: UUID,
+    agent_id: UUID | None,
+    user_id: UUID,
+    contact_id: UUID | None,
+    found: Callable[[UUID], Awaitable[R | None]],
+    opening: Callable[[], Awaitable[R]],
+) -> R:
+    """A person's one conversation with an agent in a channel, opened if new.
+
+    Serialised on the person and the channel, so two first messages open one:
+    the lock is taken, the conversation looked for under it, and opened under
+    it. ``found`` says what a conversation already there comes to -- ``None``
+    where the caller may not keep it -- and ``opening`` opens one. The lock
+    lasts the transaction, so whatever commits on the way -- authorizing the
+    person -- is the caller's to do before.
+    """
+    await seats.lock_person(
+        channel_id=channel_id,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        person_id=contact_id or user_id,
+    )
+    existing = await seats.conversation_in_channel(
+        channel_id=channel_id,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        user_id=user_id,
+        contact_id=contact_id,
+    )
+    if existing is not None and (kept := await found(existing)) is not None:
+        return kept
+    return await opening()
 
 
 class ChannelSeatsInDatabase:

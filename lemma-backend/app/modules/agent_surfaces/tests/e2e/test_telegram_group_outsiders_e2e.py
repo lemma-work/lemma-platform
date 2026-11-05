@@ -33,9 +33,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.channels.contracts.places import place_heard_on
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
     _messages_for_conversation,
@@ -123,8 +121,10 @@ async def _adopt_group(db_session: AsyncSession, surface_id: UUID):
     )
     await db_session.commit()
     assert handled is True
-    return await SurfaceGroupRepository(db_session).get(
-        surface_id=surface_id, external_channel_id=str(GROUP_CHAT)
+    return await place_heard_on(
+        SqlAlchemyUnitOfWork(db_session),
+        surface_id=surface_id,
+        external_channel_id=str(GROUP_CHAT),
     )
 
 

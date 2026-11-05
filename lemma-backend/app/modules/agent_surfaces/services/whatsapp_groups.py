@@ -4,7 +4,7 @@ A WhatsApp business number cannot be added to anybody's group. It can create
 one, and people join it by its invite link. So what is "add the bot to the
 group" on Telegram is, on WhatsApp, "ask the bot to open one": a member asks in
 their own chat, the bot creates the group with them as the person who answers
-for it (``SurfaceGroup.owner_user_id``), and hands back the link to pass on.
+for it (the group's ``owner_user_id``), and hands back the link to pass on.
 
 Meta creates the group asynchronously. The call answers with a ``request_id``
 only; the group's id and link arrive in a webhook moments later
@@ -38,10 +38,9 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.redis.client import get_redis
 from app.core.infrastructure.redis.counters import incr_with_ttl
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.agent_surfaces.domain.groups import as_group, group_place
+from app.modules.channels.contracts import Source, source_by_id
+from app.modules.channels.contracts.places import open_pending_group, owned_place
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
@@ -154,14 +153,14 @@ class WhatsAppGroupOpener:
         owner_user_id: UUID,
         title: str,
         answers_outsiders: bool = True,
-    ) -> tuple[SurfaceGroup, bool]:
+    ) -> tuple[Source, bool]:
         """The group this member asked for, and whether they already had it."""
         name = " ".join(title.split())[:GROUP_SUBJECT_MAX_CHARS]
         if not name:
             raise ValueError("A group needs a name")
         async with self.uow_factory() as uow:
-            existing = await SurfaceGroupRepository(uow.session).find_owned(
-                surface_id=surface_id, owner_user_id=owner_user_id, title=name
+            existing = await owned_place(
+                uow, surface_id=surface_id, owner_user_id=owner_user_id, title=name
             )
             if existing is not None:
                 return existing, True
@@ -195,9 +194,10 @@ class WhatsAppGroupOpener:
         if not request_id:
             raise GroupNotOpened("WhatsApp accepted the request but named none")
         async with self.uow_factory() as uow:
-            group = await SurfaceGroupRepository(uow.session).create_pending(
+            group = await open_pending_group(
+                uow,
                 pod_id=surface.pod_id,
-                surface=surface,
+                place=group_place(surface, chat=None, title=name),
                 title=name,
                 owner_user_id=owner_user_id,
                 request_id=request_id,
@@ -220,20 +220,17 @@ class WhatsAppGroupOpener:
             return False
         return opened <= OPENS_PER_MEMBER_PER_DAY
 
-    async def _confirmed(self, group: SurfaceGroup) -> SurfaceGroup:
+    async def _confirmed(self, group: Source) -> Source:
         """The group once Meta has confirmed it, or as it stands at the deadline."""
         deadline = monotonic() + self.wait_seconds
         while group.invite_link is None and monotonic() < deadline:
             await asyncio.sleep(self.poll_seconds)
             async with self.uow_factory() as uow:
-                group = (
-                    await SurfaceGroupRepository(uow.session).get_by_id(group.id)
-                    or group
-                )
+                group = as_group(await source_by_id(uow, group.id)) or group
         return group
 
 
-def _told(group: SurfaceGroup, *, already_open: bool = False) -> OpenedGroup:
+def _told(group: Source, *, already_open: bool = False) -> OpenedGroup:
     return OpenedGroup(
         title=group.title or "",
         invite_link=group.invite_link,

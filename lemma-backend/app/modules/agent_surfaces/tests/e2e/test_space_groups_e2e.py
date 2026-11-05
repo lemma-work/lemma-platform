@@ -340,7 +340,7 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     # The keeper is told in their own channel, pointed at the group, not
     # Contacts -- which group, and that nothing was done; never the guest's
     # words, which would outlive them here if they were forgotten.
-    mine = await authenticated_client.get(f"/pods/{pod_id}/channels/me")
+    mine = await authenticated_client.post(f"/pods/{pod_id}/channels/me")
     assert mine.status_code == 200, mine.text
     notes = await authenticated_client.get(
         f"/pods/{pod_id}/channels/{mine.json()['id']}/messages"
@@ -723,9 +723,9 @@ def _participants(kind: str, key: str, number: str) -> SurfacePlatformWebhookIng
 
 
 async def _people(client: AsyncClient, pod_id: str, channel_id: str) -> list[dict]:
-    listed = await client.get(f"/pods/{pod_id}/channels/{channel_id}/members")
-    assert listed.status_code == 200, listed.text
-    return [item["person"] for item in listed.json()["items"]]
+    shown = await client.get(f"/pods/{pod_id}/channels/{channel_id}")
+    assert shown.status_code == 200, shown.text
+    return [item["person"] for item in shown.json()["members"]]
 
 
 async def test_somebody_who_joins_a_group_is_in_it_before_they_speak(

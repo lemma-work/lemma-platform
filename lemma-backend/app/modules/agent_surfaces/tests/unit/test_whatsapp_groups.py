@@ -477,10 +477,10 @@ def test_a_whatsapp_group_is_named_from_the_pods_record_of_it():
     from app.modules.agent_surfaces.domain.channel_names import (
         configured_channel_name,
     )
-    from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+    from app.modules.test_support.group_sources import a_group
     from app.modules.agent_surfaces.services.outsiders import named_after
 
-    group = SurfaceGroup(
+    group = a_group(
         channel_id=uuid4(),
         pod_id=uuid4(),
         surface_id=uuid4(),

@@ -56,7 +56,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppApiError
 from app.modules.agent_surfaces.services import group_start_keys
@@ -255,7 +255,7 @@ async def _open(
     surface: AgentSurfaceEntity,
     user_id: UUID,
     request: WhatsAppGroupRequest,
-) -> SurfaceGroup:
+) -> Source:
     """Ask Meta for the group; its refusals as the API says them."""
     try:
         group, _ = await WhatsAppGroupOpener(uow_factory, wait_seconds=0).request_group(

@@ -302,17 +302,6 @@ class SourceRepository:
         )
         return _sources(rows)
 
-    async def by_request(self, *, account_id: UUID, request_id: str) -> Source | None:
-        found = (
-            await self.session.execute(
-                _with_surface().where(
-                    ChannelSourceModel.account_id == account_id,
-                    ChannelSourceModel.request_id == request_id,
-                )
-            )
-        ).first()
-        return source_entity(found[0], surface_id=found[1]) if found else None
-
     async def by_request_on_surfaces(
         self,
         *,

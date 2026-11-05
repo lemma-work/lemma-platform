@@ -98,7 +98,7 @@ class _Limiter:
     def __init__(self, *, allow: bool = True, allow_new: bool = True) -> None:
         self._allow, self._allow_new = allow, allow_new
 
-    async def allow(self, *, surface_id, contact_id):
+    async def allow(self, *, person, place, place_per_day):
         return self._allow
 
     async def allow_new_contact(self, *, surface_id):
@@ -276,8 +276,6 @@ async def test_a_strangers_first_message_makes_them_a_contact(pod):
         "CHANNEL",
     )
     assert handle.value_raw == PHONE_E164
-    # And their writing is noted: it is what lets the pod write back.
-    assert handle.last_inbound_at is not None
 
 
 async def test_a_bot_for_known_contacts_refuses_a_stranger_once_a_day(pod):
@@ -422,9 +420,6 @@ async def test_stop_opts_the_handle_out_and_starts_nothing(pod, text):
 
     assert context is None
     assert await pod.opted_out(IdentityKind.PHONE, PHONE)
-    [handle] = await pod.handles()
-    # Not noted as writing again, which is how a contact opts back in.
-    assert handle.last_inbound_at is None
     assert binder.seen == {}
 
 
@@ -525,8 +520,6 @@ async def test_a_message_they_typed_opts_them_back_in_and_is_answered(pod):
 
     assert context is not None
     assert not await pod.opted_out(IdentityKind.PHONE, PHONE)
-    [handle] = await pod.handles()
-    assert handle.last_inbound_at is not None
 
 
 @pytest.mark.parametrize(

@@ -144,6 +144,10 @@ async def test_a_closed_window_is_reopened_with_a_template_and_the_message_waits
     bodies = _bodies(message_store)
     held = [bodies.index(FIRST), bodies.index(SECOND)]
     assert held == sorted(held) and held[-1] < bodies.index("Anything else?")
+    # By one queue, not by timing: what waited is the agent's lines at their
+    # place, delivered ahead of the answer -- a later line to the same place.
+    assert await _staged_held(context.conversation_id) == [FIRST, SECOND]
+    assert await _pump_rows(context.conversation_id) == 0
 
     # Delivered once: the next message finds nothing held.
     await stage.say("thanks", script=[script_text("You're welcome.")])
@@ -162,16 +166,31 @@ async def _held_messages(
 
 
 async def _staged_held(conversation_id: UUID) -> list[str]:
+    """What was held, as the agent's lines -- each delivered to the place."""
     async with async_session_maker() as session:
         rows = await session.scalars(
             text(
-                "SELECT content->>'text' FROM surface_deliveries "
-                "WHERE conversation_id = :conversation "
-                "AND content->>'purpose' = 'held' ORDER BY created_at, id"
+                "SELECT m.body FROM channel_messages m "
+                "JOIN channel_message_deliveries d ON d.message_id = m.id "
+                "AND d.source_id = m.target_source_id "
+                "WHERE m.conversation_id = :conversation "
+                "AND m.client_message_id LIKE 'held:%' ORDER BY m.seq"
             ),
             {"conversation": conversation_id},
         )
         return list(rows.all())
+
+
+async def _pump_rows(conversation_id: UUID) -> int:
+    """Rows the surface pump would send for this conversation."""
+    async with async_session_maker() as session:
+        return await session.scalar(
+            text(
+                "SELECT count(*) FROM surface_deliveries "
+                "WHERE conversation_id = :conversation"
+            ),
+            {"conversation": conversation_id},
+        )
 
 
 async def test_a_message_held_while_the_hold_is_staged_is_kept_for_next_time(
@@ -186,8 +205,9 @@ async def test_a_message_held_while_the_hold_is_staged_is_kept_for_next_time(
 ) -> None:
     """Staging clears what it staged, never a message held meanwhile.
 
-    The member's reply stages what was held as deliveries in its ingest's
-    transaction, under the conversation's row lock. A second message held
+    The member's reply posts what was held as lines, each with its delivery,
+    in its ingest's transaction, under the conversation's row lock. A second
+    message held
     while that transaction is open waits for the lock, then starts a new set:
     it is not cleared unsent, and the next reply stages it -- once.
     """
@@ -205,6 +225,7 @@ async def test_a_message_held_while_the_hold_is_staged_is_kept_for_next_time(
     context = await stage.say("hello", script=[script_text("Hi there.")])
     assert await stage.saw("Hi there.")
     conversation_id = context.conversation_id
+    source_id = context.source_id
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     async with uow_factory() as uow:
         await hold_reply(uow, conversation_id, FIRST, asked=True)
@@ -213,7 +234,7 @@ async def test_a_message_held_while_the_hold_is_staged_is_kept_for_next_time(
         staged = await stage_held_replies(
             staging,
             conversation_id=conversation_id,
-            pod_id=UUID(str(test_pod["id"])),
+            source_id=source_id,
             platform=SurfacePlatform.WHATSAPP,
         )
         assert staged == 1
@@ -239,7 +260,7 @@ async def test_a_message_held_while_the_hold_is_staged_is_kept_for_next_time(
             await stage_held_replies(
                 uow,
                 conversation_id=conversation_id,
-                pod_id=None,
+                source_id=source_id,
                 platform=SurfacePlatform.WHATSAPP,
             )
             == 1

@@ -257,13 +257,6 @@ class ChannelDetailResponse(ChannelResponse):
     me: MyMembershipResponse = Field(default_factory=MyMembershipResponse)
 
 
-class ChannelMemberListResponse(BaseModel):
-    items: list[ChannelMemberResponse]
-    next_cursor: str | None = Field(
-        default=None, description="Pass as `cursor` for the next page."
-    )
-
-
 class ChannelListResponse(BaseModel):
     items: list[ChannelResponse]
     next_cursor: str | None = Field(

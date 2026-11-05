@@ -96,7 +96,7 @@ function Settings({ pod, source }: { pod: Pod; source: SourceSettings }) {
             )}
             <p className="gside__label" id={ids + "-head"}>People outside {pod.name}</p>
             {state.kind === "invited" ? (
-                <p className="gside__text">People here who are not in {pod.name} get a private note inviting them in. Nobody is answered from what is Public in this channel.</p>
+                <p className="gside__text">People here who are not in {pod.name} get a private note inviting them in. Nobody is answered from what is Public in this group.</p>
             ) : (
                 <>
                     {may && (
@@ -141,7 +141,7 @@ function Settings({ pod, source }: { pod: Pod; source: SourceSettings }) {
             <p className="gside__fine">{howToAsk(source.platform, bot)} {whomItAnswers(source, pod.name)}</p>
             {remove && <p className="gside__fine">{remove}</p>}
             {opened && surface && (
-                <Modal title={"Channels for " + bot} onClose={() => setOpened(false)}>
+                <Modal title={"Where " + bot + " answers"} onClose={() => setOpened(false)}>
                     <SurfaceManage pod={pod} surface={surface} onBack={() => setOpened(false)} onSaved={saved} onLeave={() => setOpened(false)} />
                 </Modal>
             )}

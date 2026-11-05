@@ -281,30 +281,6 @@ class MemberRepository(ReadState):
         )
         return [member_entity(row) for row in rows]
 
-    async def page(
-        self,
-        channel_id: UUID,
-        *,
-        limit: int,
-        after: tuple[datetime, UUID] | None = None,
-    ) -> list[Member]:
-        """Who is in the channel, in the order they joined, from ``after``
-        (a seat's join time and id)."""
-        member = ChannelMemberModel
-        statement = select(member).where(member.channel_id == channel_id)
-        if after is not None:
-            joined, seat_id = after
-            statement = statement.where(
-                tuple_(member.created_at, member.id)
-                > tuple_(literal(joined), literal(seat_id))
-            )
-        rows = await self.session.scalars(
-            statement.order_by(member.created_at, member.id).limit(
-                max(1, min(limit, MAX_MEMBERS))
-            )
-        )
-        return [member_entity(row) for row in rows]
-
     async def of_user(self, channel_id: UUID, user_id: UUID) -> Member | None:
         row = await self.session.scalar(
             select(ChannelMemberModel).where(

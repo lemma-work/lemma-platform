@@ -73,7 +73,7 @@ administrators are told. Only proof reaches this: a name never does.
   `prove_handle`, `contact_by_id` (which follows a merge), `contact_handles` (as
   `ContactHandle`), `verified_contact_handles` (only the `CHANNEL`, `HOST` and
   `CODE` handles, of the contact a merge led to: what a function opened to
-  contacts is told, `domain/verified.py`), `note_inbound`, `note_answered`,
+  contacts is told, `domain/verified.py`), `note_answered`,
   `answered_contacts_in_organization` and the two unsubscribes, for the surface
   that resolves a sender and the run that addresses them; `fold_into_member`
   for a proved account. `contracts/facts` publishes `ContactMerged` and

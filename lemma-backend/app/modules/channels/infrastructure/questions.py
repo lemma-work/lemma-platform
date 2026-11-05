@@ -121,7 +121,10 @@ class QuestionRepository:
     async def ask(
         self, *, message_id: UUID, channel_id: UUID, pod_id: UUID, new: NewQuestion
     ) -> Question:
-        """The line asks this; a second ask with the same ref is the first."""
+        """The line asks this; a second ask with the same ref is the first.
+        Only a member is asked: nothing answers a question put to a contact."""
+        if new.awaits.user_id is None:
+            raise ValueError("A question waits on a member of the pod")
         q = ChannelQuestionModel
         await self.session.execute(
             insert(q)
@@ -138,7 +141,6 @@ class QuestionRepository:
                 kind=new.kind.value,
                 question=dict(new.question),
                 awaits_user_id=new.awaits.user_id,
-                awaits_contact_id=new.awaits.contact_id,
                 expires_at=new.expires_at,
             )
             .on_conflict_do_nothing(constraint="uq_channel_questions_ref")
@@ -211,27 +213,12 @@ class QuestionRepository:
                 state=state.value,
                 answer=dict(answer) if answer is not None else None,
                 answered_by_user_id=by.user_id if by else None,
-                answered_by_contact_id=by.contact_id if by else None,
                 answered_at=now(),
                 claimed_at=None,
             )
             .returning(q)
         )
         return question_entity(row) if row is not None else None
-
-    async def settle_ref(
-        self,
-        *,
-        pod_id: UUID,
-        ref: str,
-        state: QuestionState,
-        answer: Mapping[str, object] | None = None,
-        by: Principal | None = None,
-    ) -> Question | None:
-        found = await self.by_ref(pod_id=pod_id, ref=ref)
-        if found is None:
-            return None
-        return await self.settle(found.message_id, state=state, answer=answer, by=by)
 
     async def cancel_asked_by(
         self,
@@ -413,18 +400,5 @@ class QuestionRepository:
             )
             .order_by(q.created_at.desc())
             .limit(max(1, min(limit, MAX_LINES)))
-        )
-        return [question_entity(row) for row in rows]
-
-    async def waiting_on_contact(self, contact_id: UUID) -> list[Question]:
-        q = ChannelQuestionModel
-        rows = await self.session.scalars(
-            select(q)
-            .where(
-                q.awaits_contact_id == contact_id,
-                still_waiting(),
-            )
-            .order_by(q.created_at.desc())
-            .limit(MAX_LINES)
         )
         return [question_entity(row) for row in rows]

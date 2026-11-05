@@ -79,6 +79,11 @@ PRODUCERS: dict[str, Producer] = {
         f"{_SURFACES}/test_contact_care_e2e.py"
         "::test_past_the_cap_no_run_starts_and_a_person_takes_over",
     ),
+    "agent_surfaces/services/held_replies.py:stage_held_replies": Producer(
+        Sends.PLACE,
+        f"{_SURFACES}/test_whatsapp_reengage_e2e.py"
+        "::test_a_closed_window_is_reopened_with_a_template_and_the_message_waits",
+    ),
     "agent_surfaces/services/contact_outreach.py:ContactOutreach.write": Producer(
         Sends.PLACE,
         f"{_SURFACES}/test_contact_outreach_e2e.py"

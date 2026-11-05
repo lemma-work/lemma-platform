@@ -3,7 +3,6 @@ reading clears. Mixed into ``MemberRepository``, which owns the seats it reads."
 
 from __future__ import annotations
 
-from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy import (
@@ -195,21 +194,6 @@ class ReadState:
             )
         )
         return int(found or 0)
-
-    async def read_seqs(
-        self, *, channel_ids: Collection[UUID], user_id: UUID
-    ) -> dict[UUID, int]:
-        if not channel_ids:
-            return {}
-        rows = await self.session.execute(
-            select(
-                ChannelReadStateModel.channel_id, ChannelReadStateModel.last_read_seq
-            ).where(
-                ChannelReadStateModel.user_id == user_id,
-                ChannelReadStateModel.channel_id.in_(sorted(channel_ids)),
-            )
-        )
-        return {row[0]: int(row[1]) for row in rows}
 
 
 def _unread_mentions(
