@@ -24,6 +24,10 @@ Three rules shape what this does and does not do:
   return a notice the caller shows the agent once, rather than leaving it to
   infer something from an empty directory.
 
+Once a checkout has run, the person's finished worktrees are cleared
+(``worktree_sweep``): this is where worktrees are made, and the one moment the
+sandbox is known to be awake for it.
+
 A conversation from before worktrees recorded the clone itself as its cwd and
 keeps working there, as it always has.
 
@@ -49,6 +53,9 @@ from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.workspace_cli.github_credential_bridge import (
     ensure_github_credentials,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.worktree_sweep import (
+    sweep_finished_worktrees,
 )
 
 if TYPE_CHECKING:
@@ -129,7 +136,11 @@ def _worktree_of(ctx: ToolContext, repo: ProjectRepo) -> tuple[str, str] | None:
 
 
 async def ensure_project_checkout(
-    ctx: ToolContext, workspace_session, *, redis: "Redis | None" = None
+    ctx: ToolContext,
+    workspace_session,
+    *,
+    redis: "Redis | None" = None,
+    sweep: Callable[[ToolContext, object], Awaitable[None]] | None = None,
 ) -> str | None:
     """Clone or fetch the conversation's repo, and make its worktree if it has none.
 
@@ -141,8 +152,10 @@ async def ensure_project_checkout(
     failed checkout should still let the underlying command run (it should), and
     that decision needs the failure to reach it.
 
-    ``redis`` is the marker store, an argument so a test can read what was
-    marked without replacing anything in this module.
+    ``redis`` is the marker store and ``sweep`` the step that clears finished
+    worktrees after this one is made, both arguments so a test can read what
+    was marked, and leave the database alone, without replacing anything in
+    this module.
     """
     repo = ctx.workspace_repo
     if repo is None:
@@ -170,6 +183,19 @@ async def ensure_project_checkout(
         ),
         timeout=_CLONE_TIMEOUT_SECONDS,
     )
+    notice = await _settle(
+        result, redis=redis, marker_key=marker_key, repo=repo, here=here
+    )
+    # The sandbox is awake, which is the only time the person's finished
+    # worktrees are cleared (`worktree_sweep`); it never raises.
+    await (sweep or sweep_finished_worktrees)(ctx, workspace_session)
+    return notice
+
+
+async def _settle(
+    result: dict, *, redis: "Redis", marker_key: str, repo: ProjectRepo, here: str
+) -> str | None:
+    """Mark how the checkout went, and say what the agent needs to hear of it."""
     # git's own stderr is the most useful thing anyone can say here -- it already
     # distinguishes a missing repo from an access failure from a bad ref.
     detail = str(result.get("stderr") or "").strip()

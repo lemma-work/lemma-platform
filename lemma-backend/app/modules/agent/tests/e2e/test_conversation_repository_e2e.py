@@ -9,16 +9,23 @@ connector, so the connector's own refusal travels the whole way out.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.api.dependencies import get_project_repositories
 from app.modules.agent.domain.project_repo import ProjectRepo
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.worktree_sweep import finished_worktrees
 from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.worktree_uses import WorktreeUses
+from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
 from app.modules.agent.tests.fakes import FakeProjectRepositories
 from app.modules.connectors.contracts.github import (
@@ -203,3 +210,70 @@ async def test_a_pod_without_a_github_connector_says_so_when_one_is_named(
     assert error["code"] == "POD_CONNECTOR_NOT_FOUND"
     assert "cannot be opened in a GitHub repository here" in error["message"]
     assert await _conversation_count(authenticated_client, pod_id) == 0
+
+
+async def _quiet_for(conversation_id: str, quiet: timedelta) -> None:
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await uow.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == UUID(conversation_id))
+            .values(last_activity_at=datetime.now(timezone.utc) - quiet)
+        )
+        await uow.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_reads_which_worktrees_the_person_is_finished_with(
+    authenticated_client, fixed_test_org, github
+):
+    """Read across the person's pods, the way one sandbox holds them all: an
+    archived conversation that has settled and one left for weeks are
+    finished; one with a run going, and one just opened, are not."""
+    first_pod = await _create_test_pod(authenticated_client, fixed_test_org)
+    second_pod = await _create_test_pod(authenticated_client, fixed_test_org)
+    opened = {}
+    for name, pod_id in (
+        ("archived", first_pod),
+        ("left", second_pod),
+        ("running", first_pod),
+        ("fresh", second_pod),
+    ):
+        created = await _open(authenticated_client, pod_id, repository="acme/web")
+        assert created.status_code == 201, created.text
+        opened[name] = created.json()
+    archived = await authenticated_client.patch(
+        f"/pods/{first_pod}/conversations/{opened['archived']['id']}",
+        json={"is_archived": True},
+    )
+    assert archived.status_code == 200, archived.text
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await Runs(uow).create_agent_run(
+            conversation_id=UUID(opened["running"]["id"]),
+            agent_id=None,
+            agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+        )
+        await uow.commit()
+    await _quiet_for(opened["archived"]["id"], timedelta(hours=2))
+    await _quiet_for(opened["left"]["id"], timedelta(days=15))
+    # Quiet by its stamp, and still working.
+    await _quiet_for(opened["running"]["id"], timedelta(days=15))
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        uses = await WorktreeUses(uow).of_person(
+            UUID(opened["archived"]["user_id"]), workspace_id="default"
+        )
+    finished = {
+        repo.worktree_dir(slug)
+        for repo, slug in finished_worktrees(uses, now=datetime.now(timezone.utc))
+    }
+
+    cwd = {name: body["workspace_cwd"] for name, body in opened.items()}
+    assert {cwd["archived"], cwd["left"]} <= finished
+    assert cwd["running"] not in finished
+    assert cwd["fresh"] not in finished
+    # Another workspace is another sandbox, with worktrees of its own.
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        elsewhere = await WorktreeUses(uow).of_person(
+            UUID(opened["archived"]["user_id"]), workspace_id="elsewhere"
+        )
+    assert elsewhere == []

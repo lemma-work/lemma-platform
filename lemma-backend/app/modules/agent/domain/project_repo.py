@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 _REPOS_ROOT = f"{WORKSPACE_ROOT}/repos"
-_WORKTREES_ROOT = f"{WORKSPACE_ROOT}/worktrees"
+WORKTREES_ROOT = f"{WORKSPACE_ROOT}/worktrees"
 # A worktree's slug names its directory and, after `lemma/`, its branch, so it
 # is held to what both can take without quoting.
 _WORKTREE_SLUG_PATTERN = re.compile(r"^[a-z0-9]{1,64}$")
@@ -57,7 +57,7 @@ class ProjectRepo:
 
     def worktree_dir(self, slug: str) -> str:
         """One conversation's worktree of this repository."""
-        return f"{_WORKTREES_ROOT}/{self.owner}/{self.repo}/{slug}"
+        return f"{WORKTREES_ROOT}/{self.owner}/{self.repo}/{slug}"
 
     def worktree_slug(self, cwd: str) -> str | None:
         """The slug of this repository's worktree at ``cwd``, if it is one.
@@ -65,7 +65,7 @@ class ProjectRepo:
         ``None`` for anything else -- a conversation from before worktrees,
         which works in ``clone_dir`` itself, or a directory set by hand.
         """
-        prefix = f"{_WORKTREES_ROOT}/{self.owner}/{self.repo}/"
+        prefix = f"{WORKTREES_ROOT}/{self.owner}/{self.repo}/"
         if not cwd.startswith(prefix):
             return None
         slug = cwd[len(prefix) :].rstrip("/")
@@ -102,6 +102,25 @@ class RepositoryChoices:
 def worktree_branch(slug: str) -> str:
     """The branch a conversation's worktree starts on."""
     return f"lemma/{slug}"
+
+
+def worktree_at(path: str) -> tuple[ProjectRepo, str] | None:
+    """The repository and slug of the worktree at ``path``, or ``None``.
+
+    The way back from a recorded cwd to the clone it was made from. Held to
+    ``worktree_dir`` exactly -- a path it could not have produced is not a
+    worktree -- so a hand-set cwd under the root is never taken for one.
+    """
+    if not path.startswith(f"{WORKTREES_ROOT}/"):
+        return None
+    owner, _, rest = path[len(WORKTREES_ROOT) + 1 :].rstrip("/").partition("/")
+    name, _, slug = rest.partition("/")
+    repo = parse_project_repo({"owner": owner, "repo": name})
+    if repo is None or not _WORKTREE_SLUG_PATTERN.match(slug):
+        return None
+    if repo.worktree_dir(slug) != path.rstrip("/"):
+        return None
+    return repo, slug
 
 
 def parse_project_repo(value: object) -> ProjectRepo | None:

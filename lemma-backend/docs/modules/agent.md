@@ -217,6 +217,23 @@ conversation works in another's tree or on another's branch. Conversations from
 before worktrees recorded the clone itself as their directory and keep working
 there, with the old prompt that tells them it is shared.
 
+A worktree goes when its conversations are finished with it
+(`domain/worktree_sweep`): every conversation working in it -- the root and the
+sub-agents that share it -- is archived and an hour quiet, or two weeks quiet
+whether archived or not, and none has a run going. The hour outlasts the
+checkout marker, so a conversation brought back from the archive makes its
+worktree again rather than trusting a marker. The sweep
+(`tools/workspace_cli/worktree_sweep`) reads the person's conversations across
+pods in one workspace, in a short unit of work of its own, and runs after a
+repository conversation's checkout -- never waking a sleeping sandbox -- at most
+once a day per sandbox. It starts `git worktree remove` in the sandbox and is
+not waited on. Without `--force`, git keeps a tree with changes or untracked
+files, to be tried again the next day; ignored files (`node_modules`, build
+output) go with a clean tree. The branch is never deleted: commits that never
+reached GitHub stay in the clone, and a conversation that runs again gets its
+worktree made again on its branch. A worktree whose conversations were deleted
+with their pod is not swept.
+
 ## Prompt context
 
 Prompts combine a compact pod resource map, the agent's role, reply guidance,
