@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 28 |
+| `planned` | 29 |
 | `withdrawn` | 0 |
-| **total** | **232** |
+| **total** | **233** |
 
 Scenario tests declaring a promise: 454.
 
