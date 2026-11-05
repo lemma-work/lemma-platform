@@ -41,9 +41,15 @@ from app.modules.agent_surfaces.events.work_kinds import (
     SURFACE_REPLY_FOR_RUN,
     run_reply_key,
 )
-from app.modules.agent_surfaces.services.run_reply_lines import post_run_reply
+from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.run_reply_lines import (
+    post_run_reply,
+    post_unplaced_reply,
+)
 from app.modules.channels.contracts.lines import last_heard_line
 from app.modules.channels.contracts.places import reply_address
+
+logger = get_logger(__name__)
 
 _REPLYING_STATUSES = frozenset({"COMPLETED", "FAILED"})
 
@@ -83,6 +89,23 @@ async def post_run_answer(ctx: FastContext, payload: RunReplyPayload) -> None:
     address = await reply_address(
         ctx.uow, payload.conversation_id, at_source_id=material.asked_at
     )
+    if address is None and material.asked_at is not None:
+        # The place it was asked went while it worked. Never somewhere else
+        # the person wrote -- that answered email on WhatsApp -- and never
+        # nowhere: the answer stays on the channel's timeline, sent to nobody.
+        logger.warning(
+            "agent_surfaces.reply_for_run.asked_place_gone.degraded",
+            run_id=str(payload.run_id),
+            conversation_id=str(payload.conversation_id),
+            source_id=str(material.asked_at),
+        )
+        await post_unplaced_reply(
+            ctx.uow,
+            run_id=payload.run_id,
+            conversation_id=payload.conversation_id,
+            material=material,
+        )
+        return
     if address is None:
         return
     await post_run_reply(

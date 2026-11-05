@@ -19,10 +19,11 @@ and Meta servers, with the real harness and a scripted model.
 from __future__ import annotations
 
 import json
+import logging
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -53,11 +54,17 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_messages,
 )
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    process_ingress_and_run_scripted,
     run_scripted_agent_run,
     script_text,
 )
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     clean_surface_work,  # noqa: F401  (fixture)
+    deliveries_of_line,
+)
+from app.modules.channels.infrastructure.models import (
+    ChannelMessageModel,
+    ChannelSourceModel,
 )
 from app.modules.connectors.domain.connector import AuthProvider
 
@@ -115,6 +122,59 @@ def _says(messages: list[dict], text: str) -> bool:
     return any(text in json.dumps(message) for message in messages)
 
 
+async def _by_email_and_on_whatsapp(
+    client, db_session, pod_id, user, fake_resend, fake_whatsapp, monkeypatch
+) -> str:
+    """One agent, reached by email and on WhatsApp; the address to email."""
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-001")
+    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "wa-secret")
+    agent = await _create_agent(client, pod_id)
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=user["id"],
+        connector_id="resend",
+        credentials={"api_key": "resend-token", "api_base_url": fake_resend.api_base},
+        email="assistant@resend.test",
+        provider=AuthProvider.LEMMA,
+    )
+    email_surface = await _create_surface(
+        client,
+        pod_id,
+        config={"type": "RESEND", "account_id": str(account.id)},
+        agent_name=agent["name"],
+    )
+    await _create_surface(
+        client, pod_id, config={"type": "WHATSAPP"}, agent_name=agent["name"]
+    )
+    await _set_user_mobile_number(db_session, user_id=user["id"], mobile_number=_PHONE)
+    return (
+        email_surface.get("surface_identity_email")
+        or (
+            await db_session.get(AgentSurface, UUID(email_surface["id"]))
+        ).surface_identity_email
+    )
+
+
+def _email(user, address: str, message_id: str, text: str):
+    return SurfacePlatformWebhookIngress(
+        source="resend",
+        payload=_resend_payload(
+            sender_email=user["email"],
+            assistant_address=address,
+            message_id=message_id,
+            text=text,
+        ),
+        headers={},
+    )
+
+
 async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
     authenticated_client,
     db_session,
@@ -125,60 +185,19 @@ async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
     message_store,
     monkeypatch,
 ):
-    pod_id = test_pod["id"]
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
-        f"{fake_whatsapp.api_base}/v21.0",
-    )
-    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
-    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-001")
-    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "wa-secret")
-    # One agent, reached by email and on WhatsApp.
-    agent = await _create_agent(authenticated_client, pod_id)
-    account = await _ensure_connector_account(
+    address = await _by_email_and_on_whatsapp(
+        authenticated_client,
         db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="resend",
-        credentials={"api_key": "resend-token", "api_base_url": fake_resend.api_base},
-        email="assistant@resend.test",
-        provider=AuthProvider.LEMMA,
-    )
-    email_surface = await _create_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "RESEND", "account_id": str(account.id)},
-        agent_name=agent["name"],
-    )
-    await _create_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "WHATSAPP"},
-        agent_name=agent["name"],
-    )
-    address = (
-        email_surface.get("surface_identity_email")
-        or (
-            await db_session.get(AgentSurface, UUID(email_surface["id"]))
-        ).surface_identity_email
-    )
-    await _set_user_mobile_number(
-        db_session, user_id=fixed_test_user["id"], mobile_number=_PHONE
+        test_pod["id"],
+        fixed_test_user,
+        fake_resend,
+        fake_whatsapp,
+        monkeypatch,
     )
 
     emailed = await _arrives(
         db_session,
-        SurfacePlatformWebhookIngress(
-            source="resend",
-            payload=_resend_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_address=address,
-                message_id="answered-where-asked-email",
-                text=_EMAILED,
-            ),
-            headers={},
-        ),
+        _email(fixed_test_user, address, "answered-where-asked-email", _EMAILED),
     )
     # While that run works, the same member writes on WhatsApp.
     whatsapped = await _arrives(
@@ -246,3 +265,86 @@ async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
     assert not _says(message_store.get_all("RESEND"), _WHATSAPP_ANSWER)
     claimed = await _user_message(conversation_id, _WHATSAPPED)
     assert claimed.message_metadata[STEERED_INTO_RUN] == str(whatsapp_run_id)
+
+
+async def test_an_answer_whose_place_went_mid_run_stays_on_the_timeline(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    fake_whatsapp,
+    message_store,
+    monkeypatch,
+    caplog,
+):
+    """The email place is removed while its run works. The answer is not sent
+    to WhatsApp, where the member also wrote -- and it does not vanish: it is
+    the agent's line in their channel, sent nowhere, and the loss is logged."""
+    address = await _by_email_and_on_whatsapp(
+        authenticated_client,
+        db_session,
+        test_pod["id"],
+        fixed_test_user,
+        fake_resend,
+        fake_whatsapp,
+        monkeypatch,
+    )
+    # They have written on WhatsApp before: a place the answer could wrongly
+    # fall back to.
+    await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="whatsapp",
+            payload=_whatsapp_payload(
+                text="Hi",
+                message_id="wamid-place-went-earlier",
+                phone_number_id="1234567890",
+                waba_id="waba-001",
+                sender_phone=_PHONE,
+            ),
+            headers={},
+        ),
+        script=[script_text("Hello.")],
+    )
+    emailed = await _arrives(
+        db_session, _email(fixed_test_user, address, "place-went-email", _EMAILED)
+    )
+    async with async_session_maker() as session:
+        await session.execute(
+            delete(ChannelSourceModel).where(ChannelSourceModel.id == emailed.source_id)
+        )
+        await session.commit()
+
+    with caplog.at_level(logging.WARNING):
+        await run_scripted_agent_run(
+            db_session,
+            conversation_id=emailed.conversation_id,
+            user_id=emailed.user_id,
+            pod_id=emailed.pod_id,
+            agent_name=emailed.agent_name,
+            script=[script_text(_EMAIL_ANSWER)],
+        )
+
+    assert not _says(message_store.get_all("WHATSAPP"), _EMAIL_ANSWER)
+    assert not _says(message_store.get_all("RESEND"), _EMAIL_ANSWER)
+    [email_run] = [
+        run
+        for run in await _runs(emailed.conversation_id)
+        if run.run_metadata.get("asked_at_source") == str(emailed.source_id)
+    ]
+    async with async_session_maker() as session:
+        [answer] = (
+            await session.scalars(
+                select(ChannelMessageModel).where(
+                    ChannelMessageModel.agent_run_id == email_run.id
+                )
+            )
+        ).all()
+    assert answer.body == _EMAIL_ANSWER
+    assert answer.target_source_id is None and answer.source_id is None
+    # Sent to no place; a member who hears of it may still be told.
+    assert all(
+        delivery.source_id is None for delivery in await deliveries_of_line(answer.id)
+    )
+    assert "agent_surfaces.reply_for_run.asked_place_gone.degraded" in caplog.text
