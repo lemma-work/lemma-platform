@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 31 |
+| `planned` | 32 |
 | `withdrawn` | 0 |
-| **total** | **235** |
+| **total** | **236** |
 
 Scenario tests declaring a promise: 454.
 
@@ -297,6 +297,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-015` Somebody outside the pod is answered in a group opened to them | `planned` | — |
 | `PS-SURF-016` The bot remembers what was said in a group | `planned` | — |
+| `PS-SURF-054` A member's run asks before acting on what somebody outside the pod wrote | `planned` | — |
 | `PS-SURF-017` A person can say something to the agent without the group reading it | `planned` | — |
 | `PS-SURF-018` An email thread with other people on it is answered like one | `planned` | — |
 | `PS-SURF-019` A member opens a WhatsApp group with the bot in it | `planned` | — |

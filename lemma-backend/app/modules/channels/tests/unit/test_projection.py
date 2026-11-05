@@ -12,7 +12,13 @@ from app.modules.channels.domain.entities import (
     Principal,
     Sender,
 )
-from app.modules.channels.domain.projection import Reader, may_read, readable
+from app.modules.channels.domain.projection import (
+    Reader,
+    is_outside,
+    may_read,
+    not_held,
+    readable,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -120,3 +126,20 @@ def test_a_sender_names_exactly_who_they_are():
         )
     with pytest.raises(ValueError):
         Principal(user_id=PRIYA, contact_id=TOM)
+
+
+def test_outside_the_pod_is_anybody_but_an_agent_the_pod_does_not_hold_now():
+    held = {PRIYA}
+    assert not is_outside(Sender.member(PRIYA), held=held)
+    assert is_outside(Sender.contact(TOM), held=held)
+    # A member since gone: their words are no longer a colleague's.
+    assert is_outside(Sender.member(uuid4()), held=held)
+    assert not is_outside(Sender.agent(LEM, on_behalf_of=None), held=set())
+
+
+def test_where_the_pod_could_not_say_who_it_holds_everybody_is_outside():
+    assert is_outside(Sender.member(PRIYA), held=None)
+    assert not is_outside(Sender.agent(LEM, on_behalf_of=None), held=None)
+    assert not_held("U123", held=None)
+    assert not_held("U123", held={"U999"})
+    assert not not_held("U123", held={"U123"})
