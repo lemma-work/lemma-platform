@@ -17,17 +17,17 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
+from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
 )
-from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses import pydantic_ai_driver
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
+from app.modules.agent.infrastructure.harness.lemma import driver as pydantic_ai_driver
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.domain.tools import AgentInputRequired
 
 
 class _ScopedRequestStream:
@@ -247,7 +247,7 @@ class TestPausingToolsBesideFinalAnswer:
                 ),
                 conversation=conversation,
                 messages=[],
-                ctx=AgentContext(
+                ctx=ToolContext(
                     user_id=conversation.user_id,
                     pod_id=pod_id,
                     conversation_id=conversation.id,

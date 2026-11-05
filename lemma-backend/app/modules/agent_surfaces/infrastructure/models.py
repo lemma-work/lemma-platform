@@ -18,6 +18,9 @@ from app.modules.agent_surfaces.infrastructure.inbound_delivery_models import ( 
     SurfaceMessageClaimModel,
     SurfaceReceiverStateModel,
 )
+from app.modules.agent_surfaces.infrastructure.surface_conversation_models import (  # noqa: F401
+    SurfaceConversationStateModel,
+)
 from app.modules.agent_surfaces.infrastructure.slack_configuration_models import (  # noqa: F401
     SlackConfigurationTokenModel,
 )

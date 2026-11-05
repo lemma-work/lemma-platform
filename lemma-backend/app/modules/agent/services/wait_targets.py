@@ -24,9 +24,8 @@ from app.modules.agent.domain.value_objects import (
     TERMINAL_AGENT_RUN_STATUSES,
     ConversationStatus,
 )
-from app.modules.agent.domain.subagent_results import COLLECTED_BY_WAIT
 from app.modules.agent.domain.wait import AgentWaitType, AgentWaitWakeReason
-from app.modules.agent.tools.waiting.models import wake_message
+from app.modules.agent.infrastructure.tools.waiting.models import wake_message
 
 logger = get_logger(__name__)
 
@@ -144,7 +143,8 @@ async def read_subagent_in(
     question. Reported as finished, the parent built on a result that did not
     exist yet and the question was never answered.
     """
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.conversations import Conversations
+    from app.modules.agent.infrastructure.db.runs import Runs
     from app.modules.agent.services.subagent_result_delivery import mark_collected
 
     try:
@@ -152,10 +152,11 @@ async def read_subagent_in(
     except ValueError:
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE)
 
-    repository = ConversationRepository(uow)
-    run = await repository.get_agent_run(parsed)
+    conversations = Conversations(uow)
+    runs = Runs(uow)
+    run = await runs.get_agent_run(parsed)
     child = (
-        await repository.get_conversation(run.conversation_id, include_runs=False)
+        await conversations.get_conversation(run.conversation_id, include_runs=False)
         if run is not None
         else None
     )
@@ -173,5 +174,5 @@ async def read_subagent_in(
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT)
     # Both callers hand "finished" to the parent that is waiting on exactly
     # this run, so the parent has collected it and nothing delivers it again.
-    await mark_collected(uow, run.id, by=COLLECTED_BY_WAIT)
+    await mark_collected(uow, run.id)
     return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED)

@@ -33,7 +33,8 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.services import pod_mcp_agents
-from app.modules.agent.services.pause_questions import Pause
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.tests.unit.repository_fakes import pause_for_call
 from app.modules.agent.services.pod_mcp_agent_tools import (
     AGENT_ANSWER,
     ASK_AGENT,
@@ -379,6 +380,22 @@ def test_waiting_on_its_own_work_is_still_working():
     )
 
 
+def _pause(tool_name: str, call_id: str, args: dict, *, run_id) -> Pause:
+    """The pause a run's stored call opened."""
+    return pause_for_call(
+        Message.create(
+            conversation_id=uuid4(),
+            sequence=1,
+            agent_run_id=run_id,
+            role=MessageRole.ASSISTANT,
+            kind=MessageKind.TOOL_CALL,
+            tool_name=tool_name,
+            tool_call_id=call_id,
+            tool_args=args,
+        )
+    )
+
+
 def test_waiting_on_the_person_says_what_and_where_an_approval_is_given():
     run = _run(AgentRunStatus.COMPLETED)
     answer = read_answer(
@@ -386,17 +403,17 @@ def test_waiting_on_the_person_says_what_and_where_an_approval_is_given():
         agent="analyst",
         messages=[],
         pauses=[
-            Pause(
-                tool_call_id="ask-1",
-                kind="ask_user",
-                tool_args={"questions": [{"question": "Which quarter?"}]},
-                agent_run_id=run.id,
+            _pause(
+                "ask_user",
+                "ask-1",
+                {"questions": [{"question": "Which quarter?"}]},
+                run_id=run.id,
             ),
-            Pause(
-                tool_call_id="approve-1",
-                kind="request_approval",
-                tool_args={"title": "Send the report to finance?"},
-                agent_run_id=run.id,
+            _pause(
+                "request_approval",
+                "approve-1",
+                {"title": "Send the report to finance?"},
+                run_id=run.id,
             ),
         ],
     )

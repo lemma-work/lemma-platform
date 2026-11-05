@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from redis.exceptions import RedisError
 
-from app.modules.agent.tools.speech.voice_catalogue import (
+from app.modules.agent.infrastructure.tools.speech.voice_catalogue import (
     FALLBACK_VOICE_BY_LANGUAGE,
     Voice,
     _parse,
@@ -107,7 +107,9 @@ async def test_a_cache_that_is_down_does_not_stop_the_agent_speaking(monkeypatch
     """
     import httpx
 
-    from app.modules.agent.tools.speech.voice_catalogue import load_voices
+    from app.modules.agent.infrastructure.tools.speech.voice_catalogue import (
+        load_voices,
+    )
 
     class _OfflineClient:
         """The provider is unreachable too, so only the cache is under test."""

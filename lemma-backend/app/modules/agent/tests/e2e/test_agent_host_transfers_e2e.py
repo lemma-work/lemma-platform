@@ -27,16 +27,16 @@ from app.modules.agent.contracts.host_execution import (
     AgentHostOpClient,
     AgentHostOpError,
 )
-from app.modules.agent.domain.agent_host_ops import TRANSFER_INCOMPLETE
-from app.modules.agent.domain.agent_host_transfer import (
+from app.modules.agent.agent_host.domain.ops import TRANSFER_INCOMPLETE
+from app.modules.agent.agent_host.domain.transfer import (
     BLOB_MAX_BYTES,
     DIGEST_HEADER,
     LINK_INLINE_DATA_BYTES,
 )
-from app.modules.agent.infrastructure.agent_host.transfers import (
+from app.modules.agent.agent_host.control.transfers import (
     AgentHostTransferStore,
 )
-from app.modules.agent.services.agent_host_link_ops import OLD_HOST_OUTPUT_LIMIT_BYTES
+from app.modules.agent.agent_host.link.ops import OLD_HOST_OUTPUT_LIMIT_BYTES
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     app_of,
     connected_host,

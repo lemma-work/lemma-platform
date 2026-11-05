@@ -1,47 +1,65 @@
-"""Every tool a turn can call has a declared replay class, and the classes say what §14 says.
+"""Every tool's replay class is on its policy, and the classes say what §14 says.
 
 A turn resumed after a crash settles the call its last attempt left open by
 this class: SAFE and KEYED run again under the recorded call id, UNSAFE never
-does. A tool added without a row would silently default to UNSAFE -- safe, but
-an author's decision nobody made -- so the registry must cover every tool the
-static toolsets offer.
+does, and neither does a call no spec answers to.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import CALL_NAMES, PAUSING_CALL_NAMES
 from app.modules.agent.domain.replay import (
-    REPLAY_CLASS,
     ReplayClass,
     is_replayable_call,
     replay_class,
 )
-from app.modules.agent.tools.registry import _TOOLSET_BY_NAME
+from app.modules.agent.domain.tools import ToolSpec
+from app.modules.agent.infrastructure.tools.contact import contact_specs
+from app.modules.agent.infrastructure.tools.final_answer.tools import (
+    final_answer_spec,
+)
+from app.modules.agent.infrastructure.tools.form import form_specs
+from app.modules.agent.infrastructure.tools.messaging import answer
+from app.modules.agent.infrastructure.tools.todo import todo_specs
+from app.modules.agent.services.tool_catalog import STATIC_SPECS
 
 pytestmark = pytest.mark.unit
 
 SAFE, KEYED, UNSAFE = ReplayClass.SAFE, ReplayClass.KEYED, ReplayClass.UNSAFE
 
 
-def _static_tool_names() -> set[str]:
-    names: set[str] = set()
-    for toolset in _TOOLSET_BY_NAME.values():
-        names.update(getattr(toolset, "tools", {}))
-    return names
+def _specs() -> dict[str, ToolSpec]:
+    specs = [spec for group in STATIC_SPECS.values() for spec in group]
+    specs += [
+        *answer.SPECS,
+        *contact_specs(uow_factory=object),
+        *form_specs(uow_factory=object),
+        *todo_specs(uow_factory=object),
+        final_answer_spec(agent=None),
+    ]
+    return {spec.name: spec for spec in specs}
 
 
-def test_every_static_tool_is_classified_or_is_a_pause() -> None:
-    missing = _static_tool_names() - set(REPLAY_CLASS) - set(PAUSING_TOOL_NAMES)
-    assert not missing, f"tools with no replay class: {sorted(missing)}"
+def _class(tool: str | None, args: object = None) -> ReplayClass:
+    return replay_class(_specs().get(tool or ""), args)
 
 
 def test_pauses_are_never_settled_by_a_resumed_turn() -> None:
-    assert not set(PAUSING_TOOL_NAMES) & set(REPLAY_CLASS)
-    for name in PAUSING_TOOL_NAMES:
+    specs = _specs()
+    for name in PAUSING_CALL_NAMES:
+        assert specs[name].policy.pauses is not None
         assert not is_replayable_call(name)
     assert is_replayable_call("pod_read_file")
+
+
+def test_the_stored_call_names_are_the_tools_that_pause() -> None:
+    """``CALL_NAMES`` is read only by transcript readers; it must agree with
+    ``ToolPolicy.pauses``, which is what says a tool pauses."""
+    for spec in _specs().values():
+        if spec.policy.pauses is not None:
+            assert CALL_NAMES[spec.policy.pauses] == spec.name
 
 
 @pytest.mark.parametrize(
@@ -69,7 +87,7 @@ def test_pauses_are_never_settled_by_a_resumed_turn() -> None:
 def test_the_defaults_follow_the_design(
     tool: str | None, expected: ReplayClass
 ) -> None:
-    assert replay_class(tool) is expected
+    assert _class(tool) is expected
 
 
 @pytest.mark.parametrize(
@@ -86,10 +104,10 @@ def test_the_defaults_follow_the_design(
     ],
 )
 def test_a_record_write_is_classified_by_its_operation(args, expected) -> None:
-    assert replay_class("pod_write_record", args) is expected
+    assert _class("pod_write_record", args) is expected
 
 
 def test_awaiting_a_child_is_safe_and_messaging_it_is_not() -> None:
-    assert replay_class("interact_subagent", {"action": "await"}) is SAFE
-    assert replay_class("interact_subagent", {"request": {"action": "stop"}}) is SAFE
-    assert replay_class("interact_subagent", {"action": "send"}) is UNSAFE
+    assert _class("interact_subagent", {"action": "await"}) is SAFE
+    assert _class("interact_subagent", {"request": {"action": "stop"}}) is SAFE
+    assert _class("interact_subagent", {"action": "send"}) is UNSAFE

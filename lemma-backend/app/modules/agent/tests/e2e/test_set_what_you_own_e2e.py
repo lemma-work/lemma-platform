@@ -10,7 +10,6 @@ what it owns.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,8 +17,10 @@ from fastapi import status
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.session import async_session_maker
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.pod.pod_outcome_tool import set_what_you_own
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.pod.pod_outcome_tool import (
+    set_what_you_own,
+)
 from app.modules.pod.contracts.members import pod_profile
 from app.modules.pod.contracts.outcome import OutcomeInput
 
@@ -57,16 +58,14 @@ async def _pod_with_posts(client, org_id: str) -> str:
 
 def _run_ctx(*, user_id: str, pod_id: str, workload_id: str, agent_name: str):
     workload = UUID(workload_id)
-    return SimpleNamespace(
-        deps=BaseAgentContext(
-            user_id=UUID(user_id),
-            pod_id=UUID(pod_id),
-            conversation_id=uuid4(),
-            workload_type="agent",
-            workload_id=workload,
-            agent_name=agent_name,
-            is_pod_default_agent=is_pod_default_agent(workload, pod_id=UUID(pod_id)),
-        )
+    return ToolContext(
+        user_id=UUID(user_id),
+        pod_id=UUID(pod_id),
+        conversation_id=uuid4(),
+        workload_type="agent",
+        workload_id=workload,
+        agent_name=agent_name,
+        is_pod_default_agent=is_pod_default_agent(workload, pod_id=UUID(pod_id)),
     )
 
 
@@ -92,7 +91,7 @@ async def test_the_pods_own_agent_sets_what_it_owns_and_is_told_it(
         workload_id=pod_id,
         agent_name="pod_default",
     )
-    result = await set_what_you_own(ctx, OWNS)  # type: ignore[arg-type]
+    result = await set_what_you_own(ctx, OWNS)
     assert result["success"] is True, result
     assert result["value"] == 2
 
@@ -117,7 +116,7 @@ async def test_a_measure_that_is_not_one_number_comes_back_to_the_agent(
         agent_name="pod_default",
     )
     rows = OWNS.model_copy(update={"measure": "SELECT title FROM posts"})
-    result = await set_what_you_own(ctx, rows)  # type: ignore[arg-type]
+    result = await set_what_you_own(ctx, rows)
     assert result["success"] is False
     assert result["code"] == "DATASTORE_MEASURE_INVALID"
     pod = (await authenticated_client.get(f"/pods/{pod_id}")).json()
@@ -141,7 +140,7 @@ async def test_a_named_agent_without_the_grant_is_sent_to_ask(
         workload_id=agent["id"],
         agent_name=agent["name"],
     )
-    result = await set_what_you_own(ctx, OWNS)  # type: ignore[arg-type]
+    result = await set_what_you_own(ctx, OWNS)
     assert result["success"] is False
     assert result.get("needs_approval") is True, result
     pod = (await authenticated_client.get(f"/pods/{pod_id}")).json()

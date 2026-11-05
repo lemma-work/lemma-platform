@@ -25,11 +25,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.usage import RunUsage
 
-from app.modules.agent.infrastructure.harnesses.history import (
+from app.modules.agent.infrastructure.harness.lemma.history import (
     enforce_token_ceiling,
     is_pinned_message,
 )
-from app.modules.agent.infrastructure.harnesses.history_compaction import (
+from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
     FAILED_MARKER,
     SUMMARY_MARKER,
     HistoryCompactor,
@@ -145,7 +145,7 @@ class TestWhatGetsSummarized:
         Big enough to actually cross `_MAX_TRANSCRIPT_CHARS`: below it nothing
         is truncated, and this passed with the literal library bug in place.
         """
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             _MAX_TRANSCRIPT_CHARS,
         )
 
@@ -212,7 +212,7 @@ class TestIdempotence:
         """Each pass used to emit a new pinned summary beside the last. They
         never merged, so the pin budget filled with this module's own output and
         user turns were folded nowhere near the documented threshold."""
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             is_summary_message,
         )
 
@@ -304,7 +304,7 @@ class TestTheSummaryIsNotTheUserSpeaking:
         return FunctionModel(respond)
 
     async def _summary_text(self, reply: str, seen: list[object]) -> str:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             is_summary_message,
         )
 
@@ -494,7 +494,9 @@ class TestModelSettings:
     ) -> None:
         """The run's own model is sent what `run_generation_settings` resolved
         for compaction -- one source of truth -- and only when it compacts."""
-        from app.modules.agent.services import summarization_model
+        from app.modules.agent.infrastructure.providers import (
+            summarization as summarization_model,
+        )
         from app.modules.agent.services.generation_settings import (
             COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
         )
@@ -542,7 +544,9 @@ class TestModelSettings:
 
     async def test_a_separate_summarization_model_gets_only_the_cap(self) -> None:
         """Nothing says which of the run's parameters another model accepts."""
-        from app.modules.agent.services import summarization_model
+        from app.modules.agent.infrastructure.providers import (
+            summarization as summarization_model,
+        )
         from app.modules.agent.services.run_input_settings import (
             summary_only_settings,
         )
@@ -618,7 +622,7 @@ class TestStaleImagesAreDetached:
         return messages
 
     def _has_binary(self, messages: list[object]) -> bool:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             _is_binary,
         )
 
@@ -635,7 +639,7 @@ class TestStaleImagesAreDetached:
 
     def test_a_recent_image_keeps_its_pixels(self) -> None:
         """The model may still be looking at it."""
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             strip_stale_images,
         )
 
@@ -644,7 +648,7 @@ class TestStaleImagesAreDetached:
         assert self._has_binary(strip_stale_images(history))
 
     def test_an_old_image_is_detached(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             strip_stale_images,
         )
 
@@ -654,7 +658,7 @@ class TestStaleImagesAreDetached:
 
     def test_the_detached_image_leaves_a_marker(self) -> None:
         """Silence would read as though the tool returned nothing."""
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             STALE_IMAGE_MARKER,
             strip_stale_images,
         )
@@ -668,7 +672,7 @@ class TestStaleImagesAreDetached:
         )
 
     def test_it_is_idempotent(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             strip_stale_images,
         )
 
@@ -678,7 +682,7 @@ class TestStaleImagesAreDetached:
         assert strip_stale_images(once) == once
 
     def test_a_short_history_is_untouched(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             strip_stale_images,
         )
 
@@ -688,7 +692,7 @@ class TestStaleImagesAreDetached:
 
     def test_tool_pairing_survives(self) -> None:
         """Rewriting content must not disturb which call a result belongs to."""
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             strip_stale_images,
         )
 
@@ -727,7 +731,7 @@ class TestThePinnedSetIsBounded:
         return messages
 
     async def test_the_original_request_survives_the_bound(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             MAX_PINNED_USER_MESSAGES,
         )
 
@@ -738,7 +742,7 @@ class TestThePinnedSetIsBounded:
         assert any(THE_REQUEST in text for text in _texts(compacted))
 
     async def test_the_most_recent_questions_survive_too(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             MAX_PINNED_USER_MESSAGES,
         )
 
@@ -750,7 +754,7 @@ class TestThePinnedSetIsBounded:
         assert any(f"follow-up number {count - 1}" in t for t in _texts(compacted))
 
     async def test_the_pinned_set_stops_growing(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             MAX_PINNED_USER_MESSAGES,
         )
 
@@ -766,7 +770,7 @@ class TestThePinnedSetIsBounded:
     async def test_folding_a_users_words_is_declared(self) -> None:
         """Silently turning what somebody said into prose about what they said
         is the drop this whole module removes."""
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             MAX_PINNED_USER_MESSAGES,
         )
 
@@ -784,7 +788,7 @@ class TestThePinnedSetIsBounded:
         )
 
     async def test_folded_turns_are_summarized_not_simply_lost(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             MAX_PINNED_USER_MESSAGES,
         )
 
@@ -812,7 +816,7 @@ class TestSyntheticMessagesNeverDisplaceTheRequest:
         from pydantic_ai.messages import ModelResponse, TextPart
 
         from app.modules.agent.domain.harness_options import HarnessOptions
-        from app.modules.agent.infrastructure.harnesses.history import (
+        from app.modules.agent.infrastructure.harness.lemma.history import (
             build_history_processors,
         )
 
@@ -826,7 +830,7 @@ class TestSyntheticMessagesNeverDisplaceTheRequest:
         assert not is_pinned_message(await self._leading_placeholder())
 
     async def test_it_does_not_take_the_first_pinned_slot(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             MAX_PINNED_USER_MESSAGES,
             _bounded_pins,
         )
@@ -846,7 +850,7 @@ class TestSyntheticMessagesNeverDisplaceTheRequest:
         from pydantic_ai.messages import ModelResponse, TextPart
 
         from app.modules.agent.domain.harness_options import HarnessOptions
-        from app.modules.agent.infrastructure.harnesses.history import (
+        from app.modules.agent.infrastructure.harness.lemma.history import (
             build_history_processors,
         )
 

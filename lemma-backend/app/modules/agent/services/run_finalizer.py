@@ -23,7 +23,7 @@ from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
+from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
     classify_run_failure,
     is_usage_limit_error as is_usage_limit_error,
     run_failure_reason as run_failure_reason,
@@ -37,26 +37,23 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     JsonValue,
 )
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
-from app.modules.agent.infrastructure.repositories import (
-    ConversationRepository,
-)
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     mark_final_answer,
 )
-from app.modules.agent.services.realtime import (
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import (
     completed_payload,
     error_payload,
     message_payload,
-    publish_conversation_event,
 )
 from app.modules.agent.services.run_followups import stage_run_followups
 from app.modules.agent.services.run_identity import RunIdentity
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.usage.contracts.execution import usage_context_from_agent_context
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 logger = get_logger(__name__)
 
@@ -113,7 +110,7 @@ async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
     Said on the ``completed`` frame so a client can tell the two apart without
     reading back: only this one has a run coming that it should follow.
     """
-    return await AgentConversationWaitRepository(uow).has_active(conversation_id)
+    return bool(await Pauses(uow).pending(conversation_id, kinds=(PauseKind.WAIT,)))
 
 
 def completed_event(
@@ -236,7 +233,7 @@ class RunFinalizer:
             event_data: JsonObject = {}
             answered: Message | None = None
             async with self.terminal_units() as uow:
-                finish_result = await ConversationRepository(uow).finish_agent_run(
+                finish_result = await Runs(uow).finish_agent_run(
                     agent_run_id=run.agent_run_id,
                     status=status,
                     conversation_status=conversation_status,
@@ -360,7 +357,7 @@ class RunFinalizer:
             await self.usage_recorder.release(run.usage_reservation)
             return
         context = usage_context_from_agent_context(
-            ConversationContext(
+            ToolContext(
                 user_id=run.user_id,
                 org_id=run.organization_id,
                 pod_id=run.pod_id,

@@ -25,9 +25,13 @@ lose one. Each step of a turn (a tool call, its return, the answer) commits
 fenced by the turn's claim, so a worker that lost the turn's lease cannot add a
 second answer, and a resumed turn whose answer had committed ends on it without
 asking the model again. Lemma's database being unreachable mid-turn interrupts
-the turn, which resumes; it is never recorded as the model failing. Transient token/status frames use the core realtime-channel port with
-a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
-and releases it on completion, failure, or cancellation.
+the turn, which resumes; it is never recorded as the model failing. Transient
+token/status frames go out through one publisher, `infrastructure/live.py`
+(the `LiveEvents` port, on the core realtime-channel port's Redis Pub/Sub
+adapter); the SSE stream, the web app's live socket and a visitor's page each
+subscribe to that one publish and encode its frames (`domain/live_events.py`)
+for their own wire. Each SSE connection leases one subscription connection and
+releases it on completion, failure, or cancellation.
 
 Migration `0056_agent_surface_bundle_work` arms every active wait. A turn that
 was running on the old transport, and a conversation paused on an approval that
@@ -44,11 +48,90 @@ to continue; nothing is replayed
 | `agent_host_pairings` | Single-use pairing codes a user authorizes; consuming one deletes the row, so presence is the whole validity check and a replayed code looks like one that never existed |
 | `agent_hosts`, `agent_host_harnesses` | Paired Agent Host installations and their harness snapshots |
 | `agent_host_commands`, `agent_host_run_leases` | Durable command handout and the single dispatch fence per run |
+| `agent_host_sessions` | One row per conversation: the provider session an Agent Host conversation talks to (session, harness, host, the run that bound it), the host's working directory, the instructions digest delivered, the instructions and prompt still pending, and how far into the conversation the session has been sent (`agent_host/control/session_memory`). Was the conversation's `agent_host_provider_session_id` metadata key until migration 0066 |
+| `agent_host_run_records` | One row per run: what it decided once and every later context build reads back -- where its commands execute, whether its agent's own shell replaces Lemma's command tools, and the final answer its tool recorded (`agent_host/control/run_records`). Were the run's `execution`, `host_native_commands` and `final_answer` metadata keys until migration 0066 |
 | `agent_conversations` | Pod thread, the agent it belongs to (the pod's assistant is a row like any other), parent/subagent and workspace metadata |
 | `agent_messages` | User/assistant/tool messages and structured parts |
 | `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
-| `agent_conversation_waits` | What a paused turn is waiting on — wait type, external reference, wake deadline, and the fire lease a timer tick takes; a partial unique index allows one `ACTIVE` row per conversation, mirroring `workflow_run_waits` |
-| `agent_approval_decisions`, `agent_feedback` | Durable interaction/audit records |
+| `agent_pauses` | One row per pausing tool call — the `Pause` aggregate (`domain/pauses`): its kind (question, approval, sign-in, budget, Agent Host permission, wait), status, deadline, resolution, the typed host request or budget, a wait's type, token, wake time and spec, and the one-shot execution claim of an approved tool; a partial unique index allows one PENDING wait per conversation |
+| `agent_conversation_waits`, `agent_approval_decisions` | No longer written: kept one release after `agent_pauses` absorbed them (migration 0066) |
+| `agent_feedback` | Feedback a run leaves through its tools |
+
+### Repositories
+
+Conversations, runs, messages and pauses are read and written through
+`infrastructure/db`, one concrete repository per aggregate, each built from the
+unit of work it shares a transaction with:
+
+| Repository | Owns |
+| --- | --- |
+| `conversations.Conversations` | The conversation row, its status and row lock, the history list, titling's opening texts, the sub-agent tree, and (for now) the metadata key/value writes |
+| `runs.Runs` | Starting a run, ending it exactly once (`finish_agent_run`), and the reads about one run |
+| `messages.Messages` | Appending a message and reading the transcript |
+| `queued_messages.QueuedMessages` | Messages sent while a run was working: counting, claiming, steering, withdrawing |
+| `history_reads.HistoryReads` | The runs and run-less messages a prompt is built from |
+| `pauses.Pauses` | Every pause: opened with its call, one `pending()` read of what a conversation or run is waiting on, endings written fenced on the status they were read with, the execution claim, and the pending-interactions inbox |
+| `calls.Calls` | A call's conversations (by the `call` mark each carries, at any depth), its canvas since the conversation became a call, its earlier connections' transcripts and the relays sent while nobody listened; `contracts/calls` holds the call in a chat and marks it live or not |
+
+There is no port in front of them: each has one implementation, and their
+tests run against Postgres. Every turn transaction takes the conversation's row
+lock before its run's, the order `Runs.finish_agent_run` documents.
+
+### Use cases
+
+What a person, a work item or another module does to a conversation is a use
+case under `application/`: one class per verb, with one public async method,
+constructed with exactly the repositories, helpers and other use cases it
+calls, and built from a unit of work by its own `build(uow)`. Controllers get
+the request-scoped ones from `api/dependencies.py`; work handlers, contracts and
+other use cases build the one they need. None is reached through another
+object, and none inherits from another.
+
+| Use case | Does |
+| --- | --- |
+| `conversations/start.StartConversation` | Open a conversation: its agent and the right to run it (`authorize_opening` checks that alone), its kind, where it works, the server-only facts |
+| `conversations/update.UpdateConversation` | Change title, instructions, runtime, client tags, archived |
+| `conversations/read.ConversationReads` | The query side: list, get, messages, runs, the pending-interactions inbox, and the oldest open pause of each kind |
+| `turns/send_message.SendMessage` | Find or open the conversation, authorize the sender, then admit the message (`typed_in_lemma` only from Lemma's composer) |
+| `turns/admit.AdmitMessage` | Under the conversation lock: join the live run, wait behind a pause, or start a run with its turn |
+| `turns/follow_up.StartQueuedFollowUp` | The turn owed for what was said while a run ran, or the resume of a pause answered before its run finished pausing |
+| `turns/stop.StopConversation` | Stop the run in flight, or close the pause it left, without resuming |
+| `turns/withdraw.WithdrawQueuedMessage` | Take back a message no run has read |
+| `turns/retry.RetryFailedRun` | A fresh run in place of a failed one |
+| `pauses/decide.DecidePause` | A person deciding in Lemma: authorize, resolve, retire the platform's cards |
+| `pauses/resolve.ResolvePause` | Record a decision once, queue an approved tool's execution, or reconcile |
+| `pauses/reconcile.ReconcileDecision` | Write a decided pause's return exactly once, then resume |
+| `pauses/resume.ResumeRun` | Write a pause's return and start the run that replays it, at most once |
+| `pauses/supersede.SupersedeStalePauses` | Deny what the person moved past and cancel a wait typed past, in the caller's transaction |
+| `agents/manage_runtime_profiles.RuntimeProfileCreation` | Create a model-provider or Agent Host runtime profile (discovery first, then the row) |
+| `agents/edit_runtime_profile.AgentRuntimeProfileEditor` | Update, archive and restore a runtime profile |
+| `agents/choose_organization_default.OrganizationDefaultService` | Set or clear the model an organization's teammates run on |
+| `agents/check_provider.check_saved_provider_connection` | The Models page's "Test connection": list the models, send one message |
+| `background/title.ConversationTitleService` | Title a conversation after its first run (first-message title unless a title model is configured) |
+| `background/memory_pass.MemoryPass` | After a turn, keep what the person said that is worth remembering |
+
+Each commits where the step it absorbed always did; `StartConversation`,
+`UpdateConversation` and `SupersedeStalePauses` ride the caller's transaction.
+The steps several share and that do not stand alone -- appending a pause's
+return, starting a resume run (`services/pause_resume`), building
+the return (`services/conversation_resume_return`), stopping one run
+(`services/run_stop`), the access checks (`services/conversation_access`) -- are
+in `services/`; what a message carries and the typed-reply vocabulary are pure
+and in `domain/` (`turn_admission`, `interaction_reply`).
+
+## Layout
+
+| Layer | What is there |
+| --- | --- |
+| `domain/` | Pure: entities and value types, the run's resolved runtime (`resolved_runtime`) and the pure steps of runtime resolution (`runtime_choice`), history assembly (`runtime_history`), a provider PATCH (`runtime_provider_patch`), the live frames (`live_events`), a background call's terms (`background`), prompt assembly (the `prompt/` package), and the ports (`ports.py`: `Harness`, `ModelProvider`, `LiveEvents`) |
+| `application/` | The use cases above; each opens and commits its own unit of work |
+| `services/` | Shared steps that never commit on their own. The "one of each": `runtime_resolution.resolve_runtime(request, purpose=...)` is the one chain every model choice goes through (a turn, a title, the memory pass, the vision delegate, compaction); `background_model.BackgroundModel` resolves, builds, meters and runs every non-turn model call through the `ModelProvider` port; `run_session.RunSession` loads what a run works against once (conversation, agent, run, history, runtime, grants) and builds the tools' context for the runner, the resume path, the Agent Host MCP call (`agent_host/relayed_session`, with the runtime and grants cached per lease by grant generation) and the pod MCP server (`pod_tool_context`); the run's briefs are the `context_brief/` package |
+| `infrastructure/` | Repositories (`db/`), model construction and vendor quirks (`providers/`, the only place besides the harness that imports pydantic-ai or a vendor SDK), the in-process harness on pydantic-ai (`harness/lemma/`), the harness registry (`harness/registry.py`), the live publisher (`live.py`) and the MCP wire format (`mcp.py`, `mcp_content.py`) |
+| `agent_host/` | The Agent Host, a sub-package with its own skeleton: `domain/` (wire models, link frames, permissions, readiness, selections), `link/` (the server's half of the link WebSocket: `session` the connection's lifecycle, `requests` what each request frame means, `wire` the plumbing), `control/` (pairing, dispatch, admission, recovery, host execution, and its two tables), `harness/` (`RemoteHarness`), `mcp.py` (the conversation's tools over the link) and `controllers/`. `api.py` is the only file the rest of the backend imports (`tests/unit/test_agent_host_boundary`) |
+
+Nothing under `services/` or `application/` imports pydantic-ai or a model
+vendor SDK; the MCP serving services still import the `mcp` SDK until their own
+adapter is consolidated.
 
 ## API groups
 
@@ -75,8 +158,10 @@ stateDiagram-v2
     RUNNING --> STOPPED: cooperative stop
 ```
 
-The runner resolves a runtime profile and harness (`pydantic_ai`, Agent Host,
-or test harness), builds only the allowed toolsets, creates short UoWs for
+The runner loads the run's session (`RunSession.load`), resolves its runtime
+through the one chain and its harness (the in-process one in
+`infrastructure/harness/lemma`, Agent Host, or a test harness), builds only the
+allowed toolsets, creates short UoWs for
 message/status transitions, performs model/tool I/O outside them, publishes
 realtime frames, and records usage. Tool calls receive a delegated workload
 context; destructive operations require a standing grant or session approval.

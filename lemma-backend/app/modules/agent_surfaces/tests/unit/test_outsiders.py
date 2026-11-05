@@ -21,7 +21,7 @@ import pytest
 
 from app.modules.agent_surfaces.services.channel_lines import answered_for
 from app.modules.channels.contracts import Principal
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts.channels import Audience
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     SurfaceConfig,

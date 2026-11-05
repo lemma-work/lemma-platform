@@ -85,7 +85,7 @@ async def _reply_stream(*chunks: str):
 
 
 #: Where `agent` publishes what a surface reads about conversations and agents.
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 _AGENTS = "app.modules.agent.contracts.agents"
 
 _AGENT_NAME = "Slack Surface Assistant"
@@ -105,8 +105,6 @@ def _conversation_operations(monkeypatch, *, conversation):
         start_surface_turn=AsyncMock(return_value=uuid4()),
         pending_interaction=AsyncMock(return_value=None),
         undecided_pauses=AsyncMock(return_value=[]),
-        conversation_metadata_value=AsyncMock(return_value=None),
-        set_conversation_metadata_value=AsyncMock(),
         surface_agent_identity=AsyncMock(
             return_value=SimpleNamespace(
                 id=conversation.agent_id,
@@ -209,7 +207,9 @@ def _build_service(*, surface, monkeypatch):
     return SimpleNamespace(ingress=service, starter=starter, lines=lines)
 
 
-async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch):
+async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(
+    monkeypatch, surface_rows
+):
     payload = _load_event_payload("user_dm.json")
     event = payload["event"]
     sent_payloads: list[dict] = []
@@ -279,9 +279,10 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     create_kwargs = conversations.open_surface_conversation.await_args.kwargs
     assert create_kwargs["pod_id"] == surface.pod_id
     assert create_kwargs["agent_name"] == "Slack Surface Assistant"
-    assert create_kwargs["metadata"]["surface_id"] == str(surface.id)
-    assert create_kwargs["metadata"]["surface_platform"] == "SLACK"
-    assert create_kwargs["metadata"]["external_thread_id"] == event["ts"]
+    place = surface_rows.surfaces[conversation.id]
+    assert place.surface_id == surface.id
+    assert place.surface_platform == "SLACK"
+    assert place.external_thread_id == event["ts"]
 
     await service.starter.execute_chat(context)
 
@@ -305,7 +306,9 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     assert sent_payloads == []
 
 
-async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
+async def test_sample_slack_app_mention_event_replies_in_thread(
+    monkeypatch, surface_rows
+):
     payload = _load_event_payload("bot_mention.json")
     event = payload["event"]
     sent_payloads: list[dict] = []
@@ -370,8 +373,9 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
     create_kwargs = conversations.open_surface_conversation.await_args.kwargs
     assert create_kwargs["pod_id"] == surface.pod_id
     assert create_kwargs["agent_name"] == "Slack Surface Assistant"
-    assert create_kwargs["metadata"]["external_thread_id"] == event["ts"]
-    assert create_kwargs["metadata"]["external_channel_id"] == event["channel"]
+    place = surface_rows.surfaces[conversation.id]
+    assert place.external_thread_id == event["ts"]
+    assert place.external_channel_id == event["channel"]
 
     await service.starter.execute_chat(context)
 

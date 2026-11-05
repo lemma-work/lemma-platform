@@ -165,8 +165,8 @@ another member's own access, and not shared, is `withheld: true` with no
 an answer is shared as it is posted).
 Thread replies are sent too (they carry `thread_root_id`), and each one sends
 its root again (`line.edited`) with the new `reply_count`. A line is sent
-again too when a platform message heard nameless is heard again with who said
-it.
+again too when the turn that takes up a platform message logged as it arrived
+names who said it, or the conversation answering it.
 
 | Event | Fields | |
 | --- | --- | --- |

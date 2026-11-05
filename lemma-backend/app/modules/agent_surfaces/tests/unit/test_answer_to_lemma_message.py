@@ -35,7 +35,7 @@ from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 pytestmark = pytest.mark.unit
 
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 _CONVERSATION = uuid4()
 _LAST_INBOUND = datetime(2026, 10, 2, 11, 30, tzinfo=timezone.utc)
 

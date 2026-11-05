@@ -16,11 +16,12 @@ import pytest
 from sqlalchemy import update
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import AgentHostRunSpec, AgentHostStatus
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control import admission
+from app.modules.agent.agent_host.domain.host import AgentHostRunSpec, AgentHostStatus
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control.repository_common import (
     AgentHostRunConflict,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
@@ -86,7 +87,8 @@ async def test_a_draining_host_refuses_a_new_run_and_keeps_its_own(
     repository = AgentHostDispatchRepository(SqlAlchemyUnitOfWork(db_session))
 
     async def admit(spec: AgentHostRunSpec):
-        return await repository.enqueue_run(
+        return await admission.enqueue_run(
+            repository.uow,
             host_id=machine["host_id"],
             harness_id=machine["harness_id"],
             runtime_profile_id=profile.id,

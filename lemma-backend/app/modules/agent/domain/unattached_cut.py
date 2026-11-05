@@ -21,9 +21,7 @@ def newest_unattached(messages: list[Message], *, keep: int) -> list[Message]:
     """``messages`` with only the newest ``keep`` that are not copies, and a
     notice in front of the oldest kept when any went."""
     own = [
-        index
-        for index, message in enumerate(messages)
-        if folded_from(message.metadata) is None
+        index for index, message in enumerate(messages) if folded_from(message) is None
     ]
     if len(own) <= keep:
         return messages

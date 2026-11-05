@@ -6,7 +6,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.modules.agent.tools.pod.pod_paths import normalize_json_paths, to_me_path
+from app.modules.agent.infrastructure.tools.pod.pod_paths import (
+    normalize_json_paths,
+    to_me_path,
+)
 
 _USER = UUID("2bcdade2-0000-4000-8000-00000000b38d")
 

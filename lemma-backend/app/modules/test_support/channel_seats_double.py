@@ -187,15 +187,20 @@ class InMemoryChannelSeats:
         )
         return self._now(self._put(source))
 
-    async def heard_at(
-        self, source_id: UUID, delivery_ref: Mapping[str, object]
-    ) -> None:
-        self._touch(source_id, delivery_ref, heard=True)
-
     async def addressed_at(
         self, source_id: UUID, delivery_ref: Mapping[str, object]
     ) -> None:
-        self._touch(source_id, delivery_ref, heard=False)
+        source = self._by_id(source_id)
+        if source is None:
+            return
+        self._put(
+            source.model_copy(
+                update={
+                    "delivery_ref": dict(delivery_ref),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+        )
 
     async def lock_person(
         self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
@@ -360,21 +365,6 @@ class InMemoryChannelSeats:
             ),
             None,
         )
-
-    def _touch(
-        self, source_id: UUID, delivery_ref: Mapping[str, object], *, heard: bool
-    ) -> None:
-        source = self._by_id(source_id)
-        if source is None:
-            return
-        now = datetime.now(timezone.utc)
-        update: dict[str, object] = {
-            "delivery_ref": dict(delivery_ref),
-            "updated_at": now,
-        }
-        if heard:
-            update["last_inbound_at"] = now
-        self._put(source.model_copy(update=update))
 
     def _channel(self, pod_id: UUID, home: Home, place: _PlaceKey) -> UUID:
         match home:

@@ -13,7 +13,8 @@ from datetime import timedelta
 
 import pytest
 
-from app.modules.agent.domain.wait import AgentWaitStatus, AgentWaitType
+from app.modules.agent.domain.state_kinds import PauseStatus
+from app.modules.agent.domain.wait import AgentWaitType
 from app.modules.agent.tests.e2e.test_wait_resolution_e2e import (
     _a_wait,
     _reload,
@@ -36,14 +37,14 @@ async def test_a_due_agent_time_wait_is_fired_by_the_poller(
         scheduled_in=timedelta(seconds=-1),
     )
 
-    async def status() -> AgentWaitStatus | None:
+    async def status() -> PauseStatus | None:
         current = await _reload(wait.id)
         return current.status if current is not None else None
 
     resolved = await eventually(
         label="agent TIME wait resolved by the poller",
         probe=status,
-        done=lambda value: value is not None and value != AgentWaitStatus.ACTIVE,
+        done=lambda value: value is not None and value != PauseStatus.PENDING,
         timeout_seconds=60,
     )
-    assert resolved == AgentWaitStatus.COMPLETED
+    assert resolved == PauseStatus.RESOLVED

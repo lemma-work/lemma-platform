@@ -168,7 +168,7 @@ async def test_a_decision_commits_with_the_item_that_carries_it_out(scenario) ->
     assert result["executed"] is True
     (first, resumed) = await runs(seeded.conversation_id)
     assert first.id == paused
-    assert resumed.run_metadata["resumed_tool_call_id"] == approval_id
+    assert resumed.resumed_tool_call_id == approval_id
     assert await _items(seeded, approval_id) == 0
 
 
@@ -218,7 +218,7 @@ from app.modules.agent.events import approval_work
 from app.modules.test_support.e2e.agent_work import run_approval_work
 
 
-async def _hang(decided, payload, *, uow_factory):
+async def _hang(decided, *, uow_factory):
     # The claim committed (its checkpoint returned); the tool is "running".
     print("CLAIMED", flush=True)
     await asyncio.sleep(3600)
@@ -282,8 +282,8 @@ async def test_a_worker_killed_after_the_claim_never_runs_the_tool_again(
             executor.kill()
 
     claimed_at = await _scalar(
-        "SELECT execution_claimed_at FROM agent_approval_decisions "
-        "WHERE conversation_id = :c AND approval_id = :a",
+        "SELECT execution_claimed_at FROM agent_pauses "
+        "WHERE conversation_id = :c AND tool_call_id = :a",
         c=seeded.conversation_id,
         a=approval_id,
     )
@@ -311,7 +311,7 @@ async def test_a_worker_killed_after_the_claim_never_runs_the_tool_again(
     assert await _chores_left(scenario) == 1, "the approved delete ran again"
     (first, resumed) = await runs(seeded.conversation_id)
     assert first.id == paused
-    assert resumed.run_metadata["resumed_tool_call_id"] == approval_id
+    assert resumed.resumed_tool_call_id == approval_id
     assert await _items(seeded, approval_id) == 0
     print(f"APPROVAL_KILL_RESULT settled_after_lease_seconds={settled_seconds:.2f}")
 

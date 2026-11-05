@@ -15,7 +15,6 @@ from app.modules.agent.contracts import (
     AgentEvent,
 )
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
-from app.modules.agent_surfaces.services.progress_events import _surface_platform
 
 logger = get_logger(__name__)
 
@@ -25,6 +24,8 @@ class ProgressWaitingMixin:
 
     #: Whose held files the prompts it sends carry; set by the observer.
     _run_files: RunFiles
+    #: The platform the run talks over; set by the observer.
+    _platform: str | None
 
     async def _handle_waiting_event(
         self,
@@ -143,7 +144,7 @@ class ProgressWaitingMixin:
                 delivered = False
             if delivered:
                 return
-            if _surface_platform(conversation) is None:
+            if self._platform is None:
                 # Not a surface conversation -- somebody is in the web app, where
                 # the pause renders itself. Nothing to say and nobody to say it
                 # to; the key goes back so the event is not treated as handled.

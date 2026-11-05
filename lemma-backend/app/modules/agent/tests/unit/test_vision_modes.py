@@ -1,7 +1,7 @@
 """Image-returning tools must never hand image content to a text-only model.
 
 `view_image` was gated on the model declaring VISION; `pod_view_document_pages`
-returned `BinaryContent` to whatever model was running. With
+returned `ImagePart` to whatever model was running. With
 `LEMMA_OPENAI_VISION_MODEL_NAMES` defaulting to empty, the common deployment
 therefore withheld the safe tool and offered the unsafe one — a text-only model
 asked for a PDF page and the provider rejected the whole request.
@@ -14,14 +14,14 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from pydantic_ai import ToolReturn
+from app.modules.agent.domain.tools import WithImages
 
 from app.modules.agent.domain.vision import AgentVisionMode, resolve_vision_mode
-from app.modules.agent.tools import vision_delegation
-from app.modules.agent.tools.pod import pod_common
-from app.modules.agent.tools.pod import pod_file_tools as pod_files
-from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.infrastructure.tools import vision_delegation
+from app.modules.agent.infrastructure.tools.pod import pod_common
+from app.modules.agent.infrastructure.tools.pod import pod_file_tools as pod_files
+from app.modules.agent.infrastructure.tools.pod.models import ViewDocumentPagesRequest
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
 
@@ -61,7 +61,7 @@ class TestModeResolution:
 
     def test_unavailable_is_the_default_on_a_bare_context(self) -> None:
         """A tool that cannot determine the mode must assume the unsafe case."""
-        ctx = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+        ctx = ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
         assert ctx.vision_mode is AgentVisionMode.UNAVAILABLE
 
 
@@ -122,13 +122,11 @@ def _pdf_services(monkeypatch):
 
 
 def _ctx(mode: AgentVisionMode) -> SimpleNamespace:
-    return SimpleNamespace(
-        deps=BaseAgentContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            vision_mode=mode,
-        )
+    return ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        vision_mode=mode,
     )
 
 
@@ -142,8 +140,8 @@ class TestPdfPagesRespectTheMode:
             ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
         )
 
-        assert isinstance(result, ToolReturn)
-        assert [content.data for content in result.content] == [b"jpeg-1", b"jpeg-2"]
+        assert isinstance(result, WithImages)
+        assert [content.data for content in result.images] == [b"jpeg-1", b"jpeg-2"]
 
     @pytest.mark.asyncio
     async def test_delegated_returns_words_and_never_image_content(
@@ -171,9 +169,8 @@ class TestPdfPagesRespectTheMode:
             ),
         )
 
-        assert not isinstance(result, ToolReturn), (
-            "a ToolReturn carries BinaryContent, which is what breaks the "
-            "text-only model"
+        assert not isinstance(result, WithImages), (
+            "a result with images is what breaks the text-only model"
         )
         assert result["success"] is True
         assert result["viewed_by"] == "vision_model"
@@ -199,7 +196,7 @@ class TestPdfPagesRespectTheMode:
         monkeypatch.setattr(agent_settings, "vision_model", None)
         # A deployment with its own model and no VISION_MODEL: the message says
         # no image model is set up (the log names the setting). Without a system
-        # model the workspace is asked instead (test_workspace_model_fallback.py).
+        # model the workspace is asked instead (test_runtime_resolution.py).
         monkeypatch.setattr(
             "app.modules.agent.services.runtime_system_profiles."
             "system_profile_configured",
@@ -211,7 +208,7 @@ class TestPdfPagesRespectTheMode:
             ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1),
         )
 
-        assert not isinstance(result, ToolReturn)
+        assert not isinstance(result, WithImages)
         assert result["success"] is False
         assert "reads images" in result["error"]
         assert "VISION_MODEL" not in result["error"]
@@ -223,8 +220,12 @@ class TestViewImageRespectsTheMode:
     async def test_delegated_view_image_returns_a_description(
         self, monkeypatch
     ) -> None:
-        from app.modules.agent.tools.workspace_cli import view_image as workspace_cli
-        from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
+        from app.modules.agent.infrastructure.tools.workspace_cli import (
+            view_image as workspace_cli,
+        )
+        from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+            ViewImageRequest,
+        )
 
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
@@ -249,7 +250,7 @@ class TestViewImageRespectsTheMode:
             ),
         )
 
-        assert not isinstance(result, ToolReturn)
+        assert not isinstance(result, WithImages)
         assert result.success is True
         assert "bar chart" in result.message
 
@@ -259,58 +260,61 @@ class TestMcpBridgeCarriesImages:
         """Both bridges flattened every result to text, so `view_image` reached
         Codex and Claude Code — both vision-capable — as JSON describing a
         picture they never received."""
-        from pydantic_ai import BinaryContent, ToolReturn
+        from app.modules.agent.domain.tools import ImagePart
+        from app.modules.agent.domain.tools import WithImages
 
-        from app.modules.agent.services.mcp_content import image_contents
+        from app.modules.agent.infrastructure.mcp.content import image_contents
 
-        result = ToolReturn(
-            return_value={"success": True, "file_path": "/a.png"},
-            content=[BinaryContent(data=b"\x89PNG-bytes", media_type="image/png")],
+        result = WithImages(
+            value={"success": True, "file_path": "/a.png"},
+            images=(ImagePart(data=b"\x89PNG-bytes", media_type="image/png"),),
         )
 
         images = image_contents(result)
 
         assert len(images) == 1
-        assert images[0].mimeType == "image/png"
+        assert images[0].mime_type == "image/png"
         # MCP carries image bytes base64-encoded.
         import base64
 
         assert base64.b64decode(images[0].data) == b"\x89PNG-bytes"
 
     def test_a_plain_result_contributes_no_images(self) -> None:
-        from app.modules.agent.services.mcp_content import image_contents
+        from app.modules.agent.infrastructure.mcp.content import image_contents
 
         assert image_contents({"success": True}) == []
         assert image_contents(None) == []
 
     def test_an_oversized_image_is_dropped_but_the_result_survives(self) -> None:
         """A client that rejects the image would lose the text result with it."""
-        from pydantic_ai import BinaryContent, ToolReturn
+        from app.modules.agent.domain.tools import ImagePart
+        from app.modules.agent.domain.tools import WithImages
 
-        from app.modules.agent.services.mcp_content import (
+        from app.modules.agent.infrastructure.mcp.content import (
             MAX_MCP_IMAGE_BYTES,
             image_contents,
         )
 
-        huge = ToolReturn(
-            return_value={"success": True},
-            content=[
-                BinaryContent(
+        huge = WithImages(
+            value={"success": True},
+            images=(
+                ImagePart(
                     data=b"x" * (MAX_MCP_IMAGE_BYTES + 1), media_type="image/png"
-                )
-            ],
+                ),
+            ),
         )
 
         assert image_contents(huge) == []
 
     def test_non_image_binary_is_not_sent_as_an_image(self) -> None:
-        from pydantic_ai import BinaryContent, ToolReturn
+        from app.modules.agent.domain.tools import ImagePart
+        from app.modules.agent.domain.tools import WithImages
 
-        from app.modules.agent.services.mcp_content import image_contents
+        from app.modules.agent.infrastructure.mcp.content import image_contents
 
-        audio = ToolReturn(
-            return_value={"success": True},
-            content=[BinaryContent(data=b"RIFF", media_type="audio/wav")],
+        audio = WithImages(
+            value={"success": True},
+            images=(ImagePart(data=b"RIFF", media_type="audio/wav"),),
         )
 
         assert image_contents(audio) == []

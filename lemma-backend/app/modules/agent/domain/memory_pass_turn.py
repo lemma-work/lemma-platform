@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
+from app.modules.agent.domain.pauses import CALL_NAMES
+from app.modules.agent.domain.state_kinds import PauseKind
 
 #: One message the person sent.
 WORDS_MAX_CHARS = 6000
@@ -37,8 +39,6 @@ WORK_MAX_CHARS = 2400
 #: Messages of one run read at all. Past it the turn is cut at the end, which
 #: keeps what the person said at its start.
 TURN_MESSAGES_MAX = 300
-#: The tool whose result is the person's own answer to the agent's question.
-ASK_USER_TOOL = "ask_user"
 
 _CUT = " […]"
 
@@ -135,7 +135,9 @@ def _is_the_persons(message: TurnMessage) -> bool:
     if message.role is MessageRole.USER and message.kind is MessageKind.TEXT:
         return True
     return (
-        message.kind is MessageKind.TOOL_RETURN and message.tool_name == ASK_USER_TOOL
+        # The ask_user return is the person's own answer to the agent's question.
+        message.kind is MessageKind.TOOL_RETURN
+        and message.tool_name == CALL_NAMES[PauseKind.QUESTION]
     )
 
 
@@ -171,7 +173,6 @@ def _cut(text: str, limit: int) -> str:
 
 __all__ = [
     "ANSWER_MAX_CHARS",
-    "ASK_USER_TOOL",
     "REPLY_BEFORE_MAX_CHARS",
     "STEP_MAX_CHARS",
     "TURN_MESSAGES_MAX",

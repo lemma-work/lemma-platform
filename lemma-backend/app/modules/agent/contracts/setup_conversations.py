@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
+from app.modules.agent.services.turn_staging import AgentTurnStart, stage_agent_turn
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,21 +48,18 @@ async def open_setup_conversation(
     to start without a further grant -- they administer the pod. ``held``
     writes the run without its turn (see the module docstring).
     """
-    from app.modules.agent.services.service_factories import (
-        build_conversation_service,
-    )
+    from app.modules.agent.application.conversations.start import StartConversation
+    from app.modules.agent.application.turns.admit import AdmitMessage
 
-    service = build_conversation_service(uow)
-    conversation = await service.create_conversation(
+    conversation = await StartConversation.build(uow).start(
         pod_id=pod_id,
         agent_name=None,
         user_id=user_id,
         require_execute_grant=False,
     )
-    started = await service.turns.start(
+    started = await AdmitMessage.build(uow).admit(
         conversation,
         user_id=user_id,
-        pod_id=pod_id,
         content=text,
         agent_name=None,
         message_metadata=None,

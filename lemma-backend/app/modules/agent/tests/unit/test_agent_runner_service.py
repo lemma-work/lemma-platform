@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+from app.modules.agent.services.run_session import RunSession
 import pytest
 
 from app.modules.agent.domain.entities import Message
@@ -15,7 +16,7 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.services import run_finalizer as finalizer_module
 from app.modules.agent.services.run_finalizer import (
     finalize_safely,
@@ -27,6 +28,7 @@ from app.modules.agent.services.agent_runner_service import (
     AgentRunnerService,
 )
 from app.modules.test_support.fakes import FakeUnitOfWork
+from app.modules.agent.domain.entities import Conversation
 
 
 _GENERIC_REJECTION = "The Agent Host rejected this run before dispatch. Try again."
@@ -100,9 +102,7 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
         conversation_status=ConversationStatus.STOPPED,
     )
     repository = SimpleNamespace(finish_agent_run=AsyncMock(return_value=finish_result))
-    monkeypatch.setattr(
-        finalizer_module, "ConversationRepository", lambda _uow: repository
-    )
+    monkeypatch.setattr(finalizer_module, "Runs", lambda _uow: repository)
     publish = AsyncMock()
     monkeypatch.setattr(finalizer_module, "publish_conversation_event", publish)
 
@@ -207,13 +207,12 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
     )
 
     # Build minimal domain objects so _load_run_context returns valid values.
-    conversation = SimpleNamespace(
+    conversation = Conversation(
         id=UUID("00000000-0000-0000-0000-000000000010"),
         organization_id=UUID("00000000-0000-0000-0000-000000000011"),
         pod_id=UUID("00000000-0000-0000-0000-000000000012"),
         agent_id=UUID("00000000-0000-0000-0000-000000000013"),
-        metadata=None,
-        parent_id=None,
+        user_id=UUID("00000000-0000-0000-0000-000000000014"),
     )
     agent = SimpleNamespace(name="test-agent")
     agent_run = SimpleNamespace(
@@ -224,7 +223,7 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
     )
 
     async def fake_load(*args, **kwargs):
-        return conversation, agent, agent_run, []
+        return RunSession.of(conversation, agent, agent_run)
 
     monkeypatch.setattr(service, "_load_run_context", fake_load)
     # A fresh run: nothing answered yet.

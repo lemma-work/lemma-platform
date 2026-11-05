@@ -17,13 +17,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
+from app.modules.agent.agent_host.control import admission
+from app.modules.agent.application.agents.manage_runtime_profiles import (
+    RuntimeProfileCreation,
+)
 import pytest
 from sqlalchemy import select, update
 from starlette import status
 
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostEvent,
     AgentHostEventBatch,
@@ -42,25 +46,25 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     ConversationType,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.repository import (
+from app.modules.agent.agent_host.control.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     AgentHostRunConfig,
     RemoteHarness,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+from app.modules.agent.agent_host.harness.run_config import (
     agent_host_run_config,
     offered_selections,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories.agent_repository import (
     AgentRepository,
 )
@@ -73,7 +77,6 @@ from app.modules.agent.infrastructure.runtime_models import (
 )
 from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.runtime_profile_service import (
-    AgentRuntimeProfileService,
     runtime_profile_service_for,
 )
 from app.modules.agent.tests.e2e.agent_host_helpers import (
@@ -82,7 +85,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     publish_harnesses,
     stale_after,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.builders import E2EScenario
 
 pytestmark = pytest.mark.e2e
@@ -164,7 +167,7 @@ async def _machine_with_profile(
     )
     await db_session.flush()
     uow = SqlAlchemyUnitOfWork(db_session)
-    profile = await AgentRuntimeProfileService(
+    profile = await RuntimeProfileCreation(
         AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
         AgentHostRepository(uow),
     ).create_agent_host_profile(
@@ -295,9 +298,8 @@ async def _admit(
     )
     db_session.add(run)
     await db_session.flush()
-    command = await AgentHostDispatchRepository(
-        SqlAlchemyUnitOfWork(db_session)
-    ).enqueue_run(
+    command = await admission.enqueue_run(
+        SqlAlchemyUnitOfWork(db_session),
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=run_config.runtime_profile_id,
@@ -393,7 +395,7 @@ async def test_a_turn_layers_its_selections_and_dispatch_keeps_what_is_offered(
     conversation_id = UUID(created.json()["id"])
 
     uow = SqlAlchemyUnitOfWork(db_session)
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     agent = await AgentRepository(uow).get_by_pod_and_name(
         pod_id=UUID(scenario.pod_id), name=agent_name
     )
@@ -569,7 +571,7 @@ async def test_a_host_notice_reaches_the_conversation_as_a_flat_status(
                 name="helper",
                 instruction="Help.",
             ),
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
             ),
             conversation=conversation,

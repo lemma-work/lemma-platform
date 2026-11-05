@@ -26,8 +26,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0068_channel_table_grants"
-REVISION = "0069_outcome_weeks"
+BEFORE = "0069_agent_typed_state"
+REVISION = "0070_outcome_weeks"
 
 MEASURED = {
     "outcome": {

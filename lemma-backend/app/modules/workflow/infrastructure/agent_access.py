@@ -34,7 +34,7 @@ class AgentExecuteCheck(AgentAccessPort):
         session = self._uow.session
         # Raises AgentNotFoundError for a name the pod no longer has, which
         # fails the step exactly as starting it would have.
-        agent_id = await agent_id_for_name(session, pod_id=pod_id, name=agent_name)
+        agent_id = await agent_id_for_name(self._uow, pod_id=pod_id, name=agent_name)
         ctx = await AuthorizationDataService(session).build_user_context(
             user_id=user_id, pod_id=pod_id
         )
