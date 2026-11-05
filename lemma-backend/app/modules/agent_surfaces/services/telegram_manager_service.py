@@ -8,7 +8,7 @@ from app.modules.agent_surfaces.domain.credentials import (
 import asyncio
 import re
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,6 +18,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import SurfaceConfig
@@ -47,8 +48,11 @@ from app.modules.agent_surfaces.services.telegram_manager_updates import (
 
 TELEGRAM_MANAGER_ALLOWED_UPDATES = ["message", "managed_bot"]
 
+logger = get_logger(__name__)
+
 __all__ = [
     "TELEGRAM_MANAGER_ALLOWED_UPDATES",
+    "telegram_bot_username",
     "TelegramManagedBotProvisioningClaim",
     "TelegramManagedBotProvisioningInProgressError",
     "TelegramManagedBotSetup",
@@ -67,6 +71,8 @@ class TelegramManagerService:
         manager_token: str | None = None,
         manager_username: str | None = None,
         api_base_url: str | None = None,
+        bot_username_lookup: Callable[[TelegramCredentials], Awaitable[str | None]]
+        | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._store = store or TelegramManagedBotSetupStore()
@@ -80,23 +86,52 @@ class TelegramManagerService:
             if manager_username is not None
             else surface_settings.telegram_manager_bot_username
         )
-        self._manager_username = str(raw_username or "").strip().lstrip("@")
+        self._configured_username = str(raw_username or "").strip().lstrip("@")
         self._api_base_url = api_base_url
-        self._client = TelegramClient.from_credentials(
-            TelegramCredentials(
-                bot_token=as_secret(self._manager_token),
-                api_base_url=api_base_url or None,
-            ),
-            timeout=65,
+        self._bot_username_lookup = bot_username_lookup or telegram_bot_username
+        self._client = TelegramClient.from_credentials(self._credentials(), timeout=65)
+
+    def _credentials(self) -> TelegramCredentials:
+        """The manager bot's credentials, as every call about it needs them."""
+        return TelegramCredentials(
+            bot_token=as_secret(self._manager_token),
+            api_base_url=self._api_base_url or None,
         )
 
     @property
     def configured(self) -> bool:
-        return bool(self._manager_token and self._manager_username)
+        """Whether this deployment runs a manager bot.
 
-    @property
-    def manager_username(self) -> str:
-        return self._manager_username
+        Its token is what makes it one. The username in configuration is only a
+        fallback for the deep link (see `manager_username`), so requiring it here
+        would hide a working setup from the people it is for.
+        """
+        return bool(self._manager_token)
+
+    async def manager_username(self) -> str | None:
+        """The manager bot's own @username, as Telegram reports it.
+
+        The setup link is a ``t.me/<username>`` page, so the username in it has
+        to be one Telegram knows. A configured username can stop naming this
+        deployment's bot — renamed in BotFather, or left behind when the token
+        was rotated — and then the link is a page that does not open, which is a
+        dead end for somebody halfway through making a bot. The token is what
+        says which bot this is, so Telegram is asked first; the configured
+        username is what is left for a deployment Telegram cannot be asked
+        about.
+
+        Without a token there is no manager bot, so no username either: a
+        configured one alone would link to a bot this deployment cannot run.
+        """
+        if not self.configured:
+            return None
+        resolved = await self._bot_username_lookup(self._credentials())
+        username = resolved or self._configured_username or None
+        if username is None:
+            # Telegram could not be asked and nothing is configured to fall back
+            # on. The person is told the setup is not configured; this says why.
+            logger.warning("agent_surfaces.telegram_manager.username_unresolved")
+        return username
 
     async def start_setup(
         self,
@@ -109,8 +144,16 @@ class TelegramManagerService:
         surface_config: SurfaceConfig,
         is_enabled: bool,
         pod_name: str,
+        manager_username: str | None,
     ) -> TelegramManagedBotSetup:
-        if not self.configured:
+        """Claim this surface for a setup, or resume the caller's own.
+
+        ``manager_username`` is what `manager_username()` answered, the bot the
+        setup will be linked to. Without one there is nobody to send the person
+        to, so nothing is claimed: a claim refused only afterwards would hold
+        the surface against everyone else in the pod until it expired.
+        """
+        if not self.configured or not manager_username:
             raise TelegramManagerNotConfiguredError()
 
         existing = await self._store.get_by_target(pod_id, surface_name)
@@ -154,10 +197,22 @@ class TelegramManagerService:
                 return setup
         raise RuntimeError("Could not allocate a Telegram managed-bot setup")
 
-    def launch_url(self, setup: TelegramManagedBotSetup) -> str:
-        if not self.configured:
+    def launch_url(
+        self,
+        setup: TelegramManagedBotSetup,
+        *,
+        manager_username: str | None,
+    ) -> str:
+        """Where a person finishes this setup, in Telegram.
+
+        ``manager_username`` is what `manager_username()` answered, taken as an
+        argument so that one answer cannot be named in a sheet and linked
+        somewhere else. No username means there is no bot to send anybody to,
+        which is said here rather than published as a link to nowhere.
+        """
+        if not self.configured or not manager_username:
             raise TelegramManagerNotConfiguredError()
-        return f"https://t.me/{self._manager_username}?start=surface_{setup.setup_id}"
+        return f"https://t.me/{manager_username}?start=surface_{setup.setup_id}"
 
     async def get_setup(
         self,
@@ -190,10 +245,20 @@ class TelegramManagerService:
             bot_token=bot_token,
         )
 
-    def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str:
-        if not setup.bot_username:
-            return self.launch_url(setup)
-        return f"https://t.me/{setup.bot_username}?start=lemma"
+    async def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str | None:
+        """Where "Open your bot" sends somebody once their bot is made.
+
+        The bot's own page when Telegram named it; otherwise this setup's link to
+        the manager bot. None when that has no username either: the setup is
+        already done, so a missing link leaves the button off rather than
+        failing the update that finished it.
+        """
+        if setup.bot_username:
+            return f"https://t.me/{setup.bot_username}?start=lemma"
+        manager_username = await self.manager_username()
+        if not manager_username:
+            return None
+        return self.launch_url(setup, manager_username=manager_username)
 
     async def _configure_managed_bot(
         self,
@@ -268,6 +333,20 @@ class TelegramManagerService:
         if remove_keyboard:
             payload["reply_markup"] = {"remove_keyboard": True}
         await self._client.call("sendMessage", payload)
+
+
+async def telegram_bot_username(credentials: TelegramCredentials) -> str | None:
+    """What Telegram says a bot is called, or None when it cannot be asked.
+
+    The same answer a surface's own bot gets, from the same per-token cache
+    (`TelegramPlatformService`), so resolving the manager bot's name costs a
+    cache read rather than a round trip to Telegram.
+    """
+    from app.modules.agent_surfaces.platforms.telegram.service import (
+        TelegramPlatformService,
+    )
+
+    return await TelegramPlatformService(credentials).get_bot_username()
 
 
 def _suggested_bot_name(pod_name: str) -> str:
