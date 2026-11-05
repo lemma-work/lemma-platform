@@ -16,8 +16,9 @@ unless the bot is the pod's own and its contact policy says otherwise (see
   member who looks after the bot's contacts and marked with the contact's id,
   so every run in it authorizes as nobody and reads only what is Public (see
   ``agent.domain.outsiders``).
-* **How often.** ``ContactTurnLimiter``, per contact and per bot, and a ceiling
-  on how many strangers a bot may meet in a day.
+* **How often.** ``ContactTurnLimiter``, per person -- the same window as in
+  a group -- and per bot a day, and a ceiling on how many strangers a bot may
+  meet in a day.
 
 **Email that was not authenticated gets no reply at all.** A reply goes to the
 ``From:`` line, which is text the sender chose, so answering a forged message
@@ -59,8 +60,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
 from app.modules.agent_surfaces.services.direct_messages import tell_member
-from app.modules.agent.contracts.channels import Audience
-from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
+from app.modules.agent_surfaces.services.contact_turns import contact_turn
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.fallback_reply_service import (
@@ -68,7 +68,10 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
     to_sender_alone,
 )
 from app.modules.agent_surfaces.services.opt_out_notes import note_opt_out
-from app.modules.agent_surfaces.services.outsider_limits import ContactTurnLimiter
+from app.modules.agent_surfaces.services.outsider_limits import (
+    ContactTurnLimiter,
+    person_in,
+)
 from app.modules.agent_surfaces.services.sender_handles import (
     SenderHandle,
     private_handle,
@@ -83,7 +86,6 @@ from app.modules.contacts.contracts import (
     ContactRef,
     IdentityStrength,
     find_contact,
-    note_inbound,
     open_contact,
 )
 from app.modules.contacts.contracts.outreach import (
@@ -374,13 +376,12 @@ class ContactDoor:
         contact = await self._contact(surface=surface, handle=handle, parsed=parsed)
         if contact is None:
             return await self._refusal(surface, parsed, handle, route)
-        if not await self.limiter.allow(surface_id=surface.id, contact_id=contact.id):
+        if not await self.limiter.allow(
+            person=person_in(surface.pod_id, f"{handle.kind.value}:{handle.value}"),
+            place=surface.id,
+            place_per_day=surface_settings.surface_contact_turns_per_surface_per_day,
+        ):
             return None
-        # Stamped again now that they are a contact: a stranger's first message
-        # had no handle row for ``preferences`` to stamp.
-        await note_inbound(
-            self.uow, pod_id=surface.pod_id, kind=handle.kind, value=handle.value
-        )
         return await self._contacts_turn(
             surface=surface,
             parsed=parsed,
@@ -404,28 +405,14 @@ class ContactDoor:
     ) -> SurfaceChatContext:
         # Only the contact. On an email thread a reply would otherwise copy
         # everybody else on it, and a contact's conversation is theirs.
-        parsed = to_sender_alone(parsed)
-        bound = await binder.bind_conversation(
+        return await contact_turn(
             surface=surface,
-            parsed=parsed,
-            resolved_user=ResolvedSurfaceUser(
-                internal_user_id=owner,
-                external_user_id=sender.external_user_id,
-                display_name=contact.display_name or sender.display_name,
-            ),
+            parsed=to_sender_alone(parsed),
+            sender=sender,
             route=route,
-            contact_id=contact.id,
-        )
-        return build_chat_context(
-            surface=surface,
-            parsed=parsed,
-            resolved_user=sender,
-            user_id=owner,
-            route=route,
-            conversation_id=bound.conversation_id,
-            source_id=bound.source_id,
-            created_conversation_title=bound.created_title,
-            audience=Audience.contact(contact.id),
+            binder=binder,
+            contact=contact,
+            keeper=owner,
         )
 
     async def _looked_after(self, surface: AgentSurfaceEntity, owner: UUID) -> bool:

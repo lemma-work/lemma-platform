@@ -26,6 +26,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapt
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
     ExternalSurfaceUserRepository,
 )
+from app.modules.channels.contracts import not_held
 
 logger = get_logger(__name__)
 
@@ -164,7 +165,11 @@ def participants_in_lines(
         if person in people:
             continue
         people.add(person)
-        seen.append(SurfaceGroupParticipant(name=name, in_pod=external_id in verified))
+        seen.append(
+            SurfaceGroupParticipant(
+                name=name, in_pod=not not_held(external_id, held=verified)
+            )
+        )
         if len(seen) >= MAX_PARTICIPANTS:
             break
     return tuple(seen)
@@ -184,9 +189,9 @@ def marked_for_member_run(
     """A platform's history as a member's run is shown it: every line, each
     marked by whether somebody outside the pod wrote it.
 
-    The mark the pod's own log gets as a run reads it back
-    (``channels.contracts.backgrounds``), for the platforms whose history is
-    read live (Slack). The mark is the pod's answer
+    The pod's one rule (``channels``' ``not_held``), as the pod's own log gets
+    it when a run reads it back (``channels.contracts.backgrounds``), for the
+    platforms whose history is read live (Slack). The mark is the pod's answer
     about who holds access (``live_members``), not the platform's: Slack marks
     only another company's lines, and a colleague here with no Lemma account
     reads exactly like a member. The asker's own lines and an app's are no
@@ -201,6 +206,6 @@ def marked_for_member_run(
         somebody_else = not line.get("from_bot") and not (
             asker_external_id and external_id == asker_external_id
         )
-        outside = somebody_else and (verified is None or external_id not in verified)
+        outside = somebody_else and not_held(external_id, held=verified)
         marked.append({**line, "outside_pod": outside})
     return marked

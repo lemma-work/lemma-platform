@@ -52,7 +52,9 @@ from app.modules.channels.domain.parts import (
 )
 from app.modules.channels.domain.projection import (
     Reader,
+    is_outside,
     may_read,
+    not_held,
     readable,
     withheld_from,
 )
@@ -138,6 +140,7 @@ __all__ = [
     "direct_channel",
     "erase_line",
     "hand_back",
+    "is_outside",
     "join",
     "keyed_client_id",
     "may_read",
@@ -148,6 +151,7 @@ __all__ = [
     "answered_in",
     "named_in",
     "names_of",
+    "not_held",
     "post",
     "read_upto",
     "readable",

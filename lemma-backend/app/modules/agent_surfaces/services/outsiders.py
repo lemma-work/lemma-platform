@@ -19,7 +19,8 @@ addresses the bot gets an answer, and this module is how:
   authorizes as that contact and reads only what is Public and what is theirs
   (``agent.domain.outsiders``). The member's own turns in the group are
   untouched: they still run as the member, in the member's own conversation.
-* **How often.** ``OutsiderTurnLimiter``, per person and per group.
+* **How often.** ``ContactTurnLimiter``, per person -- the same window as
+  when they write privately -- and per group a day.
 
 Nothing here answers a stranger who is *refused*. Most platforms cannot reply
 privately inside a group, and a public notice about somebody's standing is worse
@@ -45,12 +46,15 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
-from app.modules.agent.contracts.channels import Audience
 from app.modules.channels.contracts import Source
 from app.modules.channels.contracts.places import place_heard_on, places_hearing
-from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
+from app.modules.agent_surfaces.services.contact_turns import contact_turn
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
-from app.modules.agent_surfaces.services.outsider_limits import OutsiderTurnLimiter
+from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.services.outsider_limits import (
+    ContactTurnLimiter,
+    person_in,
+)
 from app.modules.agent_surfaces.services.sender_handles import (
     SenderHandle,
     group_handle,
@@ -114,7 +118,7 @@ class OutsiderDoor:
         *,
         uow: SqlAlchemyUnitOfWork,
         membership: SurfacePodMembershipPort,
-        limiter: OutsiderTurnLimiter | None = None,
+        limiter: ContactTurnLimiter | None = None,
         contacts: ContactOpener = open_contact,
         people: WorkspacePeople | None = None,
     ) -> None:
@@ -124,7 +128,7 @@ class OutsiderDoor:
         #: The group a surface hears on a chat, if the pod knows one.
         self.group_at = partial(place_heard_on, uow)
         self.membership = membership
-        self.limiter = limiter or OutsiderTurnLimiter()
+        self.limiter = limiter or ContactTurnLimiter()
 
     async def group_welcoming(
         self,
@@ -248,7 +252,9 @@ class OutsiderDoor:
         if owner is None or not sender.external_user_id or handle is None:
             return None
         if not await self.limiter.allow(
-            group_id=group.id, sender_external_id=sender.external_user_id
+            person=person_in(surface.pod_id, f"{handle.kind.value}:{handle.value}"),
+            place=group.id,
+            place_per_day=surface_settings.surface_outsider_turns_per_group_per_day,
         ):
             return None
         contact = await self.open_contact(
@@ -259,33 +265,18 @@ class OutsiderDoor:
             strength=IdentityStrength.CHANNEL,
             display_name=parsed.sender_display_name or sender.display_name,
         )
-        parsed = named_after(parsed, group)
-        bound = await binder.bind_conversation(
+        context = await contact_turn(
             surface=surface,
-            parsed=parsed,
-            resolved_user=ResolvedSurfaceUser(
-                internal_user_id=owner,
-                external_user_id=sender.external_user_id,
-                display_name=contact.display_name or sender.display_name,
-            ),
+            parsed=named_after(parsed, group),
+            sender=sender,
             route=route,
-            contact_id=contact.id,
+            binder=binder,
+            contact=contact,
+            keeper=owner,
         )
         logger.info(
             "agent_surfaces.outsiders.contact_turn.observed",
             surface_id=str(surface.id),
             contact_id=str(contact.id),
         )
-        return build_chat_context(
-            surface=surface,
-            parsed=parsed,
-            # The stranger's own name and number go on the message, so the
-            # owner reading the thread sees who asked each question.
-            resolved_user=sender,
-            user_id=owner,
-            route=route,
-            conversation_id=bound.conversation_id,
-            source_id=bound.source_id,
-            created_conversation_title=bound.created_title,
-            audience=Audience.contact(contact.id),
-        )
+        return context

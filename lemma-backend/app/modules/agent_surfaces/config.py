@@ -250,15 +250,6 @@ class SurfaceSettings(BaseSettings):
             "short enough that coming back later still gets an answer."
         ),
     )
-    surface_outsider_turns_per_person_per_10_minutes: int = Field(
-        default=10,
-        description=(
-            "How many questions one person outside the pod may put to its bot in "
-            "one group within ten minutes before the bot stops answering them "
-            "for the rest of the window. Everyone else in the group, members "
-            "included, is unaffected."
-        ),
-    )
     surface_outsider_turns_per_group_per_day: int = Field(
         default=200,
         description=(
@@ -270,8 +261,11 @@ class SurfaceSettings(BaseSettings):
     surface_contact_turns_per_person_per_10_minutes: int = Field(
         default=10,
         description=(
-            "How many messages one contact may put to a bot within ten minutes "
-            "before it stops answering them for the rest of the window."
+            "How many messages one person outside the pod may put to its bot "
+            "within ten minutes, counted together wherever they write -- in "
+            "private, by email, in a group, on a web chat -- before it stops "
+            "answering them for the rest of the window. Everyone else, members "
+            "included, is unaffected."
         ),
     )
     surface_contact_turns_per_surface_per_day: int = Field(
