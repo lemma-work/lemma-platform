@@ -1,12 +1,11 @@
-"""E2E for what the hourly push budget holds back, and what it never does.
+"""E2E for what holds a push back on its way to a member, and what never is.
 
-A member who has had ``PushBudget``'s worth of pushes from a pod this hour is
-not pushed again: the line waits in Lemma, and goes with their next push from
-that channel, which says how many lines it stands for. What names them or
-asks them something is never held, nor held back while they have the app
-open; anything else is held a few minutes while they do, and is not pushed
-once they have read it. Every try of a push is recorded. A plain line in a group is not
-worth an email. Against a real database, real Redis and the fake mail server.
+Two things hold one: having read its lines in the app (it is not pushed), and
+having the app open (it waits a few minutes, and goes then if still unread,
+with whatever came meanwhile). A busy channel is one push a window, however
+many lines it hears. What names them or asks them something is never held. A
+plain line in a group is not worth an email. Against a real database, real
+Redis and the fake mail server.
 """
 
 from __future__ import annotations
@@ -20,13 +19,9 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.redis.client import get_redis
 from app.core.live.presence import mark_online
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
-)
-from app.modules.agent_surfaces.services.notification_rate_limiter import (
-    DEFAULT_MAX_PER_RECIPIENT_PER_HOUR,
 )
 from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     deliveries_of_line,
@@ -35,9 +30,7 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
 from app.modules.agent_surfaces.tests.e2e.test_channel_deliveries_e2e import (
     _colleague,
     _deliver,
-    _due_now,
     _resend_bot,
-    _resend_unreachable,
     _row,
     _tell,
 )
@@ -54,19 +47,17 @@ from app.modules.test_support.e2e_authz import auth_headers
 pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 
-def _budget_key(pod_id: str, user_id: str) -> str:
-    return f"notify:rate:{pod_id}:{user_id}"
-
-
-async def _spend_their_budget(pod_id: str, user_id: str) -> None:
-    """They have had the hour's pushes from this pod already."""
-    await get_redis().set(
-        _budget_key(pod_id, user_id), DEFAULT_MAX_PER_RECIPIENT_PER_HOUR, ex=3600
-    )
-
-
-async def _charged(pod_id: str, user_id: str) -> int:
-    return int(await get_redis().get(_budget_key(pod_id, user_id)) or 0)
+async def _said_minutes_ago(message_ids: list[str], minutes: int) -> None:
+    """These lines are older than the app-open hold by now."""
+    async with async_session_maker() as session:
+        await session.execute(
+            update(ChannelMessageModel)
+            .where(ChannelMessageModel.id.in_([UUID(each) for each in message_ids]))
+            .values(
+                created_at=ChannelMessageModel.created_at - timedelta(minutes=minutes)
+            )
+        )
+        await session.commit()
 
 
 async def _a_group_with(
@@ -129,14 +120,13 @@ async def setting(
     return pod_id, colleague
 
 
-async def test_a_line_naming_them_is_pushed_however_many_they_had(
+async def test_a_line_naming_them_in_a_group_is_emailed(
     authenticated_client, setting, message_store
 ):
-    """The budget keeps room for exactly this: a line that names them goes,
-    even after the hour's plain pushes are spent -- by email, from a group."""
+    """A plain group line waits in Lemma; one that names them goes, by email
+    if nothing else reaches them."""
     pod_id, colleague = setting
     group = await _a_group_with(authenticated_client, pod_id, colleague)
-    await _spend_their_budget(pod_id, colleague["id"])
 
     named = await member_writes(
         authenticated_client,
@@ -171,14 +161,14 @@ async def test_a_plain_group_line_is_not_emailed(
     assert message_store.get_all("RESEND") == []
 
 
-async def test_held_pushes_go_with_the_next_one_from_their_channel(
+async def test_a_push_held_while_the_app_is_open_goes_with_what_came_meanwhile(
     authenticated_client, setting, message_store
 ):
-    """A notice the budget held is not sent, and is not forgotten: the next
-    notice waits with it, and once the hour's budget is back the two go as
-    one push that says the other is waiting."""
+    """Held while they had the app open, a push is not forgotten: the next
+    line waits with it, and once both are old enough and still unread they go
+    as one push that says the other is waiting."""
     pod_id, colleague = setting
-    await _spend_their_budget(pod_id, colleague["id"])
+    await mark_online(UUID(pod_id), UUID(colleague["id"]))
     first = await _tell(authenticated_client, pod_id, colleague["email"], text="One.")
     held = await _push_to(first["message_id"], colleague["id"])
     await _deliver(held.id)
@@ -192,8 +182,9 @@ async def test_held_pushes_go_with_the_next_one_from_their_channel(
     assert await waiting(first["channel_id"], colleague["id"]) == 2
     assert message_store.get_all("RESEND") == []
 
-    await get_redis().delete(_budget_key(pod_id, colleague["id"]))
+    await _said_minutes_ago([first["message_id"], second["message_id"]], 10)
     await window_ends_now(first["channel_id"], colleague["id"])
+    await run_pushes()
     together = await _push_to(second["message_id"], colleague["id"])
     await _deliver(together.id)
 
@@ -246,13 +237,7 @@ async def test_having_the_app_open_is_not_reading_the_line(
     assert await waiting(told["channel_id"], colleague["id"]) == 1
     assert message_store.get_all("RESEND") == []
 
-    async with async_session_maker() as session:
-        await session.execute(
-            update(ChannelMessageModel)
-            .where(ChannelMessageModel.id == UUID(told["message_id"]))
-            .values(created_at=ChannelMessageModel.created_at - timedelta(minutes=10))
-        )
-        await session.commit()
+    await _said_minutes_ago([told["message_id"]], 10)
     await window_ends_now(told["channel_id"], colleague["id"])
     await run_pushes()
     # The same push, planned again once the hold ended.
@@ -289,20 +274,42 @@ async def test_a_line_they_read_in_the_app_is_not_pushed(
     assert message_store.get_all("RESEND") == []
 
 
-async def test_a_push_is_charged_to_the_budget_once_however_often_it_is_tried(
-    authenticated_client, db_session, setting, fixed_test_user
+async def test_a_burst_is_one_push_a_window_and_none_once_read(
+    authenticated_client, async_client, setting, message_store
 ):
+    """Five lines in a minute are one push, then one more for the four that
+    came inside its window -- and not that one either, once they have read
+    them in the app."""
     pod_id, colleague = setting
-    await _resend_unreachable(db_session, fixed_test_user)
-    told = await _tell(authenticated_client, pod_id, colleague["email"])
-    push = await _push_to(told["message_id"], colleague["id"])
+    burst = [
+        await _tell(authenticated_client, pod_id, colleague["email"], text=f"{n}.")
+        for n in range(1, 6)
+    ]
+    first = await _push_to(burst[0]["message_id"], colleague["id"])
+    await _deliver(first.id)
+    assert (await _row(first.id)).status is DeliveryStatus.SENT
+    for told in burst[1:]:
+        assert await _pushes_to(told["message_id"], colleague["id"]) == []
+    channel_id = burst[0]["channel_id"]
+    assert await waiting(channel_id, colleague["id"]) == 4
 
-    await _deliver(push.id)
-    assert (await _row(push.id)).status is DeliveryStatus.FAILED
-    charged = await _charged(pod_id, colleague["id"])
-    await _due_now(push.id)
-    await _deliver(push.id)
+    last = burst[-1]
+    await window_ends_now(channel_id, colleague["id"])
+    await run_pushes()
+    rest = await _push_to(last["message_id"], colleague["id"])
+    assert rest.lines == 4 and rest.from_seq > first.seq
+    read = await async_client.post(
+        f"/pods/{pod_id}/channels/{channel_id}/read",
+        json={"seq": rest.seq},
+        headers=auth_headers(colleague),
+    )
+    assert read.status_code == 200, read.text
+    await _deliver(rest.id)
 
-    again = await _row(push.id)
-    assert (again.attempts, again.reason_code) == (2, DeliveryReasonCode.TRANSIENT)
-    assert await _charged(pod_id, colleague["id"]) == charged == 1
+    skipped = await _row(rest.id)
+    assert (skipped.status, skipped.reason_code) == (
+        DeliveryStatus.SKIPPED,
+        DeliveryReasonCode.IN_APP,
+    )
+    [mail] = message_store.get_all("RESEND")
+    assert "1." in mail["text"]

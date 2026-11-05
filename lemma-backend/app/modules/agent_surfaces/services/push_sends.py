@@ -8,10 +8,7 @@ push whose lines the member has read in the channel by then is ``SKIPPED``
 (``IN_APP``); one to a member who had the app open in the last
 ``PRESENT_FOR_SECONDS`` is held until its newest line is that old
 (``FOLDED``), and goes then if they still have not read it -- having the app
-open is not reading this channel. Held by the hourly budget is ``SKIPPED``
-(``FOLDED``): its lines go with the member's next push from the channel, no
-sooner than ``HOLD_FOR`` -- the hour's budget is what holds them, so the
-next push says how many came. A platform asked that took none of it ends as
+open is not reading this channel. A platform asked that took none of it ends as
 its failure says (``delivery_outcome.of_send``) -- so a push that may be on
 their screen is not tried again -- and nowhere to reach them is ``SKIPPED``
 (``UNREACHABLE``): it waits in Lemma.
@@ -28,11 +25,7 @@ from app.core.live.presence import seen_within
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import track_sends
 from app.modules.agent_surfaces.services.delivery_outcome import Outcome, of_send
-from app.modules.agent_surfaces.services.member_pushes import (
-    HELD_BY_BUDGET,
-    MemberPushes,
-    Push,
-)
+from app.modules.agent_surfaces.services.member_pushes import MemberPushes, Push
 from app.modules.agent_surfaces.services.notification_delivery import Delivered
 from app.modules.agent_surfaces.services.run_answer_sends import delivery_key
 from app.modules.channels.contracts import (
@@ -51,9 +44,6 @@ type PushesFor = Callable[[SqlAlchemyUnitOfWork], MemberPushes]
 #: A member who had the app open this recently may read a line there: a push
 #: that does not name or ask them waits until its newest line is this old.
 PRESENT_FOR_SECONDS = 5 * 60
-
-#: How long a push the hourly budget held waits before its lines may go again.
-HOLD_FOR = timedelta(minutes=30)
 
 READ_IN_APP = "They read it in the app before it was pushed."
 HELD_WHILE_IN_APP = (
@@ -102,8 +92,6 @@ async def push_outcome(
                         key=delivery_key(delivery),
                         urgent=delivery.urgent,
                         lines=delivery.lines,
-                        # Charged once per delivery, not per try of it.
-                        first_try=delivery.attempts <= 1,
                     )
                 )
             except platform_transport_errors() as exc:
@@ -113,8 +101,6 @@ async def push_outcome(
         return Outcome.delivered(
             delivered.platform, external_message_id=delivered.external_message_id
         )
-    if delivered.held:
-        return Outcome.folded(HELD_BY_BUDGET, hold_for=HOLD_FOR)
     if sends.tried:
         # A platform was asked and took none of it: whether to try again
         # is what that platform's failure says (``of_send``).
@@ -137,4 +123,4 @@ def _fresh_for(line: ChannelMessage) -> timedelta | None:
     return left if left > timedelta(0) else None
 
 
-__all__ = ["HOLD_FOR", "PRESENT_FOR_SECONDS", "PushesFor", "push_outcome"]
+__all__ = ["PRESENT_FOR_SECONDS", "PushesFor", "push_outcome"]
