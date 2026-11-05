@@ -45,17 +45,18 @@ async def _revoke(phone: str | None) -> str:
 async def test_a_changed_number_revokes_only_identities_bound_to_another_number():
     statement = await _revoke("+15550001111")
 
-    assert "SET revoked_at" in statement
+    assert "revoked_at=" in statement
     assert "verified_phone IS NOT NULL" in statement
     assert "verified_phone != '+15550001111'" in statement
     assert "session_proved_at IS NULL" in statement
 
 
 @pytest.mark.asyncio
-async def test_a_revoked_identity_loses_its_route_in_the_same_write():
-    """``ck_surface_identity_route_is_live``: a revoked row keeps no route."""
+async def test_a_revoked_identity_loses_its_number_and_route_in_the_same_write():
+    """Revoked is nobody's; ``ck_surface_identity_route_is_live``: no route."""
     statement = await _revoke("+15550001111")
 
+    assert "verified_phone=NULL" in statement
     assert "installation_surface_id=NULL" in statement
     assert "pod_id=NULL" in statement
 

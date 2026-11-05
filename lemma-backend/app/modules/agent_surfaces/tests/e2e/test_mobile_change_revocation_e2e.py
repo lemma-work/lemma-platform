@@ -104,6 +104,7 @@ async def test_a_routed_phone_identity_is_revoked_with_its_route_when_the_number
     assert identity.revoked_at is not None, (
         "the old number must stop proving who this is"
     )
+    assert identity.verified_phone is None, "a revoked identity keeps no number"
     assert (identity.installation_surface_id, identity.pod_id) == (None, None), (
         "a revoked identity keeps nowhere to talk"
     )
