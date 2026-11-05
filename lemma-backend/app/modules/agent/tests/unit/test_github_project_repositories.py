@@ -53,24 +53,28 @@ def _connector(answer: _GithubCredential | GithubRefusal | None):
     return _credential_as
 
 
+def _github_installation() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "installations": [
+                {
+                    "id": 7,
+                    "account": {"login": "acme", "type": "Organization"},
+                    "repository_selection": "all",
+                }
+            ]
+        },
+    )
+
+
 def _github() -> httpx.AsyncClient:
     def _answer(request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/repos/"):
             return httpx.Response(
                 200, json={"owner": {"login": "acme"}, "name": "web", "private": True}
             )
-        return httpx.Response(
-            200,
-            json={
-                "installations": [
-                    {
-                        "id": 7,
-                        "account": {"login": "acme", "type": "Organization"},
-                        "repository_selection": "all",
-                    }
-                ]
-            },
-        )
+        return _github_installation()
 
     return httpx.AsyncClient(transport=httpx.MockTransport(_answer))
 
@@ -98,6 +102,35 @@ async def test_a_covered_repository_is_kept_as_github_names_it():
 
     assert checked == ProjectRepo(owner="acme", repo="web", ref="release/2.0")
     assert checked.cwd.endswith("/repos/acme/web")
+
+
+@pytest.mark.asyncio
+async def test_a_name_github_allows_and_a_checkout_cannot_take_is_said_as_such():
+    """`.github` is a real repository name, and not a directory pod files allow.
+    It is the name that is refused, not GitHub reported as failing."""
+    credential = _GithubCredential(
+        access_token="ghu_person", login="octo", email=None, installation_id="7"
+    )
+
+    def _answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/repos/"):
+            return httpx.Response(
+                200,
+                json={"owner": {"login": "acme"}, "name": ".github", "private": True},
+            )
+        return _github_installation()
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_answer)) as client:
+        with pytest.raises(ProjectRepositoryUnavailableError) as refused:
+            await _repositories(credential, client).checked(
+                ProjectRepo(owner="acme", repo="web"), pod_id=_POD, user_id=_PERSON
+            )
+
+    assert (refused.value.code, refused.value.status_code) == (
+        "REPOSITORY_NAME_UNSUPPORTED",
+        422,
+    )
+    assert "'acme/.github'" in refused.value.message
 
 
 @pytest.mark.asyncio

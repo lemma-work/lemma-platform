@@ -70,10 +70,12 @@ class RepositoryListing:
 #: bites, and a picker shows the first few hundred rather than walking
 #: thousands on a page load -- saying so with ``complete``.
 _MAX_LISTING_PAGES = 5
-#: Pages read to decide one public repository on a selection. A yes or no has
-#: to be right, so this walks far past what a picker shows; running out is said
-#: as its own refusal rather than read as "not installed".
-_MAX_COVERAGE_PAGES = 100
+#: Pages read to decide one public repository on a selection: past what a
+#: picker shows, so a yes or no is right for any selection a person curates by
+#: hand, and short enough that a create naming a repository the selection lacks
+#: answers in a few requests. Running out is its own refusal, never read as
+#: "not installed".
+_MAX_COVERAGE_PAGES = 10
 
 
 @asynccontextmanager

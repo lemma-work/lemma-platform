@@ -44,7 +44,6 @@ from app.modules.agent.infrastructure.tools.workspace_cli.github_credential impo
 )
 from app.modules.connectors.contracts.github import (
     GithubInstallationRequiredError,
-    GithubUnavailableError,
     InstallationRepository,
     installation_repositories,
     installation_repository,
@@ -115,7 +114,15 @@ class GithubProjectRepositories:
         )
         checked = _project_repo(found, ref=repo.ref)
         if checked is None:
-            raise GithubUnavailableError()
+            # GitHub's rules allow a few names a checkout directory may not
+            # take -- `.github`, whose leading dot pod files reserve for
+            # hidden entries. Said as the name, not as GitHub failing.
+            raise ProjectRepositoryUnavailableError(
+                f"GitHub names it '{found.full_name}', which cannot be used as "
+                "a checkout directory.",
+                code="REPOSITORY_NAME_UNSUPPORTED",
+                status_code=422,
+            )
         return checked
 
     async def reachable(self, *, pod_id: UUID, user_id: UUID) -> RepositoryChoices:

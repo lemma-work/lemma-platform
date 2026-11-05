@@ -149,7 +149,7 @@ async def test_a_selected_installation_covers_a_public_repository_it_lists():
 @pytest.mark.asyncio
 async def test_a_public_repository_deep_in_a_large_selection_is_still_found():
     """Past what a picker lists: a yes or no is walked further than a listing."""
-    listed = [_repo("acme", f"other-{n}") for n in range(2000)] + [_repo("acme", "web")]
+    listed = [_repo("acme", f"other-{n}") for n in range(800)] + [_repo("acme", "web")]
     github = _GitHub(
         repo=_public_web(),
         installations=[_installation(selection="selected")],
@@ -177,6 +177,9 @@ async def test_a_selection_too_large_to_walk_is_unchecked_not_refused():
 
     assert refused.value.status_code == 422
     assert refused.value.details == {"repository": "acme/web", "installed_on": "acme"}
+    # A create waits on a bounded number of requests, not on the whole list.
+    pages = f"/user/installations/{_INSTALLATION}/repositories"
+    assert github.paths.count(pages) == 10
 
 
 @pytest.mark.asyncio
