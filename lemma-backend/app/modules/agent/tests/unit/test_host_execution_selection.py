@@ -363,6 +363,14 @@ def test_a_sub_agent_conversation_is_not_a_person_at_the_keyboard():
     )
 
 
+def test_a_templates_setup_chat_is_the_person_at_the_keyboard():
+    """The person who started the Lemma lands in its setup chat and watches."""
+    conversation = _conversation(origin=ConversationOrigin.SETUP)
+    assert triggered_by_run_user(
+        conversation, _run(conversation), heard_on_platform=False
+    )
+
+
 def test_metadata_a_client_wrote_does_not_make_a_chat_unattended():
     """The keys that used to stand for an origin are only tags now."""
     conversation = _conversation(source="SCHEDULE", workflow_run_id=str(uuid4()))

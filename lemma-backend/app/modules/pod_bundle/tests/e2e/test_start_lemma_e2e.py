@@ -116,6 +116,14 @@ async def test_from_its_own_words_everything_is_there_and_the_agent_is_asked(
 
     said = await _first_message(authenticated_client, pod_id, conversation_id)
     assert "Set yourself up to own this" in said and "set_what_you_own" in said
+    # A template's setup chat, as the agent's typed state says.
+    assert (
+        await scalar(
+            "SELECT origin FROM agent_conversations WHERE id = :c",
+            c=UUID(conversation_id),
+        )
+        == "SETUP"
+    )
     run_id = await _run_of(conversation_id)
     # Queued with everything else -- unless a session worker has run it already.
     staged = await _items(turn_key(run_id))

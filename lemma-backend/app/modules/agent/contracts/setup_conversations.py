@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.state_kinds import ConversationOrigin
 from app.modules.agent.services.turn_staging import AgentTurnStart, stage_agent_turn
 
 
@@ -56,6 +57,7 @@ async def open_setup_conversation(
         agent_name=None,
         user_id=user_id,
         require_execute_grant=False,
+        origin=ConversationOrigin.SETUP,
     )
     started = await AdmitMessage.build(uow).admit(
         conversation,

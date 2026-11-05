@@ -98,9 +98,15 @@ PERSON_TRIGGERS = frozenset(
 #: wait waking, a delegated result coming back. Qualifies only through the run
 #: it continues (``origin_trigger``).
 CONTINUATION_TRIGGERS = frozenset({RunTrigger.WAKE, RunTrigger.DELEGATION_RESULT})
-#: What a person opens in Lemma's own app.
+#: What a person opens in Lemma's own app. A template's setup chat is one: the
+#: person who started the Lemma lands in it and watches.
 _APP_ORIGINS = frozenset(
-    {ConversationOrigin.CHAT, ConversationOrigin.PROJECT, ConversationOrigin.CALL}
+    {
+        ConversationOrigin.CHAT,
+        ConversationOrigin.PROJECT,
+        ConversationOrigin.CALL,
+        ConversationOrigin.SETUP,
+    }
 )
 
 _CWD_SUFFIX = re.compile(r"/c/(\d{4}-\d{2}-\d{2})/([A-Za-z0-9_-]{1,64})/?$")
