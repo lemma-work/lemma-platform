@@ -100,10 +100,10 @@ export function deletionRefusal(problem: unknown): DeletionRefusal {
     const { statusCode, code, message, details } = (problem ?? {}) as Problem;
     const said = typeof message === "string" && message.trim() ? message.trim() : null;
     /* Not proof of a deletion: the same refusal answers an account that was
-       switched off. Either way it can no longer be used, and the person is
-       told that much and no more. */
+       switched off. Either way it can no longer be used — signing in again is
+       refused too — and the person is told that much and no more. */
     if (code === "ACCOUNT_INACTIVE") {
-        return { message: "This account can no longer be used. It may already have been deleted — sign in again to check.", organizations: [] };
+        return { message: "This account can no longer be used. If you have just deleted it, that is done and there is nothing more to do here.", organizations: [] };
     }
     if (statusCode === 401) {
         return { message: "Your session has ended. Sign in again, then try again.", organizations: [] };

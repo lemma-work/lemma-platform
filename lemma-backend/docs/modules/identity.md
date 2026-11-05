@@ -84,10 +84,12 @@ unlinks the person from their data rather than wiping shared work
   billing guard says no.
 - `AccountDeleted` is announced in the same transaction. Identity's own
   subscriber revokes every SuperTokens session and deletes the SuperTokens
-  user, which frees the address to sign up again; the request does the same
-  straight after its commit, and the work item is the retry. Agent hosts,
-  MCP grants, proved chat identities and the sender name on channel lines are
-  let go by their own modules' subscribers.
+  user, which frees the address to sign up again. The request itself only
+  drops the cached account standing after its commit, which refuses every
+  still-valid token at once; it calls SuperTokens not at all, so nothing
+  after the commit can answer 500 for an account that is already gone. Agent
+  hosts, MCP grants, proved chat identities and the sender name on channel
+  lines are let go by their own modules' subscribers.
 
 **Billing.** Billing is not in this repository, so identity asks a question
 of it through `contracts/account_deletion.py`: a billing provider registers an

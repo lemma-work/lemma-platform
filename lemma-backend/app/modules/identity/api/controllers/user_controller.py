@@ -17,7 +17,7 @@ from app.modules.identity.api.schemas.user_schemas import (
 )
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.supertokens_auth.account_removal import (
-    sign_out_after_deletion,
+    drop_cached_standing,
 )
 
 #: What a pod app's page is not told about the person viewing it (H20): it
@@ -112,10 +112,12 @@ async def upsert_profile(
         "Delete the signed-in person's account, for good. Their profile is "
         "erased, they leave every organization, and organizations nobody else "
         "is in are deleted with their pods. Work shared with others stays, "
-        'shown as by "Deleted user". Every session ends, the caller\'s '
-        "included: its cookies or tokens are cleared on this response. If the "
-        "sign-in service cannot be reached just then, the deletion still "
-        "stands and the sessions end as soon as it can be. "
+        'shown as by "Deleted user". From the answer on, no token the person '
+        "holds opens anything, this request's included; their sessions and "
+        "login are removed within moments, after which the address can sign "
+        "up again. A client should discard its tokens on success. A request "
+        "for an account already deleted is refused 403 ACCOUNT_INACTIVE "
+        "before it reaches here. "
         "Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the "
         "only owner of an organization others are still in, and with 409 and "
         "the billing provider's code while something they pay for stands in "
@@ -132,12 +134,15 @@ async def delete_current_user(
     """Delete the current user's account."""
     user_id = request.state.user.id
     outcome = await deletion.delete_account(user_id, confirm_email=data.confirm_email)
-    # Committed here rather than by the dependency, so the sign-in ends only
-    # for a deletion that has happened -- and before this answers, so the
-    # person is normally signed out everywhere by the time they read it.
+    # Committed here rather than by the dependency, so the account's live
+    # tokens are refused only once its deletion has happened -- and before
+    # this answers, so nothing the person holds works by the time they read
+    # it. Sessions and the login itself are removed by the work committed with
+    # the deletion, never here: a failure after the commit must not answer 500
+    # for an account that is already gone.
     await uow.commit()
     async with connection_released(uow.session):
-        await sign_out_after_deletion(request.state.session, user_id)
+        await drop_cached_standing(user_id)
     return AccountDeletionResponse(
         deleted=True,
         organizations_left=len(outcome.organizations_left),

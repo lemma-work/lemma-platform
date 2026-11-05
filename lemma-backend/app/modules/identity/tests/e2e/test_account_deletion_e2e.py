@@ -8,8 +8,8 @@ Through the real API, SuperTokens and the work runtime:
   "Deleted user";
 - the only owner of a team, a mistyped confirmation, and a billing provider
   that says no are each refused with nothing changed;
-- a browser's cookie session deletes as a phone's bearer session does, and has
-  its cookies cleared on the answer.
+- a browser's cookie session deletes as a phone's bearer session does, and the
+  cookie it still holds opens nothing afterwards.
 """
 
 from __future__ import annotations
@@ -122,7 +122,9 @@ async def test_someone_alone_in_their_workspace_takes_it_with_their_account(
     assert me.status_code == 403, me.text
     assert me.json()["code"] == "ACCOUNT_INACTIVE"
 
-    # The address is free: signing up with it is somebody new.
+    # The address is free once the deletion's work has run: signing up with
+    # it is somebody new.
+    await run_until_idle(async_session_maker, classes=[WorkClass.DELIVERY])
     again = await signup_user(email=person["email"])
     assert again["id"] != person["id"]
     fresh = await async_client.get("/users/me", headers=auth_headers(again))
@@ -242,32 +244,25 @@ async def test_a_mistyped_confirmation_deletes_nothing(
     assert (await _row(db_session, User, person["id"])).is_deleted is False
 
 
-async def test_a_browser_session_deletes_and_has_its_cookies_cleared(
+async def test_a_browser_session_deletes_and_its_cookie_opens_nothing_after(
     test_app, signup_user, db_session: AsyncSession
 ):
     person = await signup_user()
     # A client of its own: `async_client` may carry a bearer header, which
     # SuperTokens prefers over any cookie. `rid` is what the web SDK sends, and
     # what satisfies the anti-CSRF check for a cookie session.
+    browser_cookie = {"Cookie": f"sAccessToken={person['token']}", "rid": "session"}
     async with AsyncClient(
         transport=ASGITransport(app=test_app), base_url="http://testserver"
     ) as browser:
-        deleted = await _delete(
-            browser,
-            person["email"],
-            {"Cookie": f"sAccessToken={person['token']}", "rid": "session"},
-        )
+        deleted = await _delete(browser, person["email"], browser_cookie)
+        after = await browser.get("/users/me", headers=browser_cookie)
 
     assert deleted.status_code == 200, deleted.text
-    cleared = [
-        cookie
-        for cookie in deleted.headers.get_list("set-cookie")
-        if cookie.startswith("sAccessToken=")
-    ]
-    assert cleared and all(
-        "sAccessToken=;" in c or 'sAccessToken="";' in c for c in cleared
-    )
     assert (await _row(db_session, User, person["id"])).is_deleted is True
+    # The cookie the browser still holds is refused from the answer on.
+    assert after.status_code == 403, after.text
+    assert after.json()["code"] == "ACCOUNT_INACTIVE"
 
 
 class _Refusing:

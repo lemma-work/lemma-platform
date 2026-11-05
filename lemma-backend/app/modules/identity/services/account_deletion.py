@@ -13,7 +13,7 @@ would strand an organization with no owner, or leave a subscription charging
 nobody, is refused whole, with nothing changed.
 
 Signing the person out everywhere and removing their sign-in is not done here:
-those are calls to SuperTokens, which wait for this transaction to commit
+those are calls to SuperTokens, made by work this transaction commits
 (``supertokens_auth/account_removal.py``).
 """
 
@@ -106,9 +106,10 @@ class AccountDeletionService:
         user = await self.user_repository.get(user_id)
         if user is None:
             raise UserNotFoundError()
-        # Repeating a deletion that already happened is its own answer. Checked
-        # before the confirmation, which a tombstone's address can no longer
-        # match.
+        # Repeating a deletion that already happened is its own answer. Not
+        # over HTTP, where the deleted account is refused before the route,
+        # but for any caller inside the process. Checked before the
+        # confirmation, which a tombstone's address can no longer match.
         if user.is_deleted:
             return AccountDeletionOutcome(already_deleted=True)
         if not _confirms(confirm_email, str(user.email)):

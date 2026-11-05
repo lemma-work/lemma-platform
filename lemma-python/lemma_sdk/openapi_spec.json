@@ -129,10 +129,10 @@
         "type": "object"
       },
       "AccountDeletionResponse": {
-        "description": "What deleting the account did.\n\nEvery session has ended by the time it is read -- or, if the sign-in\nservice could not be reached just then, ends as soon as it can be.",
+        "description": "What deleting the account did.\n\nBy the time it is read no token of the person's opens anything; their\nsessions and login are removed by work that commits with the deletion.",
         "properties": {
           "deleted": {
-            "description": "Always true: the account no longer exists, whether this request deleted it or an earlier one had.",
+            "description": "Always true: this request deleted the account. A request for an account that is already deleted never gets here; it is refused 403 ACCOUNT_INACTIVE.",
             "title": "Deleted",
             "type": "boolean"
           },
@@ -53687,7 +53687,7 @@
     },
     "/users/me": {
       "delete": {
-        "description": "Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies or tokens are cleared on this response. If the sign-in service cannot be reached just then, the deletion still stands and the sessions end as soon as it can be. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.",
+        "description": "Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by \"Deleted user\". From the answer on, no token the person holds opens anything, this request's included; their sessions and login are removed within moments, after which the address can sign up again. A client should discard its tokens on success. A request for an account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.",
         "operationId": "user.current.delete",
         "requestBody": {
           "content": {

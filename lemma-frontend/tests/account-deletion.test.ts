@@ -46,6 +46,8 @@ test("an account that cannot be used is not announced as deleted", () => {
     const refused = deletionRefusal({ statusCode: 403, code: "ACCOUNT_INACTIVE" });
     assert.match(refused.message, /can no longer be used/);
     assert.doesNotMatch(refused.message, /has been deleted/);
+    // Signing in again is refused as well, so it is not offered.
+    assert.doesNotMatch(refused.message, /sign in/i);
 });
 
 test("an expired session is not mistaken for a deleted account", () => {
