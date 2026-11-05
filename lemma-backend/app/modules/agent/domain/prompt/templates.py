@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 _PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
 _THE_POD_PROMPT_PATH = _PROMPT_DIR / "the_pod.md"
 _TEAMMATE_PROMPT_PATH = _PROMPT_DIR / "teammate.md"
+_OUTSIDER_PROMPT_PATH = _PROMPT_DIR / "outsider.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
 _CONNECTORS_PROMPT_PATH = _PROMPT_DIR / "connectors.md"
 _REPLIES_PROMPT_PATH = _PROMPT_DIR / "replies.md"
@@ -119,6 +120,10 @@ def load_teammate_base_prompt() -> str:
 
 def load_agent_base_prompt() -> str:
     return _read_required_prompt(_AGENT_BASE_PROMPT_PATH)
+
+
+def load_outsider_base_prompt() -> str:
+    return _read_required_prompt(_OUTSIDER_PROMPT_PATH)
 
 
 def load_connectors_prompt() -> str:
@@ -330,13 +335,23 @@ def load_toolset_fragment(toolset: AgentToolset) -> str | None:
     return _read_required_prompt(path) if path is not None else None
 
 
-def toolset_instructions(group: str, *, host_execution: bool = False) -> str | None:
+#: Guidance a run answering somebody outside the pod is not given: how to
+#: write records and files, build tables, post to members and channels -- all
+#: of it withheld there, and a run told it believed it could.
+_NOT_FOR_OUTSIDERS = frozenset({AgentToolset.POD, AgentToolset.MESSAGING})
+
+
+def toolset_instructions(
+    group: str, *, host_execution: bool = False, answers_outsider: bool = False
+) -> str | None:
     """The usage guidance an in-process run's toolset carries, visible or deferred.
 
     Deferral hides a toolset's schemas, never its contract. The workspace's
     contract depends on the machine its commands run on; memory carries no
     tools, so it rides on its own (``load_memory_prompt``).
     """
+    if answers_outsider and group in _NOT_FOR_OUTSIDERS:
+        return None
     if group == AgentToolset.WORKSPACE_CLI:
         return load_workspace_cli_prompt(host_execution=host_execution)
     if group == AgentToolset.MEMORY or group not in AgentToolset:
@@ -410,7 +425,15 @@ def build_agent_instruction_parts(
     # Shared resource guidance stays ahead of agent-specific content for caching.
     sections = [load_the_pod_prompt()]
 
-    if conversation.is_pod_assistant:
+    # Somebody outside the pod is told what they can have, not how to build and
+    # write: a run that read "build missing pieces" told a stranger it had
+    # saved what it had no tool to save.
+    # A contact's run. A linked pod's keeps the member prompt and the pod
+    # fragment: it reads what was shared with it, through the pod tools.
+    for_outsider = run_audience(ctx).is_contact
+    if for_outsider:
+        sections.append(load_outsider_base_prompt())
+    elif conversation.is_pod_assistant:
         sections.append(load_teammate_base_prompt())
     else:
         sections.append(load_agent_base_prompt())
@@ -447,14 +470,17 @@ def build_agent_instruction_parts(
         sections.append(
             memory_timing_prompt(after_turn=getattr(ctx, "memory_after_turn", False))
         )
-    sections.extend(
-        _directory_sections(
-            ctx=ctx,
-            conversation=conversation,
-            enabled=enabled,
-            runs_as_remote_process=runs_as_remote_process,
+    # No working directory for somebody outside: theirs is the member's who
+    # looks after them, and none of it is readable to them.
+    if not for_outsider:
+        sections.extend(
+            _directory_sections(
+                ctx=ctx,
+                conversation=conversation,
+                enabled=enabled,
+                runs_as_remote_process=runs_as_remote_process,
+            )
         )
-    )
     if conversation.instructions and conversation.instructions.strip():
         sections.append(
             "# Conversation Instructions\n" + conversation.instructions.strip()
@@ -487,11 +513,16 @@ def _remote_fragments(enabled: set[AgentToolset], *, ctx: ToolContext) -> list[s
     # says so, and the workspace contract -- a VM home, `exec_command` -- would
     # contradict it.
     native_commands = bool(getattr(ctx, "host_runs_native_commands", False))
+    # Not how to write and post to a run answering somebody outside the pod,
+    # which can do neither (``capabilities/assembler._NOT_FOR_OUTSIDERS``).
+    # A contact's run; a linked pod's reads through the pod tools.
+    outsider = run_audience(ctx).is_contact
     fragments = [
         _read_required_prompt(path)
         for toolset, path in FRAGMENT_BY_TOOLSET.items()
         if toolset in enabled
         and not (toolset is AgentToolset.WORKSPACE_CLI and native_commands)
+        and not (outsider and toolset in (AgentToolset.POD, AgentToolset.MESSAGING))
     ]
     # Imported where it is used so the prompt layer, which every run loads,
     # does not carry the platform tables a surface run needs.

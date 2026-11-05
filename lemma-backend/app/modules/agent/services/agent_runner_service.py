@@ -43,6 +43,7 @@ from app.modules.agent.services.runtime_profile_service import (
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.config import agent_settings
 from app.modules.agent.services.run_signals import RunSignals
+from app.modules.agent.services.outside_text import note_what_the_turn_reads
 from app.modules.agent.services.run_limits import (
     budget_for_run,
     make_stop_checker,
@@ -206,6 +207,7 @@ class AgentRunnerService:
                 answered, run=run, finalizer=self.finalizer
             )
             return
+        await note_what_the_turn_reads(conversation.id, messages)  # before it acts
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
         run_kind = agent_run.state.kind.value

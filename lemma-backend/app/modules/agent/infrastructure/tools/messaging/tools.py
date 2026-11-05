@@ -39,6 +39,7 @@ from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.private_notes import defuse_lemma_labels
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.tools import ReplayClass, ToolGroup, ToolPolicy, tool
+from app.modules.agent.services.outside_text import note_outside_text_read
 from app.modules.agent.infrastructure.tools.messaging.models import (
     ChannelListRequest,
     ChannelListResponse,
@@ -367,14 +368,20 @@ async def channel_read(
             uow, channel_id=channel.id, limit=request.limit
         )
     in_direct = channel.kind is ChannelKind.DIRECT
-    return ChannelReadResponse(
-        success=True,
-        lines=[
-            _summary(line, reader_id=deps.user_id, in_direct=in_direct)
-            for line in lines
-            if not line.is_deleted
-        ],
-    )
+    summaries = [
+        _summary(line, reader_id=deps.user_id, in_direct=in_direct)
+        for line in lines
+        if not line.is_deleted
+    ]
+    await _note_outside_lines(deps, summaries)
+    return ChannelReadResponse(success=True, lines=summaries)
+
+
+async def _note_outside_lines(deps: ToolContext, summaries: list[LineSummary]) -> None:
+    """A run that has just read a stranger's line asks before it acts on
+    anything (``agent.services.outside_text``)."""
+    if any(summary.outside_pod for summary in summaries):
+        await note_outside_text_read(deps.conversation_id)
 
 
 async def _asked_by_me(deps: ToolContext, *, limit: int) -> ChannelReadResponse:
@@ -430,16 +437,15 @@ async def channel_search(
                 uow, viewer=viewer, kind=ChannelKind.DIRECT
             )
         }
-    return ChannelSearchResponse(
-        success=True,
-        lines=[
-            _summary(line, reader_id=deps.user_id, in_direct=line.channel_id in own)
-            for line in found
-            if not withheld_from(
-                line, user_id=deps.user_id, in_their_direct=line.channel_id in own
-            )
-        ],
-    )
+    summaries = [
+        _summary(line, reader_id=deps.user_id, in_direct=line.channel_id in own)
+        for line in found
+        if not withheld_from(
+            line, user_id=deps.user_id, in_their_direct=line.channel_id in own
+        )
+    ]
+    await _note_outside_lines(deps, summaries)
+    return ChannelSearchResponse(success=True, lines=summaries)
 
 
 async def channel_list(

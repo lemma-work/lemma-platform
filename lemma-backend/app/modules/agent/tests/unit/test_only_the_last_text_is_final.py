@@ -9,8 +9,8 @@ stored two. A surface delivering "the final answer" then posted the first one.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from uuid import uuid4
+from collections.abc import AsyncIterator, Callable
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
@@ -22,10 +22,11 @@ from pydantic_ai.models.function import (
 )
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
+    AnswerKind,
     AgentEventType,
     ConversationType,
     MessageDraft,
@@ -34,6 +35,9 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
 from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
+    ClaimSteered,
+)
 from app.modules.agent.infrastructure.harness.lemma.node_loop import (
     settle_response_answers,
 )
@@ -49,7 +53,9 @@ _VERDICT_SCHEMA = {
 }
 
 
-def _scripted(*responses: ModelResponse) -> FunctionModel:
+def _scripted(
+    *responses: ModelResponse, answered: Callable[[], None] | None = None
+) -> FunctionModel:
     """Streams each response in turn: its text, then its tool calls."""
     remaining = list(responses)
 
@@ -58,6 +64,8 @@ def _scripted(*responses: ModelResponse) -> FunctionModel:
     ) -> AsyncIterator[str | DeltaToolCalls]:
         del messages, info
         response = remaining.pop(0)
+        if answered is not None:
+            answered()
         calls = 0
         for part in response.parts:
             if isinstance(part, TextPart):
@@ -74,7 +82,11 @@ def _scripted(*responses: ModelResponse) -> FunctionModel:
 
 
 async def _texts(
-    model: FunctionModel, monkeypatch, *, output_schema: dict | None = None
+    model: FunctionModel,
+    monkeypatch,
+    *,
+    output_schema: dict | None = None,
+    claim_steered: ClaimSteered | None = None,
 ) -> list[MessageDraft]:
     monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda _: model)
     pod_id = uuid4()
@@ -84,7 +96,8 @@ async def _texts(
         type=ConversationType.TASK if output_schema else ConversationType.CHAT,
     )
     drafts: list[MessageDraft] = []
-    async for event in PydanticAIHarness()._execute(
+    agent_run_id = uuid4()
+    async for event in PydanticAIHarness(claim_steered=claim_steered)._execute(
         agent=Agent(
             pod_id=pod_id,
             user_id=conversation.user_id,
@@ -98,11 +111,13 @@ async def _texts(
             user_id=conversation.user_id,
             pod_id=pod_id,
             conversation_id=conversation.id,
+            # Steering is armed only for a run it can claim messages for.
+            agent_run_id=agent_run_id if claim_steered is not None else None,
         ),
         options=HarnessOptions(
             model_name="test-model", history_summarization_enabled=False
         ),
-        agent_run_id=uuid4(),
+        agent_run_id=agent_run_id,
         should_stop=None,
     ):
         if event.type is AgentEventType.MESSAGE and isinstance(
@@ -167,6 +182,9 @@ async def test_an_answer_the_run_goes_on_past_is_not_the_final_answer(
     assert [draft.text for draft in drafts if not _final(draft)] == [
         "Looks fine to me."
     ]
+    # Sent back for the structured answer, not by the person: no answer of
+    # its own to ship.
+    assert not any(draft.state.answer is AnswerKind.BEFORE_STEER for draft in drafts)
     assert len(finals) == 1, drafts
     assert (finals[0].metadata or {}).get("structured_output") == {"verdict": "ok"}
 
@@ -175,6 +193,57 @@ def _flag(draft: MessageDraft) -> bool | None:
     """The draft's answer as the old flag read: None for undecided."""
     answer = draft.state.answer
     return None if answer is None else draft.state.is_final_answer
+
+
+class _SaysMoreAsItAnswers:
+    """The person writes again as the run gives its first answer: the run's
+    steering claims their message once, after the model has answered."""
+
+    def __init__(self) -> None:
+        self.answered = False
+        self.said = False
+
+    def model_answered(self) -> None:
+        self.answered = True
+
+    async def claim(self, agent_run_id: UUID) -> list[Message]:
+        if not self.answered or self.said:
+            return []
+        self.said = True
+        return [
+            Message.create(
+                conversation_id=uuid4(),
+                sequence=2,
+                agent_run_id=agent_run_id,
+                role=MessageRole.USER,
+                kind=MessageKind.TEXT,
+                text="And tomorrow?",
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_an_answer_the_person_spoke_over_is_an_answer_all_the_same(
+    monkeypatch,
+) -> None:
+    """The run answered; the person said more before it ended, so it went on
+    and answered that too. The first answer is not the run's final one, but it
+    was given -- marked so it ships as a message of its own."""
+    person = _SaysMoreAsItAnswers()
+    drafts = await _texts(
+        _scripted(
+            ModelResponse(parts=[TextPart("Sunny today.")]),
+            ModelResponse(parts=[TextPart("Rain tomorrow.")]),
+            answered=person.model_answered,
+        ),
+        monkeypatch,
+        claim_steered=person.claim,
+    )
+
+    assert [
+        (draft.text, _final(draft), draft.state.answer is AnswerKind.BEFORE_STEER)
+        for draft in drafts
+    ] == [("Sunny today.", False, True), ("Rain tomorrow.", True, False)]
 
 
 def test_settling_a_response_leaves_only_a_closing_text_undecided() -> None:

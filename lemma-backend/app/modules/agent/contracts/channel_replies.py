@@ -14,6 +14,9 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.contact_history import CLIENT_NONCE_KEY, VisibleMessage
 from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.repositories.run_last_words import (
+    answers_before_steers,
+)
 
 
 async def visible_messages(
@@ -35,6 +38,9 @@ class RunReplyMaterial:
     error: str | None
     #: Started by a private note in Lemma: nothing of it goes to the platform.
     private: bool
+    #: What it answered before the person said more, oldest first: each a
+    #: message of its own, ahead of the final answer (``domain/steered_answers``).
+    earlier: tuple[str, ...] = ()
 
 
 def _answer_text(output: object) -> str | None:
@@ -54,6 +60,20 @@ def answer_line_client_id(run_id: UUID) -> str:
     return f"run:{run_id}"
 
 
+def earlier_answer_client_id(run_id: UUID, number: int) -> str:
+    """The line of the run's ``number``-th answer given before a steer
+    (from 1): one per answer, however often the reply is written."""
+    return f"{answer_line_client_id(run_id)}:{number}"
+
+
+def is_earlier_answer(client_message_id: str | None) -> bool:
+    """Whether a run's line is an answer given before a steer, rather than its
+    final answer: it rides no files and finishes no live stream."""
+    if not client_message_id or not client_message_id.startswith("run:"):
+        return False
+    return client_message_id.count(":") == 2
+
+
 async def run_reply_material(
     uow: SqlAlchemyUnitOfWork, run_id: UUID
 ) -> RunReplyMaterial | None:
@@ -67,6 +87,7 @@ async def run_reply_material(
         answer=_answer_text(run.output_data),
         error=run.error,
         private=run.state.private_note,
+        earlier=tuple(await answers_before_steers(uow.session, agent_run_id=run_id)),
     )
 
 
@@ -75,6 +96,8 @@ __all__ = [
     "RunReplyMaterial",
     "VisibleMessage",
     "answer_line_client_id",
+    "earlier_answer_client_id",
+    "is_earlier_answer",
     "run_reply_material",
     "visible_messages",
 ]

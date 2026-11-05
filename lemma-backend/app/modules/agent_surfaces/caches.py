@@ -43,6 +43,9 @@ WEB_WIDGET_KEYS = CacheNamespace("web-widget:key", 60)
 #: mirror was about to be made. Short: a conversion to private inside it is
 #: still caught by the next message, which names the new type.
 PLACE_PRIVACY = CacheNamespace("surface:place-privacy", 5 * 60)
+#: Somebody the platform said left a group, lately: a join worked after it is
+#: not taken to undo it (``services/recent_leaves``).
+RECENT_LEAVES = CacheNamespace("surface:recent-leave", 10 * 60)
 
 
 class SurfaceCaches:

@@ -30,8 +30,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0065_schedule_reset_and_author"
-REVISION = "0066_agent_typed_state"
+BEFORE = "0068_channel_table_grants"
+REVISION = "0069_agent_typed_state"
 
 _CONVERSATION_COLUMNS = (
     "origin",
@@ -472,6 +472,13 @@ def _seed(plain_url: str) -> _Ids:
             ),
             ("thought", "assistant", "THINKING", {"is_final_answer": False}, None),
             (
+                "spoken_over",
+                "assistant",
+                "TEXT",
+                {"is_final_answer": False, "answered_before_steer": True},
+                None,
+            ),
+            (
                 "held",
                 "user",
                 "TEXT",
@@ -732,13 +739,21 @@ def _assert_messages(rows: dict[UUID, dict], ids: _Ids) -> None:
 
     answers = {
         name: rows[ids[name]]["answer"]
-        for name in ("final", "last_words", "narration", "thought", "queued")
+        for name in (
+            "final",
+            "last_words",
+            "narration",
+            "thought",
+            "spoken_over",
+            "queued",
+        )
     }
     assert answers == {
         "final": "FINAL",
         "last_words": "LAST_WORDS",
         "narration": "INTERMEDIATE",
         "thought": "NOT_FINAL",
+        "spoken_over": "BEFORE_STEER",
         "queued": None,
     }
     held = rows[ids["held"]]

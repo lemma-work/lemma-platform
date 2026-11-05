@@ -68,6 +68,7 @@ from app.modules.agent.infrastructure.harness.lemma.node_events import (
     _canonical,
     _is_open_answer,
     _not_final,
+    carries_the_persons_words,
     settle_response_answers,
     unique_stored_calls,
 )
@@ -192,8 +193,11 @@ class NodeLoop[DepsT]:
                     # The node before this one has finished: log what it added.
                     await self._log(run)
                     if PydanticAIAgent.is_model_request_node(node):
-                        # Another request: the run went on past that answer.
-                        await self._release_undecided(final=False)
+                        # Another request: the run went on past that answer --
+                        # which was one, when the person saying more sent it on.
+                        await self._release_undecided(
+                            final=False, steered=carries_the_persons_words(node)
+                        )
                         # Counted before the request, not after: the ceiling is
                         # on what the run is about to spend, and a check that
                         # only ran afterwards would always allow one call past
@@ -247,12 +251,14 @@ class NodeLoop[DepsT]:
                 )
             )
 
-    async def _release_undecided(self, *, final: bool) -> None:
+    async def _release_undecided(self, *, final: bool, steered: bool = False) -> None:
         """Hand on the held closing text, final or not as the run turned out."""
         held, self._undecided = self._undecided, []
         for event in held:
             settled = (
-                event if final or not _is_open_answer(event) else _not_final(event)
+                event
+                if final or not _is_open_answer(event)
+                else _not_final(event, steered=steered)
             )
             await self.queue.put(("event", settled))
 

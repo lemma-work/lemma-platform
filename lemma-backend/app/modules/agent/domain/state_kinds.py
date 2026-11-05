@@ -109,6 +109,10 @@ class AnswerKind(str, Enum):
     LAST_WORDS = "LAST_WORDS"
     #: Explicitly not the answer: a thought, or text a later step superseded.
     NOT_FINAL = "NOT_FINAL"
+    #: Not the run's final answer, but an answer all the same: given before
+    #: the person said more, and sent ahead of the final one
+    #: (``domain/steered_answers``).
+    BEFORE_STEER = "BEFORE_STEER"
 
 
 #: The kinds that are a run's answer.

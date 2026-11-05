@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+from pydantic_ai.messages import UserPromptPart
+
 from app.modules.agent.domain.tool_call_ids import (
     call_signature,
     unique_per_call_id,
@@ -84,11 +86,26 @@ def _is_open_answer(event: AgentEvent) -> bool:
     )
 
 
-def _not_final(event: AgentEvent) -> AgentEvent:
+def _not_final(event: AgentEvent, *, steered: bool = False) -> AgentEvent:
+    """Not the run's final answer -- but, ``steered``, an answer all the same:
+    given before the person said more (``domain/steered_answers``)."""
     draft = event.data
     assert isinstance(draft, MessageDraft)
-    state = draft.state.model_copy(update={"answer": AnswerKind.NOT_FINAL})
+    answer = AnswerKind.BEFORE_STEER if steered else AnswerKind.NOT_FINAL
+    state = draft.state.model_copy(update={"answer": answer})
     return event.model_copy(update={"data": draft.model_copy(update={"state": state})})
+
+
+def carries_the_persons_words(node: object) -> bool:
+    """Whether a request is the person's steered message, rather than a retry.
+
+    A run that would end with messages waiting is sent on with them as the
+    next request's user prompt (pydantic-ai's end-of-run drain); a retry's
+    request carries the retry's prompt instead.
+    """
+    request = getattr(node, "request", None)
+    parts = getattr(request, "parts", None) or ()
+    return any(isinstance(part, UserPromptPart) for part in parts)
 
 
 def settle_response_answers(

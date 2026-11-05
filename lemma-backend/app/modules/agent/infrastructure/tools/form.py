@@ -65,6 +65,10 @@ class FillFormRequest(BaseModel):
 
 
 def _fits(column: PublicColumn, value: str | int | float | bool) -> object | None:
+    if column.attached:
+        # A file is attached by the visitor on their page. Anything the chat
+        # put here would be a path, and a path could name a file of the pod's.
+        return None
     if column.type == "BOOLEAN":
         return (
             value
@@ -92,6 +96,7 @@ def _asks(opened: OpenTable) -> list[dict[str, object]]:
             "type": column.type,
             "required": column.required,
             **({"options": list(column.options)} if column.options else {}),
+            **({"attach_on_page": True} if column.attached else {}),
         }
         for column in opened.columns
     ]

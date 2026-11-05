@@ -37,6 +37,7 @@ from app.modules.agent.infrastructure.harness.lemma.capabilities import (
 )
 from app.modules.agent.infrastructure.tools.contact import contact_specs
 from app.modules.agent.infrastructure.tools.form import form_specs
+from app.modules.agent.infrastructure.tools.group_history import group_specs
 from app.modules.agent.infrastructure.tools.workspace_cli import (
     tools as workspace_cli,
 )
@@ -55,7 +56,8 @@ pytestmark = pytest.mark.unit
 #: The decision record. Each goes through the anonymous authorizer, reaches no
 #: sandbox, and acts as nobody: the pod's reads (what it made Public), a search
 #: API call, flagging the channel for a member, a contact's own rows and
-#: functions, and filling a form on a web visitor's own page.
+#: functions, filling a form on a web visitor's own page, and a guest's group --
+#: its lines, and the tables a member gave it.
 ALLOWED = {
     "pod_tables",
     "pod_get_records",
@@ -70,6 +72,9 @@ ALLOWED = {
     "contact_records",
     "contact_function",
     "fill_form",
+    "group_history",
+    "group_records",
+    "group_add_record",
 }
 
 
@@ -83,6 +88,7 @@ def _kept_specs() -> list:
         *specs,
         *contact_specs(uow_factory=_uow_factory),
         *form_specs(uow_factory=_uow_factory),
+        *group_specs(uow_factory=_uow_factory),
     ]
 
 

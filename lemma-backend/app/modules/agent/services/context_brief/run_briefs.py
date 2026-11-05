@@ -31,6 +31,7 @@ from app.modules.agent.services.context_brief.lines import run_trigger_of
 from app.modules.agent.services.context_brief.link import link_brief
 from app.modules.agent.services.context_brief.outsider import outsider_brief
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.prompt.surface import is_group_conversation
 
 from uuid import UUID
 
@@ -130,6 +131,8 @@ async def _brief(
                 pod_id=conversation.pod_id,
                 owner_user_id=user_id,
                 contact_id=audience.contact_id,
+                in_group=is_group_conversation(ctx),
+                channel_id=conversation.channel_id,
             )
             return ""
         brief = await AgentContextBriefBuilder(uow_factory).build(

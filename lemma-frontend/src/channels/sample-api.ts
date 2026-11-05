@@ -312,5 +312,45 @@ export function sampleChannelApi(_podId: string): ChannelApi {
             }, 6_000);
             return { url: "https://t.me/" + surfaceName.replace(/^@/, "") + "_bot?startgroup=sample", expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
         },
+        /* Opened "in Telegram" a few seconds after it is made, from the
+           sample's own account, so the confirm step can be seen. */
+        async identityLink() {
+            await wait(300);
+            linkOpenedAt = Date.now() + 4_000;
+            return { code: id("sample-link"), url: "https://t.me/sample_bot?start=lk_sample", expiresAt: new Date(Date.now() + 600_000).toISOString() };
+        },
+        async identityLinkStatus() {
+            if (linkOpenedAt === null) return { state: "GONE" as const };
+            if (Date.now() < linkOpenedAt) return { state: "WAITING" as const };
+            return { state: "OPENED" as const, account: { name: "Sample You", username: "sample_you" } };
+        },
+        async confirmIdentityLink() {
+            linkOpenedAt = null;
+            /* Linked from a group or from the profile, it is the member's
+               everywhere: the profile's list shows it either way. */
+            const { rememberSampleLink } = await import("@/session/telegram-accounts");
+            rememberSampleLink("Sample You");
+            return { name: "Sample You", username: "sample_you" };
+        },
+        async declineIdentityLink() {
+            linkOpenedAt = null;
+        },
+        async tableGrants(channelId) {
+            await wait(120);
+            return [...(grants.get(channelId) ?? new Map()).values()];
+        },
+        async setTableGrant(channelId, table, grant) {
+            await wait(200);
+            const saved = { table, readColumns: grant.readColumns, addColumns: grant.addColumns };
+            grants.set(channelId, new Map(grants.get(channelId) ?? []).set(table, saved));
+            return saved;
+        },
+        async removeTableGrant(channelId, table) {
+            await wait(150);
+            grants.get(channelId)?.delete(table);
+        },
     };
 }
+
+let linkOpenedAt: number | null = null;
+const grants = new Map<string, Map<string, { table: string; readColumns: string[]; addColumns: string[] }>>();
