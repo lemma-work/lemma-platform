@@ -69,6 +69,7 @@ from app.modules.agent.services.pod_link_guards import (
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.application.conversations.start import StartConversation
 from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.identity.contracts.profiles import UserProfileRef, user_profile
 from app.modules.pod.contracts.members import pod_name
@@ -317,6 +318,7 @@ class PodAskService:
                         from_conversation_id=asking.id,
                         mode=plan.mode,
                     ),
+                    kind=RunKind.POD_ASK,
                 )
             except DomainError as exc:
                 if exc.status_code in _DENIED_STATUS_CODES:

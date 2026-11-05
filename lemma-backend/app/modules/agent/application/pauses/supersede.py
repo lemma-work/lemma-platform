@@ -60,8 +60,13 @@ class SupersedeStalePauses:
         *,
         conversation: Conversation,
         user_id: UUID,
+        reply: str | None = None,
     ) -> list[Message]:
         """Close what the person moved past; return the messages it wrote.
+
+        ``reply`` is what the person wrote, when they wrote back: with one
+        question left open, the model is handed it as that question's answer
+        rather than told the question was passed over.
 
         A ``wait_for`` the person typed past is cancelled first, with its timer,
         in the same (caller's) transaction: left PENDING, its timer would later
@@ -79,8 +84,16 @@ class SupersedeStalePauses:
         """
         cancelled = await self._cancel_superseded_wait(conversation)
         superseded: list[Message] = []
-        for pause in await self.pauses.pending(conversation.id, kinds=PERSON_KINDS):
-            saved_return = await self._deny(conversation, pause, user_id=user_id)
+        pending = await self.pauses.pending(conversation.id, kinds=PERSON_KINDS)
+        questions = [pause for pause in pending if pause.kind is PauseKind.QUESTION]
+        answered = questions[0] if reply and len(questions) == 1 else None
+        for pause in pending:
+            saved_return = await self._close(
+                conversation,
+                pause,
+                user_id=user_id,
+                reply=reply if pause is answered else None,
+            )
             if saved_return is not None:
                 superseded.append(saved_return)
         return [*cancelled, *superseded]
@@ -122,10 +135,17 @@ class SupersedeStalePauses:
         )
         return [saved]
 
-    async def _deny(
-        self, conversation: Conversation, pause: Pause, *, user_id: UUID
+    async def _close(
+        self,
+        conversation: Conversation,
+        pause: Pause,
+        *,
+        user_id: UUID,
+        reply: str | None,
     ) -> Message | None:
-        if not pause.supersede(by=user_id) or not await self.pauses.save(pause):
+        if not pause.supersede(by=user_id, reply=reply) or not await self.pauses.save(
+            pause
+        ):
             # A concurrent resolve already decided it; that resolve (or its
             # own reconcile) owns synthesizing the return.
             return None

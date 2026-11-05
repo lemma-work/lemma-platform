@@ -22,6 +22,7 @@ from app.modules.agent.infrastructure.models.feedback import (
     AgentFeedbackModel,
 )
 from app.modules.agent.infrastructure.models.pause import AgentPauseModel
+from app.modules.agent.infrastructure.models.run_step import AgentRunStepModel
 
 __all__ = [
     "AgentFeedback",
@@ -29,6 +30,7 @@ __all__ = [
     "AgentModel",
     "AgentPauseModel",
     "AgentRunModel",
+    "AgentRunStepModel",
     "ConversationModel",
     "MessageModel",
 ]

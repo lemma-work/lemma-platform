@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.domain.pauses import CALL_NAMES, PAUSING_CALL_NAMES
+from app.modules.agent.domain.pauses import (
+    CALL_NAMES,
+    DELEGATE_CALL_NAME,
+    PAUSING_CALL_NAMES,
+)
 from app.modules.agent.domain.replay import (
     ReplayClass,
     is_replayable_call,
@@ -55,11 +59,16 @@ def test_pauses_are_never_settled_by_a_resumed_turn() -> None:
 
 
 def test_the_stored_call_names_are_the_tools_that_pause() -> None:
-    """``CALL_NAMES`` is read only by transcript readers; it must agree with
-    ``ToolPolicy.pauses``, which is what says a tool pauses."""
+    """``PAUSING_CALL_NAMES`` is read only by transcript readers; it must agree
+    with ``ToolPolicy.pauses``, which is what says a tool pauses. ``delegate``
+    waits as a WAIT under its own name."""
     for spec in _specs().values():
         if spec.policy.pauses is not None:
-            assert CALL_NAMES[spec.policy.pauses] == spec.name
+            assert spec.name in PAUSING_CALL_NAMES
+            assert (
+                CALL_NAMES[spec.policy.pauses] == spec.name
+                or spec.name == DELEGATE_CALL_NAME
+            )
 
 
 @pytest.mark.parametrize(

@@ -67,6 +67,7 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostRunLeaseModel,
 )
+from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
 from app.modules.agent.services.run_finalizer import RunFinalizer
 from app.modules.agent.services.run_identity import RunIdentity
@@ -372,14 +373,18 @@ async def test_a_resumed_run_ending_with_calls_it_never_ran_answers_with_its_las
         ConversationStatus.WAITING
     )
 
-    async with owner_uow(seeded) as uow:
-        await resolve_pause(uow).resolve(
-            conversation=await conversation(seeded.conversation_id),
-            approval_id=permission_approval_tool_call_id(_WRITE),
-            user_id=seeded.user_id,
-            pod_id=seeded.pod_id,
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-        )
+    # This test drives the resumed turn itself. Staged as work, the turn is
+    # also there for the session's real worker, when a module packed into the
+    # same process started one, and two drivers of one run race to end it.
+    with suppress_agent_run_enqueue():
+        async with owner_uow(seeded) as uow:
+            await resolve_pause(uow).resolve(
+                conversation=await conversation(seeded.conversation_id),
+                approval_id=permission_approval_tool_call_id(_WRITE),
+                user_id=seeded.user_id,
+                pod_id=seeded.pod_id,
+                decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            )
     first, resumed = await runs(seeded.conversation_id)
     assert first.id == run_id
     await _lease(resumed.id, host_id, harness_id)

@@ -185,10 +185,14 @@ async def _redraw(run: RunIdentity, message: Message | None) -> None:
         )
 
 
-async def _end_machine_work(conversation_id: UUID) -> None:
+async def _end_machine_work(
+    conversation_id: UUID, status: ConversationStatus | None
+) -> None:
     """Free the conversation's slots on shared machines and stop what it left
     running there. Not while it waits on its own work: that work is what a
     waiting conversation is waiting for."""
+    if status is ConversationStatus.WAITING:
+        return
     from app.modules.workspace.contracts.agent_machines import end_run
     from app.modules.workspace.contracts.runtime_errors import machine_runtime_errors
 
@@ -296,11 +300,8 @@ class RunFinalizer:
                             run.user_id if run.memory_after_turn else None
                         ),
                     )
-            if finish_result is not None and conversation_status is not (
-                ConversationStatus.WAITING
-            ):
-                await _end_machine_work(run.conversation_id)
             if finish_result is not None:
+                await _end_machine_work(run.conversation_id, conversation_status)
                 # A retry must repair receipts even when the run is terminal.
                 # The stored outcome wins over a retry's fallback failure status.
                 await self.usage_recorder.finalize_metered(
@@ -394,6 +395,7 @@ class RunFinalizer:
             ),
             source_type=run.usage_source,
             source_id=str(run.agent_run_id),
+            parent_agent_run_id=run.parent_agent_run_id,
         )
         await self.usage_recorder.record(
             ctx=context,

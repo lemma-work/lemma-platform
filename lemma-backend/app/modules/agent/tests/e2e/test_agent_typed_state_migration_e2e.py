@@ -32,6 +32,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0068_channel_table_grants"
 REVISION = "0069_agent_typed_state"
+RUN_LOG = "0070_agent_run_log"
 
 _CONVERSATION_COLUMNS = (
     "origin",
@@ -375,13 +376,33 @@ def _seed(plain_url: str) -> _Ids:
                 "COMPLETED",
             ),
         ]
+        # Where each run is, when not the plain chat: 0070 reads its kind off it.
+        placed = {
+            "fired_run": "schedule",
+            "person_in_schedule_run": "schedule",
+            "voice_run": "coordinator",
+            "widget_run": "widget",
+            "worker_run": "child",
+        }
+        runs += [
+            ("fired_run", {"source": "SCHEDULE"}, "COMPLETED"),
+            ("person_in_schedule_run", {"source": "user_message"}, "COMPLETED"),
+            ("voice_run", {"source": "user_message"}, "COMPLETED"),
+            ("widget_run", {"source": "user_message"}, "COMPLETED"),
+            ("worker_run", {"source": "user_message"}, "COMPLETED"),
+        ]
         for name, metadata, status in runs:
             run(
                 "INSERT INTO agent_runs (id, conversation_id, status, agent_runtime, "
                 "started_at, finished_at, run_metadata, created_at, updated_at) "
                 "VALUES (%s, %s, %s, '{}', now(), "
                 "'2026-10-01T12:00:00+00:00', %s, now(), now())",
-                (ids[name], ids["chat"], status, json.dumps(metadata)),
+                (
+                    ids[name],
+                    ids[placed.get(name, "chat")],
+                    status,
+                    json.dumps(metadata),
+                ),
             )
 
         messages: list[tuple[str, str, str, dict[str, object], str | None]] = [
@@ -720,6 +741,67 @@ def _assert_messages(rows: dict[UUID, dict], ids: _Ids) -> None:
     assert rows[ids["parked"]]["parked_in_run_id"] == ids["asked_run"]
 
 
+def _assert_run_kinds(plain_url: str, ids: _Ids) -> None:
+    """0070 reads each run's kind off its conversation's origin."""
+    names = (
+        "asked_run",
+        "fired_run",
+        "person_in_schedule_run",
+        "voice_run",
+        "widget_run",
+        "worker_run",
+    )
+    with psycopg.connect(plain_url) as connection:
+        kinds = {
+            name: connection.execute(
+                "SELECT kind FROM agent_runs WHERE id = %s", (ids[name],)
+            ).fetchone()[0]
+            for name in names
+        }
+    assert kinds == {
+        "asked_run": "CHAT",
+        "fired_run": "SCHEDULE",
+        # A person writing into a schedule's conversation: their turn.
+        "person_in_schedule_run": "CHAT",
+        "voice_run": "CALL",
+        "widget_run": "CONTACT",
+        "worker_run": "SUBAGENT",
+    }
+
+
+def _assert_run_log_keeps_bytes(plain_url: str) -> None:
+    """The run log is new and empty, and hands back the bytes it was given:
+    TEXT, so neither key order nor spacing moves."""
+    assert _columns(plain_url, "agent_run_steps") == {
+        "id",
+        "created_at",
+        "conversation_id",
+        "run_id",
+        "seq",
+        "kind",
+        "messages",
+    }
+    written = '[{"parts": [{"tool_name":"x","args":"{\\"b\\": 1,  \\"a\\": 2}"}]}]'
+    with psycopg.connect(plain_url) as connection:
+        conversation_id = connection.execute(
+            "SELECT id FROM agent_conversations LIMIT 1"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO agent_run_steps "
+            "(id, created_at, conversation_id, seq, kind, messages) "
+            "VALUES (%s, now(), %s, 1, 'STEP', %s)",
+            (uuid4(), conversation_id, written),
+        )
+        (read,) = connection.execute(
+            "SELECT messages FROM agent_run_steps WHERE conversation_id = %s",
+            (conversation_id,),
+        ).fetchone()
+        assert read == written
+        assert connection.execute(
+            "SELECT count(*) FROM agent_messages WHERE run_step_seq IS NOT NULL"
+        ).fetchone() == (0,)
+
+
 def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
     with get_postgres_container() as postgres:
         database_url = get_postgres_url(postgres)
@@ -777,3 +859,13 @@ def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
         assert again[ids["surface"]]["external_thread_id"] == "777"
         again[ids["surface"]]["external_thread_id"] = "-100123"
         assert again == surfaces
+
+        # 0070, on top: every run gets its kind, and the run log starts empty.
+        _migrate(database_url, "upgrade", RUN_LOG)
+        _assert_run_kinds(plain_url, ids)
+        _assert_run_log_keeps_bytes(plain_url)
+        _migrate(database_url, "downgrade", REVISION)
+        assert "kind" not in _columns(plain_url, "agent_runs")
+        assert "run_step_seq" not in _columns(plain_url, "agent_messages")
+        assert not _columns(plain_url, "agent_run_steps")
+        assert _typed(plain_url) == (conversations, runs, messages)

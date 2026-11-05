@@ -622,7 +622,7 @@ class TestStaleImagesAreDetached:
         return messages
 
     def _has_binary(self, messages: list[object]) -> bool:
-        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.stale_images import (
             _is_binary,
         )
 
@@ -863,3 +863,63 @@ class TestSyntheticMessagesNeverDisplaceTheRequest:
         twice = await guard(once)
 
         assert len(twice) == len(once)
+
+
+class TestAHistoryOfThePersonsOwnWords:
+    """A history that is mostly what the person pasted.
+
+    Their messages are kept verbatim, so a compaction that keeps every one of
+    them whole shrank nothing -- live, it took a 101k-token history to 102k --
+    and, still over the trigger, fired again on every turn with a new summary
+    call each time.
+    """
+
+    @staticmethod
+    def _pasted_history() -> list[object]:
+        messages: list[object] = [_user(THE_REQUEST)]
+        for index in range(4):
+            messages.append(_user(f"pasted-{index} " + ("document text " * 400)))
+            messages.extend(_work(f"p{index}", "ok"))
+        return messages
+
+    async def test_an_oversized_turn_is_cut_and_the_history_shrinks(self) -> None:
+        sink: list[str] = []
+        compactor = _compactor(sink, keep_messages=2)
+        history = self._pasted_history()
+        before = compactor.footprint.counter.count(history)
+
+        compacted = await compactor(_ctx(), history)
+
+        assert compactor.footprint.counter.count(compacted) < before
+        assert any(
+            "cut from this message by compaction" in t for t in _texts(compacted)
+        )
+        # The request itself is kept, and first.
+        assert _texts(compacted)[0] == THE_REQUEST
+
+    async def test_it_never_hands_back_more_than_it_was_given(self) -> None:
+        sink: list[str] = []
+        compactor = HistoryCompactor(
+            model=_model(sink, reply="x " * 5_000),
+            trigger_tokens=2_000,
+            keep_messages=6,
+        )
+        history = _history()
+
+        compacted = await compactor(_ctx(), history)
+
+        counter = compactor.footprint.counter
+        assert counter.count(compacted) <= counter.count(history)
+
+    async def test_the_next_run_does_not_compact_what_this_one_left(self) -> None:
+        sink: list[str] = []
+        compacted = await _compactor(sink, keep_messages=2)(
+            _ctx(), self._pasted_history()
+        )
+        assert len(sink) == 1
+
+        # The next run replays the compaction's checkpoint, plus its own turn.
+        next_run = _compactor(sink, keep_messages=2)
+        await next_run(_ctx(), [*compacted, _user("Thanks.")])
+
+        assert len(sink) == 1

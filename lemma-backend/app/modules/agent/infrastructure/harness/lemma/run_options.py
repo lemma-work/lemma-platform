@@ -36,7 +36,9 @@ def harness_usage_limits() -> UsageLimits:
 
 
 def final_answer_output(
-    agent: Agent, conversation: Conversation
+    agent: Agent,
+    conversation: Conversation,
+    pausing: frozenset[str] = frozenset(),
 ) -> OutputSpec[object] | None:
     """The final-answer tool a task conversation owes, else nothing.
 
@@ -49,7 +51,7 @@ def final_answer_output(
     some Anthropic-compatible gateways refuse.
     """
     if conversation.type == ConversationType.TASK:
-        return ToolOutput(get_final_answer_tool(agent))
+        return ToolOutput(get_final_answer_tool(agent, pausing))
     return None
 
 

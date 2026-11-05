@@ -48,6 +48,11 @@ from app.modules.agent.services.run_input_settings import summary_only_settings
 from app.modules.agent.infrastructure.providers.model_factory import (
     provider_model_settings,
 )
+from app.modules.agent.infrastructure.harness.lemma.stale_images import (
+    IMAGE_RETENTION_MESSAGES as IMAGE_RETENTION_MESSAGES,
+    STALE_IMAGE_MARKER as STALE_IMAGE_MARKER,
+    strip_stale_images as strip_stale_images,
+)
 from app.modules.agent.infrastructure.providers.summarization import (
     CompactionTarget,
     LazyCompactionTarget,
@@ -296,6 +301,9 @@ class HistoryCompactor:
     footprint: ContextFootprint = field(default_factory=ContextFootprint)
     #: History size after the last compaction attempt, for the regrowth rule.
     settled_size: int | None = None
+    #: Whether this run's first request has been looked at: where the history
+    #: it replays was settled, and whether the provider's cache is cold.
+    first_seen: bool = False
 
     async def __call__(self, ctx: RunContext, messages: list[Any]) -> list[Any]:
         working = list(messages)
@@ -303,10 +311,7 @@ class HistoryCompactor:
             return working
         trigger = self.footprint.within(self.trigger_tokens)
         size = await run_blocking(self.footprint.counter.count, working)
-        if size <= trigger:
-            self._warn_if_near(size=size, trigger=trigger)
-            return working
-        if self._settling(size=size, trigger=trigger):
+        if not await self._compacts_now(ctx, working, size=size, trigger=trigger):
             return working
 
         cutoff = await run_blocking(self._tail_start, working, trigger)
@@ -350,9 +355,14 @@ class HistoryCompactor:
                 self.settled_size = size
                 return working
             summary = _failed_summary()
-        compacted = [*pinned, _summary_message(summary), *tail]
-        size_after = self.footprint.counter.count(compacted)
-        self.settled_size = size_after
+        compacted = [
+            *self._capped(pinned, trigger=trigger),
+            _summary_message(summary),
+            *tail,
+        ]
+        size_after = self._settled_on(compacted, size=size)
+        if size_after is None:
+            return working
         # Re-armed for the next cycle: the history has just shrunk, and it will
         # climb to this threshold again in a run long enough to get here twice.
         self.warned = False
@@ -366,6 +376,63 @@ class HistoryCompactor:
             kept_count=len(tail),
         )
         return compacted
+
+    async def _compacts_now(
+        self, ctx: RunContext, working: list[Any], *, size: int, trigger: int
+    ) -> bool:
+        """Whether this request is the one to compact on.
+
+        Over the trigger, unless the last attempt left the history there and it
+        has barely grown since (``_settling``). A history that replays an
+        earlier run's compaction was settled there: it is not compacted again
+        until it regrows. And below the trigger only on the first request of a
+        run whose provider cache has gone cold -- that request re-reads the
+        whole prefix at full price anyway, so rewriting it then costs nothing.
+        """
+        first, self.first_seen = not self.first_seen, True
+        if (
+            first
+            and self.settled_size is None
+            and any(is_summary_message(message) for message in working)
+        ):
+            self.settled_size = size
+        if size > trigger:
+            return not self._settling(size=size, trigger=trigger)
+        if first and size >= trigger * _COLD_SHARE and _cache_is_cold(ctx, working):
+            return True
+        self._warn_if_near(size=size, trigger=trigger)
+        return False
+
+    def _settled_on(self, compacted: list[Any], *, size: int) -> int | None:
+        """The compacted history's size, or None when it is no smaller.
+
+        Never hand back more than was given: the run keeps what it had, and
+        waits for the history to grow before trying again.
+        """
+        size_after = self.footprint.counter.count(compacted)
+        if size_after >= size:
+            self.settled_size = size
+            return None
+        self.settled_size = size_after
+        return size_after
+
+    def _capped(self, pinned: list[Any], *, trigger: int) -> list[Any]:
+        cap = max(1, int(trigger * _PIN_SHARE))
+        return [self._capped_one(message, cap) for message in pinned]
+
+    def _capped_one(self, message: Any, cap: int) -> Any:
+        """A pinned turn, its text cut to ``cap`` tokens when it runs past it.
+
+        A person's message is kept verbatim because it cannot be recovered --
+        but one pasted document can be most of the history, and kept whole on
+        every pass the compaction shrinks nothing and fires again each turn.
+        Past the cap its middle goes, said where it went.
+        """
+        tokens = self.footprint.counter.message(message)
+        if tokens <= cap:
+            return message
+        parts = [_clipped(part, cap / tokens) for part in message.parts]
+        return dataclasses.replace(message, parts=parts)
 
     def _settling(self, *, size: int, trigger: int) -> bool:
         """Whether to leave a history the last attempt could not bring down.
@@ -467,6 +534,37 @@ class HistoryCompactor:
         return None
 
 
+#: Share of the trigger one pinned turn may keep through a compaction.
+_PIN_SHARE = 0.1
+
+#: Share of the trigger past which a cold cache's first request compacts early.
+_COLD_SHARE = 0.75
+
+
+def _cache_is_cold(ctx: RunContext, working: list[Any]) -> bool:
+    """Whether the provider's cache has expired since the history's last
+    response. Unknown (no retention for the model) counts as warm."""
+    from pydantic_ai.profiles import prompt_cache_outlook
+
+    model = getattr(ctx, "model", None)
+    profile = getattr(model, "profile", None)
+    return prompt_cache_outlook(working, profile=profile) == "cold"
+
+
+def _clipped(part: Any, keep_share: float) -> Any:
+    """A user-prompt part with the middle of its text cut to ``keep_share``."""
+    content = getattr(part, "content", None)
+    if type(part).__name__ != "UserPromptPart" or not isinstance(content, str):
+        return part
+    keep = max(1, int(len(content) * keep_share))
+    head, tail = int(keep * 0.6), keep - int(keep * 0.6)
+    cut = len(content) - head - tail
+    note = f"\n... [{cut} characters cut from this message by compaction] ...\n"
+    return dataclasses.replace(
+        part, content=f"{content[:head]}{note}{content[len(content) - tail :]}"
+    )
+
+
 def _answers_a_tool_call(message: object) -> bool:
     return any(
         is_tool_result_part(part) for part in getattr(message, "parts", ()) or ()
@@ -486,85 +584,6 @@ def _wrapped_summary(output: str, *, folded: int) -> str:
     )
     notes = _SUMMARY_CLOSE.sub(lambda match: f"&lt;{match.group(0)[1:]}", output)
     return f"{preamble}{_SUMMARY_LABEL}\n<summary>\n{notes}\n</summary>"
-
-
-#: How many trailing messages keep their images live. A model that has just
-#: looked at a screenshot needs it; one twenty steps past it does not.
-IMAGE_RETENTION_MESSAGES = 8
-
-STALE_IMAGE_MARKER = (
-    "[an image was shown here earlier in this run; it is no longer attached -- "
-    "open it again if you need to look at it]"
-)
-
-
-def _is_binary(value: object) -> bool:
-    return isinstance(getattr(value, "data", None), (bytes, bytearray, memoryview))
-
-
-def _without_images(content: object) -> tuple[object, bool]:
-    """`content` with binary swapped for a marker, and whether anything changed."""
-    if _is_binary(content):
-        return STALE_IMAGE_MARKER, True
-    if isinstance(content, (list, tuple)):
-        changed = False
-        items: list[object] = []
-        for item in content:
-            replaced, item_changed = _without_images(item)
-            changed = changed or item_changed
-            items.append(replaced)
-        return (type(content)(items) if changed else content), changed
-    return content, False
-
-
-def strip_stale_images(messages: list[Any]) -> list[Any]:
-    """Detach images the model has already had several turns to read.
-
-    pydantic-ai keeps a tool's image content in the run's in-memory history, so
-    every image is re-uploaded on *every* model request for the rest of the run.
-    A ten-page document viewed at step 2 of a fifteen-step run is sent fourteen
-    more times, and the model reads it once.
-
-    Only the trailing window keeps its pixels. Older ones become a marker saying
-    an image was there, which is both cheaper and more honest than a silent
-    disappearance. Idempotent: a message already stripped has no binary left.
-    """
-    if len(messages) <= IMAGE_RETENTION_MESSAGES:
-        return messages
-    cutoff = len(messages) - IMAGE_RETENTION_MESSAGES
-    result = list(messages)
-    for index in range(cutoff):
-        message = result[index]
-        parts = getattr(message, "parts", None)
-        if not parts:
-            continue
-        new_parts: list[Any] = []
-        changed = False
-        for part in parts:
-            if not hasattr(part, "content"):
-                new_parts.append(part)
-                continue
-            content, part_changed = _without_images(part.content)
-            if part_changed:
-                changed = True
-                new_parts.append(_replaced(part, content=content))
-            else:
-                new_parts.append(part)
-        if changed:
-            result[index] = _replaced(message, parts=new_parts)
-    return result
-
-
-def _replaced(obj: Any, **changes: Any) -> Any:
-    """A copy of a pydantic-ai message or part with fields changed.
-
-    They are dataclasses in this version and pydantic models in others, and the
-    two have no copy method in common. Getting this wrong raises inside a
-    history processor, which runs on every model request.
-    """
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return dataclasses.replace(obj, **changes)
-    return obj.model_copy(update=changes)
 
 
 def _bounded_pins(pinned: list[Any]) -> list[Any]:

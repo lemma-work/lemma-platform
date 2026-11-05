@@ -197,6 +197,19 @@ async def test_decisions_are_a_durable_record(world):
     )
 
 
+def _children_named(result: dict) -> list[str]:
+    """The child conversations a delegation's return names: `delegate` wakes
+    with each child's report, the deprecated `spawn_subagent` names its one."""
+    named = [result.get("conversation_id")]
+    for key in ("results", "children"):
+        items = result.get(key)
+        if isinstance(items, list):
+            named.extend(
+                item.get("conversation_id") for item in items if isinstance(item, dict)
+            )
+    return [child for child in named if isinstance(child, str) and child]
+
+
 @scenario("An agent hands work to a subagent and gets its result back")
 @proves("PS-AGENT-030")
 @covers("agent.conversation.create", "agent.conversation.get", "agent.conversation.list")
@@ -227,7 +240,7 @@ async def test_an_agent_delegates_to_a_subagent(world):
     # The parent's own transcript is where a person looks, and the delegation
     # has to be visible in it: what was handed off, and what came back.
     transcript = await alice.transcript_of(conversation, in_pod=pod)
-    assert "spawn_subagent" in transcript, (
+    assert "delegate" in transcript or "spawn_subagent" in transcript, (
         f"the delegation is not in the parent conversation at all: {transcript[:800]}"
     )
     # That something was delegated and came back, not the exact words used to
@@ -240,11 +253,11 @@ async def test_an_agent_delegates_to_a_subagent(world):
 
     spawned = next(
         (
-            message["tool_result"]["conversation_id"]
+            child
             for message in await alice.messages_in(conversation, in_pod=pod)
-            if message.get("tool_name") == "spawn_subagent"
+            if message.get("tool_name") in ("delegate", "spawn_subagent")
             and isinstance(message.get("tool_result"), dict)
-            and message["tool_result"].get("conversation_id")
+            for child in _children_named(message["tool_result"])
         ),
         None,
     )
