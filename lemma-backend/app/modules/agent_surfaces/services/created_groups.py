@@ -19,6 +19,8 @@ knows (``group_names``), so it is read here once the surface is.
 
 from __future__ import annotations
 
+from app.modules.channels.contracts.places import surfaces_hearing
+
 from collections.abc import Collection, Sequence
 from uuid import UUID
 
@@ -29,9 +31,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     bot_creates_groups_on,
 )
@@ -59,8 +58,8 @@ async def created_group_surfaces(
         return None
     if not bot_creates_groups_on(platform):
         return None
-    surface_ids = await SurfaceGroupRepository(uow.session).surface_ids_for_channel(
-        platform=platform, external_channel_id=parsed.external_channel_id
+    surface_ids = await surfaces_hearing(
+        uow, platform=platform, external_channel_id=parsed.external_channel_id
     )
     if receiver_surface_ids is not None:
         allowed = set(receiver_surface_ids)

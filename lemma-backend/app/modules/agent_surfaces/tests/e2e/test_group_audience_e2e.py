@@ -32,9 +32,8 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.channels.contracts.places import change_place
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _ensure_connector_account,
@@ -208,8 +207,8 @@ async def test_a_members_only_group_carries_no_notice(
         scenario, db_session, fake_telegram, monkeypatch
     )
     # Nobody outside the pod is answered here, and nobody outside has spoken.
-    await SurfaceGroupRepository(db_session).set_answers_outsiders(
-        group.id, answers_outsiders=False
+    await change_place(
+        SqlAlchemyUnitOfWork(db_session), group.id, {"answers_outsiders": False}
     )
     await db_session.commit()
     seen = record_model_requests(monkeypatch)
