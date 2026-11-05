@@ -9,6 +9,7 @@ import { useSession } from "@/session/session";
 import { displayName } from "@/session/profile-edit";
 import { ProfilePanel } from "@/session/profile-panel";
 import { LinkTelegramEntry } from "@/session/link-telegram";
+import { DeleteAccountEntry } from "@/session/delete-account";
 import { AppearancePanel } from "@/session/theme";
 import { UsagePanel } from "@/usage/usage-panel";
 import { PlanSection } from "@/billing/plan-section";
@@ -314,6 +315,7 @@ export function SettingsModal({
                                         {hasToken() && <a className="account-aside" href="/connect">This browser is using a bearer token</a>}
                                     </div>
                                 )}
+                                {!sample && user.data && <DeleteAccountEntry email={user.data.email} />}
                             </div>
                         )}
 
