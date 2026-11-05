@@ -84,8 +84,6 @@ class Delivered:
     #: Nothing took it because a platform failed, not because nothing could:
     #: worth trying again.
     retryable: bool = False
-    #: Held back by the hourly budget: its lines go with the next push.
-    held: bool = False
 
     @property
     def sent(self) -> bool:
