@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 24 |
+| `planned` | 27 |
 | `withdrawn` | 0 |
-| **total** | **228** |
+| **total** | **231** |
 
 Scenario tests declaring a promise: 454.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 259 | 373 |
+| OpenAPI operations | 259 | 374 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -176,6 +176,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_an_editor_cannot_reach_over_an_owner`, `test_an_editor_removes_members_and_editors`, `test_a_member_manages_nobody`, `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
+| `PS-ONB-080` A person deletes their own account, from the app or the website | `planned` | — |
+| `PS-ONB-081` Deleting an account unlinks the person from work they shared | `planned` | — |
+| `PS-ONB-082` An account is not deleted out from under what depends on it | `planned` | — |
 | `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
 | `PS-ONB-070` A new person is shown what Lemma is and where everything is | `manual` | — |
 | `PS-ONB-071` A person can ask how the place they are in works | `manual` | — |

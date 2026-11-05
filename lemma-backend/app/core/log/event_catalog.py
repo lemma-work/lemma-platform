@@ -983,6 +983,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'http.request.slow': EventSpec('warning', frozenset({'duration_ms', 'latency_kind', 'method', 'path', 'route', 'status_code'})),
     'icon.icon_service.delete_icon_asset.diagnostic': EventSpec('debug', frozenset()),
     'icon.icon_service.ignoring_malformed_managed_icon_url.diagnostic': EventSpec('debug', frozenset()),
+    'identity.account.cached_standing_kept.degraded': EventSpec('warning', frozenset({'error_type', 'user_id'})),
+    'identity.account.deleted': EventSpec('info', frozenset({'organizations_deleted', 'organizations_left', 'pods_deleted', 'user_id'})),
     'identity.auth_abuse.counter_clear_failed': EventSpec('warning', frozenset()),
     'identity.auth_abuse.rate_limit_unavailable': EventSpec('error', frozenset()),
     'identity.email.not_sent': EventSpec('warning', frozenset({'kind', 'reason'})),

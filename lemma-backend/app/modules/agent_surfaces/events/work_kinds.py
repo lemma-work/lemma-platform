@@ -26,6 +26,8 @@ SURFACE_RECEIVER: Final = "surface.receiver"
 SURFACE_PLATFORM_UPDATE: Final = "surface.platform_update"
 #: Clears identities bound to a phone number a user no longer has.
 SURFACE_MOBILE_CHANGED: Final = "surfaces.mobile_changed"
+#: Revokes every identity a person proved, once their account is deleted.
+SURFACE_ACCOUNT_DELETED: Final = "surfaces.account_deleted"
 #: One thing Lemma's own Slack app (a workspace's manager) was told, off the request.
 SURFACE_SLACK_MANAGER: Final = "surface.slack_manager"
 #: A Slack grant a manager flow started, finished (a ``ConnectorAccountConnected``
