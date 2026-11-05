@@ -1,7 +1,7 @@
 """Sending a run's answer line to the place its question came from.
 
 A finished run's answer is the agent's line in the channel
-(``events/reply_for_run_work``), with a delivery to the place the run was
+(``agent.channel_reply``), with a delivery to the place the run was
 asked at. This is that delivery's send, which keeps what an answer has always
 been on a platform:
 

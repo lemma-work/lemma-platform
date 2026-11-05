@@ -20,7 +20,7 @@ Resend address.
 | --- | --- |
 | API routers | Pod surface CRUD/setup/catalog/send, current-user defaults, public webhooks/verification |
 | Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
-| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribes `AgentRunFinished`; posts the answer as the agent's line with a delivery to its place), `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it; one at a time per place or member), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
+| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribed by nothing: drains answers queued before `agent.channel_reply` said every run's, then goes), `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it; one at a time per place or member), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
 | Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
 
 ## Main data model

@@ -86,7 +86,7 @@ class SurfaceAgentRunProgressObserver(
 
     Display only. The agent's final answer (or its failure notice) is the
     run's channel line and its delivery, written once the run has finished
-    (``surface.reply_for_run``) and sent by the channel delivery executor --
+    (``agent.channel_reply``) and sent by the channel delivery executor --
     never by this object, so a worker dying mid-run loses a progress bubble
     and not an answer. A contact whose rules refuse the agent's answer now
     (they opted out, or WhatsApp's window closed) is shown nothing at all. Its
@@ -312,7 +312,7 @@ class SurfaceAgentRunProgressObserver(
         """Finish the run's display; the answer is not the observer's to send.
 
         The finished run's answer is its channel line and delivery
-        (``surface.reply_for_run``), sent by the channel delivery executor --
+        (``agent.channel_reply``), sent by the channel delivery executor --
         so a worker that dies here loses a typing bubble, never the answer.
         What is left for the observer is display:
 
@@ -364,7 +364,7 @@ class SurfaceAgentRunProgressObserver(
     async def _reply_will_close(self, run_id: UUID) -> bool:
         """Whether this run's reply is an answer the stream can carry.
 
-        The same test ``surface.reply_for_run`` applies: a completed run, not
+        The same test the answer path applies: a completed run, not
         private, that wrote an answer. Anything else -- a stop, a pause, a
         failure notice -- leaves no reply to close the stream, so it comes
         down now rather than spinning beside whatever follows.

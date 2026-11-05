@@ -204,8 +204,13 @@ run), so an edit, a deletion or a forgotten contact reaches every later
 prompt; the visitor's page and an export read a follow-up the same way. Only
 the runs carried whole get their background -- an older run is reduced to its
 requests and answer -- so the read is bounded and moves in elision's blocks.
-A run answering a line in Lemma answers the lines whose words it read
-(`services/channel_answers`, recorded in `channel_line_answers`).
+Every run of a person's conversation is answered one way
+(`services/run_answers`, `agent.channel_reply` on `AgentRunFinished`): at the
+place of the lines whose words it read, each recorded in
+`channel_line_answers` as a turn took it up -- in Lemma under the oldest of
+them, on a platform as the agent's line with a delivery there
+(`agent_surfaces/contracts/egress.post_answer_at_place`). A run that read
+no line answers where its conversation last took one up.
 
 A message the person sends while a run is finishing is steered into it
 (`harness/lemma/pending_user_messages`), and the run goes on to answer that

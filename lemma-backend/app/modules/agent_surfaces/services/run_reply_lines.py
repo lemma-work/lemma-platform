@@ -15,7 +15,8 @@ An answer the run gave before the person said more (``domain/steered_answers``
 in the agent module) is a line of its own, posted first, named by the run and
 its place among them -- so they arrive in the order they were given.
 
-No network: written in a FAST item (``events/reply_for_run_work``).
+No network: written in the FAST item that answers every run
+(``agent.channel_reply``, through ``contracts.egress.post_answer_at_place``).
 """
 
 from __future__ import annotations
@@ -84,14 +85,22 @@ async def post_unplaced_reply(
     run_id: UUID,
     conversation_id: UUID,
     material: RunReplyMaterial,
+    gone_source_id: UUID | None,
 ) -> ChannelMessage | None:
     """The run's answer as a line in its conversation's channel, sent nowhere.
 
-    For a run whose place went while it worked -- the source was removed.
-    The answer must not go to wherever else the person last wrote, and must
-    not vanish either: it is on the timeline, where a member reads it. The
-    same line as a placed answer would be (``run:{run}``), so a retry is one.
+    For a run whose place went while it worked -- the source it was asked at,
+    or the one the line it answers was heard at, was removed. The answer must
+    not go to wherever else the person last wrote, and must not vanish
+    either: it is on the timeline, where a member reads it. The same line as
+    a placed answer would be (``run:{run}``), so a retry is one.
     """
+    logger.warning(
+        "agent_surfaces.reply_for_run.asked_place_gone.degraded",
+        run_id=str(run_id),
+        conversation_id=str(conversation_id),
+        source_id=str(gone_source_id) if gone_source_id else None,
+    )
     channel_id = await agent_conversations.channel_of_conversation(uow, conversation_id)
     conversation = await agent_conversations.surface_conversation(uow, conversation_id)
     text = answer_text(material, platform=WEB)

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.factory import create_authorization_data_service
 
@@ -49,6 +50,8 @@ from app.modules.agent_surfaces.services.attachment_ingest_memo import (
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
 )
+from app.modules.channels.contracts import ChannelMessage
+from app.modules.channels.contracts.answers import start_answering
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -199,7 +202,9 @@ async def write_inbound_message(
     # commit, not across the turn.
     heard = _Heard(lines or ChannelLinesInDatabase(uow), context, message_text)
     finished = await _answer_or_start(context, message_text, metadata, uow, heard)
-    await heard.once()
+    line = await heard.once()
+    if finished.took_up and line is not None:
+        await _owed_an_answer(uow, context, line)
     return finished
 
 
@@ -211,11 +216,39 @@ class _Heard:
     context: SurfaceChatContext
     text: str
     written: bool = False
+    line: ChannelMessage | None = None
 
-    async def once(self) -> None:
+    async def once(self) -> ChannelMessage | None:
         if not self.written:
             self.written = True
-            await self.lines.heard(self.context, text=self.text)
+            self.line = await self.lines.heard(self.context, text=self.text)
+        return self.line
+
+
+async def _owed_an_answer(
+    uow: SqlAlchemyUnitOfWork, context: SurfaceChatContext, line: ChannelMessage
+) -> None:
+    """The line a turn took up, owed its answer by the conversation's agent --
+    as a line written in Lemma is (``channels.contracts.answers``). The run
+    that read it answers it, at its place, and settles it
+    (``agent.services.channel_answers``); it finds the line again by where
+    the message was heard and its id there, so a line with no platform id is
+    not recorded, rather than left owed by nobody.
+    """
+    if line.external_message_id is None or line.source_id is None:
+        return
+    conversation = await agent_conversations.surface_conversation(
+        uow, context.conversation_id
+    )
+    if conversation is None:
+        return
+    await start_answering(
+        uow,
+        message_id=line.id,
+        channel_id=line.channel_id,
+        agent_id=effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id),
+        conversation_id=context.conversation_id,
+    )
 
 
 async def _answer_or_start(
@@ -260,7 +293,8 @@ async def _answer_or_start(
             return FinishedPauses()
         if resumed.outcome is ResumeOutcome.NOT_A_DECISION:
             return FinishedPauses(
-                superseded=await _start_turn(context, message_text, metadata, uow)
+                superseded=await _start_turn(context, message_text, metadata, uow),
+                took_up=True,
             )
         return FinishedPauses(answered=[resumed.answered] if resumed.answered else [])
     finally:
@@ -276,6 +310,9 @@ class FinishedPauses:
     superseded: list[str] = field(default_factory=list)
     #: Answered by the message itself, in words.
     answered: list[str] = field(default_factory=list)
+    #: A turn took the message up -- it started a run, or joined one -- so a
+    #: run answers it, rather than a paused one taking it as a decision.
+    took_up: bool = False
 
 
 async def _start_turn(

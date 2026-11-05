@@ -21,9 +21,9 @@ was asked, and one refused before it started says why; the answer to
 somebody the agent asked for the member comes back to the member, after the
 line that set it asking.
 
-Both halves are safe to run twice. The turn is started with the line as its
-client id, so a retried job finds the turn it already started; the answer is
-posted with the run as its client id, so a retried post is the same line.
+Safe to run twice: the turn is started with the line as its client id, so a
+retried job finds the turn it already started. The run's answer is posted by
+the one path every run's is (``run_answers``).
 """
 
 from __future__ import annotations
@@ -44,26 +44,18 @@ from app.modules.agent.infrastructure.db.channel_conversations import (
 )
 from app.modules.agent.contracts.channel_replies import (
     answer_line_client_id,
-    run_reply_material,
 )
-from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
 from app.modules.agent.domain.private_notes import (
     LEMMA_CHANNEL,
     PRIVATE_NOTE_REQUEST_KEY,
 )
-from app.modules.agent.domain.value_objects import ConversationOrigin, QueueState
+from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.agent.infrastructure.models import AgentModel
-from app.modules.agent.infrastructure.models.conversation import (
-    ConversationModel,
-    MessageModel,
-)
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.channel_answer_lines import (
     COULD_NOT_ANSWER,
     STOPPED_BEFORE_ANSWERING,
-    post_answer,
-    post_why_unanswered,
     say_refused,
 )
 from app.modules.agent.services.live_conversation import CONVERSATION_STREAM
@@ -82,10 +74,7 @@ from app.modules.channels.contracts import (
     channel_by_id,
 )
 from app.modules.channels.contracts.answers import (
-    line_answered_in,
     lines_of_run,
-    answers_of_run,
-    settle_answers,
     start_answering,
 )
 from app.modules.channels.contracts.backgrounds import (
@@ -96,7 +85,6 @@ from app.modules.channels.contracts.backgrounds import (
 )
 from app.modules.channels.contracts.live import announce_answering
 from app.modules.channels.contracts.lines import (
-    last_heard_line,
     line_by_id,
     member_background,
 )
@@ -105,8 +93,6 @@ logger = get_logger(__name__)
 
 #: The most lines of the channel a run answering a line is shown.
 IN_APP_CONTEXT_LINES = 30
-#: The most messages one run is taken to have read: a burst steered into it.
-MAX_LINES_A_RUN_READS = 50
 
 
 class LineWaits(Exception):
@@ -367,153 +353,6 @@ def turn_metadata(
     return metadata
 
 
-# -- the answer ------------------------------------------------------------------
-
-
-async def post_run_answer(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    run_id: UUID,
-    conversation_id: UUID,
-    answered: bool = True,
-    paused: bool = False,
-) -> ChannelMessage | None:
-    """A finished run's answer, as the agent's line in the thread of the
-    oldest line in Lemma it answers. Nothing for a run answering none -- but
-    a run woken by the answers of people the agent asked for the member
-    answers that member, after the line that set it asking
-    (``_post_handed_back``).
-
-    ``answered``: the run ended with an answer, rather than failing, stopping
-    or pausing; either way the lines' readers hear they are no longer being
-    answered, once this commits, and a run that failed or was stopped says
-    so in the answer's place. ``paused``: it is waiting on somebody, and the
-    run that carries it on answers the same lines.
-    """
-    read, carries_on, handed_back = await _lines_read_by(uow, run_id, conversation_id)
-    answers = await answers_of_run(
-        uow, conversation_id=conversation_id, line_ids=read, carries_on=carries_on
-    )
-    conversation = await uow.session.get(ConversationModel, conversation_id)
-    if conversation is None:
-        return None
-    if not answers:
-        if handed_back and answered and not paused:
-            return await _post_handed_back(
-                uow, run_id=run_id, conversation=conversation
-            )
-        return None
-    lines = [await line_by_id(uow, answer.message_id) for answer in answers]
-    said = [line for line in lines if line is not None]
-    if conversation.user_id is not None:
-        for line in said:
-            announce_answering(
-                pod_id=conversation.pod_id,
-                channel_id=line.channel_id,
-                message_id=line.id,
-                agent_id=answers[0].agent_id,
-                for_user_id=conversation.user_id,
-                state="finished",
-                after_commit_of=uow.session,
-            )
-    if paused:
-        return None
-    posted: ChannelMessage | None = None
-    if said and not said[0].is_deleted:
-        material = await run_reply_material(uow, run_id)
-        if answered:
-            posted = await post_answer(
-                uow,
-                run_id=run_id,
-                conversation=conversation,
-                line=said[0],
-                material=material,
-            )
-        else:
-            await post_why_unanswered(
-                uow,
-                run_id=run_id,
-                conversation=conversation,
-                line=said[0],
-                material=material,
-            )
-    await settle_answers(
-        uow, answers, run_id=run_id, answered_with=posted.id if posted else None
-    )
-    return posted
-
-
-async def _lines_read_by(
-    uow: SqlAlchemyUnitOfWork, run_id: UUID, conversation_id: UUID
-) -> tuple[list[UUID], bool, bool]:
-    """The lines in Lemma whose words this run read -- the one that started
-    it and any steered into it, oldest first -- whether it carries on a
-    paused run, which no message of its own started, and whether it read the
-    answers to what its conversation asked of somebody else.
-
-    Not a message that joined it and was never read: the run that delivers it
-    answers it (``StartQueuedFollowUp``).
-    """
-    metadata = MessageModel.message_metadata
-    started_it = (MessageModel.agent_run_id == run_id) & (
-        MessageModel.queue_state == QueueState.NONE
-    )
-    rows = (
-        await uow.session.execute(
-            select(
-                metadata["source"].astext,
-                metadata["channel_message_id"].astext,
-                started_it,
-            )
-            .where(
-                MessageModel.conversation_id == conversation_id,
-                MessageModel.role == "user",
-                started_it | (MessageModel.steered_into_run_id == run_id),
-            )
-            .order_by(MessageModel.sequence)
-            .limit(MAX_LINES_A_RUN_READS)
-        )
-    ).all()
-    lines: list[UUID] = []
-    for source, line_id, _ in rows:
-        if source == LEMMA_CHANNEL and line_id:
-            try:
-                lines.append(UUID(line_id))
-            except ValueError:
-                continue
-    handed_back = any(row[0] in HANDED_BACK_SOURCES for row in rows)
-    return lines, not any(row[2] for row in rows), handed_back
-
-
-async def _post_handed_back(
-    uow: SqlAlchemyUnitOfWork, *, run_id: UUID, conversation: ConversationModel
-) -> ChannelMessage | None:
-    """The answer of a run woken by the people the agent asked, in a member's
-    conversation in a channel of Lemma: after the line the conversation took
-    up last, in its thread -- where the member asked it to ask them.
-
-    Only where the member last spoke to it in Lemma: one who last wrote on a
-    platform is answered there by ``agent_surfaces``, by the same rule
-    (``last_heard_line``) -- their conversation is the same one either way.
-    """
-    if conversation.user_id is None or conversation.contact_id is not None:
-        return None
-    heard = await last_heard_line(uow, conversation.id)
-    if heard is None or heard.source_id is not None:
-        return None
-    line_id = await line_answered_in(uow, conversation.id)
-    line = await line_by_id(uow, line_id) if line_id else None
-    if line is None or line.is_deleted:
-        return None
-    return await post_answer(
-        uow,
-        run_id=run_id,
-        conversation=conversation,
-        line=line,
-        material=await run_reply_material(uow, run_id),
-    )
-
-
 __all__ = [
     "COULD_NOT_ANSWER",
     "IN_APP_CONTEXT_LINES",
@@ -522,6 +361,5 @@ __all__ = [
     "answer_client_id",
     "answer_line",
     "turn_client_id",
-    "post_run_answer",
     "turn_metadata",
 ]

@@ -27,15 +27,67 @@ if TYPE_CHECKING:
     )
 from uuid import UUID
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.tools import DisplayResourceRequest
 from app.modules.agent.contracts.tools import ToolSpec
+from app.modules.agent.contracts.channel_replies import RunReplyMaterial
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,
 )
+from app.modules.channels.contracts import ChannelMessage
+from app.modules.channels.contracts.places import ReplyAddress
 
 logger = get_logger(__name__)
+
+
+async def post_answer_at_place(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    address: ReplyAddress,
+    material: RunReplyMaterial,
+) -> ChannelMessage | None:
+    """A finished run's answer as the agent's line at a platform place, with
+    its delivery there: the agent module decides the place
+    (``services/channel_answers``), and this says it the way the place reads
+    it -- a failure as the platform's notice, a web chat's as shown at once.
+    No network: the delivery is sent by ``channel_deliveries``."""
+    from app.modules.agent_surfaces.services.run_reply_lines import post_run_reply
+
+    return await post_run_reply(
+        uow,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        address=address,
+        material=material,
+    )
+
+
+async def post_unplaced_answer(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    material: RunReplyMaterial,
+    gone_source_id: UUID | None,
+) -> ChannelMessage | None:
+    """A finished run's answer whose place went while it worked: the agent's
+    line on its conversation's channel, sent to no place -- never to another
+    place the person wrote from, and never nowhere. Logged as degraded."""
+    from app.modules.agent_surfaces.services.run_reply_lines import (
+        post_unplaced_reply,
+    )
+
+    return await post_unplaced_reply(
+        uow,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        material=material,
+        gone_source_id=gone_source_id,
+    )
 
 
 async def hold_display_for_one_reply(
@@ -253,6 +305,8 @@ __all__ = [
     "deliver_voice_note",
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
+    "post_answer_at_place",
+    "post_unplaced_answer",
     "report_approved_action_failed",
     "retire_cards_answered_in_lemma",
     "space_url",

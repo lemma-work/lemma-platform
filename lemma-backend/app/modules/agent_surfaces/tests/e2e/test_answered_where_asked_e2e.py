@@ -66,6 +66,7 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     clean_surface_work,  # noqa: F401  (fixture)
     deliveries_of_line,
 )
+from app.modules.channels.infrastructure.answer_models import ChannelLineAnswerModel
 from app.modules.channels.infrastructure.models import (
     ChannelMessageModel,
     ChannelSourceModel,
@@ -137,6 +138,28 @@ async def _logged_by(run_id: UUID) -> str:
                 )
             )
         )
+
+
+async def _owed(text: str) -> tuple[str, ChannelMessageModel | None]:
+    """The heard line that says ``text``: how its answer stands, and the
+    line that answered it."""
+    async with async_session_maker() as session:
+        answer = (
+            await session.scalars(
+                select(ChannelLineAnswerModel)
+                .join(
+                    ChannelMessageModel,
+                    ChannelMessageModel.id == ChannelLineAnswerModel.message_id,
+                )
+                .where(ChannelMessageModel.body == text)
+            )
+        ).one()
+        line = (
+            await session.get(ChannelMessageModel, answer.answer_message_id)
+            if answer.answer_message_id
+            else None
+        )
+        return answer.state, line
 
 
 def _says(messages: list[dict], text: str) -> bool:
@@ -260,6 +283,13 @@ async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
     assert _asked_at(waiting.message_metadata) == whatsapped.source_id
     assert waiting.steered_into_run_id is None
     assert _WHATSAPPED not in await _logged_by(email_run.id)
+    # Each heard line is owed its answer as a line written in Lemma is: the
+    # email's is answered by the run's line, the WhatsApp one still waits.
+    state, answered_by = await _owed(_EMAILED)
+    assert state == "ANSWERED"
+    assert answered_by is not None and answered_by.body == _EMAIL_ANSWER
+    assert answered_by.agent_run_id == email_run.id
+    assert (await _owed(_WHATSAPPED)) == ("ANSWERING", None)
 
     whatsapp_run_id = await start_queued_followup_for(
         conversation_id,
@@ -290,6 +320,9 @@ async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
     claimed = await _user_message(conversation_id, _WHATSAPPED)
     assert claimed.steered_into_run_id == whatsapp_run_id
     assert _WHATSAPPED in await _logged_by(whatsapp_run_id)
+    state, answered_by = await _owed(_WHATSAPPED)
+    assert state == "ANSWERED"
+    assert answered_by is not None and answered_by.agent_run_id == whatsapp_run_id
 
 
 async def test_an_answer_whose_place_went_mid_run_stays_on_the_timeline(
