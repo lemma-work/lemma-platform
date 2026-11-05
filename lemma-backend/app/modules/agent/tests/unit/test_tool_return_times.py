@@ -26,6 +26,7 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    ToolSearchReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -150,6 +151,29 @@ def test_a_failed_call_or_a_file_is_left_as_it_was() -> None:
     history = [*failed, *image]
 
     assert with_return_times(history) == history
+
+
+def test_a_tool_searchs_matches_stay_the_structure_pydantic_ai_reads() -> None:
+    """Noted, its matches became a string, nothing found was revealed, and the
+    agent's call to the tool it had just found never ran."""
+    matches = {"discovered_tools": [{"name": "ask_teammate"}]}
+    history: list[ModelMessage] = [
+        ModelRequest(
+            parts=[
+                ToolSearchReturnPart(
+                    tool_name="search_tools",
+                    content=matches,  # type: ignore[arg-type]
+                    tool_call_id="s1",
+                    timestamp=_MONDAY,
+                )
+            ]
+        )
+    ]
+
+    (part,) = _returned(with_return_times(history))
+
+    assert isinstance(part, ToolSearchReturnPart)
+    assert part.content == matches
 
 
 def test_a_rebuilt_history_takes_each_result_time_from_its_row() -> None:

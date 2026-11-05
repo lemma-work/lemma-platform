@@ -27,7 +27,9 @@ the times it already holds. After the processors, too, so a clipped result
 (``stale_tool_output``) is noted like a whole one.
 
 Only results that are data: a failed, denied or interrupted call has nothing in
-it to go stale, and a result carrying a file is the image detacher's.
+it to go stale, a result carrying a file is the image detacher's, and a tool
+search's matches are pydantic-ai's own -- it reads which tools were found out of
+their structure, and a note would turn that into a string nothing is found in.
 """
 
 from __future__ import annotations
@@ -62,7 +64,9 @@ def without_return_time(text: str) -> str:
 
 
 def _noted(part: ToolReturnPart) -> ToolReturnPart:
-    if part.outcome != "success" or part.files:
+    # A part pydantic-ai gave a kind of its own -- a tool search's matches --
+    # is read back by pydantic-ai as the structure it is, request by request.
+    if part.tool_kind is not None or part.outcome != "success" or part.files:
         return part
     text = part.model_response_str()
     if _NOTED.match(text):
