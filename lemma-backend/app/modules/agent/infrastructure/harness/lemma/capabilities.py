@@ -112,14 +112,17 @@ def _capabilities(
     # Deferral is for the pod's own assistant, which accumulates every optional
     # toolset; a named agent chose its own. Never on a stranger's run, whose
     # one way past what is Public is reaching the member, in view.
-    defers = ctx.is_pod_default_agent and not run_audience(ctx).answers_outsiders
+    outsider = run_audience(ctx).answers_outsiders
+    defers = ctx.is_pod_default_agent and not outsider
     deferred = [g for g in groups if defers and all(s.policy.deferrable for s in g)]
     host_execution = ctx.host_workspace is not None
 
     def with_guidance(
         group: Sequence[ToolSpec], toolset: AbstractToolset[ToolContext]
     ) -> AgentCapability[ToolContext]:
-        guidance = toolset_instructions(group[0].toolset, host_execution=host_execution)
+        guidance = toolset_instructions(
+            group[0].toolset, host_execution=host_execution, answers_outsider=outsider
+        )
         if guidance is None:
             return ToolsetCapability(toolset)
         return InstructedToolset(toolset, guidance)

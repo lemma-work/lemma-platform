@@ -90,6 +90,7 @@ _ANSWER_FLAGS: dict[AnswerKind, JsonObject] = {
         "is_intermediate_assistant_message": True,
     },
     AnswerKind.NOT_FINAL: {"is_final_answer": False},
+    AnswerKind.BEFORE_STEER: {"is_final_answer": False, "answered_before_steer": True},
 }
 
 

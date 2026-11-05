@@ -59,6 +59,7 @@ from app.modules.agent.services.pod_mcp_service import (
     VerifiedSession,
 )
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.services.pod_mcp_workflows import PodWorkflows
 from app.modules.agent.domain.toolsets import AgentGrantSummary
 from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
 from app.modules.agent.services.tool_runtime import ToolRuntime
@@ -435,6 +436,17 @@ async def _pod_listings() -> dict[str, list[dict[str, Any]]]:
         ),
     )
     service.uow_factory = _uow_factory
+
+    class _NoWorkflows:
+        """A pod with no workflow, and no form waiting on the person."""
+
+        async def workflows(self, _principal: McpPrincipal) -> list[object]:
+            return []
+
+        async def waiting(self, _principal: McpPrincipal) -> list[object]:
+            return []
+
+    service.workflows = PodWorkflows(_uow_factory, gateway=_NoWorkflows())
     session = await service.list_tools(pod_id=POD, token="session")
     read_only = await service.list_tools(
         pod_id=POD,

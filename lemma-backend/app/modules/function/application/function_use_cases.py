@@ -446,6 +446,7 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
         delegation_scope,
         delegation_actor_name: str | None,
         run_as_workload: RunAsWorkload | None = None,
+        is_default_pod_agent: bool = False,
     ) -> FunctionRunEntity:
         async def resolve_once() -> ResolvedExecution:
             # Build the delegated ctx AND resolve inside one live UoW, so
@@ -460,6 +461,7 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
                     pod_id=pod_id,
                     delegation_scope=delegation_scope,
                     delegation_actor_name=delegation_actor_name,
+                    is_default_pod_agent=is_default_pod_agent,
                 )
                 async with context_scope(auth_ctx):
                     return await self._build(uow).resolve_execute(

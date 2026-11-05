@@ -64,6 +64,7 @@ from app.modules.datastore.contracts.public_tables import (
     read_public_table,
 )
 from app.modules.datastore.contracts.public_rows import (
+    Attachment,
     OpenTable,
     PublicAudience,
     PublicRowRefused,
@@ -426,16 +427,43 @@ class WebChat:
         answers: dict[str, object],
         address: str,
     ) -> None:
+        await self.admit_row(widget, visitor, table=table, address=address)
+        await self.save_visitor_row(widget, visitor, table=table, answers=answers)
+
+    async def admit_row(
+        self,
+        widget: WebWidget,
+        visitor: Visitor | None,
+        *,
+        table: str,
+        address: str,
+    ) -> OpenTable:
+        """Whether this visitor may send a row to ``table`` now, counted as a
+        send: everything asked before an answer is read, so a page attaching
+        files is turned away before a byte of them is taken."""
         vouched = visitor is not None and visitor.session.is_vouched
         if widget.answer is WidgetAnswer.KNOWN and not vouched:
             raise refused("This is for existing customers only", 403, "not_a_contact")
-        _opened, contacts_only = await self.visitor_table(widget, table=table)
+        opened, contacts_only = await self.visitor_table(widget, table=table)
         if contacts_only and not vouched:
             raise refused("Confirm your email first", 403, "needs_contact")
         if not await self.limiter.allow_submission(
             widget_id=widget.id, address=address
         ):
             raise refused("Too many answers. Try again later.", 429, "rate_limited")
+        return opened
+
+    async def save_visitor_row(
+        self,
+        widget: WebWidget,
+        visitor: Visitor | None,
+        *,
+        table: str,
+        answers: dict[str, object],
+        attachments: dict[str, Attachment] | None = None,
+    ) -> None:
+        """Add the row :meth:`admit_row` let through, with any files attached."""
+        vouched = visitor is not None and visitor.session.is_vouched
         contact_id = await self._writer(visitor) if visitor is not None else None
         try:
             await add_visitor_row(
@@ -446,6 +474,7 @@ class WebChat:
                 contact_id=contact_id,
                 vouched=vouched,
                 actor=f"contact:{contact_id}" if contact_id is not None else None,
+                attachments=attachments,
             )
         except PublicRowRefused as exc:
             raise refused(exc.message, 422, "bad_answer") from exc

@@ -71,6 +71,12 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         if not messages:
             return node
 
+        # A steered message can bring a group's background with it; what this
+        # run may do unasked follows what it now reads (``outside_text``).
+        from app.modules.agent.services.outside_text import note_steered_messages
+
+        await note_steered_messages(messages)
+
         # Rendered exactly as history renders a user message, so a steered one
         # reads the same as one the run started with -- sender label, quoted
         # message, the paths of whatever they attached.

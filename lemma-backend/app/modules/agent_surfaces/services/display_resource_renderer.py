@@ -229,10 +229,9 @@ def build_display_resource_url(
         output = _as_record(tool_output)
         return _as_nonempty_string(output.get("url"))
 
-    base = settings.frontend_url.rstrip("/")
-    space = f"{base}/t/{quote(str(pod_id), safe='')}"
+    space = _space_url(pod_id)
     conversation = (
-        f"{space}/conversation/{quote(str(conversation_id), safe='')}"
+        build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
         if conversation_id is not None
         else None
     )
@@ -250,7 +249,11 @@ def build_display_resource_url(
         case DisplayResourceType.AGENT:
             return f"{space}/profile/{name}" if name else f"{space}/about"
         case DisplayResourceType.WORKFLOW:
-            return f"{space}/workflow/{name}" if name else f"{space}/workflows"
+            return (
+                build_workflow_url(pod_id=pod_id, workflow_name=request.name)
+                if request.name
+                else f"{space}/workflows"
+            )
         case DisplayResourceType.APP:
             # The app's resource name, not a slug, on purpose: the workspace
             # canonicalizes whatever the link carries on arrival, and a slug
@@ -262,6 +265,35 @@ def build_display_resource_url(
             # A function has no page of its own in the workspace: the
             # conversation that showed it, else the teammate's space.
             return conversation or space
+
+
+def build_conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
+    """A conversation in the workspace, for a reader outside it to open.
+
+    Beside ``build_display_resource_url`` for the reason given there: this file
+    is where the workspace's routes are spelt.
+    """
+    return f"{_space_url(pod_id)}/conversation/{quote(str(conversation_id), safe='')}"
+
+
+def build_workflow_url(*, pod_id: UUID, workflow_name: str) -> str:
+    """A workflow's page in the workspace, where its runs and forms are."""
+    return f"{_space_url(pod_id)}/workflow/{quote(workflow_name, safe='')}"
+
+
+def build_workflow_run_url(*, pod_id: UUID, run_id: UUID) -> str:
+    """One workflow run's page, with the form it waits on, for someone who may
+    read its workflow."""
+    return f"{_space_url(pod_id)}/run/{quote(str(run_id), safe='')}"
+
+
+def build_space_url(*, pod_id: UUID) -> str:
+    """The pod's own space, where its waiting list is."""
+    return _space_url(pod_id)
+
+
+def _space_url(pod_id: UUID) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/t/{quote(str(pod_id), safe='')}"
 
 
 def _display_resource_title(request: DisplayResourceRequest) -> str:

@@ -289,6 +289,23 @@ class SurfaceSettings(BaseSettings):
         default=500,
         description="How many times one web form may be submitted in a day.",
     )
+    surface_web_attachment_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        gt=0,
+        description=(
+            "The largest file a person outside may attach to one answer of a "
+            "web form. Anybody with the page can send one, so it is smaller "
+            "than a member's upload."
+        ),
+    )
+    surface_web_attachments_max_bytes: int = Field(
+        default=25 * 1024 * 1024,
+        gt=0,
+        description=(
+            "The most one web form response may carry, every attached file "
+            "and answer together."
+        ),
+    )
     surface_web_reads_per_widget_per_day: int = Field(
         default=20000,
         description=(

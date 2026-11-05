@@ -30,6 +30,7 @@ from app.modules.agent.infrastructure.tools.callables import (
 from app.modules.agent.infrastructure.tools.connectors import tools as connectors
 from app.modules.agent.infrastructure.tools.contact import contact_specs
 from app.modules.agent.infrastructure.tools.form import form_specs
+from app.modules.agent.infrastructure.tools.group_history import group_specs
 from app.modules.agent.infrastructure.tools.messaging import answer
 from app.modules.agent.infrastructure.tools.messaging import tools as messaging
 from app.modules.agent.infrastructure.tools.pod import tools as pod
@@ -247,13 +248,17 @@ def _outsider_specs(
     uow_factory: UnitOfWorkFactory | None,
 ) -> list[ToolSpec]:
     """A contact's own rows and functions, where they alone read the answer
-    (not in a group, where everybody would read what was quoted), and the form
-    on a web visitor's page."""
+    (not in a group, where everybody would read what was quoted); in a group,
+    its lines and the tables a member gave it; and the form on a web
+    visitor's page."""
     if uow_factory is None:
         return []
     specs: list[ToolSpec] = []
-    if audience.is_contact and ctx.place_kind != "CHANNEL":
+    in_a_group = ctx.place_kind == "CHANNEL"
+    if audience.is_contact and not in_a_group:
         specs.extend(contact_specs(uow_factory=uow_factory))
+    if audience.is_contact and in_a_group:
+        specs.extend(group_specs(uow_factory=uow_factory))
     if audience.answers_outsiders and ctx.on_web_widget:
         specs.extend(form_specs(uow_factory=uow_factory))
     return specs

@@ -19,6 +19,7 @@ from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.entities import Message as MessageEntity
+from app.modules.agent.domain.steered_answers import MAX_STEERED_ANSWERS
 from app.modules.agent.domain.value_objects import (
     AnswerKind,
     MessageKind,
@@ -43,6 +44,25 @@ async def last_text(
     )
     model = found.scalar_one_or_none()
     return model.to_entity() if model is not None else None
+
+
+async def answers_before_steers(
+    session: AsyncSession, *, agent_run_id: UUID
+) -> list[str]:
+    """What the run answered before the person said more, oldest first
+    (``domain/steered_answers``)."""
+    texts = await session.scalars(
+        select(MessageModel.text)
+        .where(
+            MessageModel.agent_run_id == agent_run_id,
+            MessageModel.role == MessageRole.ASSISTANT.value,
+            MessageModel.kind == MessageKind.TEXT.value,
+            MessageModel.answer == AnswerKind.BEFORE_STEER,
+        )
+        .order_by(MessageModel.sequence)
+        .limit(MAX_STEERED_ANSWERS)
+    )
+    return [text for text in texts if text and text.strip()]
 
 
 async def tool_result_after(

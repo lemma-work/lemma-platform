@@ -79,6 +79,7 @@ class ToolGroup(StrEnum):
     QUESTIONS = "QUESTIONS"
     CONTACT = "CONTACT"
     FORM = "FORM"
+    GROUP = "GROUP"
     CALL = "CALL"
     CALLABLES = "CALLABLES"
     SURFACE = "SURFACE"

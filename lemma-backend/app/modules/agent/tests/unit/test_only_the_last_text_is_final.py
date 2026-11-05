@@ -13,6 +13,8 @@ from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
+from pydantic_ai import Agent as PydanticAIAgent
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import (
     AgentInfo,
@@ -20,12 +22,14 @@ from pydantic_ai.models.function import (
     DeltaToolCalls,
     FunctionModel,
 )
+from pydantic_ai.tools import RunContext
 
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
+    AnswerKind,
     AgentEventType,
     ConversationType,
     MessageDraft,
@@ -74,9 +78,20 @@ def _scripted(*responses: ModelResponse) -> FunctionModel:
 
 
 async def _texts(
-    model: FunctionModel, monkeypatch, *, output_schema: dict | None = None
+    model: FunctionModel,
+    monkeypatch,
+    *,
+    output_schema: dict | None = None,
+    capabilities: list[AbstractCapability[ToolContext]] | None = None,
 ) -> list[MessageDraft]:
     monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda _: model)
+    if capabilities:
+        built = harness_module.harness_capabilities
+        monkeypatch.setattr(
+            harness_module,
+            "harness_capabilities",
+            lambda *args, **kwargs: [*built(*args, **kwargs), *capabilities],
+        )
     pod_id = uuid4()
     conversation = Conversation(
         pod_id=pod_id,
@@ -167,6 +182,9 @@ async def test_an_answer_the_run_goes_on_past_is_not_the_final_answer(
     assert [draft.text for draft in drafts if not _final(draft)] == [
         "Looks fine to me."
     ]
+    # Sent back for the structured answer, not by the person: no answer of
+    # its own to ship.
+    assert not any(draft.state.answer is AnswerKind.BEFORE_STEER for draft in drafts)
     assert len(finals) == 1, drafts
     assert (finals[0].metadata or {}).get("structured_output") == {"verdict": "ok"}
 
@@ -175,6 +193,42 @@ def _flag(draft: MessageDraft) -> bool | None:
     """The draft's answer as the old flag read: None for undecided."""
     answer = draft.state.answer
     return None if answer is None else draft.state.is_final_answer
+
+
+class _SaysMoreAsItAnswers(AbstractCapability[object]):
+    """The person writes again as the run gives its answer: their words are
+    steered in once, the way ``PendingUserMessagesCapability`` steers them."""
+
+    def __init__(self) -> None:
+        self.said = False
+
+    async def before_node_run(self, ctx: RunContext[object], *, node: object) -> object:
+        if not self.said and PydanticAIAgent.is_call_tools_node(node):
+            self.said = True
+            ctx.enqueue("And tomorrow?")
+        return node
+
+
+@pytest.mark.asyncio
+async def test_an_answer_the_person_spoke_over_is_an_answer_all_the_same(
+    monkeypatch,
+) -> None:
+    """The run answered; the person said more before it ended, so it went on
+    and answered that too. The first answer is not the run's final one, but it
+    was given -- marked so it ships as a message of its own."""
+    drafts = await _texts(
+        _scripted(
+            ModelResponse(parts=[TextPart("Sunny today.")]),
+            ModelResponse(parts=[TextPart("Rain tomorrow.")]),
+        ),
+        monkeypatch,
+        capabilities=[_SaysMoreAsItAnswers()],
+    )
+
+    assert [
+        (draft.text, _final(draft), draft.state.answer is AnswerKind.BEFORE_STEER)
+        for draft in drafts
+    ] == [("Sunny today.", False, True), ("Rain tomorrow.", True, False)]
 
 
 def test_settling_a_response_leaves_only_a_closing_text_undecided() -> None:

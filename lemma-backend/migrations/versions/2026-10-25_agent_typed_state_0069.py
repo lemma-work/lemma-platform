@@ -25,7 +25,7 @@ stamped the literal `SCHEDULE`, which `origin` now says.
 `steered_into_run_id`, `steer_dispatched_at`, `client_message_id` (unique per
 conversation), `private_note`, `private_note_in_dm`, `written_in`, `answer`
 (`is_final_answer`, `is_intermediate_assistant_message`,
-`answer_from_last_words`), `held_for_a_person`, `folded_from`,
+`answer_from_last_words`, `answered_before_steer`), `held_for_a_person`, `folded_from`,
 `synthetic_tool_return` and `parked_in_run_id` (the call's own run, where
 `parked_in_run` was true).
 
@@ -82,8 +82,8 @@ the code before this reads exactly what it wrote.
 An open pull request (#1046, `outcome_weeks`) also claims 0066; whichever
 merges second is renumbered.
 
-Revision ID: 0066_agent_typed_state
-Revises: 0065_schedule_reset_and_author
+Revision ID: 0069_agent_typed_state
+Revises: 0068_channel_table_grants
 """
 
 from __future__ import annotations
@@ -92,8 +92,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0066_agent_typed_state"
-down_revision = "0065_schedule_reset_and_author"
+revision = "0069_agent_typed_state"
+down_revision = "0068_channel_table_grants"
 branch_labels = None
 depends_on = None
 
@@ -322,6 +322,7 @@ CASE
     AND {_MM}->>'answer_from_last_words' = 'true' THEN 'LAST_WORDS'
   WHEN {_MM}->>'is_final_answer' = 'true' THEN 'FINAL'
   WHEN {_MM}->>'is_intermediate_assistant_message' = 'true' THEN 'INTERMEDIATE'
+  WHEN {_MM}->>'answered_before_steer' = 'true' THEN 'BEFORE_STEER'
   WHEN {_MM}->>'is_final_answer' = 'false' THEN 'NOT_FINAL'
 END
 """
@@ -344,6 +345,7 @@ _MESSAGE_KEYS = (
     "is_final_answer",
     "is_intermediate_assistant_message",
     "answer_from_last_words",
+    "answered_before_steer",
     "held_for_a_person",
     "folded_from",
     "synthetic_tool_return",
@@ -522,6 +524,7 @@ def _add_columns() -> None:
             "answer",
             _enum(
                 "answerkind",
+                "BEFORE_STEER",
                 "FINAL",
                 "INTERMEDIATE",
                 "LAST_WORDS",

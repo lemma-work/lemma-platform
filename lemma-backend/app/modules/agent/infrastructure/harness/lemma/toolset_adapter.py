@@ -33,6 +33,7 @@ _TOOLSET_IDS = {
     ToolGroup.TODO: "lemma_todo",
     ToolGroup.CONTACT: "contact",
     ToolGroup.FORM: "visitor_form",
+    ToolGroup.GROUP: "group_history",
 }
 
 

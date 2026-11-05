@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field
 
 from app.modules.agent.infrastructure.tools.responses import BaseToolResponse
 
+#: The tools whose results are lines of the pod's channels, each marked by
+#: whether somebody outside the pod wrote it (``LineSummary.outside_pod``):
+#: read back off stored returns by ``services/outside_text``.
+CHANNEL_READ_TOOLS = frozenset({"channel_read", "channel_search"})
+
 #: The most a contact's run may say when it calls for a person.
 MAX_OUTSIDER_MESSAGE_CHARS = 1000
 #: The most lines one read returns.

@@ -212,14 +212,49 @@ def build_progress_observer(
     )
 
 
+def conversation_url(*, pod_id: UUID, conversation_id: UUID) -> str:
+    """Where a person opens this conversation in Lemma, from anywhere else."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_conversation_url,
+    )
+
+    return build_conversation_url(pod_id=pod_id, conversation_id=conversation_id)
+
+
+def workflow_run_url(*, pod_id: UUID, run_id: UUID) -> str:
+    """Where a person opens one workflow run in Lemma, with the form it waits on.
+
+    The page reads the run, so it opens only for someone who may read its
+    workflow; a form assigned on one they may not is answered from the pod's
+    waiting list instead (``space_url``).
+    """
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_workflow_run_url,
+    )
+
+    return build_workflow_run_url(pod_id=pod_id, run_id=run_id)
+
+
+def space_url(*, pod_id: UUID) -> str:
+    """Where a person opens the pod itself in Lemma."""
+    from app.modules.agent_surfaces.services.display_resource_renderer import (
+        build_space_url,
+    )
+
+    return build_space_url(pod_id=pod_id)
+
+
 __all__ = [
     "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
     "build_surface_tools",
+    "conversation_url",
     "deliver_display_resource",
     "deliver_voice_note",
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
     "report_approved_action_failed",
     "retire_cards_answered_in_lemma",
+    "space_url",
+    "workflow_run_url",
 ]
