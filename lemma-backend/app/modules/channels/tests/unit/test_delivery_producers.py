@@ -95,6 +95,11 @@ PRODUCERS: dict[str, Producer] = {
         "::test_an_agent_answer_to_a_carried_group_line_follows_it_to_the_place",
     ),
     # -- pushed to a member ---------------------------------------------------
+    "agent_surfaces/services/run_reply_lines.py:post_unplaced_reply": Producer(
+        Sends.PUSH,
+        f"{_SURFACES}/test_answered_where_asked_e2e.py"
+        "::test_an_answer_whose_place_went_mid_run_stays_on_the_timeline",
+    ),
     "agent_surfaces/services/direct_messages.py:DirectMessages.send": Producer(
         Sends.PUSH,
         f"{_SURFACES}/test_channel_deliveries_e2e.py"
