@@ -766,7 +766,14 @@ answered with who does answer.
 
 Management routes use pod permissions and ensure connector account ownership.
 Webhook security handles Slack signatures, Teams/Telegram/WhatsApp verification,
-email provider metadata, timestamp windows, and challenge responses. Identity
+email provider metadata, timestamp windows, and challenge responses. Every
+webhook body is read under its platform's ceiling (`WEBHOOK_BODY_LIMITS` in
+`api/controllers/webhook_ingest.py`) before its signature is checked, and one
+over it answers 413 as soon as it crosses. The per-surface route
+(`/surfaces/{surface_id}/webhook`) does not name its platform, so it takes the
+largest ceiling (`ANY_PLATFORM_BODY_LIMIT`): one keyed by the surface would
+answer the same unsigned body 413 on one platform and 401 on another, telling
+a caller which platform the surface is on. Identity
 policy controls whether unknown external senders are rejected, linked, or
 represented as contacts. The inbound row's unique key and the message claim
 (`surface_message_claims`) make a repeated provider delivery one message.

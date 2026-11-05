@@ -85,7 +85,10 @@ def test_run_args_snapshot_db(config, paths, manifest):
     assert "--network lemma-local-net" in joined
     assert "--network-alias db" in joined
     assert "--restart unless-stopped" in joined
-    assert "lemma-local-postgres-data:/var/lib/postgresql/data" in joined
+    # The whole argument, not a substring of `joined`: the old
+    # `.../postgresql/data` mount contains this text, and pg18 refuses it.
+    assert "lemma-local-postgres-data:/var/lib/postgresql" in args
+    assert "lemma-local-postgres-data:/var/lib/postgresql/data" not in args
     assert f"{paths.postgres_init_dir}:/docker-entrypoint-initdb.d:ro" in joined
     assert "--health-cmd pg_isready -U postgres -h localhost" in joined
     assert "-p" not in args  # no host ports for infra
