@@ -96,13 +96,15 @@ class DeliveryRepository:
     async def claim(
         self, row_id: UUID, *, lease: timedelta, content: dict[str, Any] | None = None
     ) -> bool:
-        """``PENDING -> SENDING`` for this sender, or ``False`` if someone has it."""
-        now = datetime.now(UTC)
+        """``PENDING -> SENDING`` for this sender, or ``False`` if someone has it.
+
+        Its deadline is the database's time, as every time the pump compares
+        is (``clock``)."""
         values: dict[str, Any] = {
             "status": DeliveryStatus.SENDING.value,
-            "sending_until": now + lease,
+            "sending_until": func.now() + lease,
             "attempts": SurfaceDeliveryModel.attempts + 1,
-            "updated_at": now,
+            "updated_at": datetime.now(UTC),
         }
         if content is not None:
             values["content"] = content
@@ -148,28 +150,35 @@ class DeliveryRepository:
         )
         return result is not None
 
+    async def clock(self) -> datetime:
+        """The database's time: what ``not_before`` and ``sending_until`` are
+        written in, so the pump compares them with it rather than with a
+        worker's own clock, which may run behind (and then hold back a row
+        that was due when it was written)."""
+        return await self.session.scalar(select(func.now()))
+
     async def retry_later(
-        self, row_id: UUID, *, not_before: datetime, error: str | None
-    ) -> bool:
-        """``SENDING -> PENDING``: refused for now, not before ``not_before``."""
+        self, row_id: UUID, *, delay: timedelta, error: str | None
+    ) -> datetime | None:
+        """``SENDING -> PENDING``: refused for now, not for another ``delay``.
+        When it is next due, by the database's time; ``None`` if not SENDING."""
         values: dict[str, Any] = {
             "status": DeliveryStatus.PENDING.value,
             "sending_until": None,
-            "not_before": not_before,
+            "not_before": func.now() + delay,
             "updated_at": datetime.now(UTC),
         }
         if error is not None:
             values["last_error"] = error[:1000]
-        result = await self.session.scalar(
+        return await self.session.scalar(
             update(SurfaceDeliveryModel)
             .where(
                 SurfaceDeliveryModel.id == row_id,
                 SurfaceDeliveryModel.status == DeliveryStatus.SENDING.value,
             )
             .values(**values)
-            .returning(SurfaceDeliveryModel.id)
+            .returning(SurfaceDeliveryModel.not_before)
         )
-        return result is not None
 
     async def update_content(self, row_id: UUID, content: dict[str, Any]) -> None:
         await self.session.execute(

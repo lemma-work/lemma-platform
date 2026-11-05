@@ -38,7 +38,7 @@ export const CAPABILITIES: CapabilitySpec[] = [
         unlocks: "Sends invitations, password resets and sign-in codes. Without it, share invitation links yourself." },
     { id: "connectors", title: "Connectors", required: false,
         unlocks: "Lets people connect Gmail, GitHub, Slack, Notion and more, so work can happen in them." },
-    { id: "channels", title: "Channels", required: false,
+    { id: "channels", title: "Messaging apps", required: false,
         unlocks: "Answer in Telegram, Slack, email, WhatsApp and Teams." },
     { id: "voice", title: "Voice", required: false,
         unlocks: "Reply with voice notes, read incoming ones, and take live calls." },

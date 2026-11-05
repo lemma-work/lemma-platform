@@ -24,7 +24,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
 
 logger = get_logger(__name__)
 
@@ -61,7 +61,7 @@ class Audience:
 def chat_audience(
     *,
     platform: SurfacePlatform,
-    group: SurfaceGroup | None,
+    group: Source | None,
     parsed: ParsedInboundSurfaceEvent,
     outside_authors: Iterable[str],
 ) -> Audience | None:

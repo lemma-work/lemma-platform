@@ -42,10 +42,10 @@ class PartsBoundary extends Component<{ children: ReactNode }, { failed: boolean
         return { failed: true };
     }
     componentDidCatch(error: unknown) {
-        console.error("A line's files could not be shown", error);
+        console.error("A message's files could not be shown", error);
     }
     render() {
-        if (this.state.failed) return <p className="cline__problem" role="alert">Couldn’t show what this line shares.</p>;
+        if (this.state.failed) return <p className="cline__problem" role="alert">Couldn’t show what this message shares.</p>;
         return this.props.children;
     }
 }
@@ -55,7 +55,7 @@ function LinePartsList({ podId, channelId, line }: { podId: string; channelId: s
     const links = extraLinks(line.text ?? "", line.parts);
     if (!files.length && !links.length) return null;
     return (
-        <ul className="cline__parts" aria-label="Shared with this line">
+        <ul className="cline__parts" aria-label="Shared with this message">
             {files.map((file) => (
                 <li key={"f" + (file.fileId ?? file.path)}>
                     <FileChip podId={podId} channelId={channelId} lineId={line.id} file={file} />

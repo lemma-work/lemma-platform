@@ -101,13 +101,8 @@ async def post_run_reply(
     ]
     if conversation is None or (text is None and not earlier):
         return None
-    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
     event = _answered_event(address)
-    sender = Sender.agent(
-        agent_id,
-        on_behalf_of=answered_for(conversation.audience, conversation.user_id),
-        display_name=await _agent_name(uow, agent_id),
-    )
+    sender = await agent_sender(uow, conversation)
     thread_root_id = await _thread_root(uow, source, event)
     said = [
         (earlier_answer_client_id(run_id, number), one)
@@ -162,6 +157,19 @@ async def _thread_root(
     )
 
 
+async def agent_sender(
+    uow: SqlAlchemyUnitOfWork, conversation: agent_conversations.SurfaceConversation
+) -> Sender:
+    """Who a line said in ``conversation`` is from: its agent, for the person
+    the conversation answers, under the name it goes out with."""
+    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
+    return Sender.agent(
+        agent_id,
+        on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+        display_name=await _agent_name(uow, agent_id),
+    )
+
+
 async def _agent_name(uow: SqlAlchemyUnitOfWork, agent_id: UUID) -> str:
     """The name the answer goes out under: the pod's own agent has the
     product's responder name, not its internal one."""
@@ -171,4 +179,4 @@ async def _agent_name(uow: SqlAlchemyUnitOfWork, agent_id: UUID) -> str:
     return agent.name
 
 
-__all__ = ["ALL_REASONING_REPLY", "answer_text", "post_run_reply"]
+__all__ = ["ALL_REASONING_REPLY", "agent_sender", "answer_text", "post_run_reply"]
