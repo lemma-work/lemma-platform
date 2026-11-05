@@ -510,6 +510,9 @@ impl Normalizer {
     }
 
     fn tool_report(&mut self, update: &Map<String, Value>, opening: bool) -> Vec<Normalized> {
+        if let Some(events) = self.beat(update, opening) {
+            return events;
+        }
         let id = match non_empty(update.get("toolCallId")) {
             Some(raw) => self.resolve_id(&raw, opening),
             // ACP makes the id optional. With none, the only correlation
@@ -580,6 +583,25 @@ impl Normalizer {
             ));
         }
         events
+    }
+
+    /// What a Claude Code progress beat says, or `None` when the report is not
+    /// one.
+    ///
+    /// A beat is never a call of its own. A heartbeat of a call still held
+    /// says that call is running, so its input is final; any other beat, and
+    /// one about a call already on the record, says nothing a conversation
+    /// shows.
+    fn beat(&mut self, update: &Map<String, Value>, opening: bool) -> Option<Vec<Normalized>> {
+        if opening || self.dialect != Dialect::ClaudeCode {
+            return None;
+        }
+        let raw = non_empty(update.get("toolCallId"))?;
+        if self.aliases.contains_key(&raw) || !claude::is_beat(update, &raw) {
+            return None;
+        }
+        let running = claude::heartbeat_of(&raw).and_then(|call| self.aliases.get(call).cloned());
+        Some(running.map(|id| self.announce(&id)).unwrap_or_default())
     }
 
     /// Whether this report closes the call, and how.

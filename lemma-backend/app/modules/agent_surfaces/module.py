@@ -124,6 +124,7 @@ def _register_work() -> None:
     # (webhooks, notifications) and so must know their kinds; the worker runs
     # them. Facts subscribed here (pod lifecycle, a run finishing, a changed
     # mobile) are written by whichever process commits the fact.
+    import app.modules.agent_surfaces.events.account_deleted_work  # noqa: F401
     import app.modules.agent_surfaces.events.ingest_work  # noqa: F401
     import app.modules.agent_surfaces.events.channel_delivery_work  # noqa: F401
     import app.modules.agent_surfaces.events.mobile_work  # noqa: F401

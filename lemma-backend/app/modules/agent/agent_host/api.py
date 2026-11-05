@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.modules.agent.agent_host.control.channels import (
+        notify_host_revoked as notify_host_revoked,
         poke_host as poke_host,
     )
     from app.modules.agent.agent_host.control.dispatch_repository import (
@@ -82,6 +83,7 @@ _PACKAGE = "app.modules.agent.agent_host"
 
 #: Each exported name, by the file under ``agent_host/`` that defines it.
 _EXPORTS: dict[str, str] = {
+    "notify_host_revoked": "control.channels",
     "poke_host": "control.channels",
     "AgentHostDispatchRepository": "control.dispatch_repository",
     "store_final_answer": "control.final_answer",

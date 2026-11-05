@@ -15,6 +15,13 @@ version: 2
 # for the ecosystem, not per group. At 1, an open routine PR held the only slot
 # and the security group had nowhere to go, which is how 28 alerts accumulated
 # under a config that reads as correct.
+#
+# Every entry waits seven days after a release before proposing it. A
+# compromised or broken publish is usually caught and yanked within days, and
+# without a wait a routine group PR picks up whatever shipped that morning:
+# November's npm and Python groups carried releases one to four days old. The
+# wait applies to version updates only; a security update for an advisory
+# still opens as soon as the fix exists.
 updates:
   # Every directory with a `uv.lock` is listed across the two uv entries below,
   # which together are the list `lint-lockfiles` gates on. A directory
@@ -49,6 +56,8 @@ updates:
       interval: monthly
       time: "04:00"
       timezone: Asia/Kolkata
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 2
     groups:
       python-routine-updates:
@@ -70,6 +79,8 @@ updates:
       interval: monthly
       time: "04:05"
       timezone: Asia/Kolkata
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 2
     versioning-strategy: lockfile-only
     groups:
@@ -94,6 +105,8 @@ updates:
       interval: monthly
       time: "04:15"
       timezone: Asia/Kolkata
+    cooldown:
+      default-days: 7
     # A slot per group: the React pair and the routine group are separate
     # version-update PRs, and both can be open at once.
     open-pull-requests-limit: 3
@@ -123,6 +136,8 @@ updates:
       interval: monthly
       time: "04:30"
       timezone: Asia/Kolkata
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 2
     groups:
       github-actions-updates:
@@ -155,6 +170,8 @@ updates:
       interval: monthly
       time: "04:45"
       timezone: Asia/Kolkata
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 2
     # The guest image installs a pinned kernel (UBUNTU_KERNEL_RELEASE) from its
     # base release's archive. Dependabot moved the base from 24.04 to 26.04 on
@@ -189,6 +206,8 @@ updates:
       interval: monthly
       time: "05:00"
       timezone: Asia/Kolkata
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 2
     groups:
       rust-routine-updates:
