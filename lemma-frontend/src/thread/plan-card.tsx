@@ -16,28 +16,27 @@ export function PlanCard({ steps }: { steps: PlanStepState[] }) {
     if (!steps.length) return null;
 
     const done = steps.filter((step) => step.status === "completed").length;
-    const complete = done === steps.length;
 
+    /* A checklist, as a run's plan reads in a coding agent's transcript: a
+       ring for what is next, a turning ring for the step in hand, a filled
+       tick for what is done -- three states read at a glance without a
+       legend, and no heading over a list that says what it is. */
     return (
-        <section className="plan" aria-label="Plan">
-            <header className="plan__head">
-                <span className="plan__title">{complete ? "Done" : "Plan"}</span>
-                <span className="plan__count">{done} of {steps.length}</span>
-            </header>
-            <ol className="plan__steps">
+        <section className="runplan" aria-label={`Plan, ${done} of ${steps.length} done`}>
+            <ol className="runplan__steps">
                 {steps.map((step, index) => (
                     <li
                         key={index + "-" + step.step}
-                        className="plan__step"
+                        className="runplan__step"
                         data-status={step.status}
                         /* The step being worked on is the one worth finding at
                            a glance, so it is the only one the list announces. */
                         aria-current={step.status === "in_progress" ? "step" : undefined}
                     >
-                        <span className="plan__mark" aria-hidden="true">
-                            {step.status === "completed" ? <CheckIcon size={12} weight="bold" /> : null}
+                        <span className="runplan__mark" aria-hidden="true">
+                            {step.status === "completed" ? <CheckIcon size={10} weight="bold" /> : null}
                         </span>
-                        <span className="plan__what">{step.step}</span>
+                        <span className="runplan__what">{step.step}</span>
                     </li>
                 ))}
             </ol>

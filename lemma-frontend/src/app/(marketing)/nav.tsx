@@ -31,8 +31,8 @@ export function MarketingNav({ over = false }: { over?: boolean }) {
                     <Link href="/templates">Templates</Link>
                     <a href={githubUrl} target="_blank" rel="noreferrer">GitHub</a>
                     <a href={discordUrl} target="_blank" rel="noreferrer">Discord</a>
-                    <Link href="/t">Sign in</Link>
-                    <Link href="/t" className={s.navStart}>Get started</Link>
+                    <Link href="/home">Sign in</Link>
+                    <Link href="/home" className={s.navStart}>Get started</Link>
                 </nav>
                 <details className={s.mobileMenu}>
                     <summary>Menu</summary>
@@ -42,7 +42,7 @@ export function MarketingNav({ over = false }: { over?: boolean }) {
                         <Link href="/templates">Templates</Link>
                         <a href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
                         <a href={discordUrl} target="_blank" rel="noreferrer">Discord ↗</a>
-                        <Link href="/t">Sign in</Link>
+                        <Link href="/home">Sign in</Link>
                     </div>
                 </details>
             </div>

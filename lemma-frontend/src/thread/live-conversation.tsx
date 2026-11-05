@@ -66,6 +66,7 @@ export function LiveConversation({
     callError,
     callRefresh,
     createWith,
+    folderChosen,
     draftScope,
     emptyHint,
     placeholder,
@@ -79,6 +80,11 @@ export function LiveConversation({
      *  resource metadata it is found by, and it still only comes into being
      *  when somebody says something. */
     createWith?: Record<string, unknown>;
+    /** A folder on this computer chosen for the conversation before this
+     *  pane had a composer -- in another box that handed its first words
+     *  here -- by the id that box parked it under. Adopted in place of this
+     *  pane's own choice when the conversation is created. */
+    folderChosen?: string;
     /** What this pane is about, when it has no conversation yet — the draft a
      *  not-yet-sent message is kept under, so two panes beside two docs do not
      *  share one. Absent in the main pane, which keeps the one "new" draft. */
@@ -718,7 +724,7 @@ export function LiveConversation({
                         /* A folder chosen while composing is parked in the
                            desktop shell. Adopted here, before the session
                            learns the id and before the first run reads it. */
-                        await adoptConversationFolder(made.id, folder.pendingId);
+                        await adoptConversationFolder(made.id, folderChosen ?? folder.pendingId);
                         return made;
                     },
                     isActive: () => mounted.current,
@@ -805,7 +811,7 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer, createWith, reply.sendWith],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, folderChosen, running, steer, createWith, reply.sendWith],
     );
 
     /* A refused message, sent again as a new one, or taken back into the box

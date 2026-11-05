@@ -1,4 +1,4 @@
-import { VoiceIcon, StopIcon, SendIcon, AttachIcon, CloseIcon } from "@/ui/icons";
+import { VoiceIcon, StopIcon, SendIcon, PlusIcon, CloseIcon } from "@/ui/icons";
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
     canSend,
@@ -335,7 +335,7 @@ export const Composer = memo(function Composer({
                                 aria-label="Attach a file"
                                 onClick={() => picker.current?.click()}
                             >
-                                <AttachIcon size={19} />
+                                <PlusIcon size={19} />
                             </button>
                         </>
                     )}

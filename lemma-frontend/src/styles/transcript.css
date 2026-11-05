@@ -1,0 +1,247 @@
+/* The conversation, read the way a coding agent's transcript reads: what the
+   agent said, then a quiet line for what it did next ("Ran 4 commands ›"),
+   then what it said then -- in the order it happened, each line of work
+   opening onto the steps themselves. Its plan is a checklist card, and a run
+   still going ends on one line saying what it is doing and for how long.
+   Loaded after the stylesheets it adjusts. */
+
+/* A run of steps: one line in a caption's colour, a chevron after it. */
+.stepgroup {
+    margin: 2px 0;
+}
+
+.stepgroup__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13.5px;
+    line-height: 1.5;
+    text-align: left;
+    cursor: pointer;
+}
+
+.stepgroup__toggle:hover,
+.stepgroup__toggle[aria-expanded="true"] {
+    color: var(--ink);
+}
+
+.stepgroup__what {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stepgroup__chev {
+    display: grid;
+    place-items: center;
+    flex: none;
+}
+
+.stepgroup .steps__list {
+    gap: 1px;
+    margin: 4px 0 4px;
+}
+
+/* A step: what it did, then -- quieter -- what on, on one line. */
+.steprow {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    max-width: 100%;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: left;
+}
+
+.steprow--opens {
+    cursor: pointer;
+}
+
+.steprow--opens:hover,
+.steprow--opens[aria-expanded="true"] {
+    color: var(--ink);
+}
+
+.steprow__what {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* With something after it, what the step did is short and keeps its width:
+   the detail gives way first. */
+.steprow:has(.steprow__on) .steprow__what {
+    flex: none;
+    max-width: 60%;
+}
+
+.steprow__on {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink-3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.steps__list li[data-kind="thought"] .steprow__what {
+    color: var(--ink-3);
+    font-style: italic;
+}
+
+/* What a step opens onto: its card, or the whole thought. */
+.steprow__more {
+    margin: 4px 0 8px;
+}
+
+p.steprow__more {
+    white-space: pre-wrap;
+}
+
+/* The run going: a dot, what it is doing, how long so far. */
+.working {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 0;
+    color: var(--ink-3);
+    font-size: 13.5px;
+    line-height: 1.5;
+}
+
+.working__dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1.4s ease-in-out infinite;
+}
+
+.working__what {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink-2);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.working__time {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+}
+
+/* The same line when the steps under way open from it. */
+.working--opens {
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.working--opens:hover .working__what,
+.working--opens[aria-expanded="true"] .working__what {
+    color: var(--ink);
+}
+
+/* The plan: a card of rows -- a dashed ring for what is next, a turning ring
+   for the step in hand, a filled tick for what is done. */
+.runplan {
+    margin: 6px 0;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--paper);
+}
+
+.runplan__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.runplan__step {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 4px 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.runplan__mark {
+    display: grid;
+    place-items: center;
+    box-sizing: border-box;
+    width: 15px;
+    height: 15px;
+    margin-top: 2px;
+    border: 1.5px dashed var(--ink-3);
+    border-radius: 50%;
+    color: var(--paper);
+}
+
+.runplan__step[data-status="completed"] {
+    color: var(--ink-3);
+}
+
+.runplan__step[data-status="completed"] .runplan__mark {
+    border: 0;
+    background: var(--ink-3);
+}
+
+.runplan__step[data-status="in_progress"] {
+    color: var(--ink);
+}
+
+.runplan__step[data-status="in_progress"] .runplan__mark {
+    border: 1.5px solid var(--line-2);
+    border-top-color: var(--accent);
+    animation: runplan-turn 0.9s linear infinite;
+}
+
+@keyframes runplan-turn {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* The box: a rounded rectangle rather than a pill, as the rest of the frame
+   draws its boxes. */
+.split .composer__box {
+    border-radius: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .working__dot {
+        animation: none;
+    }
+
+    .runplan__step[data-status="in_progress"] .runplan__mark {
+        border-color: var(--accent);
+        animation: none;
+    }
+}

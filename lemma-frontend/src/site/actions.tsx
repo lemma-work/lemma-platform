@@ -87,9 +87,9 @@ function Remix({ source }: ActionProps) {
                 setCreated(id);
             }
             window.location.assign(
-                "/t/" +
+                "/l/" +
                     encodeURIComponent(id) +
-                    "/conversation?remixSource=" +
+                    "?remixSource=" +
                     encodeURIComponent(url.href),
             );
         } catch (e) {

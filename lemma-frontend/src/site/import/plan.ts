@@ -127,9 +127,9 @@ export function installedApp(steps: PlanStep[]): string | null {
  *  the teammate instead puts the thing that was just installed behind a second
  *  click, which reads as an install that produced nothing. */
 export function landingPath(podId: string, steps: PlanStep[]): string {
-    const base = "/t/" + encodeURIComponent(podId);
+    const base = "/l/" + encodeURIComponent(podId);
     const app = installedApp(steps);
-    return app ? base + "/app/" + encodeURIComponent(app) : base;
+    return app ? base + "/apps/" + encodeURIComponent(app) : base;
 }
 
 /** A repository slug as a teammate's name: `smart-inbox` → "Smart Inbox". */

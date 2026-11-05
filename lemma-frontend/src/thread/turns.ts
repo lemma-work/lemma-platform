@@ -3,6 +3,7 @@ import { isDisplayResourceTool, parseDisplayResource, type DisplayResource } fro
 import { notedBy, type Noted } from "./memory-notes";
 import { parseToolCard, type SignInAsk, type ToolCard } from "./tool-cards";
 import { toolKey, toolLabel, toolTitle } from "./tool-name";
+import { subjectOf } from "./step-groups";
 import { clientIdOf, pendingStateOf, type PendingState } from "./pending-sends";
 import {
     approvalDetails,
@@ -61,6 +62,15 @@ export interface Note {
     card?: ToolCard;
     /** The call this step is, so the live indicator can find it. */
     toolCallId?: string;
+    /** Which tool it was (`toolKey`), for saying what a run of steps did --
+     *  "Ran 4 commands" -- rather than listing their names. */
+    key?: string;
+    /** Called and not yet returned: the step a live run is on, which its
+     *  working line says in the present tense. */
+    running?: boolean;
+    /** What it was done to, said short (`subjectOf`): a file's name, a
+     *  page's site, a search's words, a command. */
+    subject?: string;
     /** Made by a sub-agent (`parent_call_id`), and drawn under the `task`
      *  that started it rather than as the run's own step. */
     nested?: boolean;
@@ -96,6 +106,13 @@ export type TurnItem =
     | { kind: "interaction"; id: string; interaction: Interaction }
     /** The work, written down by the agent that is doing it. */
     | { kind: "plan"; id: string; steps: PlanStepState[] }
+    /** A run of the turn's steps -- tool calls and thinking -- between two
+     *  things it said or showed, at the point it happened: `count` of
+     *  `notes`, from `from`. Drawn as one line saying what they did, which
+     *  opens onto the steps themselves, so the reply reads as what was said
+     *  and done in the order it was, not as all the work up front and then
+     *  everything said. */
+    | { kind: "steps"; id: string; from: number; count: number }
     /** A tool call this app reads rather than summarises — a terminal session,
      *  the sources behind an answer, a run that is asleep. */
     | { kind: "tool-card"; id: string; toolCallId?: string; card: ToolCard };
@@ -150,7 +167,9 @@ export interface Turn {
     id: string;
     day?: string;
     human?: HumanMessage;
-    /** Reasoning and tool calls, folded behind one line. */
+    /** Reasoning and tool calls, every one of the turn's, in order. Each
+     *  run of them also sits among `items`, as a `steps` item, where it
+     *  happened. */
     notes: Note[];
     /** Speech, cards and pauses, in the order they happened. */
     items: TurnItem[];
@@ -213,6 +232,22 @@ function msOf(iso?: string | null): number | undefined {
 
 /** "9s", "2m 14s", "1h 3m". Long enough to be worth saying, short enough to sit
  *  inside a status line. */
+/** Whether a stale run folds an item away: its work -- what it said along
+ *  the way, its steps, its plan -- but not what it showed, nor a question
+ *  still waiting on somebody, which are not the work. */
+export function foldsAway(item: TurnItem): boolean {
+    return item.kind !== "resource" && !(item.kind === "interaction" && !item.interaction.decision);
+}
+
+/** Where a stale run's answer starts -- the last thing it said -- when there
+ *  is work before it to fold into one line; -1 when there is nothing to fold,
+ *  or no answer to fold it above. */
+export function answerOf(items: readonly TurnItem[]): number {
+    let answer = -1;
+    items.forEach((item, index) => { if (item.kind === "text") answer = index; });
+    return answer > 0 && items.slice(0, answer).some(foldsAway) ? answer : -1;
+}
+
 export function spanOf(fromMs?: number, toMs?: number): string {
     if (fromMs === undefined || toMs === undefined) return "";
     const seconds = Math.round((toMs - fromMs) / 1000);
@@ -225,6 +260,9 @@ export function spanOf(fromMs?: number, toMs?: number): string {
 
 /** A tool's arguments as one short line — the command or path is what a
  *  person wants, not a serialised object. */
+/** Tools whose `description` argument is the agent saying what the call is for. */
+const DESCRIBED: ReadonlySet<string> = new Set(["bash", "exec_command", "shell", "terminal"]);
+
 /** The agent's own one-line statement of intent, when it gave one.
  *
  *  Not a field this app invented a use for: the backend describes it, in as
@@ -238,9 +276,14 @@ export function spanOf(fromMs?: number, toMs?: number): string {
  *  rather than a paragraph of the agent talking itself through a dead end —
  *  which is worth reading afterwards and is not what you want to watch.
  */
-export function commentOf(args: unknown): string {
+export function commentOf(args: unknown, key = ""): string {
     if (!args || typeof args !== "object") return "";
-    const value = (args as Record<string, unknown>).comment;
+    const record = args as Record<string, unknown>;
+    /* A command's `description` is the agent saying what it is for -- a
+       local agent writes one for every shell call -- where another tool's
+       may be an issue's body. */
+    const comment = typeof record.comment === "string" && record.comment.trim() ? record.comment : undefined;
+    const value = comment ?? (DESCRIBED.has(key) ? record.description : undefined);
     if (typeof value !== "string") return "";
     const clean = value.replace(/\s+/g, " ").trim();
     return clean.length > 140 ? clean.slice(0, 139).trimEnd() + "…" : clean;
@@ -335,7 +378,7 @@ export function liveNote(streaming: Streaming, landed: Note[] = []): Note[] {
            otherwise read as a step called "request_approval" — the envelope's
            name, which is exactly the thing this pass is about not showing. */
         if (isInteractionTool(streaming.tool.toolName)) {
-            return [{ kind: "tool", label: "Waiting on you", detail: "" }];
+            return [{ kind: "tool", label: "Waiting on you", detail: "", running: true }];
         }
         /* And the line below it did show the envelope's name — `exec_command`
            where a landed step says "Exec command" — because it was reading the
@@ -344,24 +387,30 @@ export function liveNote(streaming: Streaming, landed: Note[] = []): Note[] {
            still through a four-minute run: with no comment on the live step it
            fell back to the last one that had landed, so the line described
            something the agent had finished with several steps ago. */
-        const said = commentOf(streaming.tool.args);
+        const key = toolKey(streaming.tool.toolName);
+        const said = commentOf(streaming.tool.args, key);
         return [{
             kind: "tool",
             label: toolLabel(streaming.tool.toolName),
             detail: said || argSummary(streaming.tool.args),
             said: Boolean(said),
+            key: key || undefined,
+            subject: subjectOf(key, streaming.tool.args) || undefined,
+            running: true,
         }];
     }
     if (streaming.thinking) return [{ kind: "thought", label: "Thought", detail: streaming.thinking }];
     /* A run queued behind others on the person's computer has done nothing
        yet, and "Working" alone over minutes of that reads as stuck. */
-    if (streaming.waiting) return [{ kind: "tool", label: streaming.waiting, detail: "" }];
+    if (streaming.waiting) return [{ kind: "tool", label: streaming.waiting, detail: "", running: true }];
     return [];
 }
 
-/** A tool call as a step in the fold. */
-function step(message: RawMessage, metadata: Record<string, unknown> | null, earlier: Note[]): Note {
-    const said = commentOf(message.tool_args);
+/** A tool call as a step in the fold. `returns` are the turn's results by
+ *  call id: a call with none yet is still running. */
+function step(message: RawMessage, metadata: Record<string, unknown> | null, earlier: Note[], returns: ReadonlyMap<string, RawMessage>): Note {
+    const key = toolKey(message.tool_name, metadata);
+    const said = commentOf(message.tool_args, key);
     const parent = typeof metadata?.parent_call_id === "string" ? metadata.parent_call_id : "";
     return {
         kind: "tool",
@@ -372,6 +421,9 @@ function step(message: RawMessage, metadata: Record<string, unknown> | null, ear
         detail: said || toolTitle(metadata) || argSummary(message.tool_args),
         said: Boolean(said),
         toolCallId: message.tool_call_id ?? undefined,
+        key: key || undefined,
+        subject: subjectOf(key, message.tool_args) || undefined,
+        running: Boolean(message.tool_call_id) && !returns.has(message.tool_call_id ?? ""),
         /* Nested only under a task this turn actually shows. A parent from
            a page not yet loaded would indent a step under nothing. */
         nested: Boolean(parent) && earlier.some((note) => note.toolCallId === parent),
@@ -486,6 +538,16 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
         return turn;
     };
 
+    /** A step, in the turn's trace and in the run of steps at the point it
+     *  happened: the run before it grows when nothing was said or shown in
+     *  between, and a new run starts when something was. */
+    const work = (turn: Turn, note: Note, id: string | undefined) => {
+        const last = turn.items[turn.items.length - 1];
+        if (last?.kind === "steps" && last.from + last.count === turn.notes.length) last.count += 1;
+        else turn.items.push({ kind: "steps", id: "steps-" + (id ?? turn.notes.length), from: turn.notes.length, count: 1 });
+        turn.notes.push(note);
+    };
+
     /** Every assistant message extends the turn's working span. */
     const worked = (turn: Turn, message: RawMessage) => {
         const at = msOf(message.created_at);
@@ -501,7 +563,7 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
             const text = textOf(message);
             if (!current) current = open(message);
             worked(current, message);
-            if (text) current.notes.push({ kind: "thought", label: "Thought", detail: text });
+            if (text) work(current, { kind: "thought", label: "Thought", detail: text }, message.id);
             continue;
         }
 
@@ -641,11 +703,11 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
                     });
                     continue;
                 }
-                current.notes.push({ ...step(message, metadata, current.notes), card });
+                work(current, { ...step(message, metadata, current.notes, returns), card }, message.id);
                 continue;
             }
 
-            current.notes.push(step(message, metadata, current.notes));
+            work(current, step(message, metadata, current.notes, returns), message.id);
             continue;
         }
 

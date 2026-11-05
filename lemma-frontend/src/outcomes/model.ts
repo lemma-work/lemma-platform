@@ -105,6 +105,9 @@ export interface Handoff {
     /** Files that go with the first message, as the box they were attached
      *  in would have sent them. */
     files?: File[];
+    /** A folder on this computer chosen in that box, by the id it was
+     *  parked under (desktop app only), for the new chat to work in. */
+    folder?: string;
 }
 
 /** Words put in a chat's box -- what an app or a widget asked for, or ⌘K
@@ -133,6 +136,8 @@ export type Go = (view: View, options?: GoOptions) => void;
 export interface AskWith {
     files?: File[];
     createWith?: Record<string, unknown>;
+    /** The id a folder chosen in the box was parked under. */
+    folder?: string;
 }
 
 /** Start a chat with a Lemma with these words, sent, and open it. */
@@ -765,12 +770,14 @@ export function chatItems(input: {
 
 /** A line in a Lemma's sidebar section: a chat, or something of its own
  *  work -- an automation that ran, a table that changed -- each opening
- *  where it is read. */
-export type RowKind = ChatKind | "automation" | "table";
+ *  where it is read; or an app the reader pinned. */
+export type RowKind = ChatKind | "automation" | "table" | "app";
 
 export interface SideRow {
     key: string;
     kind: RowKind;
+    /** The Lemma it is in, for a list that mixes them. */
+    podId: string;
     title: string;
     /** More about it, for its tooltip: the last thing said, where it came from. */
     said: string | null;
@@ -789,6 +796,7 @@ export function rowOfChat(item: ChatItem): SideRow {
     return {
         key: item.key,
         kind: item.kind,
+        podId: item.podId,
         title: item.title,
         said: item.said,
         at: item.at,
@@ -839,8 +847,11 @@ export function workRows(input: {
         const run = origin.runId ?? conversation.id;
         const at = timeOf(conversation.activityAt);
         const row: SideRow = {
-            key: "auto:" + automation.key,
+            /* Its Lemma in its key: a list that mixes Lemmas can hold two
+               automations of one name. */
+            key: "auto:" + input.podId + ":" + automation.key,
             kind: "automation",
+            podId: input.podId,
             title: automation.name,
             said: origin.kind === "schedule" ? "Runs on a schedule" : "A workflow",
             at,
@@ -866,8 +877,9 @@ export function workRows(input: {
         const at = timeOf(table.updated);
         if (at === null || input.now - at > QUIET_AFTER_MS) return [];
         return [{
-            key: "table:" + table.name,
+            key: "table:" + input.podId + ":" + table.name,
             kind: "table",
+            podId: input.podId,
             title: table.title,
             said: "A table",
             at,
@@ -910,8 +922,33 @@ export function inSidebar(item: { kind: string; unread: number; needsYou: boolea
     return item.kind !== "line" || item.unread > 0 || item.needsYou;
 }
 
-/** How long an outcome can go without a chat moving before its section
- *  folds itself away. */
+/** What the sidebar lists under each Lemma, as the reader asked: its chats;
+ *  with its automations' latest runs; or with the tables changed lately as
+ *  well. */
+export type SideShowing = "chats" | "automations" | "everything";
+
+/** How the sidebar lists them: under each Lemma, or all together, newest
+ *  first. */
+export type SideGrouping = "lemma" | "together";
+
+export interface SideSettings {
+    showing: SideShowing;
+    grouping: SideGrouping;
+}
+
+export const SIDE_DEFAULTS: SideSettings = { showing: "chats", grouping: "lemma" };
+
+/** What a browser kept of the reader's choice, read safely: anything it
+ *  does not recognise is the default. */
+export function readSideSettings(raw: unknown): SideSettings {
+    const kept = raw && typeof raw === "object" ? raw as Partial<SideSettings> : {};
+    return {
+        showing: kept.showing === "automations" || kept.showing === "everything" ? kept.showing : "chats",
+        grouping: kept.grouping === "together" ? "together" : "lemma",
+    };
+}
+
+/** How long a table can go unchanged before it stops counting as recent. */
 export const QUIET_AFTER_MS = 7 * 86_400_000;
 
 export interface SidebarSection<T, R> {
@@ -924,13 +961,14 @@ export interface SidebarSection<T, R> {
     open: boolean;
 }
 
-/** The sidebar's outcomes: the one that moved most recently first, the ones
- *  that never moved last, by name. Each is open unless it has been quiet for
- *  a week -- and always when it is where the reader is, or has something
- *  waiting on them. What the reader folded or opened themselves wins. */
+/** The sidebar's Lemmas: the one that moved most recently first, the ones
+ *  that never moved last, by name. Each is folded to its name -- a list of
+ *  Lemmas, the way a list of projects reads -- and a dot on a folded one says
+ *  something in it waits on the reader. One opens while the reader is in it,
+ *  and stays open once they open it themselves; what they folded or opened
+ *  wins. */
 export function sidebarSections<T extends { id: string; name: string }, R extends { at: number | null; needsYou: boolean }>(
     sections: readonly { pod: T; items: readonly R[] }[],
-    now: number,
     chosen: ReadonlyMap<string, boolean>,
     here: string | null,
 ): SidebarSection<T, R>[] {
@@ -939,8 +977,7 @@ export function sidebarSections<T extends { id: string; name: string }, R extend
             const times = items.map((item) => item.at).filter((at): at is number => at !== null);
             const latest = times.length > 0 ? Math.max(...times) : null;
             const waiting = items.filter((item) => item.needsYou).length;
-            const lively = waiting > 0 || pod.id === here || (latest !== null && now - latest < QUIET_AFTER_MS);
-            return { pod, items: [...items], latest, waiting, open: chosen.get(pod.id) ?? lively };
+            return { pod, items: [...items], latest, waiting, open: chosen.get(pod.id) ?? pod.id === here };
         })
         .sort((a, b) => {
             if (a.latest !== null && b.latest !== null && a.latest !== b.latest) return b.latest - a.latest;

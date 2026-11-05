@@ -22,6 +22,12 @@ const config: NextConfig = {
   ...(process.env.LEMMA_DIST_DIR ? { distDir: process.env.LEMMA_DIST_DIR } : {}),
   poweredByHeader: false,
   skipTrailingSlashRedirect: true,
+  env: {
+    /* Which build this is, written into the browser code, so what a browser
+       kept on the device from an older one is dropped rather than read as
+       this one's (`src/session/device-cache.ts`). */
+    NEXT_PUBLIC_LEMMA_BUILD: process.env.LEMMA_BUILD_ID || String(Date.now()),
+  },
   async redirects() {
     return [
       { source: "/terms", destination: "/tos", permanent: true },
@@ -39,9 +45,9 @@ const config: NextConfig = {
         permanent: false,
       },
       { source: "/landing", destination: "/", permanent: true },
-      ...["home", "pods", "conversations"].map((p) => ({
+      ...["pods", "conversations"].map((p) => ({
         source: "/" + p,
-        destination: "/t",
+        destination: "/home",
         permanent: false,
       })),
       /* The app was tried at `/o` beside the workspace before it became

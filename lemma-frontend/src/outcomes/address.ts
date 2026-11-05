@@ -1,7 +1,8 @@
-/** The frame's address grammar: which view a `/t` path names, and the path
- *  for a view. Kept apart from `model.ts` and free of imports, so code that
- *  only needs to read an address — analytics templating one, on every page —
- *  does not carry the plan parser and the channel model with it. */
+/** The app's address grammar: which view a path names, and the path for a
+ *  view. Kept apart from `model.ts` and free of imports, so code that only
+ *  needs to read an address — analytics templating one, on every page, or
+ *  the server sending an old link on — does not carry the plan parser and
+ *  the channel model with it. */
 
 export type OutcomeTab = "home" | "plan" | "chats" | "apps" | "made" | "contacts" | "automations" | "settings";
 
@@ -35,6 +36,10 @@ export type View =
     | { name: "today" }
     | { name: "outcomes" }
     | { name: "needs" }
+    /** Every app across the Lemmas. */
+    | { name: "apps" }
+    /** The services the organization's Lemmas can work through. */
+    | { name: "connectors" }
     | { name: "chats"; open: ChatOpen }
     | { name: "people" }
     /** `section` is a part of a Lemma's settings (its About), or one view
@@ -98,9 +103,10 @@ function decoded(segment: string): string | null {
     }
 }
 
-/** `c/{id}`, `g/{id}` or `contacts/{id}`, read against the Lemma it is in.
- *  A part that will not read opens nothing rather than the wrong thing. */
-function chatOpenOf(podId: string, rest: readonly (string | undefined)[]): ChatOpen {
+/** `c/{id}`, `g/{id}` or `contacts/{id}` in the frame's first grammar,
+ *  read against the Lemma it is in. A part that will not read opens nothing
+ *  rather than the wrong thing. */
+function trialChatOf(podId: string, rest: readonly (string | undefined)[]): ChatOpen {
     const [kind, id] = rest;
     const named = id ? decoded(id) : null;
     if (!named) return NO_CHAT;
@@ -110,86 +116,204 @@ function chatOpenOf(podId: string, rest: readonly (string | undefined)[]): ChatO
     return NO_CHAT;
 }
 
-function chatTail(open: OpenChat): string {
-    switch (open.kind) {
-        case "chat": return "/c/" + encodeURIComponent(open.id);
-        case "shared": return "/g/" + encodeURIComponent(open.id);
-        case "contact": return "/contacts/" + encodeURIComponent(open.id);
+/* ── addresses ──────────────────────────────────────────────────────────
+ *
+ * Plain words, one noun. The places are words of their own -- `/home`,
+ * `/needs`, `/apps`, `/connectors`, `/people`, `/chats` -- and everything
+ * about one Lemma sits under `/l/{id}`, in plural words for its sections
+ * and the same word with a name for one thing in it: `/l/{id}/apps` lists
+ * them, `/l/{id}/apps/{name}` opens one. `/l` alone is every Lemma.
+ *
+ * The workspace's own addresses lived under `/l` before this; where a word
+ * is in both, it means the same place, and a word only the workspace used
+ * (`conversation`, `file`, `about`…) is not one of these, so an old link is
+ * told apart and read the old way (`viewOfAddress`). */
+
+/** The app's places that are not inside one Lemma. */
+const PLACES: Readonly<Record<string, View>> = {
+    home: { name: "today" },
+    needs: { name: "needs" },
+    apps: { name: "apps" },
+    connectors: { name: "connectors" },
+    people: { name: "people" },
+    chats: { name: "chats", open: NO_CHAT },
+};
+
+export const LEMMAS = "/l";
+export const HOME = "/home";
+
+/** The rest of a path, decoded, or null if any part will not read. */
+function decodedAll(parts: readonly string[]): string[] | null {
+    const out = parts.map(decoded);
+    return out.every((part): part is string => part !== null) ? out : null;
+}
+
+/** What an address names, or null when it is not one of the app's own --
+ *  an old link, a workspace address -- for the caller to read another way. */
+export function readView(pathname: string): View | null {
+    const parts = pathname.split("/").filter(Boolean);
+    const [head, ...after] = parts;
+    if (!head) return null;
+    if (head !== "l") return after.length === 0 ? PLACES[head] ?? null : null;
+    const [id, section, ...tail] = after;
+    if (!id) return { name: "outcomes" };
+    if (id === "new") return after.length === 1 ? { name: "hire" } : null;
+    /* The workspace's list of every teammate, from its own addresses. */
+    if (id === "teammates") return after.length === 1 ? { name: "outcomes" } : null;
+    const podId = decoded(id);
+    if (!podId) return null;
+    const rest = decodedAll(tail);
+    if (!rest) return null;
+    const [one, two] = rest;
+    switch (section) {
+        case undefined: return outcomeView(podId);
+        case "plan": return rest.length === 0 ? outcomeView(podId, "plan") : null;
+        case "chats":
+            if (rest.length === 0) return outcomeView(podId, "chats");
+            return rest.length === 1 ? chatView({ kind: "chat", podId, id: one }) : null;
+        case "groups":
+            if (rest.length === 0) return outcomeView(podId, "chats", "channels");
+            return rest.length === 1 ? chatView({ kind: "shared", podId, id: one }) : null;
+        case "contacts":
+            if (rest.length === 0) return outcomeView(podId, "contacts");
+            return rest.length === 1 ? chatView({ kind: "contact", podId, id: one }) : null;
+        case "apps":
+            if (rest.length === 0) return outcomeView(podId, "apps");
+            return rest.length === 1 ? { name: "app", podId, app: one } : null;
+        case "files":
+            return rest.length === 0 ? outcomeView(podId, "made") : { name: "file", podId, path: "/" + rest.join("/") };
+        case "tables":
+            if (rest.length === 0) return outcomeView(podId, "made");
+            if (rest.length === 1) return { name: "table", podId, table: one };
+            return rest.length === 2 ? { name: "record", podId, table: one, recordId: two } : null;
+        case "automations": {
+            if (rest.length === 0) return outcomeView(podId, "automations");
+            const view = AUTOMATION_SECTIONS.find((each) => each === one);
+            return view && rest.length === 1 ? outcomeView(podId, "automations", view) : null;
+        }
+        case "workflows":
+            if (rest.length === 0) return outcomeView(podId, "automations", "workflows");
+            return rest.length === 1 ? { name: "workflow", podId, workflow: one } : null;
+        case "runs":
+            if (rest.length === 0) return outcomeView(podId, "automations", "history");
+            return rest.length === 1 ? { name: "run", podId, runId: one } : null;
+        case "agents":
+            if (rest.length === 0) return outcomeView(podId, "automations", "agents");
+            return rest.length === 1 ? { name: "agent", podId, agent: one } : null;
+        case "settings":
+            return rest.length <= 1 ? outcomeView(podId, "settings", one ?? null) : null;
+        case "computer":
+            return rest.length <= 1 ? { name: "computer", podId, conversationId: one ?? null } : null;
+        default:
+            return null;
     }
 }
 
-/** What a frame path names. Anything unreadable is Home, the frame's front,
- *  rather than a 404: a link from a newer build should still land somewhere. */
-export function readView(pathname: string): View {
+const e = encodeURIComponent;
+
+/** A Lemma's section, as its address names it. */
+const SECTION_WORDS: Readonly<Record<OutcomeTab, string>> = {
+    home: "",
+    plan: "plan",
+    chats: "chats",
+    apps: "apps",
+    made: "files",
+    contacts: "contacts",
+    automations: "automations",
+    settings: "settings",
+};
+
+/** The address for somewhere: the inverse of `readView`, which the
+ *  round-trip test holds it to. */
+export function writeView(view: View): string {
+    switch (view.name) {
+        case "today": return HOME;
+        case "needs": return "/needs";
+        case "apps": return "/apps";
+        case "connectors": return "/connectors";
+        case "people": return "/people";
+        case "outcomes": return LEMMAS;
+        case "hire": return LEMMAS + "/new";
+        case "chats": {
+            const open = view.open;
+            if (open.kind === "none") return "/chats";
+            const word = open.kind === "chat" ? "chats" : open.kind === "shared" ? "groups" : "contacts";
+            return LEMMAS + "/" + e(open.podId) + "/" + word + "/" + e(open.id);
+        }
+        case "outcome": {
+            const base = LEMMAS + "/" + e(view.podId);
+            if (view.tab === "home") return base;
+            if (view.tab === "chats" && view.section === "channels") return base + "/groups";
+            const tail = (view.tab === "settings" || view.tab === "automations") && view.section ? "/" + e(view.section) : "";
+            return base + "/" + SECTION_WORDS[view.tab] + tail;
+        }
+        case "run": return LEMMAS + "/" + e(view.podId) + "/runs/" + e(view.runId);
+        case "app": return LEMMAS + "/" + e(view.podId) + "/apps/" + e(view.app);
+        case "table": return LEMMAS + "/" + e(view.podId) + "/tables/" + e(view.table);
+        case "record": return LEMMAS + "/" + e(view.podId) + "/tables/" + e(view.table) + "/" + e(view.recordId);
+        case "workflow": return LEMMAS + "/" + e(view.podId) + "/workflows/" + e(view.workflow);
+        case "agent": return LEMMAS + "/" + e(view.podId) + "/agents/" + e(view.agent);
+        case "computer": return LEMMAS + "/" + e(view.podId) + "/computer" + (view.conversationId ? "/" + e(view.conversationId) : "");
+        case "file": return LEMMAS + "/" + e(view.podId) + "/files/" + view.path.split("/").filter(Boolean).map(e).join("/");
+    }
+}
+
+/* ── the frame's first addresses ─────────────────────────────────────── */
+
+/** The first words after `/t` (and `/o`, where the frame was tried before
+ *  it was `/t`) in the frame's first grammar. Anything else there was a
+ *  workspace address. */
+const TRIAL_HEADS: ReadonlySet<string> = new Set(["outcomes", "needs-you", "apps", "connectors", "people", "new-lemma", "chats", "outcome"]);
+
+/** What an address in the frame's first grammar -- `/t/outcome/{id}/…`,
+ *  `/t/chats/{id}/c/{chat}`, `/t/needs-you` -- named, so an old link opens
+ *  the same place at its new address. Null for anything else. */
+export function readTrialView(pathname: string): View | null {
     const [root, head, id, tab, ...rest] = pathname.split("/").filter(Boolean);
-    if ((root !== "t" && root !== "o") || !head) return { name: "today" };
+    if (root !== "t" && root !== "o") return null;
+    if (!head) return { name: "today" };
+    if (!TRIAL_HEADS.has(head)) return null;
     if (head === "outcomes") return { name: "outcomes" };
     if (head === "needs-you") return { name: "needs" };
+    if (head === "apps") return { name: "apps" };
+    if (head === "connectors") return { name: "connectors" };
     if (head === "people") return { name: "people" };
     if (head === "new-lemma") return { name: "hire" };
     if (head === "chats") {
         const podId = id ? decoded(id) : null;
         /* The contacts queue was a chat for a day; it is a Lemma's tab now. */
         if (podId && (tab === "contacts" || tab === "customers") && !rest[0]) return outcomeView(podId, "contacts");
-        return { name: "chats", open: podId ? chatOpenOf(podId, [tab, ...rest]) : NO_CHAT };
+        return { name: "chats", open: podId ? trialChatOf(podId, [tab, ...rest]) : NO_CHAT };
     }
-    if (head === "outcome" && id) {
-        const podId = decoded(id);
-        if (!podId) return { name: "today" };
-        const one = rest[0] ? decoded(rest[0]) : null;
-        if (tab === "run" && one) return { name: "run", podId, runId: one };
-        if (tab === "app" && one) return { name: "app", podId, app: one };
-        if (tab === "table" && one) return { name: "table", podId, table: one };
-        if (tab === "workflow" && one) return { name: "workflow", podId, workflow: one };
-        if (tab === "agent" && one) return { name: "agent", podId, agent: one };
-        if (tab === "computer") return { name: "computer", podId, conversationId: one };
-        if (tab === "record" && one && rest[1]) {
-            const recordId = decoded(rest[1]);
-            if (recordId) return { name: "record", podId, table: one, recordId };
-        }
-        if (tab === "settings") return outcomeView(podId, "settings", one);
-        if (tab === "automations") return outcomeView(podId, "automations", AUTOMATION_SECTIONS.find((each) => each === one) ?? null);
-        /* X-ray was a tab of its own; it is a view of Automations now. */
-        if (tab === "xray") return outcomeView(podId, "automations", "xray");
-        if (tab === "file" && rest.length > 0) {
-            const parts = rest.map(decoded);
-            if (parts.every((part): part is string => part !== null)) return { name: "file", podId, path: "/" + parts.join("/") };
-        }
-        /* A Lemma's every chat, searchable; `channels` opens it on the shared
-           ones. A link with a chat named under it, from when the list was a
-           tab, opens that chat. */
-        if (tab === "chats") {
-            if (one === "channels" && rest.length === 1) return outcomeView(podId, "chats", "channels");
-            const open = chatOpenOf(podId, rest);
-            return open.kind === "none" ? outcomeView(podId, "chats") : chatView(open);
-        }
-        return outcomeView(podId, OUTCOME_TABS.find((each) => each === tab) ?? "home");
+    if (!id) return { name: "today" };
+    const podId = decoded(id);
+    if (!podId) return { name: "today" };
+    const one = rest[0] ? decoded(rest[0]) : null;
+    if (tab === "run" && one) return { name: "run", podId, runId: one };
+    if (tab === "app" && one) return { name: "app", podId, app: one };
+    if (tab === "table" && one) return { name: "table", podId, table: one };
+    if (tab === "workflow" && one) return { name: "workflow", podId, workflow: one };
+    if (tab === "agent" && one) return { name: "agent", podId, agent: one };
+    if (tab === "computer") return { name: "computer", podId, conversationId: one };
+    if (tab === "record" && one && rest[1]) {
+        const recordId = decoded(rest[1]);
+        if (recordId) return { name: "record", podId, table: one, recordId };
     }
-    return { name: "today" };
-}
-
-export function writeView(view: View): string {
-    switch (view.name) {
-        case "today": return "/t";
-        case "outcomes": return "/t/outcomes";
-        case "needs": return "/t/needs-you";
-        case "people": return "/t/people";
-        case "hire": return "/t/new-lemma";
-        case "chats":
-            return view.open.kind === "none" ? "/t/chats" : "/t/chats/" + encodeURIComponent(view.open.podId) + chatTail(view.open);
-        case "outcome": {
-            const base = "/t/outcome/" + encodeURIComponent(view.podId);
-            if (view.tab === "home") return base;
-            return base + "/" + view.tab + ((view.tab === "settings" || view.tab === "automations" || view.tab === "chats") && view.section ? "/" + encodeURIComponent(view.section) : "");
-        }
-        case "run": return "/t/outcome/" + encodeURIComponent(view.podId) + "/run/" + encodeURIComponent(view.runId);
-        case "app": return "/t/outcome/" + encodeURIComponent(view.podId) + "/app/" + encodeURIComponent(view.app);
-        case "table": return "/t/outcome/" + encodeURIComponent(view.podId) + "/table/" + encodeURIComponent(view.table);
-        case "workflow": return "/t/outcome/" + encodeURIComponent(view.podId) + "/workflow/" + encodeURIComponent(view.workflow);
-        case "agent": return "/t/outcome/" + encodeURIComponent(view.podId) + "/agent/" + encodeURIComponent(view.agent);
-        case "record": return "/t/outcome/" + encodeURIComponent(view.podId) + "/record/" + encodeURIComponent(view.table) + "/" + encodeURIComponent(view.recordId);
-        case "computer": return "/t/outcome/" + encodeURIComponent(view.podId) + "/computer" + (view.conversationId ? "/" + encodeURIComponent(view.conversationId) : "");
-        case "file":
-            return "/t/outcome/" + encodeURIComponent(view.podId) + "/file/" + view.path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+    if (tab === "settings") return outcomeView(podId, "settings", one);
+    if (tab === "automations") return outcomeView(podId, "automations", AUTOMATION_SECTIONS.find((each) => each === one) ?? null);
+    /* X-ray was a tab of its own; it is a view of Automations now. */
+    if (tab === "xray") return outcomeView(podId, "automations", "xray");
+    if (tab === "file" && rest.length > 0) {
+        const parts = decodedAll(rest);
+        if (parts) return { name: "file", podId, path: "/" + parts.join("/") };
     }
+    /* A Lemma's every chat, searchable; `channels` opens it on the shared
+       ones. A link with a chat named under it, from when the list was a
+       tab, opens that chat. */
+    if (tab === "chats") {
+        if (one === "channels" && rest.length === 1) return outcomeView(podId, "chats", "channels");
+        const open = trialChatOf(podId, rest);
+        return open.kind === "none" ? outcomeView(podId, "chats") : chatView(open);
+    }
+    return outcomeView(podId, OUTCOME_TABS.find((each) => each === tab) ?? "home");
 }

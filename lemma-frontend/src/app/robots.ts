@@ -8,7 +8,7 @@ export default function robots(): MetadataRoute.Robots {
             userAgent: '*',
             allow: ['/', '/templates/', '/docs/', '/import/github/'],
             disallow: [
-                '/t/', '/l/', '/auth/', '/connect', '/demo/', '/characters/', '/d/', '/home',
+                '/t/', '/l/', '/needs', '/apps', '/connectors', '/people', '/chats', '/auth/', '/connect', '/demo/', '/characters/', '/d/', '/home',
                 '/pod/',
                 '/organizations/',
                 '/profile',

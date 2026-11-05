@@ -23,7 +23,7 @@ test("every in-app resource link is a route this app reads", () => {
     ];
     for (const [args, tab] of cases) {
         const url = href(args);
-        assert.ok(url?.startsWith(SITE + "/t/" + POD), url ?? "no link");
+        assert.ok(url?.startsWith(SITE + "/l/" + POD), url ?? "no link");
         const address = readAddress(new URL(url!).pathname);
         assert.equal(address.podId, POD);
         assert.equal(address.tabId, tab, url!);

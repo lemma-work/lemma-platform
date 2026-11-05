@@ -80,11 +80,12 @@ export function resourceLabel(resource: DisplayResource): string {
 }
 
 /** Where this resource lives in the workspace, for the kinds a card links to
- *  rather than draws. The same `/t/{pod}/…` routes the backend gives Slack and
- *  WhatsApp (`display_resource_renderer.build_display_resource_url`), so a
- *  link means the same place wherever it is followed from. */
+ *  rather than draws. The same workspace routes the backend gives Slack and
+ *  WhatsApp (`display_resource_renderer.build_display_resource_url`), under
+ *  `/l`, where the app reads them, so a link means the same place wherever it
+ *  is followed from. */
 export function resourceHref(site: string, podId: string, resource: DisplayResource, now = Date.now()): string | null {
-    const base = site + "/t/" + encodeURIComponent(podId);
+    const base = site + "/l/" + encodeURIComponent(podId);
     const name = resource.name ? encodeURIComponent(resource.name) : null;
     switch (resource.type) {
         case "BROWSER":

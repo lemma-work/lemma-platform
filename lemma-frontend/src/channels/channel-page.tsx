@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { isForbidden, isMissing } from "@/session/auth-state";
@@ -39,7 +39,7 @@ import { useInbox } from "./waiting-panel";
  *  to say something, and beside it a thread or the chat's details. Kept live
  *  by the pod's socket while on screen, and marked read as far as the newest
  *  message the reader has seen. */
-export function ChannelPage({ pod, channelId, visible, onNamed, onLeft }: {
+export function ChannelPage({ pod, channelId, visible, onNamed, onLeft, actions }: {
     pod: Pod;
     channelId: string;
     visible: boolean;
@@ -47,6 +47,9 @@ export function ChannelPage({ pod, channelId, visible, onNamed, onLeft }: {
     onNamed: (title: string) => void;
     /** The reader left the chat, or deleted it. */
     onLeft: () => void;
+    /** What the page it is set in offers at the header's end, so a frame
+     *  around it needs no header of its own. */
+    actions?: ReactNode;
 }) {
     const detail = useChannel(pod.id, channelId, visible);
     const channel = detail.data ?? null;
@@ -68,7 +71,7 @@ export function ChannelPage({ pod, channelId, visible, onNamed, onLeft }: {
             </div>
         );
     }
-    return <ChannelView key={channel.id} pod={pod} channel={channel} title={title ?? ""} visible={visible} onLeft={onLeft} />;
+    return <ChannelView key={channel.id} pod={pod} channel={channel} title={title ?? ""} visible={visible} onLeft={onLeft} actions={actions} />;
 }
 
 /** The people and agents in a channel as a row of faces: a few of them,
@@ -178,13 +181,14 @@ function ContactStrip({ pod, channel, may }: { pod: Pod; channel: ChannelDetail;
     );
 }
 
-function ChannelView({ pod, channel, title, visible, onLeft }: {
+function ChannelView({ pod, channel, title, visible, onLeft, actions }: {
     pod: Pod;
     channel: ChannelDetail;
     title: string;
     visible: boolean;
     /** The reader left the channel, or deleted it. */
     onLeft: () => void;
+    actions?: ReactNode;
 }) {
     const me = useMe();
     const cache = useQueryClient();
@@ -346,6 +350,7 @@ function ChannelView({ pod, channel, title, visible, onLeft }: {
                     {channel.topic && <span className="cpage__topic" title={channel.topic}>{channel.topic}</span>}
                     <span className="cpage__spacer" />
                     {channel.kind !== "DIRECT" && <Faces members={facesOf} me={me} online={online} open={detailsOpen && panelAt === "members"} onOpen={() => showSide("members")} />}
+                    {actions}
                 </header>
                 {channel.kind === "CONTACT" && <ContactStrip pod={pod} channel={channel} may={may} />}
                 {channel.archived && <p className="cpage__note" role="status">This chat is archived. Bring it back from Settings to write in it again.</p>}

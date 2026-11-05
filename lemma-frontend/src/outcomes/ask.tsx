@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { source, type Pod, type Tab } from "@/data";
 import { AppCover } from "@/stage/app-cover";
 import { key } from "@/session/storage";
 import type { Choice } from "@/data/runtimes";
-import { AttachIcon } from "@/ui/icons";
+import { PlusIcon } from "@/ui/icons";
 import { canSend, namePasted, offered, toAttachments, type Attachment } from "@/thread/attachments";
 import { AttachedFiles } from "@/thread/attached";
 import { ModelPicker } from "@/thread/model-picker";
+import { useConversationFolder } from "@/desktop/folders";
+import { FolderChip } from "@/desktop/folder-chip";
+import { TeammateFace } from "@/space/teammate-face";
 import type { Ask, Go } from "./model";
 import { Icon, to } from "./parts";
 
@@ -21,12 +24,13 @@ function runtimeOf(model: Choice | null): Record<string, unknown> | undefined {
     return model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined;
 }
 
-/** A box to ask a Lemma something, with which Lemma at its foot. Home lets
- *  the reader pick and remembers the pick; a new chat names its Lemma in
- *  the address, and picking another moves the chat there. Files go with the
- *  words -- attached, pasted or dropped -- and the model picked under it is
- *  the one the chat it starts runs on, as in the workspace's own box. */
-export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placeholder = "Ask anything, or say what to do", seed = null, fixed = false }: {
+/** The one box to ask a Lemma something, with which Lemma at its foot.
+ *  Home lets the reader pick and remembers the pick; a new chat names its
+ *  Lemma in the address, and picking another moves the chat there. Files go
+ *  with the words -- attached, pasted or dropped -- and the model picked
+ *  under it is the one the chat it starts runs on, as in the workspace's own
+ *  box. */
+export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placeholder = "Ask anything, or say what to do" }: {
     pods: readonly Pod[];
     /** The Lemma asked, when where the box sits decides it. */
     podId?: string;
@@ -34,29 +38,17 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
     onAsk: Ask;
     autoFocus?: boolean;
     placeholder?: string;
-    /** The start of a request put in the box -- "Make a table to track" --
-     *  for the reader to finish. A new `id` puts it there again. */
-    seed?: { text: string; id: number } | null;
-    /** On a Lemma's own page the box asks that Lemma, and says nothing of
-     *  which. */
-    fixed?: boolean;
 }) {
     const [text, setText] = useState("");
     const [held, setHeld] = useState<Attachment[]>([]);
     const [refused, setRefused] = useState<string | null>(null);
     const [over, setOver] = useState(false);
     const [model, setModel] = useState<Choice | null>(null);
-    const field = useRef<HTMLTextAreaElement>(null);
     const picker = useRef<HTMLInputElement>(null);
-    useEffect(() => {
-        if (!seed) return;
-        setText(seed.text);
-        const box = field.current;
-        if (box) {
-            box.focus();
-            requestAnimationFrame(() => box.setSelectionRange(seed.text.length, seed.text.length));
-        }
-    }, [seed]);
+    /* A folder on this computer for the chat to work in: the desktop app's,
+       on a local install, and nothing anywhere else. Parked until the chat
+       exists, then adopted by it. */
+    const folder = useConversationFolder(null);
     const [chosen, setChosen] = useState<string | null>(() => {
         try {
             return localStorage.getItem(ASK_IN_KEY);
@@ -88,7 +80,7 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
         setText("");
         setHeld([]);
         setRefused(null);
-        onAsk(target.id, said, { files, createWith: runtimeOf(model) });
+        onAsk(target.id, said, { files, createWith: runtimeOf(model), folder: folder.folder ? folder.pendingId : undefined });
         setModel(null);
     };
     return (
@@ -111,7 +103,6 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
             <AttachedFiles className="ox-askbox__files" files={held} onRemove={(gone) => setHeld((was) => was.filter((kept) => kept.key !== gone))} />
             <label className="ox-sr" htmlFor="ask-text">Ask {target?.name ?? "a Lemma"}</label>
             <textarea
-                ref={field}
                 id="ask-text"
                 rows={2}
                 value={text}
@@ -148,16 +139,22 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
                     }}
                 />
                 <button type="button" className="ox-askbox__attach" title="Attach a file" aria-label="Attach a file" onClick={() => picker.current?.click()}>
-                    <AttachIcon size={18} />
+                    <PlusIcon size={18} />
                 </button>
-                {target && !fixed && (
-                    <label className="ox-askbox__in">
-                        <span>To</span>
+                {/* Who is asked, as a face and a name rather than a form
+                    field: the native list underneath, for the keyboard. */}
+                {/* Not on a Lemma's own page, which is the one asked. */}
+                {target && pods.length > 1 && (
+                    <label className="ox-askbox__in" title="Who to ask">
+                        <span className="ox-sr">To</span>
+                        <TeammateFace pod={target} size={18} />
                         <select value={target.id} onChange={(event) => pick(event.target.value)}>
                             {pods.map((pod) => <option key={pod.id} value={pod.id}>{pod.name}</option>)}
                         </select>
+                        <Icon name="chevron" size={12} />
                     </label>
                 )}
+                <FolderChip folder={folder} />
                 {refused && <span className="ox-askbox__note">{refused}</span>}
                 <span className="ox-askbox__model">
                     {target && source.label === "live" && <ModelPicker key={target.id} podId={target.id} orgId={target.orgId} conversationId={null} picked={model} onPicked={setModel} />}

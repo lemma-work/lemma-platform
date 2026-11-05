@@ -93,11 +93,11 @@ test("auth steps preserve the destination without carrying sensitive link parame
     assert.equal(landing(search), target);
     assert.equal(storedDestination(), null);
     rememberDestination(target);
-    assert.equal(landing("?redirect_uri=https://evil.example"), "/t");
+    assert.equal(landing("?redirect_uri=https://evil.example"), "/home");
     assert.equal(storedDestination(), null);
     rememberDestination(target);
     rememberDestination(null);
-    assert.equal(landing(""), "/t");
+    assert.equal(landing(""), "/home");
 });
 
 test("nothing asked for is nothing honoured", () => {
@@ -155,9 +155,9 @@ test("creating an organization from an install returns to the install", () => {
 });
 
 test("a new organization with nowhere to return to opens in the workspace", () => {
-    assert.equal(afterNewOrganizationIn("org-1", "", HERE), "/t?org=org-1");
+    assert.equal(afterNewOrganizationIn("org-1", "", HERE), "/home?org=org-1");
     // A destination this app would not honour after sign-in is not honoured here either.
-    assert.equal(afterNewOrganizationIn("org-1", "?redirect_uri=https%3A%2F%2Fevil.example%2F", HERE), "/t?org=org-1");
+    assert.equal(afterNewOrganizationIn("org-1", "?redirect_uri=https%3A%2F%2Fevil.example%2F", HERE), "/home?org=org-1");
 });
 
 test("a sign-in on its way to an install is told apart from any other", () => {
