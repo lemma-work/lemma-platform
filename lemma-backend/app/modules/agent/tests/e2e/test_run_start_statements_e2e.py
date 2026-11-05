@@ -24,6 +24,7 @@ from app.modules.agent.infrastructure.harness.registry import build_harness_regi
 from app.modules.agent.services.run_session import RunSession
 from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
 from app.modules.agent.tests.e2e.turn_work_support import TurnPod, scalar, turn_pod
+from app.modules.agent.services.run_log_loader import load_run_log
 from app.modules.test_support.query_counting import counted_queries, format_statements
 
 pytestmark = [pytest.mark.e2e]
@@ -33,7 +34,13 @@ pytestmark = [pytest.mark.e2e]
 #: grants once, for its toolsets and its brief, where they were read twice; and
 #: one more reads where agent_surfaces heard the conversation, which was keys of
 #: the conversation's row before it was agent_surfaces' own table.
-RUN_START_STATEMENTS = 16
+#: Two more read the run log the model's history is replayed from (18). Then
+#: the history window became one statement where it was four -- the run's
+#: conversation, its newest runs, their total and each run's message count --
+#: the log's checkpoint is found in the statement that reads the steps after
+#: it, and the brief's schedules come with their count: 13. (A third log read,
+#: the last logged run's status, only once there are steps.)
+RUN_START_STATEMENTS = 13
 
 
 @pytest.fixture
@@ -68,7 +75,13 @@ async def _start_run(run_id: UUID, *, user_id: UUID, pod_id: UUID, agent_name: s
         user_id=user_id,
         configured_accounts=runner._resolve_configured_accounts,
     )
-    assert session.agent is not None
+    assert session.agent is not None and session.run is not None
+    await load_run_log(
+        uow_factory,
+        conversation=session.conversation,
+        run=session.run,
+        history=session.history,
+    )
     return await specs_for(
         agent=session.agent,
         conversation=session.conversation,

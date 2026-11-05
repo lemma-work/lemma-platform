@@ -14,6 +14,7 @@ from app.modules.agent.domain.conversation_lifecycle import (
     conversation_status_for,
 )
 from app.modules.agent.domain.pauses import (
+    DELEGATE_CALL_NAME,
     CALL_NAMES,
     PAUSING_CALL_NAMES,
     PERSON_KINDS,
@@ -61,7 +62,8 @@ def test_stored_statuses_have_one_spelling(enum: type) -> None:
 
 def test_every_pause_kind_names_the_call_it_is_stored_under() -> None:
     assert set(CALL_NAMES) == set(PauseKind)
-    assert set(CALL_NAMES.values()) == PAUSING_CALL_NAMES
+    # `delegate` waits as a WAIT under a name of its own.
+    assert set(CALL_NAMES.values()) | {DELEGATE_CALL_NAME} == PAUSING_CALL_NAMES
     assert PauseKind.WAIT not in PERSON_KINDS
 
 

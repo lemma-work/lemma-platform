@@ -18,7 +18,7 @@ import pytest
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.run_origin import run_origin
+from app.modules.agent.domain.run_waiters import run_waiters
 from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
@@ -42,7 +42,7 @@ def _behaves_as_a_chat(conversation: Conversation, *, cwd: str) -> None:
     assert conversation.origin is ConversationOrigin.CHAT
     assert conversation.workflow_run_id is None
     assert conversation.cwd == cwd
-    assert run_origin(conversation).origin == "chat"
+    assert run_waiters(conversation).parent_kind is None
     assert not is_sub_agent_run(conversation)
 
 

@@ -20,7 +20,7 @@ from app.modules.agent.domain.prompt.templates import (
 )
 from app.modules.agent.domain.value_objects import AgentToolset
 
-_FRAGMENT_HEADING = "# Sub-agents"
+_FRAGMENT_HEADING = "# Delegation"
 
 
 def _prompt(
@@ -47,7 +47,7 @@ def test_a_remote_run_that_can_delegate_is_told_to_delegate_through_lemma():
     assert _FRAGMENT_HEADING in prompt
     flat = " ".join(prompt.split())
     assert "never through a task or sub-agent tool of your own runtime" in flat
-    assert "`wait_for(subagent_run_id=...)`" in flat
+    assert "`wait_for(subagent_run_ids=[...])`" in flat
 
 
 def test_a_run_that_cannot_delegate_is_not_told_about_it():

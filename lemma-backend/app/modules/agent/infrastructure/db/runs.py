@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import exists, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -24,6 +24,7 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
     MessageRole,
 )
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.run_state import RunFailure, RunState
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
@@ -123,6 +124,7 @@ class Runs(UnitOfWorkRepository):
                     select(
                         AgentRunModel.status,
                         AgentRunModel.conversation_id,
+                        AgentRunModel.kind,
                     ).where(AgentRunModel.id == agent_run_id)
                 )
             ).one_or_none()
@@ -194,6 +196,7 @@ class Runs(UnitOfWorkRepository):
                 status=next_status,
                 conversation_status=resolved_conversation_status,
                 updated=True,
+                kind=row.kind,
             )
 
     async def completed_in_pod(self, pod_id: UUID, *, more_than: int) -> bool:
@@ -289,6 +292,31 @@ class Runs(UnitOfWorkRepository):
         )
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def record_tool_profile(self, agent_run_id: UUID, profile: str) -> None:
+        """Which toolset-experiment arm the run got, kept beside its metadata so
+        a result is attributable (scaffolding; goes with the switch)."""
+        await self.session.execute(
+            update(AgentRunModel)
+            .where(AgentRunModel.id == agent_run_id)
+            .values(
+                run_metadata=func.coalesce(
+                    AgentRunModel.run_metadata, text("'{}'::jsonb")
+                ).op("||")(func.jsonb_build_object("tool_profile", profile))
+            )
+        )
+
+    async def latest_kind(self, conversation_id: UUID) -> RunKind | None:
+        """The kind of the conversation's newest run: what a run that
+        continues it -- a delegated result, a reply -- is."""
+        return (
+            await self.session.execute(
+                select(AgentRunModel.kind)
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
     async def run_is_replay_safe(self, agent_run_id: UUID) -> bool:
         """Whether a run replays a user turn and holds nothing a replay would repeat.

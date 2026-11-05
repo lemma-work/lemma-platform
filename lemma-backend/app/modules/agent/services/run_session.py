@@ -35,6 +35,7 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.tool_profile import run_tool_profile
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.agent_memory_paths import (
     memory_is_active,
@@ -49,7 +50,6 @@ from app.modules.agent.domain.private_notes import (
     run_delivers_to_surface,
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
-from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.value_objects import (
@@ -160,6 +160,8 @@ class RunSession:
     grants: AgentGrantSummary | None = None
     #: Where agent_surfaces last heard the conversation, if anywhere.
     surface: ConversationSurface | None = None
+    #: The run's place in its conversation (``RuntimeHistoryWindow``).
+    run_index: int | None = None
 
     # -- Loading ------------------------------------------------------------
 
@@ -232,7 +234,9 @@ class RunSession:
                     )
                 surface = await conversation_surface(uow, conversation.id)
                 record_history_size(span, runs=runs, sent=messages)
-        return cls.of(conversation, agent, agent_run, messages, surface)
+        session = cls.of(conversation, agent, agent_run, messages, surface)
+        session.run_index = window.current_run_index
+        return session
 
     @classmethod
     async def for_resume(
@@ -376,8 +380,13 @@ class RunSession:
                 memory_enabled=memory_enabled,
                 in_process=in_process,
                 answers_outsiders=for_outsider,
-                origin=run_origin(conversation).origin,
+                kind=agent_run.state.kind,
             ),
+            tool_profile=run_tool_profile(
+                agent_run.state.kind,
+                pod_default=agent.kind is AgentKind.POD_DEFAULT,
+                deployed=agent_settings.agent_tool_profile,
+            ).value,
             run_toolsets=run_toolsets,
             workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
             grant_summary=self.grants,

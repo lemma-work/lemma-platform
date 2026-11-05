@@ -296,6 +296,11 @@ export function humanMarks(
         };
         return marks;
     }
+    if (meta.source === "subagent_result") {
+        /* Delivered by Lemma from a sub-agent, not typed by the person. */
+        marks.from = "Sub-agent";
+        return marks;
+    }
     if (meta.private_note === true) marks.note = true;
     const named = [meta.sender_display_name, meta.sender_phone]
         .find((value): value is string => typeof value === "string" && value.trim() !== "");
