@@ -29,6 +29,7 @@ from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.tools import (
     ReplayClass,
     ToolAccess,
+    ToolAudience,
     ToolGroup,
     ToolPolicy,
     ToolSpec,
@@ -241,7 +242,9 @@ def group_specs(*, uow_factory: UnitOfWorkFactory) -> tuple[ToolSpec, ...]:
     # Each takes the group from the conversation and the guest from the run,
     # never from the model.
     read = ToolPolicy(
-        access=ToolAccess.READ, outsider_allowed=True, replay=ReplayClass.SAFE
+        access=ToolAccess.READ,
+        offered_to=ToolAudience.OUTSIDERS,
+        replay=ReplayClass.SAFE,
     )
     return (
         tool(group_history, ToolGroup.GROUP, read),
@@ -250,7 +253,9 @@ def group_specs(*, uow_factory: UnitOfWorkFactory) -> tuple[ToolSpec, ...]:
             group_add_record,
             ToolGroup.GROUP,
             ToolPolicy(
-                outsider_allowed=True, idempotent=False, replay=ReplayClass.UNSAFE
+                offered_to=ToolAudience.OUTSIDERS,
+                idempotent=False,
+                replay=ReplayClass.UNSAFE,
             ),
         ),
     )

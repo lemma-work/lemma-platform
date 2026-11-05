@@ -21,7 +21,6 @@ from app.modules.agent.infrastructure.db.channel_conversations import (
     ChannelConversations,
 )
 from app.modules.agent.domain.asked_questions import line_client_id
-from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.messaging.models import (
     MAX_OUTSIDER_MESSAGE_CHARS,
@@ -67,11 +66,6 @@ async def ask_a_person(
     deps = ctx
     if deps.pod_id is None or deps.conversation_id is None:
         return AskAPersonResponse(success=False, error="Only in a conversation.")
-    if not run_audience(deps).answers_outsiders:
-        return AskAPersonResponse(
-            success=False,
-            error="You are talking to a member already: answer them yourself.",
-        )
     if deps.keeper_asking:
         # The member who typed this is the person it would call in.
         return AskAPersonResponse(
@@ -192,16 +186,6 @@ async def list_pod_members(
     if deps.pod_id is None:
         return ListPodMembersResponse(
             success=False, error="list_pod_members is only available inside a pod."
-        )
-    if deps.audience.answers_outsiders:
-        # The directory is read as the member who looks after this run, and
-        # everything in it could be repeated to the stranger asking.
-        return ListPodMembersResponse(
-            success=False,
-            error=(
-                "You are talking to somebody outside the pod, so its members are "
-                "not yours to list. When they need a person, use `ask_a_person`."
-            ),
         )
     page = await pod_directory.list_pod_members(
         pod_id=deps.pod_id,

@@ -53,7 +53,6 @@ async def test_a_nul_character_is_refused_wherever_text_is_sent(pod: Pod):
     _refused(await owner.patch(f"{lines}/{line['id']}", json={"text": NUL}))
     _refused(await owner.post(pod.base, json={"title": NUL}))
     _refused(await owner.patch(f"{pod.base}/{crew['id']}", json={"topic": NUL}))
-    _refused(await owner.get(pod.base, params={"q": NUL}))
     _refused(await owner.get(f"/pods/{pod.id}/search", params={"q": NUL}))
     await pod.client(pod.user).post(f"{pod.base}/me")
     _refused(
@@ -144,8 +143,7 @@ async def test_a_field_or_platform_a_request_does_not_take_is_refused(pod: Pod):
 async def test_each_refusal_names_what_it_is(pod: Pod):
     crew = await group(pod)
     owner = pod.client()
-    await owner.post(f"{pod.base}/me")
-    mine = (await owner.get(f"{pod.base}/me")).json()
+    mine = (await owner.post(f"{pod.base}/me")).json()
 
     _refused(
         await owner.delete(f"{pod.base}/{mine['id']}/members/me"),

@@ -43,7 +43,6 @@ __all__ = [
     "delivery_skipped",
     "delivery_undelivered",
     "delivery_unnoted",
-    "due_deliveries",
     "due_fact",
     "lapsed_delivery",
     "reclaim_delivery",
@@ -116,7 +115,6 @@ async def delivery_sent(
     *,
     platform: str,
     external_message_id: str | None,
-    provider_status: str | None = None,
     reason: str | None = None,
 ) -> None:
     """It went. ``reason``: what a member should know of where it waits --
@@ -125,7 +123,6 @@ async def delivery_sent(
         delivery_id,
         platform=platform,
         external_message_id=external_message_id,
-        provider_status=provider_status,
         reason=reason,
     )
 
@@ -137,7 +134,6 @@ async def delivery_skipped(
     code: DeliveryReasonCode,
     reason: str,
     platform: str | None = None,
-    provider_status: str | None = None,
 ) -> None:
     """Not sent, on purpose: why, and the reason a member reads."""
     await DeliveryRepository(uow.session).skipped(
@@ -145,7 +141,6 @@ async def delivery_skipped(
         code=code,
         reason=reason,
         platform=platform,
-        provider_status=provider_status,
     )
 
 
@@ -174,7 +169,6 @@ async def delivery_failed(
     reason: str,
     platform: str | None = None,
     retry_after: float | None = None,
-    provider_status: str | None = None,
 ) -> Delivery:
     """It did not go: due again after backoff -- no sooner than the platform's
     ``retry_after`` (seconds) -- or given up after the last try."""
@@ -184,7 +178,6 @@ async def delivery_failed(
         reason=reason,
         platform=platform,
         retry_after=retry_after,
-        provider_status=provider_status,
     )
 
 
@@ -195,7 +188,6 @@ async def delivery_dead(
     code: DeliveryReasonCode,
     reason: str,
     platform: str | None = None,
-    provider_status: str | None = None,
 ) -> None:
     """Given up at once: a retry would repeat what already arrived (part of a
     long message) or meet the same refusal."""
@@ -204,7 +196,6 @@ async def delivery_dead(
         code=code,
         reason=reason,
         platform=platform,
-        provider_status=provider_status,
     )
 
 
@@ -256,10 +247,6 @@ async def deliveries_of(
     uow: SqlAlchemyUnitOfWork, message_ids: Sequence[UUID]
 ) -> list[Delivery]:
     return await DeliveryRepository(uow.session).of_messages(message_ids)
-
-
-async def due_deliveries(uow: SqlAlchemyUnitOfWork, *, limit: int = 100) -> list[UUID]:
-    return await DeliveryRepository(uow.session).due(limit=limit)
 
 
 def due_fact(delivery: Delivery) -> ChannelDeliveryDue:

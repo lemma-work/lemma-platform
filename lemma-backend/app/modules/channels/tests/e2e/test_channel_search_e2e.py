@@ -23,7 +23,6 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.channels.contracts import NewLine, Principal, Sender, post
 from app.modules.channels.tests.e2e.channel_pod import (
     Pod,
-    contact_place,
     group,
     keep_answers_to_the_asker,
     say,
@@ -148,56 +147,6 @@ async def test_search_narrows_by_who_kind_and_when_and_reaches_the_archive(pod: 
     )
 
 
-async def test_the_channel_list_narrows_by_visibility_and_title(pod: Pod):
-    launch = await group(pod, title="Launch plan")
-    secret = await group(pod, title="Secret plan", visibility="PRIVATE")
-    await group(pod, title="100% done")
-    owner = pod.client()
-
-    def ids(listed) -> set[str]:
-        assert listed.status_code == 200, listed.text
-        return {item["id"] for item in listed.json()["items"]}
-
-    private = await owner.get(
-        pod.base, params={"kind": "GROUP", "visibility": "PRIVATE"}
-    )
-    assert ids(private) == {secret["id"]}
-    assert ids(await owner.get(pod.base, params={"q": "LAUNCH"})) == {launch["id"]}
-    assert ids(await owner.get(pod.base, params={"q": "plan"})) == {
-        launch["id"],
-        secret["id"],
-    }
-    # Typed as written: a ``%`` is a percent sign, not "anything".
-    assert len(ids(await owner.get(pod.base, params={"q": "0% d"}))) == 1
-    assert ids(await owner.get(pod.base, params={"q": "n%"})) == set()
-
-
-async def test_a_channels_members_are_read_a_page_at_a_time(pod: Pod):
-    crew = await group(
-        pod, visibility="PRIVATE", members=[pod.editor["id"], pod.user["id"]]
-    )
-    path = f"{pod.base}/{crew['id']}/members"
-    owner = pod.client()
-
-    first = await owner.get(path, params={"limit": 2})
-    assert first.status_code == 200, first.text
-    assert len(first.json()["items"]) == 2
-    cursor = first.json()["next_cursor"]
-    assert cursor is not None
-    rest = await owner.get(path, params={"limit": 2, "cursor": cursor})
-    assert rest.status_code == 200, rest.text
-    everyone = [
-        item["person"]["id"] for item in first.json()["items"] + rest.json()["items"]
-    ]
-    assert sorted(everyone) == sorted(
-        [pod.owner["id"], pod.editor["id"], pod.user["id"]]
-    )
-    assert rest.json()["next_cursor"] is None
-
-    missing = await pod.client(pod.viewer).get(path)
-    assert missing.status_code == 404, missing.text
-
-
 async def test_a_snippet_keeps_the_words_as_written(pod: Pod):
     crew = await group(pod)
     await say(pod, crew["id"], "[live] the deploy is green")
@@ -206,27 +155,3 @@ async def test_a_snippet_keeps_the_words_as_written(pod: Pod):
 
     [hit] = found.json()["items"]
     assert hit["snippet"] == "[live] the deploy is green"
-
-
-async def test_the_list_finds_a_channel_by_every_word_and_by_whose_it_is(
-    pod: Pod, db_session
-):
-    await group(pod, title="Spring launch plan")
-    await group(pod, title="Hiring")
-    await contact_place(db_session, pod)
-    await pod.client().post(f"{pod.base}/me")
-    owner = pod.client()
-
-    async def named(q: str, **params: str) -> list[str | None]:
-        found = await owner.get(pod.base, params={"q": q, **params})
-        assert found.status_code == 200, found.text
-        return [
-            item["title"] or item["person"]["name"] for item in found.json()["items"]
-        ]
-
-    assert await named("plan LAUNCH") == ["Spring launch plan"]
-    assert await named("launch hiring") == []
-    assert await named("dana") == ["Dana"]
-    own = pod.owner["email"].split("@")[0]
-    mine = await owner.get(pod.base, params={"q": own, "kind": "DIRECT"})
-    assert [item["kind"] for item in mine.json()["items"]] == ["DIRECT"]

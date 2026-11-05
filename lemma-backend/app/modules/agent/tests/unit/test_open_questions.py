@@ -24,7 +24,11 @@ from app.modules.agent.services.context_brief.open_questions import (
 )
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.messaging.answer import answer_question
+from app.modules.agent.infrastructure.tools.messaging.answer import (
+    SPECS as ANSWER_SPECS,
+    answer_question,
+)
+from app.modules.agent.services.tool_runtime import WITHHELD_MESSAGE, ToolRuntime
 from app.modules.agent.infrastructure.tools.messaging.models import (
     AnswerQuestionRequest,
 )
@@ -284,19 +288,21 @@ async def test_a_refused_answer_comes_back_with_the_reason(monkeypatch):
 
 async def test_a_strangers_run_answers_nothing(monkeypatch):
     """A question put to a member is answered under the member's authority;
-    a contact's run has none to lend."""
+    a contact's run has none to lend, so the tool is not in its toolset and
+    is held however it is asked for."""
 
     async def _answer(uow_factory, **kwargs):  # pragma: no cover - not reached
         raise AssertionError("answered as a member from a stranger's run")
 
     monkeypatch.setattr("app.modules.channels.contracts.questions.answer", _answer)
 
-    result = await answer_question(
+    result = await ToolRuntime(ANSWER_SPECS).call(
+        "answer_question",
+        {"question_id": str(uuid4()), "answer": {"text": "yes"}},
         _ctx(audience=Audience.contact(uuid4())),
-        AnswerQuestionRequest(question_id=uuid4(), answer={"text": "yes"}),
     )
 
-    assert result.success is False
+    assert result == {"success": False, "error": WITHHELD_MESSAGE}
 
 
 async def test_a_refusal_reaches_the_model_instead_of_ending_the_run():

@@ -1,16 +1,14 @@
-"""Each try of a delivery, and how long the settled ones are kept.
+"""How long settled pushes, and the tries written before, are kept.
 
-A try begins when a sender claims a delivery and ends with what it recorded,
-so ``channel_delivery_attempts`` says what each try ran into -- a 429 and
-then a send is two rows -- where the delivery keeps only how it ended. A try
-with no end is a claim that lapsed.
+A settled push -- ``SENT``, ``SKIPPED`` or ``DEAD``, to a member -- is deleted
+``KEPT_FOR`` after it was made: it is a record of a notification, and nothing
+reads it once the line is old. A send to a place is kept as long as its line:
+its platform id is how a reply in a thread there finds the line it answers,
+and how a late status report finds the send.
 
-**Retention.** A settled push -- ``SENT``, ``SKIPPED`` or ``DEAD``, to a
-member -- is deleted ``KEPT_FOR`` after it was made, with its tries: it is a
-record of a notification, and nothing reads it once the line is old. A send
-to a place is kept as long as its line: its platform id is how a reply in a
-thread there finds the line it answers, and how a late status report finds
-the send. Its tries go after ``KEPT_FOR`` like any other.
+``channel_delivery_attempts`` is no longer written, but the tries written
+before still go ``KEPT_FOR`` after their delivery was made, until the
+migration that drops the table.
 """
 
 from __future__ import annotations
@@ -18,11 +16,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, func, literal_column, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import delete, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.channels.domain.entities import DeliveryReasonCode, DeliveryStatus
+from app.modules.channels.domain.entities import DeliveryStatus
 from app.modules.channels.infrastructure.delivery_models import (
     ChannelDeliveryAttemptModel,
     ChannelMessageDeliveryModel,
@@ -32,38 +29,6 @@ from app.modules.channels.infrastructure.delivery_models import (
 KEPT_FOR = timedelta(days=30)
 
 _A = ChannelDeliveryAttemptModel
-
-
-async def try_started(session: AsyncSession, delivery_id: UUID) -> None:
-    """A try begins: the next number after the delivery's last try (a
-    member's retry starts ``attempts`` again; the tries go on counting)."""
-    number = (
-        select(func.coalesce(func.max(_A.n), 0) + 1)
-        .where(_A.delivery_id == delivery_id)
-        .scalar_subquery()
-    )
-    await session.execute(insert(_A).values(delivery_id=delivery_id, n=number))
-
-
-async def try_ended(
-    session: AsyncSession,
-    delivery_id: UUID,
-    outcome: DeliveryStatus,
-    code: DeliveryReasonCode | None,
-    *,
-    provider_status: str | None = None,
-) -> None:
-    """What the try in flight ended as."""
-    await session.execute(
-        update(_A)
-        .where(_A.delivery_id == delivery_id, _A.finished_at.is_(None))
-        .values(
-            finished_at=func.now(),
-            outcome=outcome.value,
-            error_code=code.value if code is not None else None,
-            provider_status=provider_status,
-        )
-    )
 
 
 def _made_before(at: datetime) -> UUID:
@@ -117,4 +82,4 @@ def _count(result: object) -> int:
     return int(rowcount) if isinstance(rowcount, int) else 0
 
 
-__all__ = ["KEPT_FOR", "prune_settled", "try_ended", "try_started"]
+__all__ = ["KEPT_FOR", "prune_settled"]

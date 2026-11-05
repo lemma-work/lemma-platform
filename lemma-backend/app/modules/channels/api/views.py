@@ -21,7 +21,6 @@ from app.modules.channels.api.message_schemas import (
 from app.modules.channels.api.schemas import (
     AgentNames,
     ChannelDetailResponse,
-    ChannelMemberResponse,
     ChannelResponse,
     LinePreview,
     channel_people,
@@ -38,7 +37,6 @@ from app.modules.channels.domain.entities import (
     Channel,
     ChannelMessage,
     Delivery,
-    Member,
     Principal,
 )
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
@@ -182,23 +180,6 @@ async def channel_detail(
             can_manage=await may_manage(uow, caller, channel),
         ),
     )
-
-
-async def members_response(
-    uow: SqlAlchemyUnitOfWork, caller: Caller, members: Sequence[Member]
-) -> list[ChannelMemberResponse]:
-    """People and agents in a channel, each by name."""
-    names, agents = await _named(
-        uow,
-        caller.pod_id,
-        people=[member.principal for member in members if member.principal],
-        agents=[member.agent_id for member in members if member.agent_id],
-    )
-    return [
-        shown
-        for member in members
-        if (shown := member_response(member, names=names, agents=agents))
-    ]
 
 
 async def lines_response(
