@@ -102,8 +102,6 @@ class BackgroundRefs(BaseModel):
     source_id: UUID | None = None
     #: How the pod's bot is named in a group.
     agent_name: str | None = None
-    #: Left out as it was chosen (``PLATFORM``): counted, never kept.
-    withheld: int = 0
     items: tuple[BackgroundItem, ...] = ()
 
 
@@ -218,7 +216,7 @@ def _shown(
     refs: BackgroundRefs, lines: dict[UUID, ChannelMessage], members: set[UUID]
 ) -> ShownBackground:
     shown: list[SaidLine] = []
-    withheld = refs.withheld
+    withheld = 0
     for item in refs.items:
         if item.line_id is None:
             if refs.view is BackgroundView.PLATFORM and item.text:

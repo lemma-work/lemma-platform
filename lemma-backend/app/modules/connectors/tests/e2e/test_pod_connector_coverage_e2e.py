@@ -205,7 +205,8 @@ async def test_members_see_no_one_elses_coverage(scenario, db_session):
 
 
 async def _lines_for(world: World, who: str) -> list[str]:
-    mine = await world.call("GET", f"/pods/{world.pod_id}/channels/me", who)
+    # 200, not 201: the asking made their channel already.
+    mine = await world.call("POST", f"/pods/{world.pod_id}/channels/me", who)
     assert mine.status_code == status.HTTP_200_OK, mine.text
     lines = await world.call(
         "GET",
@@ -247,8 +248,13 @@ async def test_asking_posts_one_line_in_each_missing_members_channel_once_a_day(
 
 
 async def _has_channel(world: World, who: str) -> bool:
-    mine = await world.call("GET", f"/pods/{world.pod_id}/channels/me", who)
-    return mine.status_code == status.HTTP_200_OK
+    """Whether their own channel exists -- read from the list, which makes
+    nothing; only their own direct channel is theirs to see."""
+    listed = await world.call(
+        "GET", f"/pods/{world.pod_id}/channels", who, params={"kind": "DIRECT"}
+    )
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+    return bool(listed.json()["items"])
 
 
 async def test_asking_can_name_some_of_them(scenario, db_session):

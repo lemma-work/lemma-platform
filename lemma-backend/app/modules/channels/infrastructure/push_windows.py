@@ -139,7 +139,6 @@ class PushWindows:
                         func.coalesce(_P.pushed_at + PUSH_WINDOW, new.next_attempt_at),
                     ),
                 ),
-                "updated_at": func.now(),
             },
         ).returning(
             _P.recipient_user_id,
@@ -192,7 +191,6 @@ class PushWindows:
                     urgent=False,
                     next_attempt_at=None,
                     pushed_at=func.now(),
-                    updated_at=func.now(),
                 )
             )
         return windows

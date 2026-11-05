@@ -35,8 +35,6 @@ export class ChannelSourcesNamespace {
       ChannelsService.channelList(
         podId,
         undefined, // kind
-        undefined, // visibility
-        undefined, // q
         false,
         undefined,
         undefined,

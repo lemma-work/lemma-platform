@@ -19,13 +19,14 @@ from uuid import uuid4
 
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.tools import ToolGroup, ToolPolicy, ToolSpec
+from app.modules.agent.domain.tools import ToolAudience, ToolGroup, ToolPolicy, ToolSpec
 from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
     function_toolset,
 )
 from app.modules.agent.infrastructure.tools.pod import tools as pod_tools
 from app.modules.agent.infrastructure.tools.tool_errors import format_tool_error
 from app.modules.agent.services.tool_runtime import (
+    MEMBERS_WITHHELD_MESSAGE,
     WITHHELD_MESSAGE,
     ToolRuntime,
     UnknownToolError,
@@ -306,10 +307,29 @@ async def test_a_strangers_run_is_refused_a_tool_its_policy_withholds():
         "success": False,
         "error": WITHHELD_MESSAGE,
     }
-    allowed = dataclasses.replace(spec, policy=ToolPolicy(outsider_allowed=True))
+    allowed = dataclasses.replace(
+        spec, policy=ToolPolicy(offered_to=ToolAudience.ANYONE)
+    )
     assert await ToolRuntime([allowed]).call(spec.name, {}, stranger) == {
         "success": True
     }
+
+
+@pytest.mark.anyio
+async def test_a_members_run_is_refused_a_tool_only_outsiders_are_offered():
+    """The other toolset: calling a member in is a stranger's run's, and a
+    member's run has the person right here."""
+    spec = dataclasses.replace(
+        _spec("ask_a_person", returns={"success": True}),
+        policy=ToolPolicy(offered_to=ToolAudience.OUTSIDERS),
+    )
+
+    assert await ToolRuntime([spec]).call(spec.name, {}, _ctx()) == {
+        "success": False,
+        "error": MEMBERS_WITHHELD_MESSAGE,
+    }
+    stranger = _ctx(audience=Audience.contact(uuid4()))
+    assert await ToolRuntime([spec]).call(spec.name, {}, stranger) == {"success": True}
 
 
 def test_arguments_validate_flat_or_wrapped_with_the_tools_own_title():

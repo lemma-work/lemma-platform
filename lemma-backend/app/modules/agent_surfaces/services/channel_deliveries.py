@@ -520,7 +520,6 @@ class ChannelDeliveries:
     async def _record(self, delivery: Delivery, outcome: Outcome) -> None:
         reason = outcome.reason or "Not sent."
         code = outcome.code or Code.TRANSIENT
-        status = outcome.provider_status
         async with self.uow_factory() as uow:
             match outcome.result:
                 case Result.SENT:
@@ -529,7 +528,6 @@ class ChannelDeliveries:
                         delivery.id,
                         platform=outcome.platform or "LEMMA",
                         external_message_id=outcome.external_message_id,
-                        provider_status=status,
                         reason=outcome.reason,
                     )
                 case Result.SKIPPED if outcome.hold_for is not None:
@@ -543,7 +541,6 @@ class ChannelDeliveries:
                         code=code,
                         reason=reason,
                         platform=outcome.platform,
-                        provider_status=status,
                     )
                 case Result.DEAD:
                     await delivery_dead(
@@ -552,7 +549,6 @@ class ChannelDeliveries:
                         code=code,
                         reason=reason,
                         platform=outcome.platform,
-                        provider_status=status,
                     )
                 case Result.FAILED:
                     await delivery_failed(
@@ -562,7 +558,6 @@ class ChannelDeliveries:
                         reason=reason,
                         platform=outcome.platform,
                         retry_after=outcome.retry_after,
-                        provider_status=status,
                     )
             # The next line to this target was waiting on this one.
             await announce_next_for_target(uow, delivery)

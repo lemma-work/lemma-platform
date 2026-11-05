@@ -272,7 +272,9 @@ def refused(spec: ToolSpec) -> ToolSpec:
 
 
 def _offered(spec: ToolSpec, audience: Audience) -> bool:
-    return spec.policy.outsider_allowed or not audience.answers_outsiders
+    """A member's run and a stranger's are given two toolsets: each tool is in
+    one, the other or both, by its policy (``ToolPolicy.offered_to``)."""
+    return spec.policy.offered(answers_outsiders=audience.answers_outsiders)
 
 
 def _outsider_specs(

@@ -1,5 +1,11 @@
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.tools import ReplayClass, ToolGroup, ToolPolicy, tool
+from app.modules.agent.domain.tools import (
+    ReplayClass,
+    ToolAudience,
+    ToolGroup,
+    ToolPolicy,
+    tool,
+)
 from app.modules.agent.infrastructure.tools.web.models import (
     WebFetchRequest,
     WebFetchResponse,
@@ -57,7 +63,7 @@ SPECS = (
     tool(
         web_search,
         ToolGroup.WEB_SEARCH,
-        ToolPolicy(outsider_allowed=True, replay=ReplayClass.SAFE),
+        ToolPolicy(offered_to=ToolAudience.ANYONE, replay=ReplayClass.SAFE),
     ),
     # Fetches inside the conversation owner's sandbox, so never for a stranger.
     tool(web_fetch, ToolGroup.WEB_SEARCH, ToolPolicy(replay=ReplayClass.SAFE)),

@@ -228,14 +228,9 @@ class MemberLines:
             edited = await self.lines.edit(line.id, text=body)
         else:
             # An edit names people by the same rule a post does.
-            people, agents = await self._named(channel, parts)
+            people, _ = await self._named(channel, parts)
             edited = await rewrite_line(
-                self.uow,
-                message_id=line.id,
-                text=body,
-                parts=parts,
-                people=people,
-                agents=agents,
+                self.uow, message_id=line.id, text=body, parts=parts, people=people
             )
         if edited is None:
             raise LineRefused("That line was deleted")
@@ -316,18 +311,15 @@ async def rewrite_line(
     text: str,
     parts: Sequence[Part],
     people: Sequence[Principal],
-    agents: Sequence[UUID],
 ) -> ChannelMessage | None:
-    """What a line says now, and who it names: ``people`` and ``agents``, as
-    resolved from ``parts`` by ``Naming``. Somebody newly named is counted and
-    told, as a post tells them; somebody no longer named stops counting.
-    ``None`` when the line is gone or deleted."""
+    """What a line says now, and who it names: ``people``, as resolved from
+    ``parts`` by ``Naming``. Somebody newly named is counted and told, as a
+    post tells them; somebody no longer named stops counting. ``None`` when
+    the line is gone or deleted."""
     edited = await LineRepository(uow.session).edit(message_id, text=text, parts=parts)
     if edited is None:
         return None
-    change = await sync_mentions(
-        uow.session, message=edited, people=people, agents=agents
-    )
+    change = await sync_mentions(uow.session, message=edited, people=people)
     if change.added_users:
         channel = await ChannelRepository(uow.session).get(edited.channel_id)
         if channel is not None:

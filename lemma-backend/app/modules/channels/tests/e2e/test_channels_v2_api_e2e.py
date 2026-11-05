@@ -117,7 +117,6 @@ async def test_a_private_group_is_missing_to_who_is_not_in_it(pod: Pod):
 async def test_a_members_own_channel_is_theirs_alone_and_no_get_makes_it(pod: Pod):
     user = pod.client(pod.user)
 
-    assert (await user.get(f"{pod.base}/me")).status_code == 404
     assert (await user.get(pod.base, params={"kind": "DIRECT"})).json()["items"] == []
 
     made = await user.post(f"{pod.base}/me")
@@ -126,7 +125,8 @@ async def test_a_members_own_channel_is_theirs_alone_and_no_get_makes_it(pod: Po
     assert again.status_code == 200 and again.json()["id"] == made.json()["id"]
     mine = made.json()
     assert mine["kind"] == "DIRECT" and mine["person"]["id"] == pod.user["id"]
-    assert (await user.get(f"{pod.base}/me")).json()["id"] == mine["id"]
+    [listed] = (await user.get(pod.base, params={"kind": "DIRECT"})).json()["items"]
+    assert listed["id"] == mine["id"]
 
     for who in (None, pod.editor):
         for path in (f"{pod.base}/{mine['id']}", f"{pod.base}/{mine['id']}/messages"):

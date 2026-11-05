@@ -72,11 +72,6 @@ export class ChannelsNamespace {
     podId: string,
     options: {
       kind?: ChannelKind | `${ChannelKind}`;
-      /** Only public, or only private, channels (a member's and a contact's
-       *  own are private). */
-      visibility?: Visibility | `${Visibility}`;
-      /** Only channels whose title holds these words, in any case. */
-      q?: string;
       archived?: boolean;
       /** Only this contact's channel. */
       contactId?: string;
@@ -97,8 +92,6 @@ export class ChannelsNamespace {
       ChannelsService.channelList(
         podId,
         options.kind as ChannelKind | undefined,
-        options.visibility as Visibility | undefined,
-        options.q,
         options.archived ?? false,
         options.contactId,
         options.assignee,
@@ -142,11 +135,6 @@ export class ChannelsNamespace {
    *  how the caller hears of it. */
   get(podId: string, channelId: string) {
     return this.client.request(() => ChannelsService.channelGet(podId, channelId));
-  }
-
-  /** The caller's own channel with the pod; not found until it is made. */
-  mine(podId: string) {
-    return this.client.request(() => ChannelsService.channelMeGet(podId));
   }
 
   /** The caller's own channel with the pod, made if it is not there yet. */
@@ -407,41 +395,6 @@ export class ChannelsNamespace {
         options.archived ?? false,
         options.cursor,
         options.limit ?? 30,
-      ),
-    );
-  }
-
-  /** A contact's channel's cases, the most recently opened first, each with
-   *  what happened in it: who answered and when, reopens, how it ended. Page
-   *  with `next_cursor`. */
-  cases(
-    podId: string,
-    channelId: string,
-    options: { cursor?: string; limit?: number } = {},
-  ) {
-    return this.client.request(() =>
-      ChannelsService.channelCaseList(
-        podId,
-        channelId,
-        options.cursor,
-        options.limit ?? 20,
-      ),
-    );
-  }
-
-  /** Who is in a channel -- members, contacts and agents -- in the order they
-   *  joined. Page with `next_cursor`. */
-  members(
-    podId: string,
-    channelId: string,
-    options: { cursor?: string; limit?: number } = {},
-  ) {
-    return this.client.request(() =>
-      ChannelsService.channelMemberList(
-        podId,
-        channelId,
-        options.cursor,
-        options.limit ?? 100,
       ),
     );
   }
