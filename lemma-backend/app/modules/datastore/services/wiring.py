@@ -9,6 +9,8 @@ nothing more.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.datastore.composition import get_datastore_composition
 from app.modules.datastore.infrastructure.record_repository import (
@@ -19,6 +21,11 @@ from app.modules.datastore.infrastructure.repositories import (
     DatastoreTableRepository,
 )
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
+from app.modules.datastore.infrastructure.repositories.outcome_week_repository import (
+    OutcomeWeekRepository,
+)
+from app.modules.datastore.services.outcome_measure import OutcomeMeasureService
+from app.modules.datastore.services.outcome_standing import OutcomeStandingService
 from app.modules.datastore.infrastructure.storage import create_datastore_storage
 from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.record_service import RecordService
@@ -79,4 +86,30 @@ def build_record_service(uow) -> RecordService:
         ),
         authorization_service=create_authorization_data_service(uow),
         user_repository=build_user_directory(uow),
+    )
+
+
+def build_outcome_measure_service(uow) -> OutcomeMeasureService:
+    """Construct the service that checks and reads what a pod owns."""
+    tables = build_table_service(uow)
+    return OutcomeMeasureService(
+        tables=tables,
+        table_repository=tables.table_repository,
+        records=DatastoreRecordRepository(schema_manager=get_schema_manager()),
+        authz=tables.authz,
+    )
+
+
+def build_outcome_standing_service(uow) -> OutcomeStandingService:
+    """Construct the service that says where a pod stands and keeps its weeks."""
+    from app.modules.pod.contracts.outcome import PodOutcome, read_pod_outcome
+
+    async def outcome_of(pod_id: UUID) -> PodOutcome | None:
+        return await read_pod_outcome(uow.session, pod_id)
+
+    return OutcomeStandingService(
+        outcomes=outcome_of,
+        measures=build_outcome_measure_service(uow),
+        weeks=OutcomeWeekRepository(uow.session),
+        session=uow.session,
     )

@@ -12,7 +12,7 @@ clients, and resource-level grants for users, roles, and workloads.
 | --- | --- |
 | API routers | Pods, members, roles, effective permissions, join requests, resource access |
 | Work kinds | `pod.provision` (the pod's datastore schema, written with the pod), `pod.join_request.email` (`delivery`) |
-| Facts emitted | `PodDeleted` and member removal, which agent, schedule, surfaces and MCP access subscribe to |
+| Facts emitted | `PodDeleted` and member removal, which agent, schedule, surfaces and MCP access subscribe to; `PodOutcomeChanged`, which datastore subscribes its weekly reading to |
 
 ## Main data model
 
@@ -36,6 +36,7 @@ permission bundles use the shared authorization repositories.
 | `/pods/{pod_id}/permissions/*` | Permission catalog and current user's effective permissions |
 | `/pods/{pod_id}/resources/.../access` | Read/replace/delete a grantee's resource grant |
 | `/pods/{pod_id}/join*` | Direct policy-based join and reviewable join requests |
+| `/pods/{pod_id}/outcome` | Set or clear what the pod owns (`PUT`, `DELETE`) |
 
 ## Key flows
 
@@ -58,6 +59,34 @@ grants intersected with the invoking user's, so it can never reach past the
 person who ran it; the default pod agent holds no grants and mirrors its
 invoking user's rights exactly. Destructive operations additionally require
 standing authority or a session approval.
+
+## What a pod owns
+
+`PodConfig.outcome` is the one thing a pod owns: a sentence, its kind (`week`, a
+bar held every week, or `date`, a finish line by `due`), a target with its unit
+(`%` makes it a share from 0 to 100), and a measure -- one read-only SQL query
+over the pod's tables that answers a single number. These are the front matter
+fields of the plan the workspace keeps at `/plan.md`; the plan's prose stays in
+that file, and the agent's brief points at it.
+
+It changes only through `PodOutcomeService`. `PUT /pods/{pod_id}/outcome` and
+the agent's `set_what_you_own` tool both go through `set_outcome`, which needs
+`POD_UPDATE` and checks a new or changed measure through the `OutcomeMeasures`
+port (`app/core/ports/outcome_measures.py`, implemented by datastore) before
+keeping it. A measure is read for the whole pod, so the check refuses anyone who
+cannot read every row it counts. The tables with row security a check covered
+are kept as `row_security_checked`; an unchanged measure that now counts a
+table with row security outside them is checked again, so setting it again is
+how someone who administers that table makes it readable. `PodService.create_pod`
+and `update_pod` keep the stored outcome whatever a request's config says.
+`set_starting_outcome` is the one unchecked path: a Lemma started from a
+template keeps the template's measure before its tables exist, for a pod its
+caller has just made, with nothing recorded as checked -- so it reads only
+while its tables have no row security, which is how every shipped template
+brings them.
+
+`since` is stamped the day it is first set and kept while only the wording,
+target or measure change. Every change emits `PodOutcomeChanged`.
 
 ## Dependencies
 

@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice, ConnectorPlan
 
@@ -133,11 +133,21 @@ class VariableSpec(BaseModel):
 class ImportPlan(BaseModel):
     format_version: int
     bundle_name: str | None = None
+    # `pod.json`'s description, so the person importing can see what the bundle
+    # is for before approving it.
+    description: str | None = None
     steps: list[PlanStep] = Field(default_factory=list)
     variables: list[VariableSpec] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     #: The bundle's pod connectors and the choices each offers the importer.
     connectors: list[ConnectorPlan] = Field(default_factory=list)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _text_or_nothing(cls, value: object) -> object:
+        """A ``pod.json`` description that is not text is no description: the
+        bundle is someone else's file, and one stray field must not fail a plan."""
+        return value if isinstance(value, str) else None
 
     def next_pending_step(self) -> PlanStep | None:
         for step in self.steps:
@@ -164,19 +174,28 @@ class BundleSourceKind(str, Enum):
 
     ``URL`` covers any lemma-origin signed download URL (an export or an
     uploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public
-    repo fetched via the connector path.
+    repo fetched via the connector path; ``TEMPLATE`` is a bundle that ships
+    with the backend under ``pod_bundle/templates/``, named rather than located.
     """
 
     URL = "URL"
     GITHUB = "GITHUB"
+    TEMPLATE = "TEMPLATE"
+
+
+#: A template's name is its directory under ``templates/``. No dots and no
+#: separators, so a name cannot address anything outside that directory.
+TEMPLATE_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
 
 
 class BundleSource(BaseModel):
     kind: BundleSourceKind
     # For kind=URL: the signed lemma download URL the bundle was imported from
     # (kept for the recipe/provenance). For kind=GITHUB: repo_url is set instead.
+    # For kind=TEMPLATE: `template:<name>`, which is what the recipe records.
     url: str | None = None
     repo_url: str | None = None
+    template: str | None = None
     ref: str | None = None
     bundle_filename: str | None = None
     bundle_sha256: str | None = None
