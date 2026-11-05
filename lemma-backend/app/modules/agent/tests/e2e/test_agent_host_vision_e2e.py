@@ -339,8 +339,11 @@ async def test_a_repo_backed_conversation_reaches_a_remote_harness(
 
     assert ctx.workspace_repo is not None, "the repo never reached the tools"
     assert ctx.workspace_repo.full_name == "lemma-work/lemma-platform"
-    # Derived from the repo, not a scratch directory beside it.
-    assert ctx.get_workspace_cwd() == ctx.workspace_repo.cwd
+    # Derived from the repo -- a worktree of it keyed by the conversation, since
+    # nothing stamped one -- not a scratch directory beside it.
+    assert ctx.get_workspace_cwd() == ctx.workspace_repo.worktree_dir(
+        UUID(conversation_id).hex[:8]
+    )
 
 
 @pytest.mark.asyncio

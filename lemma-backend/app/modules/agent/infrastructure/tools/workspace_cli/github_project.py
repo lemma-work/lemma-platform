@@ -1,24 +1,31 @@
 """Put a conversation's project on disk before the agent looks for it.
 
-A conversation started against a repo (``metadata.repo``) resolves its cwd to
-``<workspace root>/repos/{owner}/{repo}``. The directory itself always exists -- every
+A conversation started against a repo works in a git worktree of its own,
+``<workspace root>/worktrees/{owner}/{repo}/{slug}`` on branch ``lemma/{slug}``,
+made from one clone per repository at ``<workspace root>/repos/{owner}/{repo}``
+(``domain/project_repo``). The directory itself always exists -- every
 ``get_session`` calls ``_ensure_workspace_directory`` -- so without this step the
 agent would open a project and find an empty folder, which is precisely the
 ambiguity ``WORKSPACE_RECREATED_NOTICE`` exists to prevent elsewhere.
 
-Two rules shape what this does and does not do:
+Three rules shape what this does and does not do:
 
-- **Clone when there is nothing there; otherwise only fetch.** An existing
-  checkout is never pulled, reset, switched, or cleaned. One sandbox per user
-  means two conversations can share a checkout, and it may hold uncommitted
-  work from either of them; silently moving a working tree under an agent is
-  worse than leaving it a commit behind. A fetch moves none of that -- only the
-  remote-tracking refs -- so a conversation opened on a checkout another one
-  made days ago still sees where `origin` is now, and decides for itself what
-  to do about it.
-- **Say when it failed.** A clone that fails (repo gone, account without access)
-  returns a notice the caller shows the agent once, rather than leaving it to
+- **Clone when there is nothing there; otherwise only fetch.** The clone is
+  never pulled, reset, switched, or cleaned, and neither is a worktree once
+  made. A fetch moves none of that -- only the remote-tracking refs, which every
+  worktree of the clone shares -- so a conversation opened on a clone made days
+  ago still starts from where `origin` is now.
+- **A worktree is made once, from `origin`.** On a branch of its own, from the
+  conversation's ref or the repository's default branch, so no conversation
+  inherits another's uncommitted work or its branch. A worktree whose directory
+  was lost comes back on the same branch, with the commits it had.
+- **Say when it failed.** A clone that fails (repo gone, account without access),
+  a worktree that could not be made, and a fetch that left `origin/*` stale each
+  return a notice the caller shows the agent once, rather than leaving it to
   infer something from an empty directory.
+
+A conversation from before worktrees recorded the clone itself as its cwd and
+keeps working there, as it always has.
 
 Like the credential bridge next door, the work is marker-guarded in Redis so a
 session running twenty commands pays for this once.
@@ -37,6 +44,7 @@ from typing import TYPE_CHECKING
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
+from app.modules.agent.domain.project_repo import ProjectRepo, worktree_branch
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.workspace_cli.github_credential_bridge import (
@@ -57,26 +65,73 @@ _PRESENT_TTL_SECONDS = 45 * 60
 # right account and carrying on works without waiting out a long TTL.
 _FAILED_TTL_SECONDS = 5 * 60
 _CLONE_TIMEOUT_SECONDS = 300
-# The checkout's own exit status when only its fetch failed (sysexits'
-# EX_TEMPFAIL), told apart from a clone that failed, which git reports as 128.
+# The step's own exit statuses, told apart from a clone that failed, which git
+# reports as 128: only the fetch failed (sysexits' EX_TEMPFAIL), and the
+# worktree could not be made.
 _FETCH_FAILED_EXIT = 75
+_WORKTREE_FAILED_EXIT = 76
 
 
-def _checkout_command(*, url: str, path: str, ref: str | None) -> str:
+def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
+    """Clone into ``path`` if nothing is there, else fetch; mark a failed fetch.
+
+    The `[ -e ... ]` guard is what makes this idempotent and safe to run at the
+    head of any command: an existing clone is never cloned over. A fetch that
+    fails sets `stale` for the end of the step, so a worktree is still made.
+    """
     branch = f"--branch {shlex.quote(ref)} " if ref else ""
-    # The `[ -e ... ]` guard is what makes this idempotent and safe to run at the
-    # head of any command: an existing checkout is never cloned over.
+    clone = shlex.quote(path)
     return (
         f"if [ -e {shlex.quote(path + '/.git')} ]; then "
-        f"git -C {shlex.quote(path)} fetch --quiet origin || exit {_FETCH_FAILED_EXIT}; "
-        f"else git clone {branch}{shlex.quote(url)} {shlex.quote(path)}; fi"
+        f"git -C {clone} fetch --quiet origin || stale=1; "
+        f"else git clone {branch}{shlex.quote(url)} {clone} || exit; fi"
     )
+
+
+def _checkout_command(
+    *, url: str, clone_dir: str, ref: str | None, worktree: str | None, slug: str | None
+) -> str:
+    """The whole step, as one shell command.
+
+    With a worktree: the clone, then this conversation's worktree on
+    ``lemma/{slug}`` -- from `origin/<ref>` (or the ref itself, for a tag or a
+    commit), else from `origin/HEAD` -- unless it is already there. `worktree
+    prune` first, so a worktree whose directory went missing can be made again;
+    its branch, if it survived, is reused rather than re-made, so its commits
+    are where they were.
+    """
+    steps = [_clone_or_fetch(url=url, path=clone_dir, ref=ref)]
+    if worktree is not None and slug is not None:
+        git = f"git -C {shlex.quote(clone_dir)}"
+        branch = worktree_branch(slug)
+        target = ref or "HEAD"
+        path = shlex.quote(worktree)
+        steps.append(
+            f"if [ ! -e {shlex.quote(worktree + '/.git')} ]; then "
+            f"{git} worktree prune; "
+            f"start={shlex.quote('origin/' + target)}; "
+            f'{git} rev-parse --verify --quiet "$start^{{commit}}" >/dev/null '
+            f"|| start={shlex.quote(target)}; "
+            f"if {git} show-ref --verify --quiet {shlex.quote('refs/heads/' + branch)}; "
+            f"then {git} worktree add --quiet {path} {shlex.quote(branch)}; "
+            f'else {git} worktree add --quiet -b {shlex.quote(branch)} {path} "$start"; '
+            f"fi || exit {_WORKTREE_FAILED_EXIT}; fi"
+        )
+    steps.append(f'[ -z "${{stale-}}" ] || exit {_FETCH_FAILED_EXIT}')
+    return "; ".join(steps)
+
+
+def _worktree_of(ctx: ToolContext, repo: ProjectRepo) -> tuple[str, str] | None:
+    """This conversation's worktree and its slug, or None if it works in the clone."""
+    cwd = ctx.get_workspace_cwd()
+    slug = repo.worktree_slug(cwd)
+    return (repo.worktree_dir(slug), slug) if slug is not None else None
 
 
 async def ensure_project_checkout(
     ctx: ToolContext, workspace_session, *, redis: "Redis | None" = None
 ) -> str | None:
-    """Clone the conversation's repo if its directory is empty, else fetch it.
+    """Clone or fetch the conversation's repo, and make its worktree if it has none.
 
     Returns a notice to show the agent once, or None when there is nothing to
     say -- which is the case both when the checkout is already there and when
@@ -102,24 +157,33 @@ async def ensure_project_checkout(
     if await redis.exists(marker_key):
         return None
 
+    worktree = _worktree_of(ctx, repo)
+    here = worktree[0] if worktree else repo.clone_dir
     url = f"https://github.com/{repo.owner}/{repo.repo}.git"
     result = await workspace_session.exec_command(
-        cmd=_checkout_command(url=url, path=repo.cwd, ref=repo.ref),
+        cmd=_checkout_command(
+            url=url,
+            clone_dir=repo.clone_dir,
+            ref=repo.ref,
+            worktree=worktree[0] if worktree else None,
+            slug=worktree[1] if worktree else None,
+        ),
         timeout=_CLONE_TIMEOUT_SECONDS,
     )
     # git's own stderr is the most useful thing anyone can say here -- it already
     # distinguishes a missing repo from an access failure from a bad ref.
     detail = str(result.get("stderr") or "").strip()
-    if result.get("exit_code") == 0:
+    exit_code = result.get("exit_code")
+    if exit_code == 0:
         await redis.set(marker_key, "present", ex=_PRESENT_TTL_SECONDS)
         return None
-    if result.get("exit_code") == _FETCH_FAILED_EXIT:
+    if exit_code == _FETCH_FAILED_EXIT:
         # The checkout is there and as usable as before, so it is marked present
         # and said once: an agent comparing against `origin/*` needs to know it
         # may be comparing against an old one.
         await redis.set(marker_key, "present", ex=_PRESENT_TTL_SECONDS)
         return (
-            f"[workspace notice] {repo.full_name} is checked out in {repo.cwd}, "
+            f"[workspace notice] {repo.full_name} is checked out in {here}, "
             "but fetching it failed, so `origin/*` may be behind GitHub. "
             f"{detail}".strip()
         )
@@ -128,11 +192,17 @@ async def ensure_project_checkout(
     logger.warning(
         "agent.workspace_cli.github_project_clone_failed.degraded",
         repo=repo.full_name,
-        exit_code=result.get("exit_code"),
+        exit_code=exit_code,
     )
+    if exit_code == _WORKTREE_FAILED_EXIT:
+        return (
+            f"[workspace notice] {repo.full_name} is cloned in {repo.clone_dir}, "
+            f"but this conversation's worktree could not be made in {here}, so "
+            f"this directory is empty for a reason. {detail}".strip()
+        )
     return (
         f"[workspace notice] {repo.full_name} could not be cloned into "
-        f"{repo.cwd}, so this directory is empty for a reason. "
+        f"{repo.clone_dir}, so {here} is empty for a reason. "
         f"{detail}".strip()
     )
 

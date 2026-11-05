@@ -1,8 +1,14 @@
-"""A GitHub repository a conversation works in.
+"""A GitHub repository a conversation works in, and where it lives on disk.
 
 A leaf of its own because the conversation entity carries one as a typed
 field, and ``workspace_location`` -- which decides what the repository means
 for the conversation's directory -- reads conversations.
+
+Two places per repository. One clone, ``clone_dir``, shared by every
+conversation of the person in it: the objects and ``origin/*`` are fetched
+once for all of them. And a worktree per conversation, ``worktree_dir``, on a
+branch of its own (``worktree_branch``), so no conversation's working tree or
+uncommitted changes are another's.
 """
 
 from __future__ import annotations
@@ -14,6 +20,10 @@ from dataclasses import dataclass
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 _REPOS_ROOT = f"{WORKSPACE_ROOT}/repos"
+_WORKTREES_ROOT = f"{WORKSPACE_ROOT}/worktrees"
+# A worktree's slug names its directory and, after `lemma/`, its branch, so it
+# is held to what both can take without quoting.
+_WORKTREE_SLUG_PATTERN = re.compile(r"^[a-z0-9]{1,64}$")
 
 # An owner/repo pair becomes both a filesystem path and part of a clone URL, so
 # these are validated rather than trusted. The patterns are GitHub's own naming
@@ -41,8 +51,25 @@ class ProjectRepo:
         return f"{self.owner}/{self.repo}"
 
     @property
-    def cwd(self) -> str:
+    def clone_dir(self) -> str:
+        """The one clone of this repository, which every worktree of it shares."""
         return f"{_REPOS_ROOT}/{self.owner}/{self.repo}"
+
+    def worktree_dir(self, slug: str) -> str:
+        """One conversation's worktree of this repository."""
+        return f"{_WORKTREES_ROOT}/{self.owner}/{self.repo}/{slug}"
+
+    def worktree_slug(self, cwd: str) -> str | None:
+        """The slug of this repository's worktree at ``cwd``, if it is one.
+
+        ``None`` for anything else -- a conversation from before worktrees,
+        which works in ``clone_dir`` itself, or a directory set by hand.
+        """
+        prefix = f"{_WORKTREES_ROOT}/{self.owner}/{self.repo}/"
+        if not cwd.startswith(prefix):
+            return None
+        slug = cwd[len(prefix) :].rstrip("/")
+        return slug if _WORKTREE_SLUG_PATTERN.match(slug) else None
 
     def to_json(self) -> dict[str, str]:
         value = {"owner": self.owner, "repo": self.repo}
@@ -70,6 +97,11 @@ class RepositoryChoices:
 
     choices: tuple[RepositoryChoice, ...]
     complete: bool = True
+
+
+def worktree_branch(slug: str) -> str:
+    """The branch a conversation's worktree starts on."""
+    return f"lemma/{slug}"
 
 
 def parse_project_repo(value: object) -> ProjectRepo | None:

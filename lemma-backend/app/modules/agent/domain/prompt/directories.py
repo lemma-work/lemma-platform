@@ -18,6 +18,7 @@ import re
 from typing import TYPE_CHECKING
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.modules.agent.domain.project_repo import ProjectRepo, worktree_branch
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.domain.workspace_location import (
     resolve_pod_cwd,
@@ -72,17 +73,34 @@ def _workspace_repo(ctx: ToolContext):
     return getattr(ctx, "workspace_repo", None)
 
 
-def _project_paragraph(repo) -> str:
+def _project_paragraph(repo: ProjectRepo, cwd: str) -> str:
     """What an agent needs to know when its cwd is a real checkout."""
+    credentials = (
+        "`git` and `gh` are already authenticated as the connected account, and "
+        "a commit identity is already set — don't configure either."
+    )
+    slug = repo.worktree_slug(cwd)
+    if slug is not None:
+        start = f"`origin/{repo.ref}`" if repo.ref else "the default branch"
+        return (
+            f"This directory is a git worktree of **{repo.full_name}** on branch "
+            f"`{worktree_branch(slug)}`, made for this conversation from {start} "
+            "before your first command ran. The working tree and the branch are "
+            "yours: other conversations in this repository have worktrees of "
+            f"their own. The clone behind them, {_prompt_path(repo.clone_dir)}, "
+            "is shared — its objects and `origin/*` are fetched before your "
+            "session starts (a notice says so if that failed) — so never work "
+            f"in it directly. {credentials} Push your branch, or rename it, "
+            "when the work is ready. An empty directory here means the clone "
+            "or the worktree failed, and a notice will have said which."
+        )
     on_ref = f" on `{repo.ref}`" if repo.ref else ""
     return (
         f"This directory is a git checkout of **{repo.full_name}**{on_ref}, "
         "cloned for you before your first command ran — or, if it was already "
         "here, fetched, so `origin/*` is current while the working tree is "
-        "left as it was (a notice says so if the fetch failed). `git` and "
-        "`gh` are already authenticated as the "
-        "connected account, and a commit identity is already set — don't "
-        "configure either.\n\n"
+        "left as it was (a notice says so if the fetch failed). "
+        f"{credentials}\n\n"
         "The checkout is shared, not yours alone: another conversation may be "
         "working in it right now. Run `git status` before you assume the tree "
         "is clean, and never `reset --hard`, `clean`, or force-switch a branch "
@@ -307,7 +325,7 @@ def _workspace_directory_section(
         )
     repo = _workspace_repo(ctx)
     orientation = (
-        _project_paragraph(repo)
+        _project_paragraph(repo, cwd)
         if repo is not None
         else (
             "An empty working directory means this is a **new conversation**, "

@@ -130,11 +130,12 @@ class PodConversations(BoundResource):
         parent_id: str | None = None,
         repository: str | None = None,
     ) -> ConversationResponse:
-        """Open a conversation, in a GitHub repository's checkout if one is named.
+        """Open a conversation, in a worktree of a GitHub repository if one is named.
 
         ``repository`` is ``owner/name``, one of `repositories()`. The server
         refuses a repository the organization's GitHub installation does not
-        cover for you, and every conversation of yours in it shares one checkout.
+        cover for you. The conversation works in a git worktree of its own, on a
+        branch of its own, made from one shared clone of the repository.
         """
         return self._call(
             agent_conversation_create,

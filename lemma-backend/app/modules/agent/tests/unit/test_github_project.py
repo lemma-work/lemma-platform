@@ -1,4 +1,9 @@
 from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 from uuid import uuid4
@@ -105,11 +110,13 @@ async def test_clone_never_runs_over_an_existing_checkout(
 
     command = session.commands[0]
     path = f"{WORKSPACE_ROOT}/repos/acme/web"
-    existing, _, fresh = command.partition("; else ")
-    assert existing == (
-        f"if [ -e {path}/.git ]; then git -C {path} fetch --quiet origin || exit 75"
+    # A conversation from before worktrees works in the clone itself, so it is
+    # cloned or fetched there and nothing else is made.
+    assert command.startswith(
+        f"if [ -e {path}/.git ]; then git -C {path} fetch --quiet origin || stale=1; "
+        f"else git clone https://github.com/acme/web.git {path} || exit; fi"
     )
-    assert fresh == f"git clone https://github.com/acme/web.git {path}; fi"
+    assert "worktree" not in command
     # Nothing that could move or discard work in an existing tree.
     for destructive in ("pull", "reset", "checkout", "switch", "clean", "merge"):
         assert destructive not in command
@@ -368,3 +375,171 @@ async def test_a_broken_bridge_never_blocks_the_work_itself(
     result = await _run_tool(tool, _context(_REPO))
 
     assert result.success is True
+
+
+# --- worktrees -----------------------------------------------------------------
+
+
+def _worktree_context(slug: str = "ab12cd34", repo: ProjectRepo = _REPO) -> ToolContext:
+    return ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        workspace_repo=repo,
+        workspace_cwd=repo.worktree_dir(slug),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_gets_a_worktree_of_the_shared_clone() -> None:
+    session = _FakeSession()
+
+    notice = await github_project.ensure_project_checkout(
+        _worktree_context(), session, redis=_FakeRedis()
+    )
+
+    assert notice is None
+    command = session.commands[0]
+    clone = f"{WORKSPACE_ROOT}/repos/acme/web"
+    worktree = f"{WORKSPACE_ROOT}/worktrees/acme/web/ab12cd34"
+    assert f"git clone https://github.com/acme/web.git {clone}" in command
+    assert (
+        f'git -C {clone} worktree add --quiet -b lemma/ab12cd34 {worktree} "$start"'
+        in command
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_worktree_that_could_not_be_made_says_so() -> None:
+    redis = _FakeRedis()
+    session = _FakeSession(
+        exit_code=76, stderr="fatal: invalid reference: origin/release"
+    )
+
+    notice = await github_project.ensure_project_checkout(
+        _worktree_context(), session, redis=redis
+    )
+
+    assert notice is not None
+    assert "worktree could not be made" in notice
+    assert f"{WORKSPACE_ROOT}/worktrees/acme/web/ab12cd34" in notice
+    assert "invalid reference" in notice
+    assert redis.values[_MARKER_KEY] == "failed"
+
+
+class _Git:
+    """Real git, against a repository on local disk standing in for GitHub."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.env = {
+            **os.environ,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_AUTHOR_NAME": "Ada Member",
+            "GIT_AUTHOR_EMAIL": "ada@example.test",
+            "GIT_COMMITTER_NAME": "Ada Member",
+            "GIT_COMMITTER_EMAIL": "ada@example.test",
+        }
+        self.origin = root / "origin.git"
+        self.clone = root / "repos" / "acme" / "web"
+        source = root / "source"
+        self.run("init", "-q", "-b", "main", str(source))
+        self.run("-C", str(source), "commit", "-q", "--allow-empty", "-m", "first")
+        self.run("-C", str(source), "branch", "release")
+        self.run("clone", "-q", "--bare", str(source), str(self.origin))
+
+    def run(self, *args: str) -> str:
+        done = subprocess.run(
+            ["git", *args], env=self.env, capture_output=True, text=True, check=True
+        )
+        return done.stdout.strip()
+
+    def push_commit(self, message: str) -> str:
+        scratch = self.root / f"push-{message}"
+        self.run("clone", "-q", str(self.origin), str(scratch))
+        self.run("-C", str(scratch), "commit", "-q", "--allow-empty", "-m", message)
+        self.run("-C", str(scratch), "push", "-q", "origin", "main")
+        return self.run("-C", str(scratch), "rev-parse", "HEAD")
+
+    def step(self, slug: str, *, ref: str | None = None) -> tuple[int, Path]:
+        """What the sandbox runs before a conversation's first command."""
+        worktree = self.root / "worktrees" / "acme" / "web" / slug
+        # The session has already made its cwd by the time this runs.
+        worktree.mkdir(parents=True, exist_ok=True)
+        command = github_project._checkout_command(
+            url=str(self.origin),
+            clone_dir=str(self.clone),
+            ref=ref,
+            worktree=str(worktree),
+            slug=slug,
+        )
+        done = subprocess.run(
+            ["sh", "-c", command], env=self.env, capture_output=True, text=True
+        )
+        return done.returncode, worktree
+
+
+@pytest.fixture
+def git(tmp_path: Path) -> _Git:
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    return _Git(tmp_path)
+
+
+def test_two_conversations_never_share_a_working_tree(git: _Git) -> None:
+    first_code, first = git.step("one")
+    second_code, second = git.step("two")
+
+    assert (first_code, second_code) == (0, 0)
+    assert git.run("-C", str(first), "branch", "--show-current") == "lemma/one"
+    assert git.run("-C", str(second), "branch", "--show-current") == "lemma/two"
+    (first / "draft.txt").write_text("unsaved")
+    assert git.run("-C", str(second), "status", "--porcelain") == ""
+    # One clone behind both, and nobody works in it.
+    assert git.run("-C", str(git.clone), "status", "--porcelain") == ""
+
+
+def test_a_new_conversation_starts_from_where_origin_is_now(git: _Git) -> None:
+    git.step("one")
+    latest = git.push_commit("second")
+
+    code, worktree = git.step("two")
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == latest
+
+
+def test_a_conversation_on_a_ref_starts_from_that_branch(git: _Git) -> None:
+    code, worktree = git.step("one", ref="release")
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == git.run(
+        "-C", str(git.clone), "rev-parse", "origin/release"
+    )
+
+
+def test_a_lost_worktree_comes_back_on_its_branch_with_its_commits(
+    git: _Git,
+) -> None:
+    _, worktree = git.step("one")
+    git.run("-C", str(worktree), "commit", "-q", "--allow-empty", "-m", "mine")
+    mine = git.run("-C", str(worktree), "rev-parse", "HEAD")
+    shutil.rmtree(worktree)
+
+    code, worktree = git.step("one")
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == mine
+
+
+def test_an_unreachable_origin_still_leaves_a_worktree_and_says_fetch_failed(
+    git: _Git,
+) -> None:
+    git.step("one")
+    git.origin.rename(git.root / "gone.git")
+
+    code, worktree = git.step("two")
+
+    assert code == github_project._FETCH_FAILED_EXIT
+    assert git.run("-C", str(worktree), "branch", "--show-current") == "lemma/two"

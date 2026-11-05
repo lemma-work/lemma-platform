@@ -221,8 +221,8 @@ async def installation_repository(
 
     Returned with GitHub's own spelling: a renamed repository answers under
     its new name, and ``Acme/Web`` comes back as ``acme/web``, so two
-    conversations naming one repository two ways share one checkout rather
-    than cloning it twice.
+    conversations naming one repository two ways share one clone rather than
+    cloning it twice.
 
     Raises the refusals in ``domain/github_installation_errors``.
     """

@@ -271,7 +271,7 @@ def test_parse_project_repo_normalizes_a_pasted_repo_name():
 
     assert repo == ProjectRepo(owner="acme", repo="web", ref="main")
     assert repo.full_name == "acme/web"
-    assert repo.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
+    assert repo.clone_dir == f"{WORKSPACE_ROOT}/repos/acme/web"
 
 
 @pytest.mark.parametrize(
@@ -311,20 +311,36 @@ def test_a_project_never_names_the_account_it_clones_as():
     assert repo.to_json() == {"owner": "acme", "repo": "web"}
 
 
-def test_repo_metadata_derives_the_working_directory():
+def test_an_unstamped_repo_conversation_gets_a_worktree_keyed_by_its_id():
+    """A run a webhook started is created without `apply_location`, so every
+    read has to agree on its worktree until its first run writes it down."""
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
         repo=ProjectRepo(owner="acme", repo="web", ref="main"),
     )
+    slug = conversation.id.hex[:8]
 
     location = resolve_workspace_location(conversation)
 
-    assert location.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
+    assert location.cwd == f"{WORKSPACE_ROOT}/worktrees/acme/web/{slug}"
+    assert resolve_workspace_location(conversation).cwd == location.cwd
     assert location.repo is not None
     assert location.repo.ref == "main"
     # Both filesystems still line up, exactly as they do for a scratchpad.
-    assert resolve_pod_cwd(conversation) == "/me/repos/acme/web"
+    assert resolve_pod_cwd(conversation) == f"/me/worktrees/acme/web/{slug}"
+
+
+def test_a_worktree_is_told_apart_from_the_clone_and_from_anything_else():
+    repo = ProjectRepo(owner="acme", repo="web")
+
+    assert repo.worktree_slug(repo.worktree_dir("ab12cd34")) == "ab12cd34"
+    # A conversation from before worktrees works in the clone itself.
+    assert repo.worktree_slug(repo.clone_dir) is None
+    assert repo.worktree_slug(f"{WORKSPACE_ROOT}/worktrees/acme/api/ab12cd34") is None
+    # The slug is a branch name too, so nothing that needs quoting is one.
+    assert repo.worktree_slug(f"{WORKSPACE_ROOT}/worktrees/acme/web/a b") is None
+    assert repo.worktree_slug(f"{WORKSPACE_ROOT}/worktrees/acme/web/x/y") is None
 
 
 def test_an_explicit_cwd_still_wins_over_the_repo_directory():
@@ -342,15 +358,19 @@ def test_an_explicit_cwd_still_wins_over_the_repo_directory():
     assert location.repo is not None
 
 
-async def test_creating_against_a_repo_stamps_its_directory():
-    conversation = Conversation(
-        pod_id=uuid4(), user_id=uuid4(), repo=ProjectRepo(owner="acme", repo="web")
-    )
+async def test_each_conversation_in_a_repo_gets_a_worktree_of_its_own():
+    repo = ProjectRepo(owner="acme", repo="web")
+    first = Conversation(pod_id=uuid4(), user_id=uuid4(), repo=repo)
+    second = Conversation(pod_id=first.pod_id, user_id=first.user_id, repo=repo)
     service = _service({})
 
-    await service._apply_inherited_cwd(conversation, parent_id=None)
+    await service._apply_inherited_cwd(first, parent_id=None)
+    await service._apply_inherited_cwd(second, parent_id=None)
 
-    assert conversation.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
+    assert first.cwd is not None and second.cwd is not None
+    assert repo.worktree_slug(first.cwd) is not None
+    assert repo.worktree_slug(second.cwd) is not None
+    assert first.cwd != second.cwd
 
 
 async def test_a_root_conversation_gets_a_scratchpad_of_its_own():
@@ -378,6 +398,9 @@ async def test_a_subagent_inherits_the_parent_project():
     await service._apply_inherited_cwd(child, parent_id=parent.id)
 
     child_location = resolve_workspace_location(child)
-    assert child_location.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
+    # The parent's own worktree, so a sub-agent works on the parent's branch.
+    assert child_location.cwd == parent.cwd
+    assert parent.repo is not None and parent.cwd is not None
+    assert parent.repo.worktree_slug(parent.cwd) is not None
     assert child_location.repo == resolve_workspace_location(parent).repo
     assert child.repo == parent.repo

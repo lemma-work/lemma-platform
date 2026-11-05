@@ -30,7 +30,7 @@ from sandbox_runtime.paths import WORKSPACE_ROOT
 pytestmark = [pytest.mark.e2e]
 
 _WEB = ProjectRepo(owner="acme", repo="web")
-_CHECKOUT = f"{WORKSPACE_ROOT}/repos/acme/web"
+_WORKTREES = f"{WORKSPACE_ROOT}/worktrees/acme/web/"
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ async def _conversation_count(client, pod_id: str) -> int:
 
 
 @pytest.mark.asyncio
-async def test_a_conversation_opened_in_a_repository_works_in_its_checkout(
+async def test_a_conversation_opened_in_a_repository_works_in_a_worktree_of_it(
     authenticated_client, fixed_test_org, github
 ):
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
@@ -70,10 +70,11 @@ async def test_a_conversation_opened_in_a_repository_works_in_its_checkout(
 
     assert created.status_code == 201, created.text
     body = created.json()
-    # Stored as the installation spells it, so the directory is the one
-    # checkout every spelling of this repository shares.
-    assert body["workspace_cwd"] == _CHECKOUT
-    assert body["pod_cwd"] == "/me/repos/acme/web"
+    # Stored as the installation spells it, so every spelling of this
+    # repository makes its worktrees from the one clone.
+    assert body["workspace_cwd"].startswith(_WORKTREES)
+    assert _WEB.worktree_slug(body["workspace_cwd"]) is not None
+    assert body["pod_cwd"] == body["workspace_cwd"].replace(WORKSPACE_ROOT, "/me")
     assert body["metadata"]["repo"] == {"owner": "acme", "repo": "web"}
     assert await _stored_repo(body["id"]) == _WEB
     assert github.asked == ["Acme/Web"]
@@ -97,11 +98,11 @@ async def test_a_conversation_without_a_repository_gets_a_directory_of_its_own(
 
 
 @pytest.mark.asyncio
-async def test_two_conversations_in_one_repository_share_its_checkout(
+async def test_two_conversations_in_one_repository_get_worktrees_of_their_own(
     authenticated_client, fixed_test_org, github
 ):
-    """The accepted hazard, said rather than hidden: one sandbox per person
-    means one checkout per repository, and both conversations work in it."""
+    """One clone per repository, and a worktree each: neither conversation
+    works in the other's tree."""
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
 
     first = await _open(authenticated_client, pod_id, repository="acme/web")
@@ -109,7 +110,12 @@ async def test_two_conversations_in_one_repository_share_its_checkout(
 
     assert first.status_code == second.status_code == 201
     assert first.json()["id"] != second.json()["id"]
-    assert first.json()["workspace_cwd"] == second.json()["workspace_cwd"] == _CHECKOUT
+    first_cwd, second_cwd = (
+        first.json()["workspace_cwd"],
+        second.json()["workspace_cwd"],
+    )
+    assert first_cwd.startswith(_WORKTREES) and second_cwd.startswith(_WORKTREES)
+    assert first_cwd != second_cwd
 
 
 @pytest.mark.asyncio
@@ -178,7 +184,6 @@ async def test_the_picker_lists_what_opening_accepts(
             "name": "web",
             "private": True,
             "default_branch": None,
-            "workspace_cwd": _CHECKOUT,
         }
     ]
 

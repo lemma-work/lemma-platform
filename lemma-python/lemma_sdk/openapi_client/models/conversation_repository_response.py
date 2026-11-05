@@ -19,8 +19,6 @@ class ConversationRepositoryResponse:
         full_name (str): 'owner/name', the value create takes.
         name (str):
         owner (str):
-        workspace_cwd (str): The checkout a conversation opened in it works in. Shared by every conversation of yours in
-            this repository.
         default_branch (None | str | Unset):
         private (bool | Unset):  Default: False.
     """
@@ -28,7 +26,6 @@ class ConversationRepositoryResponse:
     full_name: str
     name: str
     owner: str
-    workspace_cwd: str
     default_branch: None | str | Unset = UNSET
     private: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -39,8 +36,6 @@ class ConversationRepositoryResponse:
         name = self.name
 
         owner = self.owner
-
-        workspace_cwd = self.workspace_cwd
 
         default_branch: None | str | Unset
         if isinstance(self.default_branch, Unset):
@@ -57,7 +52,6 @@ class ConversationRepositoryResponse:
                 "full_name": full_name,
                 "name": name,
                 "owner": owner,
-                "workspace_cwd": workspace_cwd,
             }
         )
         if default_branch is not UNSET:
@@ -76,8 +70,6 @@ class ConversationRepositoryResponse:
 
         owner = d.pop("owner")
 
-        workspace_cwd = d.pop("workspace_cwd")
-
         def _parse_default_branch(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -93,7 +85,6 @@ class ConversationRepositoryResponse:
             full_name=full_name,
             name=name,
             owner=owner,
-            workspace_cwd=workspace_cwd,
             default_branch=default_branch,
             private=private,
         )

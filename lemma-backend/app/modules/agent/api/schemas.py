@@ -396,10 +396,10 @@ class CreateConversationRequest(BaseModel):
             "A GitHub repository to work in, as 'owner/name': one the "
             "organization's GitHub installation covers for you, as listed by "
             "the conversation repositories endpoint. The conversation's "
-            "workspace_cwd is then that repository's checkout, cloned or "
-            "fetched before the agent's first command. Every conversation of "
-            "yours in the same repository works in that one checkout, "
-            "uncommitted changes included."
+            "workspace_cwd is then a git worktree of it on a branch of its own "
+            "(lemma/<slug>), made before the agent's first command from one "
+            "clone of the repository, which is fetched first. Other "
+            "conversations in the repository get worktrees of their own."
         ),
     )
 
@@ -422,12 +422,6 @@ class ConversationRepositoryResponse(BaseModel):
     name: str
     private: bool = False
     default_branch: str | None = None
-    workspace_cwd: str = Field(
-        description=(
-            "The checkout a conversation opened in it works in. Shared by every "
-            "conversation of yours in this repository."
-        )
-    )
 
     @classmethod
     def of(cls, choice: RepositoryChoice) -> ConversationRepositoryResponse:
@@ -437,7 +431,6 @@ class ConversationRepositoryResponse(BaseModel):
             name=choice.repo.repo,
             private=choice.private,
             default_branch=choice.default_branch,
-            workspace_cwd=choice.repo.cwd,
         )
 
 

@@ -101,7 +101,7 @@ async def test_a_covered_repository_is_kept_as_github_names_it():
         )
 
     assert checked == ProjectRepo(owner="acme", repo="web", ref="release/2.0")
-    assert checked.cwd.endswith("/repos/acme/web")
+    assert checked.clone_dir.endswith("/repos/acme/web")
 
 
 @pytest.mark.asyncio

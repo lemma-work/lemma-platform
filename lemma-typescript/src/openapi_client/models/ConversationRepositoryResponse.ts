@@ -14,8 +14,4 @@ export type ConversationRepositoryResponse = {
     name: string;
     owner: string;
     private?: boolean;
-    /**
-     * The checkout a conversation opened in it works in. Shared by every conversation of yours in this repository.
-     */
-    workspace_cwd: string;
 };

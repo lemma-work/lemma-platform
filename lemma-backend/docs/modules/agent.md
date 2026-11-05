@@ -182,7 +182,8 @@ already holds is stored under a new one, its return following it
 (`RunMessageWriter._unique_call_id`).
 
 Subagents are child conversations with inherited workspace context and reduced
-toolsets.
+toolsets. Widgets are tool outputs stored in conversation context and served
+through signed, purpose-bound embed access.
 
 ### A conversation in a GitHub repository
 
@@ -197,19 +198,24 @@ only where the App is installed), or the installation's selection lists it
 own code; GitHub not answering is a 503, never a pass, and a selection too long
 to walk is `GITHUB_REPOSITORY_UNCHECKED`, not "not installed". The listing
 shows at most a picker's worth and says `complete: false` past it.
-The repository is stored as GitHub spells it, which sets the conversation's
-directory to its checkout, `/workspace/repos/{owner}/{repo}`
-(`domain/workspace_location`). Before the agent's first shell or Python call
-the sandbox clones it there with the person's token, or fetches it if it is
-already there (`tools/workspace_cli/github_project`); a fetch that fails leaves
-the checkout as it was and tells the agent once that `origin/*` may be behind.
+The repository is stored as GitHub spells it, and the conversation's directory
+is a worktree of it of its own, `/workspace/worktrees/{owner}/{repo}/{slug}` on
+branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
+sub-agent inherits its parent's worktree; a run a webhook started, which is not
+stamped at creation, gets one keyed by its conversation id.
 
-One sandbox per person means one checkout per repository: every conversation
-of theirs in it works in the same tree, uncommitted changes included. That is
-accepted, and said rather than hidden -- in the API's field description, in
-`workspace_cwd`, and in the agent's prompt, which tells it to check
-`git status` and work on a branch of its own. Widgets are tool outputs stored in conversation context and served
-through signed, purpose-bound embed access.
+Before the agent's first shell or Python call, the sandbox clones the
+repository once per person, at `/workspace/repos/{owner}/{repo}`, with the
+person's token -- or fetches it if it is already there -- and then adds this
+conversation's worktree from `origin/<ref>` or `origin/HEAD`
+(`tools/workspace_cli/github_project`). A worktree whose directory was lost is
+made again on its surviving branch. A failed clone, a failed worktree and a
+failed fetch each tell the agent once.
+
+So the clone's objects and `origin/*` are shared, and nothing else is: no
+conversation works in another's tree or on another's branch. Conversations from
+before worktrees recorded the clone itself as their directory and keep working
+there, with the old prompt that tells them it is shared.
 
 ## Prompt context
 
