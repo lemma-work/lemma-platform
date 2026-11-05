@@ -76,8 +76,10 @@ def _project_repo(
 ) -> ProjectRepo | None:
     """GitHub's name held to the rules a directory and a clone URL need.
 
-    GitHub's own naming rules are narrower than these, so this only ever
-    drops something GitHub would not have produced.
+    ``None`` is not GitHub misbehaving: GitHub allows a few names a checkout
+    directory cannot take -- ``.github``, whose leading dot pod files reserve
+    for hidden entries. The picker leaves those out; ``checked`` refuses them
+    by name.
     """
     return parse_project_repo({"owner": found.owner, "repo": found.name, "ref": ref})
 
