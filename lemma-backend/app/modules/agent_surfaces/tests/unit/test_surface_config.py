@@ -71,11 +71,6 @@ EXPECTED = [
         False,
     ),
     (
-        "surface_outsider_turns_per_person_per_10_minutes",
-        "SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES",
-        10,
-    ),
-    (
         "surface_outsider_turns_per_group_per_day",
         "SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY",
         200,

@@ -20,7 +20,7 @@ Pushes to members never come here: they go to members, never to contacts.
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -146,9 +146,8 @@ def decide(
 
 
 def _latest(handles: Sequence[ContactHandle]) -> ContactHandle:
-    return max(
-        handles,
-        key=lambda handle: (
-            handle.last_inbound_at or datetime.min.replace(tzinfo=timezone.utc)
-        ),
-    )
+    """The handle a place that names none is written to: the one last vouched
+    for. Every place a contact was heard at names its own address, so this
+    is only a place that never has; when they last wrote is the place's
+    (``channel_sources.last_inbound_at``), not a handle's."""
+    return max(handles, key=lambda handle: handle.verified_at)

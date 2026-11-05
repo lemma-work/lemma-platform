@@ -215,9 +215,8 @@ async def heard_from(
     """
     if not typed:
         return False
-    await ContactRepository(uow.session).note_inbound(
-        pod_id=pod_id, kind=kind, value=value
-    )
+    # When they last wrote is the place's (``channel_sources.last_inbound_at``,
+    # written by the line they were heard saying), not the handle's.
     lifted = await SuppressionRepository(uow.session).lift(
         pod_id=pod_id, kind=kind, value=value
     )

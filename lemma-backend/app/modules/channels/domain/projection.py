@@ -20,11 +20,18 @@ Whether a member's answer is kept to them is the group's choice
 (``channels.answers_shared``): asked in front of the group, it is the
 group's to read -- posted shared (``shared_when_posted``) -- unless the group
 keeps answers to whoever asked until they share them.
+
+Who is **outside the pod** is decided here too (``is_outside``), for every
+reader that marks a line as somebody else's words: the background a run is
+given, ``channel_read`` and ``channel_search``, a group's roster, and so the
+authorizer's ask-before-acting (``core.authorization.outside_text``), which
+reads those marks. Marked one way in the background and another by a read,
+the same line asked the member first in one turn and not in the next.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Collection, Hashable, Iterable
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -59,6 +66,29 @@ class Reader(BaseModel):
     @property
     def is_member(self) -> bool:
         return self.contact_id is None
+
+
+def is_outside(sender: Sender, *, held: Collection[UUID] | None) -> bool:
+    """Whether somebody outside the pod said this: anybody but an agent whom
+    the pod does not hold now -- a contact, and a member since gone, whose
+    words are no longer a colleague's. ``held`` is who of the speakers the pod
+    holds, read as the line is read; ``None`` where that could not be read
+    (``not_held``)."""
+    if sender.kind is SenderKind.AGENT:
+        return False
+    return not_held(sender.user_id, held=held)
+
+
+def not_held(person: Hashable | None, *, held: Collection[Hashable] | None) -> bool:
+    """The rule under ``is_outside``, for a person known only by an id the
+    pod was asked about -- a platform's own, where its history is read live.
+
+    Anybody whose id the pod does not hold, and everybody where the pod's
+    answer could not be read (``held`` is ``None``): a stranger left unmarked
+    is the mistake that costs; a colleague marked only asks the member before
+    the run acts.
+    """
+    return held is None or person is None or person not in held
 
 
 def may_read(reader: Reader, message: ChannelMessage) -> bool:
