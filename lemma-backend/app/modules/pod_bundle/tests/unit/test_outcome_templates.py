@@ -42,6 +42,27 @@ def test_bars_hold_every_week_and_finish_lines_wait_for_a_date():
         assert card.plan.how and card.plan.never, card.id
 
 
+#: The kinds of work a shelf groups Lemmas by. A template outside them would
+#: sit on a shelf under a heading nobody wrote.
+FUNCTIONS = {"support", "sales", "engineering", "marketing", "ops"}
+
+
+def test_every_template_says_what_kind_of_work_it_does():
+    for card in shipped_cards():
+        assert card.function in FUNCTIONS, card.id
+
+
+def test_every_template_brings_a_set_up_skill_for_its_first_chat():
+    """The first message tells the agent to follow its set-up skill, so a
+    template without one would start a Lemma that cannot do what it is told."""
+    for card in shipped_cards():
+        skill = TEMPLATES_ROOT / card.id / "files" / "skills" / "set-up" / "SKILL.md"
+        text = skill.read_text()
+        assert text.startswith("---\nname: set-up\ndescription: "), card.id
+        for table in _tables_brought(card.id):
+            assert f"`{table}`" in text, (card.id, table)
+
+
 def test_every_measure_is_one_read_only_query_over_the_tables_it_brings():
     """Checked here because starting a Lemma keeps a template's measure without
     reading it: the tables it counts do not exist until the template is in."""

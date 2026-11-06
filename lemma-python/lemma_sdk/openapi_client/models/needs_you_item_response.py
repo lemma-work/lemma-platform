@@ -21,21 +21,26 @@ class NeedsYouItemResponse:
 
     Exactly one of ``conversation_id``, ``workflow_run_id`` and ``channel_id``
     is set, by kind: a conversation for QUESTION, APPROVAL and PERMISSION; a
-    workflow run for FORM and DECISION; a contact's channel for CONTACT.
+    workflow run for FORM and DECISION; a contact's channel for CONTACT; the
+    member's own line for MESSAGE, with the line in ``message_id``.
 
         Attributes:
-            key (str): Stable across reads: `conversation:<id>`, `wait:<id>` or `contact:<channel id>`.
+            key (str): Stable across reads: `conversation:<id>`, `wait:<id>`, `contact:<channel id>` or `message:<line id>`.
             kind (NeedsYouKind): What the member is asked for, and so where it is answered.
             pod_id (UUID):
             pod_name (str):
             since (datetime.datetime): When it started waiting.
             channel_id (None | Unset | UUID):
+            choices (list[str] | Unset): MESSAGE: the answers it offered, each sent as `{choice}`. An answer in words,
+                `{text}`, is always allowed too.
             conversation_id (None | Unset | UUID):
             detail (None | str | Unset): Where it is. The conversation's title when `title` is the question; the workflow's
                 name; or why the contact asked for a person.
+            message_id (None | Unset | UUID): MESSAGE: the line it was asked on. Answer it with `POST
+                /pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer`.
             title (None | str | Unset): What is asked. QUESTION/APPROVAL/PERMISSION: the question or what the agent wants to
                 do, else the conversation's title. FORM/DECISION: the decision's question or the form's title, else the
-                workflow's name. CONTACT: the contact's name.
+                workflow's name. CONTACT: the contact's name. MESSAGE: the first line of what the agent asked.
             tool_call_id (None | str | Unset): A conversation's pause, as the approval id its decision endpoint takes.
             workflow_run_id (None | Unset | UUID):
     """
@@ -46,8 +51,10 @@ class NeedsYouItemResponse:
     pod_name: str
     since: datetime.datetime
     channel_id: None | Unset | UUID = UNSET
+    choices: list[str] | Unset = UNSET
     conversation_id: None | Unset | UUID = UNSET
     detail: None | str | Unset = UNSET
+    message_id: None | Unset | UUID = UNSET
     title: None | str | Unset = UNSET
     tool_call_id: None | str | Unset = UNSET
     workflow_run_id: None | Unset | UUID = UNSET
@@ -72,6 +79,10 @@ class NeedsYouItemResponse:
         else:
             channel_id = self.channel_id
 
+        choices: list[str] | Unset = UNSET
+        if not isinstance(self.choices, Unset):
+            choices = self.choices
+
         conversation_id: None | str | Unset
         if isinstance(self.conversation_id, Unset):
             conversation_id = UNSET
@@ -85,6 +96,14 @@ class NeedsYouItemResponse:
             detail = UNSET
         else:
             detail = self.detail
+
+        message_id: None | str | Unset
+        if isinstance(self.message_id, Unset):
+            message_id = UNSET
+        elif isinstance(self.message_id, UUID):
+            message_id = str(self.message_id)
+        else:
+            message_id = self.message_id
 
         title: None | str | Unset
         if isinstance(self.title, Unset):
@@ -119,10 +138,14 @@ class NeedsYouItemResponse:
         )
         if channel_id is not UNSET:
             field_dict["channel_id"] = channel_id
+        if choices is not UNSET:
+            field_dict["choices"] = choices
         if conversation_id is not UNSET:
             field_dict["conversation_id"] = conversation_id
         if detail is not UNSET:
             field_dict["detail"] = detail
+        if message_id is not UNSET:
+            field_dict["message_id"] = message_id
         if title is not UNSET:
             field_dict["title"] = title
         if tool_call_id is not UNSET:
@@ -162,6 +185,8 @@ class NeedsYouItemResponse:
 
         channel_id = _parse_channel_id(d.pop("channel_id", UNSET))
 
+        choices = cast(list[str], d.pop("choices", UNSET))
+
         def _parse_conversation_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -187,6 +212,23 @@ class NeedsYouItemResponse:
             return cast(None | str | Unset, data)
 
         detail = _parse_detail(d.pop("detail", UNSET))
+
+        def _parse_message_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                message_id_type_0 = UUID(data)
+
+                return message_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        message_id = _parse_message_id(d.pop("message_id", UNSET))
 
         def _parse_title(data: object) -> None | str | Unset:
             if data is None:
@@ -230,8 +272,10 @@ class NeedsYouItemResponse:
             pod_name=pod_name,
             since=since,
             channel_id=channel_id,
+            choices=choices,
             conversation_id=conversation_id,
             detail=detail,
+            message_id=message_id,
             title=title,
             tool_call_id=tool_call_id,
             workflow_run_id=workflow_run_id,

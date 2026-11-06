@@ -23,13 +23,14 @@ class NeedsYouItemResponse(BaseSchema):
 
     Exactly one of ``conversation_id``, ``workflow_run_id`` and ``channel_id``
     is set, by kind: a conversation for QUESTION, APPROVAL and PERMISSION; a
-    workflow run for FORM and DECISION; a contact's channel for CONTACT.
+    workflow run for FORM and DECISION; a contact's channel for CONTACT; the
+    member's own line for MESSAGE, with the line in ``message_id``.
     """
 
     key: str = Field(
         description=(
-            "Stable across reads: `conversation:<id>`, `wait:<id>` or "
-            "`contact:<channel id>`."
+            "Stable across reads: `conversation:<id>`, `wait:<id>`, "
+            "`contact:<channel id>` or `message:<line id>`."
         )
     )
     kind: NeedsYouKind
@@ -41,7 +42,8 @@ class NeedsYouItemResponse(BaseSchema):
             "What is asked. QUESTION/APPROVAL/PERMISSION: the question or what "
             "the agent wants to do, else the conversation's title. FORM/"
             "DECISION: the decision's question or the form's title, else the "
-            "workflow's name. CONTACT: the contact's name."
+            "workflow's name. CONTACT: the contact's name. MESSAGE: the first "
+            "line of what the agent asked."
         ),
     )
     detail: str | None = Field(
@@ -62,6 +64,20 @@ class NeedsYouItemResponse(BaseSchema):
     )
     workflow_run_id: UUID | None = None
     channel_id: UUID | None = None
+    message_id: UUID | None = Field(
+        default=None,
+        description=(
+            "MESSAGE: the line it was asked on. Answer it with "
+            "`POST /pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer`."
+        ),
+    )
+    choices: list[str] = Field(
+        default_factory=list,
+        description=(
+            "MESSAGE: the answers it offered, each sent as `{choice}`. An "
+            "answer in words, `{text}`, is always allowed too."
+        ),
+    )
 
 
 class NeedsYouResponse(BaseSchema):

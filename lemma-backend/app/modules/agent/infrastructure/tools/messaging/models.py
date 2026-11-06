@@ -49,6 +49,16 @@ class ChannelPostRequest(BaseModel):
             "you asked has answered."
         ),
     )
+    choices: list[str] | None = Field(
+        default=None,
+        min_length=2,
+        max_length=4,
+        description=(
+            "Only with `wants_answer`: two to four short answers they can pick "
+            "with one tap, like 'Send it' and 'Not mine'. They can always "
+            "answer in their own words instead."
+        ),
+    )
 
 
 class ChannelPostResponse(BaseToolResponse):

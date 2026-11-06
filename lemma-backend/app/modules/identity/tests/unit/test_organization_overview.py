@@ -19,11 +19,16 @@ from app.modules.agent.contracts.conversation_summaries import (
     PendingInteractionKind,
     PodPendingInteraction,
 )
+from app.modules.channels.contracts.asked_in_a_line import (
+    AskedInALine,
+    offered_choices,
+)
 from app.modules.channels.contracts.contacts_waiting import ContactWaiting
 from app.modules.identity.domain.time_zones import known_zone, last_days
 from app.modules.identity.services.organization_needs_you import (
     NeedsYouKind,
     contact_items,
+    line_items,
     oldest_first,
     pause_items,
     wait_items,
@@ -155,6 +160,54 @@ def test_a_contact_is_named_and_opens_its_channel():
         "Wants a refund",
     )
     assert item.channel_id == channel and item.key == f"contact:{channel}"
+
+
+def _asked(prompt: str | None, choices: tuple[str, ...] = ()) -> AskedInALine:
+    return AskedInALine(
+        pod_id=POD,
+        channel_id=uuid4(),
+        message_id=uuid4(),
+        prompt=prompt,
+        choices=choices,
+        since=NOW,
+    )
+
+
+def test_a_line_question_opens_its_line_and_offers_its_choices():
+    asked = _asked(
+        "Jonas has waited 21 hours.\n\nA draft: ...", ("Send it", "Not mine")
+    )
+    [item] = line_items([asked], NAMES)
+    assert (item.kind, item.title, item.pod_name) == (
+        NeedsYouKind.MESSAGE,
+        "Jonas has waited 21 hours.",
+        "Support",
+    )
+    assert (item.channel_id, item.message_id) == (asked.channel_id, asked.message_id)
+    assert item.key == f"message:{asked.message_id}"
+    assert item.choices == ("Send it", "Not mine")
+
+
+def test_a_long_line_question_is_cut_to_one_line_of_a_list():
+    [item] = line_items([_asked("word " * 100)], NAMES)
+    assert item.title is not None and len(item.title) <= 160
+    assert item.title.endswith("…")
+    [empty] = line_items([_asked(None)], NAMES)
+    assert empty.title is None
+
+
+def test_choices_are_read_from_the_shape_ask_user_keeps_them_in():
+    asked = {
+        "questions": [
+            {
+                "question": "Send?",
+                "options": [{"label": "Yes"}, {"label": " "}, {"x": 1}],
+            }
+        ]
+    }
+    assert offered_choices(asked) == ("Yes",)
+    assert offered_choices({"prompt": "Anything?"}) == ()
+    assert offered_choices({"questions": "not a list"}) == ()
 
 
 def test_the_list_is_the_oldest_first_and_stable_on_a_tie():

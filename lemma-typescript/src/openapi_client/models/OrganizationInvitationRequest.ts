@@ -8,6 +8,10 @@ import type { OrganizationRole } from './OrganizationRole.js';
  */
 export type OrganizationInvitationRequest = {
     email: string;
+    /**
+     * A few words from the inviter, quoted in the invitation email: why they are being asked in. Sent once, with the email, and not kept.
+     */
+    note?: (string | null);
     pod_id?: (string | null);
     pod_role?: (string | null);
     redirect_uri?: (string | null);

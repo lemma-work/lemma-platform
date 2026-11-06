@@ -20,6 +20,8 @@ class OrganizationInvitationRequest:
     Attributes:
         email (str):
         role (OrganizationRole): Roles for organization membership.
+        note (None | str | Unset): A few words from the inviter, quoted in the invitation email: why they are being
+            asked in. Sent once, with the email, and not kept.
         pod_id (None | Unset | UUID):
         pod_role (None | str | Unset):
         redirect_uri (None | str | Unset):
@@ -27,6 +29,7 @@ class OrganizationInvitationRequest:
 
     email: str
     role: OrganizationRole
+    note: None | str | Unset = UNSET
     pod_id: None | Unset | UUID = UNSET
     pod_role: None | str | Unset = UNSET
     redirect_uri: None | str | Unset = UNSET
@@ -36,6 +39,12 @@ class OrganizationInvitationRequest:
         email = self.email
 
         role = self.role.value
+
+        note: None | str | Unset
+        if isinstance(self.note, Unset):
+            note = UNSET
+        else:
+            note = self.note
 
         pod_id: None | str | Unset
         if isinstance(self.pod_id, Unset):
@@ -65,6 +74,8 @@ class OrganizationInvitationRequest:
                 "role": role,
             }
         )
+        if note is not UNSET:
+            field_dict["note"] = note
         if pod_id is not UNSET:
             field_dict["pod_id"] = pod_id
         if pod_role is not UNSET:
@@ -80,6 +91,15 @@ class OrganizationInvitationRequest:
         email = d.pop("email")
 
         role = OrganizationRole(d.pop("role"))
+
+        def _parse_note(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        note = _parse_note(d.pop("note", UNSET))
 
         def _parse_pod_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -119,6 +139,7 @@ class OrganizationInvitationRequest:
         organization_invitation_request = cls(
             email=email,
             role=role,
+            note=note,
             pod_id=pod_id,
             pod_role=pod_role,
             redirect_uri=redirect_uri,

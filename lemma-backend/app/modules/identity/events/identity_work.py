@@ -106,6 +106,7 @@ async def send_identity_email(
             accept_url=invited.accept_url,
             pod_name=invited.pod_name,
             pod_description=invited.pod_description,
+            note=invited.note,
         )
         return
     if event_type == UserSignedUpEvent.get_event_type():

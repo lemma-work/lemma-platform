@@ -129,9 +129,19 @@ again of everything when it writes.
 
 A template is a bundle under `templates/<name>/` whose `pod.json` also says
 what a Lemma made from it owns (`outcome`, with a measure over the tables it
-brings) and how to show it (`lemma`: face, place, what it brings, the first
-lines of its plan). An import with `kind=TEMPLATE` packs and stages it like an
-upload; `GET /pods/bundle/templates` lists the cards.
+brings) and how to show it (`lemma`: the kind of work it does as a shelf groups
+it -- `function`: support, sales, engineering, marketing or ops -- its face,
+place, what it brings, the first lines of its plan). An import with
+`kind=TEMPLATE` packs and stages it like an upload; `GET /pods/bundle/templates`
+lists the cards.
+
+Every template also brings a `set-up` skill, and a Lemma started from one is
+asked in its first message to follow it: where the work happens, connect it,
+fill the template's tables from what is already there (each item judged with a
+closed question through `lemma decisions run`, so an inbox's receipts and
+newsletters stay out of the number), keep them filling with an automation on
+the service's own trigger, show the weeks it read, and ask for the bar. A
+template whose tables ship with rows (Launch, Audit) starts from those instead.
 
 `POST /pods/start` (`application/start_use_cases.py`) writes a Lemma in one
 transaction: the pod (under a free name), what it owns, a first `/plan.md`, and

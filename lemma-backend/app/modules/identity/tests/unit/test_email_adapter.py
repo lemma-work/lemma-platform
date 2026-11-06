@@ -64,9 +64,10 @@ async def test_pod_invitation_email_uses_pod_layout(monkeypatch):
 
     html = sent["html_content"]
     assert result is True
-    assert sent["subject"] == "Invitation to join pod Acme Support AI"
-    assert "Pod invitation" in html
-    assert "Use Acme Support AI." in html
+    assert sent["subject"] == "Invitation to join Acme Support AI"
+    assert "Work with Acme Support AI." in html
+    assert "a Lemma at Acme" in html
+    assert "pod" not in sent["subject"].lower() and "Pod invitation" not in html
     assert "lemma" in html.lower()
     assert "Open Acme Support AI" in html
     assert "Ask product questions" in html
@@ -94,12 +95,50 @@ async def test_pod_invitation_humanizes_partially_formatted_stored_name(monkeypa
         pod_name="Email-test_pod Pod",
     )
 
-    assert sent["subject"] == "Invitation to join pod Email Test Pod"
-    assert "Use Email Test Pod." in sent["html_content"]
+    assert sent["subject"] == "Invitation to join Email Test Pod"
+    assert "Work with Email Test Pod." in sent["html_content"]
     assert "Open Email Test Pod" in sent["html_content"]
     assert "Email-test_pod" not in sent["html_content"]
     assert "Email-test_pod" not in sent["text_content"]
     assert "Pod Pod" not in sent["html_content"]
+
+
+@pytest.mark.asyncio
+async def test_an_invitation_quotes_the_inviters_note_and_escapes_it(monkeypatch):
+    adapter = SmtpIdentityEmailAdapter()
+    sent: dict[str, str] = {}
+
+    async def capture_send(**kwargs):
+        sent.update(kwargs)
+        return True
+
+    monkeypatch.setattr(adapter, "_send", capture_send)
+
+    await adapter.send_invitation_email(
+        to_email="dev@example.com",
+        organization_name="Acme",
+        inviter_email="ada@example.com",
+        role=OrganizationRole.ORG_MEMBER,
+        accept_url="https://lemma.work/invitations/test/accept",
+        pod_name="Support",
+        note="You answered most of these <b>customers</b>.",
+    )
+
+    html, text = sent["html_content"], sent["text_content"]
+    assert "You answered most of these" in text
+    assert "&lt;b&gt;customers&lt;/b&gt;" in html and "<b>customers</b>" not in html
+
+    sent.clear()
+    await adapter.send_invitation_email(
+        to_email="dev@example.com",
+        organization_name="Acme",
+        inviter_email="ada@example.com",
+        role=OrganizationRole.ORG_MEMBER,
+        accept_url="https://lemma.work/invitations/test/accept",
+        pod_name="Support",
+        note="   ",
+    )
+    assert "wrote:" not in sent["text_content"]
 
 
 @pytest.mark.asyncio
