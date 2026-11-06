@@ -150,6 +150,30 @@ class ConversationStateError(AgentModuleError):
         super().__init__(message, code="CONVERSATION_STATE_ERROR", status_code=409)
 
 
+class ProjectRepositoryUnavailableError(AgentModuleError):
+    """The pod's GitHub connector cannot give this person's sandbox a checkout.
+
+    Carries the connector's own refusal -- its code, status and connect link --
+    so a client renders the same remedy it would anywhere else: connect your
+    account, reconnect it, ask an owner to allow sandbox use.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        code: str,
+        status_code: int,
+        connect_url: str | None = None,
+    ):
+        super().__init__(
+            f"A conversation cannot be opened in a GitHub repository here: {reason}",
+            code=code,
+            status_code=status_code,
+        )
+        self.details = {"connect_url": connect_url} if connect_url else None
+
+
 class UnknownApprovalError(AgentModuleError):
     """No pending approval and no recorded decision for this approval id.
 

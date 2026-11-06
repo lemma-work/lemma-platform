@@ -23,6 +23,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/askable-pods` | `agent.askable_pod.list` | List Pods This Pod Can Ask |
 | GET | `/pods/{pod_id}/conversations` | `agent.conversation.list` | List Pod Agent Conversations |
 | GET | `/pods/{pod_id}/conversations/pending-interactions` | `agent.conversation.pending_interaction.list` | List Interactions Waiting On You |
+| GET | `/pods/{pod_id}/conversations/repositories` | `agent.conversation.repository.list` | List Repositories A Conversation Can Open In |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.get` | Get Pod Conversation |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |

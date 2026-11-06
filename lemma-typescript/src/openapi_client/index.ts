@@ -139,6 +139,8 @@ export type { ContactsCapUpdate } from './models/ContactsCapUpdate.js';
 export { ContactStatus } from './models/ContactStatus.js';
 export type { ContactUpdateRequest } from './models/ContactUpdateRequest.js';
 export type { ConversationListResponse } from './models/ConversationListResponse.js';
+export type { ConversationRepositoryListResponse } from './models/ConversationRepositoryListResponse.js';
+export type { ConversationRepositoryResponse } from './models/ConversationRepositoryResponse.js';
 export type { ConversationResponse } from './models/ConversationResponse.js';
 export { ConversationStatus } from './models/ConversationStatus.js';
 export { ConversationType } from './models/ConversationType.js';

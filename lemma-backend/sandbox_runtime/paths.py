@@ -88,11 +88,6 @@ RUNS_ROOT = f"{WORKSPACE_ROOT}/runs"
 #: lifetime cap and restarted when the machine resumes.
 SERVICES_ROOT = f"{WORKSPACE_ROOT}/services"
 
-#: Bare mirrors of repositories, fetched rather than re-cloned; checkouts are
-#: worktrees of these (``~/lemma/repos/<owner>/<repo>`` for the shared one,
-#: a run's own under its run directory).
-MIRRORS_ROOT = f"{HOME_ROOT}/.lemma/mirrors"
-
 #: What a person or agent may never delete, move or overwrite through any API,
 #: reset scope (except a confirmed `home`), the disk janitor or quiesce: the
 #: browser's profile, which is where every login lives. A login lost here is a
@@ -246,7 +241,6 @@ __all__ = [
     "BROWSER_PROFILE_ROOT",
     "CACHE_PATHS",
     "HOME_ROOT",
-    "MIRRORS_ROOT",
     "PROTECTED_PATHS",
     "RUNS_ROOT",
     "SERVICES_ROOT",
