@@ -190,6 +190,8 @@ _NAME_TO_MODULE = {
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
     'ConversationListResponse': 'conversation_list_response',
+    'ConversationRepositoryListResponse': 'conversation_repository_list_response',
+    'ConversationRepositoryResponse': 'conversation_repository_response',
     'ConversationResponse': 'conversation_response',
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
@@ -1022,6 +1024,8 @@ if TYPE_CHECKING:
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
     from .conversation_list_response import ConversationListResponse
+    from .conversation_repository_list_response import ConversationRepositoryListResponse
+    from .conversation_repository_response import ConversationRepositoryResponse
     from .conversation_response import ConversationResponse
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
@@ -1867,6 +1871,8 @@ __all__ = [
     'ContactsCapResponse',
     'ContactsCapUpdate',
     'ConversationListResponse',
+    'ConversationRepositoryListResponse',
+    'ConversationRepositoryResponse',
     'ConversationResponse',
     'ConversationResponseMetadataType0',
     'ConversationStatus',
