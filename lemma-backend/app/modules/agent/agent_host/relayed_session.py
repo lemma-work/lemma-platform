@@ -189,6 +189,7 @@ async def load_relayed_session(
     """
     # Imported here: the run session's graph (history, briefs) has no place
     # in the startup imports of the API process that serves the host link.
+    from app.modules.agent.services.run_origin import run_started_in_lemma
     from app.modules.agent.services.run_session import RunSession
     from app.modules.agent.services.surface_context import conversation_surface
 
@@ -229,6 +230,10 @@ async def load_relayed_session(
             else None
         )
         surface = await conversation_surface(uow, conversation.id)
+        # Relayed calls act as the conversation's person (``relayed_context``).
+        in_lemma = await run_started_in_lemma(
+            uow, conversation, conversation.user_id, run=run
+        )
     # Outside the unit of work: these open their own, or reach Redis, and
     # holding this one across them would pin a pooled connection for nothing.
     inputs = await _kept_inputs(
@@ -247,6 +252,7 @@ async def load_relayed_session(
         runtime_profile=inputs.runtime_profile if inputs else None,
         grants=inputs.grants.summary() if inputs else None,
         surface=surface,
+        started_in_lemma=in_lemma,
     )
 
 

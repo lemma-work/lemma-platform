@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Protocol, TypedDict
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -51,7 +51,6 @@ from app.modules.agent.domain.private_notes import (
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
-from app.modules.agent.domain.started_in_lemma import started_in_lemma
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.value_objects import (
     AgentToolset,
@@ -59,7 +58,6 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.domain.vision import AgentVisionMode, resolve_vision_mode
-from app.modules.agent.domain.project_repo import ProjectRepo
 from app.modules.agent.domain.workspace_location import (
     WorkspaceLocation,
     has_recorded_cwd,
@@ -78,6 +76,8 @@ from app.modules.agent.services.conversation_access import (
     validate_conversation_access,
 )
 from app.modules.agent.services.run_phase_spans import record_history_size, run_phase
+from app.modules.agent.services.run_context_fields import RunIdentity
+from app.modules.agent.services.run_origin import run_started_in_lemma
 from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
@@ -127,27 +127,6 @@ class SessionLoader(Protocol):
 NIL_CONVERSATION_ID = UUID(int=0)
 
 
-class _Identity(TypedDict):
-    """The tool-context fields every variant of a run's context shares."""
-
-    user_id: UUID
-    org_id: UUID | None
-    pod_id: UUID
-    conversation_id: UUID
-    agent_name: str | None
-    agent_run_id: UUID | None
-    workload_type: str | None
-    workload_id: UUID | None
-    is_pod_default_agent: bool
-    runtime_profile: JsonObject | None
-    workspace_id: str
-    workspace_cwd: str
-    machine: str | None
-    started_in_lemma: bool
-    workspace_repo: ProjectRepo | None
-    pod_cwd: str
-
-
 @dataclass(slots=True)
 class RunSession:
     """One run's conversation, agent, runtime, grants and history, loaded once."""
@@ -165,6 +144,8 @@ class RunSession:
     surface: ConversationSurface | None = None
     #: The run's place in its conversation (``RuntimeHistoryWindow``).
     run_index: int | None = None
+    #: Whether its run may use the person's own machine (``services/run_origin``).
+    started_in_lemma: bool = False
 
     # -- Loading ------------------------------------------------------------
 
@@ -236,9 +217,12 @@ class RunSession:
                         messages, runs, current_run_id=agent_run.id
                     )
                 surface = await conversation_surface(uow, conversation.id)
+                in_lemma = await run_started_in_lemma(
+                    uow, conversation, user_id, run=agent_run
+                )
                 record_history_size(span, runs=runs, sent=messages)
         session = cls.of(conversation, agent, agent_run, messages, surface)
-        session.run_index = window.current_run_index
+        session.run_index, session.started_in_lemma = window.current_run_index, in_lemma
         return session
 
     @classmethod
@@ -279,6 +263,8 @@ class RunSession:
             workspace=resolve_workspace_location(conversation),
             runtime=resolved,
             runtime_profile=resolved.runtime_snapshot().as_payload(),
+            # The paused run is the conversation's newest.
+            started_in_lemma=await run_started_in_lemma(uow, conversation, user_id),
         )
 
     async def resolve_turn_runtime(
@@ -308,7 +294,7 @@ class RunSession:
 
     # -- The context the tools see -------------------------------------------
 
-    def _identity(self, *, user_id: UUID, agent_run_id: UUID | None) -> _Identity:
+    def _identity(self, *, user_id: UUID, agent_run_id: UUID | None) -> RunIdentity:
         """What every variant of a run's tool context says the same way.
 
         ``workload_id`` is the principal ``pod_data_access`` builds its delegated
@@ -333,7 +319,7 @@ class RunSession:
             "workspace_id": self.workspace.workspace_id,
             "workspace_cwd": self.workspace.cwd,
             "machine": agent.machine if agent is not None else None,
-            "started_in_lemma": started_in_lemma(self.conversation, user_id),
+            "started_in_lemma": self.started_in_lemma,
             "workspace_repo": self.workspace.repo,
             "pod_cwd": pod_cwd_from_workspace_cwd(self.workspace.cwd),
         }
