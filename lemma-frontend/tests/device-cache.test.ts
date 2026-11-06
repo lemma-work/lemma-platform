@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { KEPT_FOR_MS, keptOnDevice, readable } from "../src/session/device-cache.ts";
+import { QueryClient } from "@tanstack/react-query";
+import { KEPT_FOR_MS, keptOnDevice, keptState, readable } from "../src/session/device-cache.ts";
 import { channelsKey } from "../src/channels/queries.ts";
+
+test("the device keeps lists that answered, and no change still on its way, not even a paused one", () => {
+    const client = new QueryClient();
+    client.setQueryData(["pods", "org-1"], [{ id: "pod-1" }]);
+    client.setQueryData(["file", "pod-1", "/notes.md"], "what is inside");
+    /* A message sent offline waits as a paused mutation, its words in it. */
+    client.getMutationCache().build(client, { mutationKey: ["send"] }, {
+        context: undefined, data: undefined, error: null, failureCount: 0, failureReason: null,
+        isPaused: true, status: "pending", variables: { text: "a private message" }, submittedAt: 0,
+    });
+    const state = keptState(client);
+    assert.deepEqual(state.queries.map((query) => query.queryKey), [["pods", "org-1"]]);
+    assert.deepEqual(state.mutations, []);
+});
 
 test("the device keeps the frame's lists, and nothing that is inside a chat, a file or a table", () => {
     for (const kept of [
@@ -14,7 +29,6 @@ test("the device keeps the frame's lists, and nothing that is inside a chat, a f
         ["conversation-asks", "pod-1"],
         ["workflow-waiting", "pod-1,pod-2"],
         ["workflows", "pod-1", "names"],
-        ["outcome-plan", "pod-1"],
         ["outcome-apps", "pod-1"],
         ["outcome-tables", "pod-1"],
     ]) assert.equal(keptOnDevice(kept), true, JSON.stringify(kept));
@@ -24,6 +38,7 @@ test("the device keeps the frame's lists, and nothing that is inside a chat, a f
         ["channel", "pod-1", "lines", "ch-1"],
         ["channel", "pod-1", "detail", "ch-1"],
         ["file", "pod-1", "/notes.md"],
+        ["outcome-plan", "pod-1"], // its answer carries the whole of plan.md
         ["outcome-measure", "pod-1", "select 1"],
         ["computer", "cwd", "pod-1", "c-1"],
         [42],

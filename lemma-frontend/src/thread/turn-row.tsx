@@ -121,16 +121,21 @@ export function WorkingLine({ steps = [], inFlight, since, podId = "", conversat
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
     }, []);
+    const doing = stepNow([...steps, ...inFlight]);
     const what = (
         <>
             <span className="working__dot" aria-hidden="true" />
-            <span className="working__what">{stepNow([...steps, ...inFlight])}</span>
-            <span className="working__time">{spanOf(started, now)}</span>
+            <span className="working__what">{doing}</span>
+            <span className="working__time" aria-hidden="true">{spanOf(started, now)}</span>
         </>
     );
-    if (steps.length === 0) return <p className="working" role="status">{what}</p>;
+    /* Only a change of what it is doing is announced: not the clock, which
+       ticks every second, and not the steps opened under it. */
+    const told = <span className="sr-only" role="status">{doing}</span>;
+    if (steps.length === 0) return <p className="working">{what}{told}</p>;
     return (
-        <div className="stepgroup" role="status">
+        <div className="stepgroup">
+            {told}
             <button type="button" className="working working--opens" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
                 {what}
                 <span className="stepgroup__chev">{open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}</span>

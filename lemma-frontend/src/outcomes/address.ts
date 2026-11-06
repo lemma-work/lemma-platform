@@ -154,7 +154,9 @@ export function readView(pathname: string): View | null {
     const parts = pathname.split("/").filter(Boolean);
     const [head, ...after] = parts;
     if (!head) return null;
-    if (head !== "l") return after.length === 0 ? PLACES[head] ?? null : null;
+    /* Its own places only: `/constructor` is not one because every object
+       answers to it. */
+    if (head !== "l") return after.length === 0 && Object.hasOwn(PLACES, head) ? PLACES[head] : null;
     const [id, section, ...tail] = after;
     if (!id) return { name: "outcomes" };
     if (id === "new") return after.length === 1 ? { name: "hire" } : null;

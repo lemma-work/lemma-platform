@@ -1,12 +1,14 @@
 import { dehydrate, hydrate, type DehydratedState, type QueryClient } from "@tanstack/react-query";
+import { upstreamUrl } from "./client";
 import { key } from "./storage";
 
 /* What the app keeps on this device between visits, so it opens on what the
  * reader saw last rather than on a spinner, and the network catches up
  * behind it: the lists the frame is drawn from -- organizations, Lemmas,
- * their chats and shared chats, what waits on the reader, plans, the names of
+ * their chats and shared chats, what waits on the reader, the names of
  * apps, tables, automations and files. Never what is inside a file, a table
- * or a chat.
+ * or a chat, a Lemma's plan included, and never a change still on its way
+ * to the API.
  *
  * One record in IndexedDB, written at most once a second while the cache
  * changes. It is the signed-in person's: read back only for them, on the same API and the
@@ -28,7 +30,6 @@ const READ_WITHIN_MS = 800;
  *  older build -- whose answers may be shaped differently -- is dropped
  *  rather than read as this one's. */
 const BUILD = process.env.NEXT_PUBLIC_LEMMA_BUILD ?? "dev";
-const API = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export interface KeptRecord {
     build: string;
@@ -47,7 +48,6 @@ const LISTS: ReadonlySet<string> = new Set([
     "pod-detail",
     "workflow-waiting",
     "conversation-asks",
-    "outcome-plan",
     "outcome-apps",
     "outcome-tables",
     "outcome-schedules",
@@ -68,8 +68,20 @@ export function keptOnDevice(queryKey: readonly unknown[]): boolean {
     return false;
 }
 
-/** Whether a kept record may be read back now, for this person. */
-export function readable(record: unknown, now: number, owner: string | null, build = BUILD, api = API): record is KeptRecord {
+/** What of the cache the device keeps: the lists that have answered, and no
+ *  mutations -- by default a paused one, a message sent offline, would be
+ *  kept words and all. */
+export function keptState(client: QueryClient): DehydratedState {
+    return dehydrate(client, {
+        shouldDehydrateQuery: (query) => query.state.status === "success" && keptOnDevice(query.queryKey),
+        shouldDehydrateMutation: () => false,
+    });
+}
+
+/** Whether a kept record may be read back now, for this person. `api` is the
+ *  one this browser talks to now, not the one it was built with: `/connect`
+ *  and the deployment can point it elsewhere. */
+export function readable(record: unknown, now: number, owner: string | null, build = BUILD, api = upstreamUrl()): record is KeptRecord {
     if (!owner || !record || typeof record !== "object") return false;
     const kept = record as Partial<KeptRecord>;
     return kept.owner === owner && kept.build === build && kept.api === api
@@ -147,8 +159,7 @@ export function keepOnDevice(client: QueryClient): () => void {
         timer = null;
         const who = owner();
         if (!who) return;
-        const state = dehydrate(client, { shouldDehydrateQuery: (query) => query.state.status === "success" && keptOnDevice(query.queryKey) });
-        const record: KeptRecord = { build: BUILD, api: API, owner: who, at: Date.now(), state };
+        const record: KeptRecord = { build: BUILD, api: upstreamUrl(), owner: who, at: Date.now(), state: keptState(client) };
         void run("readwrite", (store) => store.put(record, RECORD)).catch(() => undefined);
     };
     /* At most once a second, from the first change: a cache that never goes

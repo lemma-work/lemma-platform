@@ -92,6 +92,11 @@ test("an app address names the kind of view, never which one", () => {
     assert.equal(toRouteTemplate("/t/outcome/pod-1/table/payroll"), "/l/[lemma]/tables/[name]");
     assert.equal(toRouteTemplate("/o/outcome/pod-1/table/payroll"), "/l/[lemma]/tables/[name]");
     assert.equal(toRouteTemplate("/o/pod-1/table/payroll"), "/t/[pod]/table/[name]");
+    /* A word every object answers to is as unknown as any other word, not a
+       template of `undefined`. */
+    for (const word of ["/constructor", "/__proto__", "/toString"]) {
+        assert.equal(toRouteTemplate(word), toRouteTemplate("/not-a-place"), word);
+    }
 });
 
 test("other routes still template by the route list, and nothing unknown is echoed", () => {

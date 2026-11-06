@@ -99,6 +99,10 @@ test("an address that is not the app's own is left for another reader, not guess
     for (const path of ["/", "/blog", "/t", "/t/outcome/abc", "/o/outcome/abc", "/l/abc/whatever", "/l/abc/apps/a/b", "/l/%E0%A4%A", "/l/abc/files/%E0%A4%A", "/l/new/x", "/home/x"]) {
         assert.equal(readView(path), null, path);
     }
+    /* Words every object answers to are not places. */
+    for (const path of ["/constructor", "/toString", "/__proto__", "/hasOwnProperty"]) {
+        assert.equal(readView(path), null, path);
+    }
     /* A word the workspace used under `/l` is the workspace's to read. */
     for (const path of ["/l/p1/conversation/c1", "/l/p1/file/me/notes.md", "/l/p1/about/connections", "/l/p1/table/leads", "/l/p1/app/crm", "/l/p1/run/r1"]) {
         assert.equal(readView(path), null, path);
