@@ -54,7 +54,11 @@ Three rules carry most of the weight:
 - **A run that a person did not start in Lemma never touches a person's own
   machine.** A schedule, a channel message or a webhook acts for nobody sitting
   at a computer, so such an agent needs a pod machine, named by its `machine`
-  field.
+  field. Which runs count is the run's own kind (`agent_runs.kind`), not the
+  kind of conversation it is in: a `chat` turn by the conversation's person,
+  in a conversation with no contact and no channel, or a sub-agent that turn
+  spawned. A person writing into a schedule's conversation is theirs; the
+  schedule's own turns there are not.
 - **An app reaches its viewer's machine only after the viewer says yes, in
   Lemma.** The first call answers `MACHINE_CONSENT_REQUIRED` with the URL of a
   Lemma page that asks them; the app cannot grant consent to itself, and the
