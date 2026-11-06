@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationRef, Pod } from "@/data";
+import { matchesChat } from "@/channels/chat-list";
 import { useSearch } from "@/search/use-search";
 import { highlight, type Hit } from "@/search/matching";
+import { useMe } from "@/session/use-me";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
-import { chatView, isChat, outcomeView, type View } from "./model";
+import { chatItems, chatView, outcomeView, type View } from "./model";
+import { useChannelsByPod } from "./chats";
 import { Bars, Icon } from "./parts";
 
 /** How many of a Lemma's own things the palette lists for what was typed. */
@@ -32,9 +35,15 @@ export function Palette({ pods, podId, activity, onClose, go, onAsk }: {
 
     const said = text.trim().toLowerCase();
     const matches = said ? pods.filter((pod) => pod.name.toLowerCase().includes(said) || (pod.description ?? "").toLowerCase().includes(said)) : pods;
-    const chats = said
-        ? pods.flatMap((pod) => (activity.get(pod.id) ?? []).filter((one) => isChat(one) && one.title.toLowerCase().includes(said)).map((one) => ({ pod, chat: one }))).slice(0, 5)
-        : [];
+    /* Every chat the sidebar lists, shared ones and groups too, found by its
+       name or what was last said in it -- the one chat list's own search. */
+    const reader = useMe();
+    const [channels, feeds] = useChannelsByPod(pods);
+    const chats = useMemo(() => {
+        if (!said) return [];
+        const { needs, rest } = chatItems({ pods, conversations: activity, channels, me: reader });
+        return [...needs, ...rest].filter((item) => matchesChat(item, said)).slice(0, 5);
+    }, [said, pods, activity, channels, reader]);
     const asking = pods.find((pod) => pod.id === target) ?? null;
     const search = useSearch(asking?.id ?? null, [...pods], text);
     const found = said ? search.hits.slice(0, FOUND_SHOWN) : [];
@@ -76,6 +85,7 @@ export function Palette({ pods, podId, activity, onClose, go, onAsk }: {
 
     return (
         <div className="ox-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+            {feeds}
             <div className="ox-palette" role="dialog" aria-modal="true" aria-label="Ask, find, or jump to a Lemma" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}>
                 <form className="ox-palette__in" onSubmit={(event) => { event.preventDefault(); ask(); }}>
                     <Icon name="search" />
@@ -121,11 +131,11 @@ export function Palette({ pods, podId, activity, onClose, go, onAsk }: {
                     <>
                         <p className="ox-palette__h">Chats</p>
                         <ul className="ox-palette__list">
-                            {chats.map(({ pod, chat }) => (
-                                <li key={pod.id + chat.id}>
-                                    <button type="button" onClick={() => go(chatView({ kind: "chat", podId: pod.id, id: chat.id }))}>
-                                        <span className="ox-palette__name">{chat.title}</span>
-                                        <span className="ox-palette__desc">{pod.name}</span>
+                            {chats.map((item) => (
+                                <li key={item.key}>
+                                    <button type="button" onClick={() => go(chatView(item.open))}>
+                                        <span className="ox-palette__name">{item.title}</span>
+                                        <span className="ox-palette__desc">{item.podName}</span>
                                     </button>
                                 </li>
                             ))}

@@ -5,6 +5,7 @@ import { source, type Pod } from "@/data";
 import {
     EMPTY_WIDGET_DRAFT,
     widgetAnswerChoices,
+    contactChannelId,
     contactName,
     handleText,
     outreachProblem,
@@ -20,8 +21,8 @@ import {
     type WebWidget,
     type WidgetDraft,
 } from "@/data/contacts";
-import { channelApi } from "@/channels/api";
 import { SearchIcon } from "@/ui/icons";
+import { channelApi } from "@/channels/api";
 import { ContactQueue } from "@/channels/contact-queue";
 import { ContactBots } from "./contact-bots";
 import { isForbidden } from "@/session/auth-state";
@@ -292,19 +293,21 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
 }
 
 /** A contact's channel: everything they and the space's agents said, where
- *  an editor can step in. Found when asked for, since a contact who has
- *  never written has none. */
+ *  an editor can step in. The contact says which it is, so it opens at once;
+ *  one who has never written has none. A backend too old to say is asked. */
 function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; onLeave: () => void }) {
     const [state, setState] = useState<"idle" | "finding" | "none" | "failed">("idle");
     const open = async () => {
         setState("finding");
         try {
-            const found = await channelApi(pod.id).list({ kind: "CONTACT", archived: false, contactId: contact.id, limit: 1 });
-            const channel = found.items[0];
-            if (!channel) { setState("none"); return; }
+            const id = await contactChannelId(contact, async (contactId) => {
+                const found = await channelApi(pod.id).list({ kind: "CONTACT", archived: false, contactId, limit: 1 });
+                return found.items[0]?.id ?? null;
+            });
+            if (!id) { setState("none"); return; }
             setState("idle");
             onLeave();
-            goTo(channelHref(pod.id, channel.id));
+            goTo(channelHref(pod.id, id));
         } catch {
             setState("failed");
         }

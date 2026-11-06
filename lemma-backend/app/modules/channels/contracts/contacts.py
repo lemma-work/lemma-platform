@@ -1,4 +1,5 @@
-"""What the contacts module asks of the channels when it forgets somebody."""
+"""What the contacts module asks of the channels: where a contact's own chat
+is, and what forgetting somebody does to them."""
 
 from __future__ import annotations
 
@@ -7,6 +8,17 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.infrastructure.contact_channels import ContactChannels
+
+
+async def contact_channel_ids(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_ids: Collection[UUID]
+) -> dict[UUID, UUID]:
+    """Each contact's own channel in the pod, by contact, for those who have
+    one -- a contact who never wrote has none. One read for a page of
+    contacts, so a list can open each one's chat without looking it up."""
+    return await ContactChannels(uow.session).own_channel_ids(
+        pod_id=pod_id, contact_ids=contact_ids
+    )
 
 
 async def forget_contacts_in_channels(
@@ -21,4 +33,4 @@ async def forget_contacts_in_channels(
     )
 
 
-__all__ = ["forget_contacts_in_channels"]
+__all__ = ["contact_channel_ids", "forget_contacts_in_channels"]

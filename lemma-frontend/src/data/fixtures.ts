@@ -2345,10 +2345,10 @@ function sampleContacts(podId: string): Contact[] {
     if (!CONTACTS.has(podId)) {
         const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
         CONTACTS.set(podId, [
-            { id: podId + "-contact-dana", name: "Dana Ruiz", createdAt: day(1), anonymous: false, handles: [{ kind: "EMAIL", value: "dana@client.example", strength: "CHANNEL" }] },
-            { id: podId + "-contact-tiago", name: "Tiago", createdAt: day(3), anonymous: false, handles: [{ kind: "PHONE", value: "16505551234", strength: "CHANNEL" }] },
-            { id: podId + "-contact-ana", name: null, createdAt: day(6), anonymous: false, handles: [{ kind: "HOST", value: "w:cust-42", strength: "HOST" }, { kind: "EMAIL", value: "ana@shop.example", strength: "CODE" }] },
-            { id: podId + "-contact-visitor", name: null, createdAt: day(0), anonymous: true, handles: [{ kind: "WEB", value: podId + "-session", strength: "SESSION" }] },
+            { id: podId + "-contact-dana", name: "Dana Ruiz", createdAt: day(1), anonymous: false, channelId: "sample-contact", handles: [{ kind: "EMAIL", value: "dana@client.example", strength: "CHANNEL" }] },
+            { id: podId + "-contact-tiago", name: "Tiago", createdAt: day(3), anonymous: false, channelId: null, handles: [{ kind: "PHONE", value: "16505551234", strength: "CHANNEL" }] },
+            { id: podId + "-contact-ana", name: null, createdAt: day(6), anonymous: false, channelId: null, handles: [{ kind: "HOST", value: "w:cust-42", strength: "HOST" }, { kind: "EMAIL", value: "ana@shop.example", strength: "CODE" }] },
+            { id: podId + "-contact-visitor", name: null, createdAt: day(0), anonymous: true, channelId: "sample-visitor", handles: [{ kind: "WEB", value: podId + "-session", strength: "SESSION" }] },
         ]);
     }
     return CONTACTS.get(podId) ?? [];

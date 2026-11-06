@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.api.dependencies import get_uow_factory
+from app.modules.channels.contracts import contact_channel
 from app.modules.contacts.contracts import (
     IdentityKind,
     IdentityStrength,
@@ -67,3 +68,40 @@ async def test_a_contact_is_found_by_name_address_or_number(
         "Web visitor",
         "dana.reyes@client.example",
     ]
+
+
+async def test_a_contact_who_wrote_carries_their_chat_and_one_who_never_did_none(
+    authenticated_client, test_pod
+):
+    """A list opens a contact's chat straight from the contact: no second
+    read to find it, and none to learn they have none yet."""
+    pod_id = UUID(test_pod["id"])
+    async with get_uow_factory()() as uow:
+        wrote = await open_contact(
+            uow,
+            pod_id=pod_id,
+            kind=IdentityKind.EMAIL,
+            value="lee@client.example",
+            strength=IdentityStrength.CHANNEL,
+            display_name="Lee",
+        )
+        await open_contact(
+            uow,
+            pod_id=pod_id,
+            kind=IdentityKind.EMAIL,
+            value="quiet@client.example",
+            strength=IdentityStrength.CHANNEL,
+            display_name="Quiet",
+        )
+        chat = await contact_channel(uow, pod_id=pod_id, contact_id=wrote.id)
+        await uow.commit()
+
+    listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    assert listed.status_code == 200, listed.text
+    chats = {item["label"]: item["channel_id"] for item in listed.json()["items"]}
+    assert chats["Lee"] == str(chat.id)
+    assert chats["Quiet"] is None
+
+    one = await authenticated_client.get(f"/pods/{pod_id}/contacts/{wrote.id}")
+    assert one.status_code == 200, one.text
+    assert one.json()["channel_id"] == str(chat.id)
