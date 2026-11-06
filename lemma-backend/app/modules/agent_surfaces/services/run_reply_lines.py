@@ -45,18 +45,15 @@ from app.modules.agent_surfaces.services.channel_lines import (
     answered_for,
     shown_on_web,
 )
-from app.modules.agent_surfaces.services.place_threads import THREADED
 from app.modules.agent_surfaces.services.progress_events import failure_notice
 from app.modules.channels.contracts import (
     ChannelMessage,
     ChannelNotFound,
     NewLine,
     Sender,
-    Source,
-    SourceKind,
     post,
 )
-from app.modules.channels.contracts.lines import thread_root_at
+from app.modules.channels.contracts.placement import answer_placement, placement_at
 from app.modules.channels.contracts.places import ReplyAddress
 
 logger = get_logger(__name__)
@@ -145,8 +142,14 @@ async def post_run_reply(
     conversation_id: UUID,
     address: ReplyAddress,
     material: RunReplyMaterial,
+    answering: ChannelMessage | None = None,
 ) -> ChannelMessage | None:
-    """Post the run's answer at ``address`` and plan its delivery there."""
+    """Post the run's answer at ``address`` and plan its delivery there.
+
+    ``answering``: the heard line it answers, which places it -- in that
+    line's thread, pointing at it (``channels.contracts.placement``) -- and
+    which its delivery answers in place. Without one, it is placed by what
+    the place last heard of the conversation."""
     source = address.source
     # The place's platform, not a missing surface: a place whose bot was
     # removed has no surface either, and its answer is not shown anywhere --
@@ -164,7 +167,11 @@ async def post_run_reply(
         return None
     event = _answered_event(address)
     sender = await agent_sender(uow, conversation)
-    thread_root_id = await _thread_root(uow, source, event)
+    placement = (
+        await answer_placement(uow, answering, source=source)
+        if answering is not None and answering.source_id == source.id
+        else await placement_at(uow, address)
+    )
     said = [
         (earlier_answer_client_id(run_id, number), one)
         for number, one in enumerate(earlier, start=1)
@@ -186,7 +193,9 @@ async def post_run_reply(
                 # The thread it goes to, so the place knows the agent is in it
                 # -- and a Slack or Teams thread is a thread here too.
                 external_thread_id=event.external_thread_id if event else None,
-                thread_root_id=thread_root_id,
+                thread_root_id=placement.thread_root_id,
+                # What its delivery answers in place (``place_aim``).
+                reply_to_id=placement.reply_to_id,
             ),
             deliver_to=[source.id],
         )
@@ -202,20 +211,6 @@ def _answered_event(address: ReplyAddress) -> ParsedInboundSurfaceEvent | None:
         return ParsedInboundSurfaceEvent.model_validate(address.ref)
     except ValidationError:
         return None
-
-
-async def _thread_root(
-    uow: SqlAlchemyUnitOfWork,
-    source: Source,
-    event: ParsedInboundSurfaceEvent | None,
-) -> UUID | None:
-    if event is None or source.kind is not SourceKind.CHAT:
-        return None
-    if source.platform not in THREADED:
-        return None
-    return await thread_root_at(
-        uow, source_id=source.id, external_thread_id=event.external_thread_id
-    )
 
 
 async def agent_sender(

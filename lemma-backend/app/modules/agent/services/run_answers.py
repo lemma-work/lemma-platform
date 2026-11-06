@@ -36,7 +36,7 @@ from app.modules.agent.contracts.channel_replies import (
     run_reply_material,
 )
 from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
-from app.modules.agent.domain.private_notes import LEMMA_CHANNEL
+from app.modules.agent.domain.private_notes import HEARD_IN_CHANNEL, LEMMA_CHANNEL
 from app.modules.agent.domain.run_places import ASKED_IN_PLACE_KEY, place_source
 from app.modules.agent.domain.value_objects import QueueState
 from app.modules.agent.infrastructure.models.conversation import (
@@ -54,11 +54,16 @@ from app.modules.channels.contracts.answers import (
     settle_answers,
 )
 from app.modules.channels.contracts.live import announce_answering
-from app.modules.channels.contracts.lines import line_by_id, line_heard_at
+from app.modules.channels.contracts.lines import line_by_id, lines_heard_at
 from app.modules.channels.contracts.places import ReplyAddress, reply_address
 
 #: The most messages one run is taken to have read: a burst steered into it.
 MAX_LINES_A_RUN_READS = 50
+
+#: Messages that name the line they answer, which is answered through its
+#: answer rows: a line written in Lemma, or one heard elsewhere that channels
+#: started an agent for. Any other heard message is found by where it was heard.
+ANSWERED_BY_ROWS = frozenset({LEMMA_CHANNEL, HEARD_IN_CHANNEL})
 
 #: How a run ended that a platform is told of: its answer, or its failure.
 _SAID_ON_A_PLATFORM = frozenset({"COMPLETED", "FAILED"})
@@ -128,6 +133,9 @@ async def post_run_answer(
         return None
     material = await run_reply_material(uow, run_id)
     if material is None:
+        # The run is gone: nothing will answer its lines. They end
+        # unanswered, as a failure's notice ends them, rather than wait on it.
+        await settle_answers(uow, answers, run_id=None, answered_with=None)
         return None
     if in_lemma:
         posted = await _answer_in_lemma(
@@ -145,6 +153,7 @@ async def post_run_answer(
             conversation=conversation,
             material=material,
             address=await _address_of(uow, said[-1]),
+            answering=said[-1],
             expected_at=said[-1].source_id,
         )
     elif answers:
@@ -230,6 +239,7 @@ async def _answer_unasked(
             conversation=conversation,
             material=material,
             address=await _address_of(uow, line),
+            answering=line,
             expected_at=line.source_id,
         )
     if not handed_back or conversation.contact_id is not None or line.is_deleted:
@@ -246,9 +256,11 @@ async def _answer_at_place(
     conversation: ConversationModel,
     material: RunReplyMaterial,
     address: ReplyAddress | None,
+    answering: ChannelMessage | None = None,
     expected_at: UUID | None = None,
 ) -> ChannelMessage | None:
-    """The answer at a platform place, with its delivery there. Nothing of a
+    """The answer at a platform place, with its delivery there -- to
+    ``answering``, the heard line it answers, where it has one. Nothing of a
     private note's run, or of one asked in Lemma, goes to a platform; and a
     run that stopped is not told of there, where nobody saw it start.
 
@@ -284,6 +296,7 @@ async def _answer_at_place(
         conversation_id=conversation.id,
         address=address,
         material=material,
+        answering=answering,
     )
 
 
@@ -304,8 +317,10 @@ async def _lines_read_by(
     uow: SqlAlchemyUnitOfWork, run_id: UUID, conversation_id: UUID
 ) -> _Read:
     """The lines whose words this run read -- the one that started it and
-    any steered into it, oldest first: a line written in Lemma by its id, one
-    heard on a platform by where it was heard and its id there.
+    any steered into it, oldest first: a line a turn started from the
+    channel by its id (written in Lemma, or heard and answered by an agent
+    other than its door's), one a door took up by where it was heard and its
+    id there.
 
     Not a message that joined it and was never read: the run that delivers it
     answers it (``StartQueuedFollowUp``).
@@ -332,22 +347,36 @@ async def _lines_read_by(
             .limit(MAX_LINES_A_RUN_READS)
         )
     ).all()
+    # Where each was heard, as the source its stored place names.
+    read = [
+        (source, line_id, place_source(place), external_message_id)
+        for source, line_id, place, external_message_id, _ in rows
+    ]
+    # Every heard line it read, in one read however many were steered in.
+    heard = await lines_heard_at(
+        uow,
+        [
+            (heard_at, external_message_id)
+            for source, _, heard_at, external_message_id in read
+            if source not in ANSWERED_BY_ROWS
+            and heard_at is not None
+            and external_message_id
+        ],
+    )
     lines: list[UUID] = []
     heard_lines: dict[UUID, ChannelMessage] = {}
-    for source, line_id, place, external_message_id, _ in rows:
-        heard_at = place_source(place)
-        if source == LEMMA_CHANNEL and line_id:
+    for source, line_id, heard_at, external_message_id in read:
+        if source in ANSWERED_BY_ROWS and line_id:
             try:
                 lines.append(UUID(line_id))
             except ValueError:
                 continue
-        elif heard_at is not None and external_message_id:
-            heard = await line_heard_at(
-                uow, source_id=heard_at, external_message_id=external_message_id
-            )
-            if heard is not None:
-                lines.append(heard.id)
-                heard_lines[heard.id] = heard
+        elif (
+            heard_at is not None
+            and (line := heard.get((heard_at, external_message_id))) is not None
+        ):
+            lines.append(line.id)
+            heard_lines[line.id] = line
     return _Read(
         lines=lines,
         carries_on=not any(row[4] for row in rows),

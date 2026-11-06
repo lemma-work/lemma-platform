@@ -1,0 +1,10 @@
+{
+  "name": "daily_chase",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 17 * * 1-5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Read the steps table. For every step not done that is due within three days, or already past its date, ask its owner what is in the way."
+}

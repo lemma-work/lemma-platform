@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
+from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts import channels as agent_channels
 from app.modules.agent.contracts.channels import Audience
@@ -26,7 +27,7 @@ from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
 from app.modules.channels.contracts.deliveries import deliveries_of, delivery_sent
-from app.modules.channels.contracts.lines import thread_root_at
+from app.modules.channels.contracts.placement import heard_thread_root
 from app.modules.channels.contracts import (
     AccountKey,
     ChannelMessage,
@@ -43,9 +44,6 @@ from app.modules.channels.contracts import (
     source_for,
 )
 
-
-#: Platforms whose channels have threads, kept as threads on the timeline.
-THREADED = frozenset({"SLACK", "TEAMS"})
 
 #: A web chat's platform, as its channel source names it.
 WEB = "WEB"
@@ -113,7 +111,7 @@ def reply_ref_of(event: ParsedInboundSurfaceEvent) -> dict[str, object]:
             },
         }
     )
-    return target.model_dump(mode="json", exclude={"raw_payload"})
+    return target.model_dump(mode="json", exclude={"raw_payload", "unasked"})
 
 
 def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
@@ -213,7 +211,7 @@ async def note_heard(
             external_message_id=external_message_id,
             external_thread_id=event.external_thread_id,
             # A Slack or Teams thread is a thread here too.
-            thread_root_id=await _thread_root(
+            thread_root_id=await heard_thread_root(
                 uow,
                 source,
                 external_thread_id=event.external_thread_id,
@@ -224,25 +222,23 @@ async def note_heard(
         ),
         mentions=said.mentions,
         mentioned_agents=said.agents,
+        # Written by the turn answering it: put to that conversation's agent.
+        door_agent_id=await _door_agent(uow, context),
     )
 
 
-async def _thread_root(
-    uow: SqlAlchemyUnitOfWork,
-    source: Source,
-    *,
-    external_thread_id: str | None,
-    external_message_id: str | None = None,
+async def _door_agent(
+    uow: SqlAlchemyUnitOfWork, context: SurfaceChatContext
 ) -> UUID | None:
-    """The line a reply in a shared Slack or Teams place hangs from."""
-    if source.kind is not SourceKind.CHAT or source.platform not in THREADED:
-        return None
-    return await thread_root_at(
-        uow,
-        source_id=source.id,
-        external_thread_id=external_thread_id,
-        external_message_id=external_message_id,
+    """The agent this turn's message was put to: its conversation's, which
+    answers it here. Any other agent the line names, or that answers every
+    line in the channel, is started by ``channels`` -- the one rule."""
+    conversation = await agent_channels.surface_conversation(
+        uow, context.conversation_id
     )
+    if conversation is None:
+        return None
+    return effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
 
 
 async def note_heard_on_web(

@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     NO_CHAT,
+    agentKey,
+    agentView,
     ageOf,
+    answersHere,
     chatItems,
     chatView,
     dailyActivity,
@@ -11,7 +14,7 @@ import {
     sectionRows,
     workRows,
     inSidebar,
-    lineTitle,
+    isFramePath,
     repeatedTitles,
     sidebarSections,
     QUIET_AFTER_MS,
@@ -25,6 +28,7 @@ import {
     serializePlan,
     standingOf,
     viewOfAddress,
+    verbOf,
     viewOfItem,
     workSince,
     writeView,
@@ -32,6 +36,7 @@ import {
     type View,
 } from "../src/outcomes/model.ts";
 import type { ConversationRef } from "../src/data/types.ts";
+import { chatTitle } from "../src/channels/chat-list.ts";
 import type { Channel } from "../src/channels/model.ts";
 import type { AskedRow } from "../src/thread/waiting-on-you.ts";
 import type { WaitingRow } from "../src/workflow/waiting-inbox.tsx";
@@ -47,7 +52,7 @@ function conversation(id: string, activityAt: string | null, kind?: string): Con
     };
 }
 
-test("every view writes an address that reads back as itself", () => {
+test("every view writes an address that reads back as itself, and is told apart from a workspace address", () => {
     const views: View[] = [
         { name: "today" },
         { name: "outcomes" },
@@ -61,7 +66,8 @@ test("every view writes an address that reads back as itself", () => {
         { name: "chats", open: { kind: "contact", podId: "abc", id: "contact 7" } },
         outcomeView("abc", "contacts"),
         outcomeView("pod one/2"),
-        outcomeView("abc", "xray"),
+        outcomeView("abc", "automations"),
+        outcomeView("abc", "automations", "schedules"),
         outcomeView("abc", "apps"),
         outcomeView("abc", "plan"),
         outcomeView("abc", "settings"),
@@ -73,27 +79,51 @@ test("every view writes an address that reads back as itself", () => {
         { name: "app", podId: "abc", app: "crm" },
         { name: "table", podId: "abc", table: "leads" },
         { name: "file", podId: "abc", path: "/reports/Q3 review.md" },
+        { name: "computer", podId: "abc", conversationId: null },
+        { name: "computer", podId: "abc", conversationId: "c1" },
+        outcomeView("abc", "chats", "channels"),
     ];
-    for (const view of views) assert.deepEqual(readView(writeView(view)), view, writeView(view));
+    for (const view of views) {
+        assert.deepEqual(readView(writeView(view)), view, writeView(view));
+        /* A path whose first word is not one of the frame's own would be read
+           as a Lemma's workspace address and opened as its summary. */
+        assert.ok(isFramePath(writeView(view)), writeView(view) + " is the frame's own");
+    }
 });
 
 test("an address the frame cannot read lands somewhere, not nowhere", () => {
-    assert.deepEqual(readView("/o/nonsense"), { name: "today" });
+    assert.deepEqual(readView("/t/nonsense"), { name: "today" });
     assert.deepEqual(readView("/t/abc"), { name: "today" });
-    assert.deepEqual(readView("/o/outcome/abc/whatever"), outcomeView("abc"));
-    assert.deepEqual(readView("/o/outcome/%E0%A4%A"), { name: "today" });
-    assert.deepEqual(readView("/o/outcome/abc/run"), outcomeView("abc"), "a run with no id is the outcome");
-    assert.deepEqual(readView("/o/chats/p1/c/%E0%A4%A"), { name: "chats", open: NO_CHAT });
-    assert.deepEqual(readView("/o/chats/p1/x/y"), { name: "chats", open: NO_CHAT }, "an unknown kind of chat opens none");
+    assert.deepEqual(readView("/t/outcome/abc/whatever"), outcomeView("abc"));
+    assert.deepEqual(readView("/t/outcome/%E0%A4%A"), { name: "today" });
+    assert.deepEqual(readView("/t/outcome/abc/run"), outcomeView("abc"), "a run with no id is the outcome");
+    assert.deepEqual(readView("/t/outcome/abc/xray"), outcomeView("abc", "automations", "xray"), "X-ray was a tab; it is a view of Automations now");
+    assert.deepEqual(readView("/t/outcome/abc/automations/nonsense"), outcomeView("abc", "automations"), "a view it does not have is its first");
+    assert.deepEqual(readView("/t/chats/p1/c/%E0%A4%A"), { name: "chats", open: NO_CHAT });
+    assert.deepEqual(readView("/t/chats/p1/x/y"), { name: "chats", open: NO_CHAT }, "an unknown kind of chat opens none");
+});
+
+test("the app's own paths are told apart from workspace addresses under the same /t", () => {
+    for (const path of ["/t", "/t/outcomes", "/t/needs-you", "/t/people", "/t/new-lemma", "/t/chats/p1/c/c1", "/t/outcome/p1/apps"]) {
+        assert.ok(isFramePath(path), path);
+    }
+    for (const path of ["/t/p1", "/t/p1/conversation/c1", "/t/teammates", "/l/p1/apps", "/o/p1"]) {
+        assert.ok(!isFramePath(path), path + " is a workspace address");
+    }
+    assert.ok(isFramePath("/o/outcome/p1"), "a link from while the app was tried at /o");
+    assert.deepEqual(readView("/o/outcome/p1/apps"), outcomeView("p1", "apps"));
+    assert.deepEqual(viewOfAddress({ podId: null, tabId: null, conversationId: null, team: true }), { name: "outcomes" }, "every teammate at once is the list of Lemmas");
 });
 
 test("a link to an outcome's old Chats tab opens the chat it named", () => {
-    assert.deepEqual(readView("/o/outcome/p1/chats/c/c1"), chatView({ kind: "chat", podId: "p1", id: "c1" }));
-    assert.deepEqual(readView("/o/outcome/p1/chats/g/g1"), chatView({ kind: "shared", podId: "p1", id: "g1" }));
-    assert.deepEqual(readView("/o/outcome/p1/chats/customers"), outcomeView("p1"));
-    assert.deepEqual(readView("/o/chats/p1/customers"), outcomeView("p1", "contacts"), "the old customers queue is the Contacts tab");
-    assert.deepEqual(readView("/o/chats/p1/customers/c9"), chatView({ kind: "contact", podId: "p1", id: "c9" }));
-    assert.deepEqual(readView("/o/outcome/p1/chats"), outcomeView("p1"), "with no chat named, the outcome itself");
+    assert.deepEqual(readView("/t/outcome/p1/chats/c/c1"), chatView({ kind: "chat", podId: "p1", id: "c1" }));
+    assert.deepEqual(readView("/t/outcome/p1/chats/g/g1"), chatView({ kind: "shared", podId: "p1", id: "g1" }));
+    assert.deepEqual(readView("/t/outcome/p1/chats/customers"), outcomeView("p1", "chats"));
+    assert.deepEqual(readView("/t/chats/p1/customers"), outcomeView("p1", "contacts"), "the old customers queue is the Contacts tab");
+    assert.deepEqual(readView("/t/chats/p1/customers/c9"), chatView({ kind: "contact", podId: "p1", id: "c9" }));
+    assert.deepEqual(readView("/t/outcome/p1/chats"), outcomeView("p1", "chats"), "with no chat named, its every chat");
+    assert.deepEqual(readView("/t/outcome/p1/chats/channels"), { name: "outcome", podId: "p1", tab: "chats", section: "channels" }, "on the shared ones");
+    assert.deepEqual(readView(writeView(outcomeView("p1", "chats", "channels"))), outcomeView("p1", "chats", "channels"));
 });
 
 test("what waits on you opens its chat, or the run whose form it is", () => {
@@ -110,13 +140,17 @@ test("a workspace link followed inside the frame stays in the frame where it can
     assert.deepEqual(viewOfAddress(address("workflow:late-fees")), { name: "workflow", podId: "p1", workflow: "late-fees" });
     assert.deepEqual(viewOfAddress(address("file:/me/notes.md")), { name: "file", podId: "p1", path: "/me/notes.md" });
     assert.deepEqual(viewOfAddress(address("space:contacts")), outcomeView("p1", "contacts"));
-    assert.deepEqual(viewOfAddress(address("space:chats")), outcomeView("p1"), "an outcome's chats are under its name in the sidebar");
+    assert.deepEqual(viewOfAddress(address("space:chats")), outcomeView("p1", "chats"), "a Lemma's every chat");
+    assert.deepEqual(viewOfAddress(address("space:channels")), { name: "outcome", podId: "p1", tab: "chats", section: "channels" }, "the shared ones");
     assert.deepEqual(viewOfAddress(address(null)), outcomeView("p1"));
-    assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "schedules" }), outcomeView("p1", "settings", "schedules"));
+    assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "schedules" }), outcomeView("p1", "automations", "schedules"), "schedules are a view of Automations here");
+    assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "people" }), outcomeView("p1", "settings", "people"));
     assert.deepEqual(viewOfAddress(address("bot:researcher")), { name: "agent", podId: "p1", agent: "researcher" });
     assert.deepEqual(viewOfAddress(address("record:leads:42")), { name: "record", podId: "p1", table: "leads", recordId: "42" });
-    assert.deepEqual(viewOfAddress(address("space:workflows")), outcomeView("p1", "xray"));
-    assert.equal(viewOfAddress(address("computer")), null, "what the frame does not show goes to the workspace");
+    assert.deepEqual(viewOfAddress(address("space:workflows")), outcomeView("p1", "automations"));
+    assert.deepEqual(viewOfAddress(address("computer")), { name: "computer", podId: "p1", conversationId: null }, "the machine it works on");
+    assert.deepEqual(viewOfAddress(address("space:all")), outcomeView("p1", "made"), "everything it holds is its files");
+    assert.equal(viewOfAddress(address("nothing-this-build-knows:1")), null, "what the frame does not show goes to the classic workspace");
     assert.equal(viewOfAddress({ podId: null, tabId: null, conversationId: null }), null);
 });
 
@@ -366,6 +400,30 @@ test("a contact waiting on a person is something to answer, opened in their chat
     assert.deepEqual(viewOfItem(items[1]), chatView({ kind: "contact", podId: "p1", id: "ch1" }));
 });
 
+test("a question, an approval or a form is answered in place; a reply or a decision opens where it is", () => {
+    const asked: AskedRow[] = [
+        { podId: "p1", podName: "Support", conversationId: "c1", title: "Refund for Mara", kind: "approval", summary: "Approve a $240 refund", sinceMs: 1_000 },
+        { podId: "p1", podName: "Support", conversationId: "c2", title: "Holiday hours", kind: "question", summary: null, sinceMs: 2_000 },
+    ];
+    const wait = (id: string, type: string) => ({
+        podId: "p2",
+        podName: "Books",
+        workflowName: "late-fees",
+        wait: { id, runId: "r-" + id, workflowId: null, podId: "p2", nodeId: "n", type, schema: null, uiSchema: null, createdAt: new Date(3_000).toISOString(), externalRef: null, agentName: null, question: null },
+        run: { id: "r-" + id, workflowId: null, podId: "p2", status: "WAITING", failedNodeId: null, currentNodeId: null, error: null, startedAt: null, completedAt: null, createdAt: null },
+    });
+    const waits = [wait("w1", "HUMAN"), wait("w2", "DECISION")] as unknown as WaitingRow[];
+    const contacts = [{ podId: "p1", podName: "Support", channelId: "ch1", name: "Dana Ruiz", reason: null, sinceMs: 5_000 }];
+    const said = queueItems(asked, waits, contacts).map((item) => [item.title, answersHere(item), verbOf(item)]);
+    assert.deepEqual(said, [
+        ["Approve a $240 refund", "ask", "Decide"],
+        ["Holiday hours", "ask", "Answer"],
+        ["Fill in the late-fees form", "form", "Fill in"],
+        ["Fill in the late-fees form", null, "Open"],
+        ["Reply to Dana Ruiz", null, "Reply"],
+    ]);
+});
+
 test("how long something has waited reads the way a person says it", () => {
     const now = 100 * 86_400_000;
     assert.equal(ageOf(now - 20_000, now), "1 min");
@@ -558,10 +616,10 @@ test("the sidebar puts the busiest outcome first and folds the ones gone quiet",
     assert.ok(QUIET_AFTER_MS > 0);
 });
 
-test("a private line is named for what it is, and repeated names get told apart", () => {
-    assert.equal(lineTitle("Email"), "Your chat on Email");
-    assert.equal(lineTitle("WhatsApp and Email"), "Your chat on WhatsApp and Email");
-    assert.equal(lineTitle("Notices"), "Notices");
+test("a person's own chat is named for what it is, and repeated names get told apart", () => {
+    assert.equal(chatTitle(channel("mine", "DIRECT", { sources: [{ platform: "RESEND", title: null }] }), "Support"), "Your chat on Email");
+    assert.equal(chatTitle(channel("mine", "DIRECT", { sources: [{ platform: "WHATSAPP", title: null }, { platform: "RESEND", title: null }] }), "Support"), "Your chat on WhatsApp and Email");
+    assert.equal(chatTitle(channel("mine", "DIRECT"), "Support"), "Notices");
     const repeated = repeatedTitles([
         { key: "a", title: "LLM Lab tutor" },
         { key: "b", title: "Casual greeting" },
@@ -589,4 +647,11 @@ test("an automation that ran many times is one line, with how many runs and its 
     const reviewer = work.find((row) => row.title === "Reviewer");
     assert.deepEqual(reviewer?.view, { name: "run", podId: "p1", runId: "r2" }, "it opens its newest run");
     assert.equal(reviewer?.running, true, "one of its runs is still going");
+});
+
+test("an agent row that arrived without a name opens nothing, and keys apart from its twin", () => {
+    assert.deepEqual(agentView("p1", { name: "billing", broken: false }), { name: "agent", podId: "p1", agent: "billing" });
+    assert.equal(agentView("p1", { name: "", broken: true }), null, "its address would end at agent/ and open the settings instead");
+    assert.notEqual(agentKey({ id: "" }, 0), agentKey({ id: "" }, 1), "two nameless rows share an empty id");
+    assert.equal(agentKey({ id: "a1" }, 3), "a1");
 });

@@ -1,0 +1,51 @@
+{
+  "name": "pull_requests",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {
+    "description": "One row per pull request: when it was opened, when it was first reviewed, and by whom."
+  },
+  "columns": [
+    {
+      "name": "id",
+      "type": "UUID",
+      "required": true,
+      "auto": true
+    },
+    {
+      "name": "title",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "repo",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "link",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "opened_at",
+      "type": "DATETIME",
+      "required": true
+    },
+    {
+      "name": "reviewed_at",
+      "type": "DATETIME",
+      "required": false
+    },
+    {
+      "name": "reviewed_same_day",
+      "type": "BOOLEAN",
+      "required": false
+    },
+    {
+      "name": "reviewer",
+      "type": "TEXT",
+      "required": false
+    }
+  ]
+}

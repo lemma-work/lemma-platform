@@ -115,6 +115,10 @@ class ChannelSeats(Protocol):
         surface_ids: Collection[UUID] | None,
     ) -> list[Source]: ...
 
+    async def answers_every_line_at(
+        self, *, external_channel_id: str, surface_id: UUID, agent_id: UUID
+    ) -> bool: ...
+
     async def conversation_at(
         self,
         source_id: UUID,
@@ -261,6 +265,16 @@ class ChannelSeatsInDatabase:
             platform=platform,
             external_channel_id=external_channel_id,
             surface_ids=surface_ids,
+        )
+
+    async def answers_every_line_at(
+        self, *, external_channel_id: str, surface_id: UUID, agent_id: UUID
+    ) -> bool:
+        return await places.answers_every_line_at(
+            self.uow,
+            external_channel_id=external_channel_id,
+            surface_id=surface_id,
+            agent_id=agent_id,
         )
 
     async def conversation_at(

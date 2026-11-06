@@ -1,0 +1,10 @@
+{
+  "name": "morning_drafts",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 9 * * 1-5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Read the conversations table. For every customer with no answered_at who wrote more than 20 hours ago, draft a reply and ask the person in with_person to check it. If nobody has it, ask whoever answered most this week. Send nothing to a customer yourself."
+}

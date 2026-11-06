@@ -321,6 +321,82 @@ Existing apps shall remain reachable in their own tabs.
 
 ---
 
+## Capability: Give a pod one thing it owns
+
+A pod can own one thing a person can check: a bar it holds every week ("Every
+customer hears back within a day"), or a finish line by a date ("Twenty
+design partners signed by the end of the quarter"). It is held to a target and counted by a measure, one
+read-only query over the pod's own tables that answers a single number. The
+plan for getting there is a file in the pod that people and its agent both
+edit.
+
+### PS-POD-070 — A person starts a pod that owns something, in one step
+**Status:** planned
+
+- When a member of an organization starts a pod from a template, the system
+  shall create the pod owning what the template counts, with the template's
+  tables, skill and schedules, a first plan, and a conversation in which the
+  pod's agent sets itself up.
+- When a member starts a pod from a sentence in their own words, the system
+  shall create the pod owning that sentence, with a first plan and a
+  conversation in which its agent is asked to build what counts it.
+- While a template's tables, skill and schedules are still being added, the
+  system shall not start the pod's agent on that conversation.
+- When a template's tables, skill and schedules have been added, or adding them
+  has failed, the system shall start the pod's agent on that conversation.
+- If any part of starting the pod fails, then the system shall leave no pod, no
+  plan and no conversation behind.
+- If the name asked for is taken in the organization, then the system shall give
+  the pod the name with the next free number after it.
+- If a template is a finish line and no date is given, then the system shall
+  refuse.
+
+**Contracts:** `pod.start`, `pod.bundle.templates`
+
+### PS-POD-071 — Everyone in a pod sees the same number, week by week
+**Status:** planned
+
+- The system shall count a pod's measure over every row of the tables it names,
+  so every member sees the same number, including members who may not open some
+  of those rows.
+- The system shall show a member the count and never the rows they may not
+  open.
+- The system shall keep, for each week, the last number the measure answered
+  in it, with the target it was held to then.
+- When a pod's measure is changed, the system shall start its weeks again.
+- If the measure can no longer be read, then the system shall say why, and keep
+  the week's last number.
+
+**Contracts:** `outcome.standing`, `outcome.history`
+
+### PS-POD-072 — Only someone who can read every row a measure counts may set it
+**Status:** planned
+
+- When a pod editor sets what the pod owns with a measure, the system shall read
+  it once and answer what it counts before keeping it.
+- If the person setting a measure may not read every row it counts, then the
+  system shall refuse and keep what the pod owned before.
+- If a measure is not one read-only query that answers a single number, then the
+  system shall refuse and say what it answered instead.
+- When an editor changes only what a pod owns in words, or its target, the
+  system shall keep its measure without asking them to read every row.
+
+**Contracts:** `outcome.set`, `outcome.clear`
+
+### PS-POD-073 — A pod's agent knows what the pod owns and can set its measure
+**Status:** planned
+
+- While a pod owns something, the system shall tell the pod's agent what it
+  owns, how it is counted, and where its plan is, in every conversation.
+- When the pod's agent sets what the pod owns, the system shall apply the same
+  checks it applies to a person, with the agent's own authority.
+- If an agent without the right to change the pod tries to set what it owns,
+  then the system shall have it ask for approval.
+
+**Contracts:** `outcome.set`
+
+---
+
 ## Not covered here
 
 | Concern | Where it lives |

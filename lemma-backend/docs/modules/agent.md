@@ -264,7 +264,10 @@ no line answers where its conversation last took one up.
 A message the person sends while a run is finishing is steered into it
 (`harness/lemma/pending_user_messages`), and the run goes on to answer that
 too -- if it is of the run's kind: a note or not alike, and said at the place
-the run was asked or at none (`domain/run_places`). One said elsewhere waits
+the run was asked or at none (`domain/run_places`). Each thread of a group in
+Lemma is a place of its own (`lemma:<thread>`, kept on the message's and the
+run's metadata), so a line in another thread waits as a platform's message
+said elsewhere does. One said elsewhere waits
 for the follow-up turn that claims it, which is asked where it was said, and
 that turn reads it after the answer of the run it waited for
 (`harness/lemma/history_replay`), not above it. The answer it had already

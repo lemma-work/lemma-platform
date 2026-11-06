@@ -28,7 +28,9 @@ from app.modules.agent.domain.run_places import (
     ASKED_IN_PLACE_KEY,
     IN_LEMMA,
     AnswerScope,
+    in_lemma,
 )
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = [pytest.mark.e2e]
@@ -304,3 +306,67 @@ async def test_a_run_asked_nowhere_in_particular_takes_in_only_what_was_too(
     steered = await queued_messages.claim_queued_user_messages(run_id, as_run=True)
 
     assert [message.id for message in steered] == [composer]
+
+
+async def test_a_group_thread_is_steered_by_the_place_stored_with_it(
+    db_session, scenario
+):
+    """A run asked in one thread of a group takes in a reply in that thread,
+    not a line in another: both compared as the place stored with them, the
+    name ``in_lemma`` gave it once -- the database never builds one."""
+    await scenario.create_org_with_pod(name_prefix="Queued threads")
+    asked, other = uuid4(), uuid4()
+    conversation = ConversationModel(
+        id=uuid4(),
+        user_id=UUID(scenario.owner_user["id"]),
+        pod_id=UUID(scenario.pod_id),
+        organization_id=UUID(scenario.org_id),
+    )
+    db_session.add(conversation)
+    run = AgentRunModel(
+        id=uuid4(),
+        conversation_id=conversation.id,
+        status="RUNNING",
+        agent_runtime={"profile_id": "system:lemma"},
+        started_at=_BASE,
+        created_at=_BASE,
+        **AgentRunModel.state_values(
+            RunState(asked_in_lemma=True, asked_in_thread=asked)
+        ),
+    )
+    db_session.add(run)
+    rows = [
+        MessageModel(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            agent_run_id=run.id,
+            sequence=index,
+            role="user",
+            kind="TEXT",
+            text=text,
+            queue_state=QueueState.QUEUED,
+            message_metadata={
+                "source": "lemma_channel",
+                ASKED_IN_PLACE_KEY: in_lemma(thread),
+            },
+            created_at=_BASE + timedelta(seconds=index),
+        )
+        for index, (text, thread) in enumerate(
+            [("In the other thread.", other), ("In the same thread.", asked)],
+            start=1,
+        )
+    ]
+    db_session.add_all(rows)
+    await db_session.commit()
+    queued_messages = QueuedMessages(SqlAlchemyUnitOfWork(db_session))
+
+    steered = await queued_messages.claim_queued_user_messages(run.id, as_run=True)
+    await db_session.commit()
+
+    assert [message.id for message in steered] == [rows[1].id]
+    # What waits is read back as stored, and is the scope the code would
+    # name for a run asked in that thread.
+    other_scope = AnswerScope.of_run(
+        RunState(asked_in_lemma=True, asked_in_thread=other).privacy
+    )
+    assert await queued_messages.earliest_queued_scope(run.id) == other_scope

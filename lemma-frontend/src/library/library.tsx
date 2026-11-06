@@ -37,7 +37,7 @@ const DRAWN = 150;
 
 /** The columns to profile and to show: what the table declares, or — when it
  *  declares nothing — whatever keys the rows are found to carry. */
-function fieldsOf(declared: { name: string; system?: boolean }[] | undefined, rows: Row[]) {
+function fieldsOf(declared: { name: string; system?: boolean; type?: string; options?: string[] | null }[] | undefined, rows: Row[]) {
     return declared ?? Array.from(new Set(rows.flatMap(Object.keys))).map(name => ({ name }));
 }
 
@@ -138,7 +138,7 @@ export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
        which asks under the same key, gets the same answer, and the sample
        has one to give. */
     const detailKey = ["table", podId, name, "detail"];
-    const readDetail = () => source.tableShape(podId, name) as Promise<{ primary_key_column?: string; enable_rls?: boolean; columns?: { name: string; system?: boolean }[] } | null>;
+    const readDetail = () => source.tableShape(podId, name) as Promise<{ primary_key_column?: string; enable_rls?: boolean; columns?: { name: string; system?: boolean; type?: string; options?: string[] | null }[] } | null>;
     const detail = useQuery({ queryKey: detailKey, queryFn: readDetail, staleTime: 300_000 });
     const primaryKey = (detail.data as { primary_key_column?: string } | undefined)?.primary_key_column ?? "id";
     const rowsKey = ["table", podId, name, "rows"];
