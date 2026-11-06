@@ -908,3 +908,26 @@ export function agentView(podId: string, agent: { name: string; broken: boolean 
 export function agentKey(agent: { id: string }, at: number): string {
     return agent.id || `unnamed-${at}`;
 }
+
+/** An app kept mounted this visit, with the organization it was opened in
+ *  and its Lemma as last read. */
+export type KeptApp<P extends { id: string }> = { podId: string; app: string; orgId: string | null; pod: P | null };
+
+/** The kept apps against a Lemma list just read for `orgId`. Each takes its
+ *  Lemma as now listed. One whose own organization's list no longer has its
+ *  Lemma goes. One from another organization stays as it was, so switching
+ *  organization never unmounts it. The same array when nothing changed. */
+export function refreshKept<P extends { id: string }>(kept: readonly KeptApp<P>[], pods: readonly P[], orgId: string | null): readonly KeptApp<P>[] {
+    let changed = false;
+    const next = kept.flatMap((one) => {
+        const now = pods.find((candidate) => candidate.id === one.podId);
+        if (now) {
+            if (now !== one.pod) changed = true;
+            return [{ ...one, pod: now }];
+        }
+        if (one.orgId !== orgId) return [one];
+        changed = true;
+        return [];
+    });
+    return changed ? next : kept;
+}

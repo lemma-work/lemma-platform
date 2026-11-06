@@ -544,6 +544,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        link to the shared chats while Chats is already open still lands on
        Shared. */
     const [chatsOn, setChatsOn] = useState<{ filter: ChatFilter; at: number }>({ filter: "all", at: 0 });
+    /* Shared chats were a tab, and a browser may still remember it as the
+       last one open: that opens Chats on Shared, as a link to it does. */
+    useEffect(() => {
+        if (!pod || tabs[pod.id] !== "space:channels") return;
+        setChatsOn((was) => ({ filter: "channels", at: was.at + 1 }));
+        setTabs((previous) => ({ ...previous, [pod.id]: "space:chats" }));
+    }, [pod, tabs]);
     /* Left, Chats opens on All again next time. */
     useEffect(() => {
         if (activeTab?.id !== "space:chats") setChatsOn((was) => (was.filter === "all" ? was : { filter: "all", at: was.at }));
