@@ -103,6 +103,12 @@
     .all__tabs button {
         flex: none;
     }
+    /* Chats has six filters, more than a phone's width: they wrap to a
+       second row rather than leave the last ones past the edge unseen. */
+    .chats-page__filters {
+        flex-wrap: wrap;
+        row-gap: 4px;
+    }
 
     /* Chats: a table does not fit here, so each row becomes two lines —
        the title, then where it came from and when. */
