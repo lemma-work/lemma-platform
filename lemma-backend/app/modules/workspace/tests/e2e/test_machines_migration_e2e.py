@@ -1,4 +1,4 @@
-"""Migration 0072 turns every existing workspace into a default machine.
+"""Migration 0073 turns every existing workspace into a default machine.
 
 A workspace row already there when it runs takes the defaults: private,
 billed to its user, the legacy 1x2 size it was built at -- which is how the
@@ -21,8 +21,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0071_outcome_weeks"
-REVISION = "0072_machines"
+BEFORE = "0072_workflow_runs_by_time"
+REVISION = "0073_machines"
 TABLES = (
     "machine_connections",
     "machine_previews",

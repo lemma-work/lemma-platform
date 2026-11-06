@@ -26,6 +26,7 @@ import {
     readSideSettings,
     readTrialView,
     readView,
+    refreshKept,
     sameOpen,
     serializePlan,
     standingOf,
@@ -702,4 +703,15 @@ test("an agent row that arrived without a name opens nothing, and keys apart fro
     assert.equal(agentView("p1", { name: "", broken: true }), null, "its address would end at agent/ and open the settings instead");
     assert.notEqual(agentKey({ id: "" }, 0), agentKey({ id: "" }, 1), "two nameless rows share an empty id");
     assert.equal(agentKey({ id: "a1" }, 3), "a1");
+});
+
+test("a kept app outlives a Lemma list that leaves its Lemma out, until its own organization's list does", () => {
+    const desk = { id: "p1", name: "Desk" };
+    const kept = [{ podId: "p1", app: "board", orgId: "o1", pod: null }];
+    const read = refreshKept(kept, [desk], "o1");
+    assert.equal(read[0].pod, desk, "it takes its Lemma once the list has it");
+    assert.equal(refreshKept(read, [desk], "o1"), read, "the same list changes nothing");
+    assert.equal(refreshKept(read, [{ id: "p9", name: "Elsewhere" }], "o2"), read, "another organization's list leaves it mounted");
+    assert.equal(refreshKept(read, [], "o2")[0].pod, desk, "with the Lemma it was last drawn with");
+    assert.deepEqual(refreshKept(read, [], "o1"), [], "its own organization, read without it, lets it go");
 });

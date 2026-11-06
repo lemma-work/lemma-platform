@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, type Org } from "@/data";
+import { source, type Org, type Pod } from "@/data";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { readAddress } from "@/shell/address";
@@ -31,8 +31,8 @@ import { FirstProfileStep } from "@/session/first-profile-step";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import {
     NEW_CHAT,
-    HOME, chatOpenOfView, chatView, outcomeView, podOfView, queueItems, readTrialView, readView, viewOfAddress, writeView,
-    type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type View,
+    HOME, chatOpenOfView, chatView, outcomeView, podOfView, queueItems, readTrialView, readView, refreshKept, viewOfAddress, writeView,
+    type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type KeptApp, type View,
 } from "./model";
 import { usePlans, usePodActivity, usePodDetails } from "./data";
 import { Bars, Icon, Empty } from "./parts";
@@ -354,15 +354,15 @@ export function OutcomesShell() {
     /* Every app opened this visit stays mounted, hidden while something else
        is in front, so coming back to one never cold-boots it -- the one thing
        the workspace's README says must never happen to an app. */
-    const [keptApps, setKeptApps] = useState<readonly { podId: string; app: string }[]>([]);
+    const [keptApps, setKeptApps] = useState<readonly KeptApp<Pod>[]>([]);
     const appPod = view.name === "app" ? view.podId : null;
     const appName = view.name === "app" ? view.app : null;
-    const keeps = (list: readonly { podId: string; app: string }[]) => list.some((each) => each.podId === appPod && each.app === appName);
-    const kept = appPod && appName && !keeps(keptApps) ? [...keptApps, { podId: appPod, app: appName }] : keptApps;
+    const keeps = (list: readonly KeptApp<Pod>[]) => list.some((each) => each.podId === appPod && each.app === appName);
+    const kept = appPod && appName && !keeps(keptApps) ? [...keptApps, { podId: appPod, app: appName, orgId, pod: null }] : keptApps;
     useEffect(() => {
         if (!appPod || !appName) return;
-        setKeptApps((was) => (was.some((each) => each.podId === appPod && each.app === appName) ? was : [...was, { podId: appPod, app: appName }]));
-    }, [appPod, appName]);
+        setKeptApps((was) => (was.some((each) => each.podId === appPod && each.app === appName) ? was : [...was, { podId: appPod, app: appName, orgId, pod: null }]));
+    }, [appPod, appName, orgId]);
 
     const myName = nameOf(me.data);
     const scoped = podOfView(view);
@@ -381,6 +381,15 @@ export function OutcomesShell() {
         return detail ? { ...pod, ...detail } : pod;
     }), [list, details]);
     const pod = scoped && view.name !== "chats" ? withPeople.find((one) => one.id === scoped) ?? null : null;
+
+    /* Each kept app holds the Lemma it was last drawn with, so a list that
+       leaves that Lemma out -- another organization's, or one being read
+       again -- does not unmount it. Only its own organization's list, read
+       and without it, lets the app go. */
+    useEffect(() => {
+        if (!pods.isSuccess) return;
+        setKeptApps((was) => refreshKept(was, withPeople, orgId));
+    }, [withPeople, pods.isSuccess, orgId]);
 
     /* A link to a Lemma this organization's list does not have -- from
        WhatsApp, an email, a teammate: one in another of your organizations,
@@ -535,7 +544,7 @@ export function OutcomesShell() {
                     {calling && <CallStage huddle={huddle} go={go} />}
                     {page}
                     {kept.map((one) => {
-                        const keptPod = withPeople.find((candidate) => candidate.id === one.podId);
+                        const keptPod = withPeople.find((candidate) => candidate.id === one.podId) ?? one.pod;
                         if (!keptPod) return null;
                         const shown = Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
                         return (
