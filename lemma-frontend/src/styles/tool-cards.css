@@ -535,7 +535,6 @@
    somebody talking and the other is a description of an argument list, so they
    do not get the same voice. */
 .steps__detail--said { color:var(--ink-2); }
-.steps__peek { font-style:normal; }
 
 /* ── a local agent's edits ──────────────────────────────────────────
    A diff is read line by line, so each line is its own block and the sign

@@ -40,7 +40,7 @@ export default async function ProductPage({ params }: Props) {
                     <h1 className={p.headline}>{hero.headline}</h1>
                     <Paragraphs text={hero.intro} className={p.intro} />
                     <div className={`${s.ctas} ${p.centred}`}>
-                        <Link className={s.primary} href="/t">Get started free</Link>
+                        <Link className={s.primary} href="/home">Get started free</Link>
                         <Link className={s.textLink} href="/#try">Look around a sample space →</Link>
                     </div>
                     <div className={p.stage}>
@@ -64,7 +64,7 @@ export default async function ProductPage({ params }: Props) {
                     <h2 id="close-title">{page.close.headline}</h2>
                     {page.close.sub && <p className={p.closeSub}>{page.close.sub}</p>}
                     <div className={`${s.ctas} ${p.centred}`}>
-                        <Link className={p.closePrimary} href="/t">Get started free</Link>
+                        <Link className={p.closePrimary} href="/home">Get started free</Link>
                         <a className={p.closeGhost} href={githubUrl} target="_blank" rel="noreferrer">View on GitHub</a>
                     </div>
                 </section>

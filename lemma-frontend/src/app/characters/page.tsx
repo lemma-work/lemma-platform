@@ -24,7 +24,7 @@ export default function Characters() {
     const detail = DETAILS[selected];
     const mark = (name: Featured, size: number) => <Mark seed={name} name={DETAILS[name].title} icon={characterUrl(name)} size={size} />;
     return <main className={styles.page} data-dark={dark}>
-        <header className={styles.header}><a href="/t">lemma<span> / character study</span></a><button onClick={() => setDark(!dark)}>{dark ? "Light" : "Dark"} background</button></header>
+        <header className={styles.header}><a href="/home">lemma<span> / character study</span></a><button onClick={() => setDark(!dark)}>{dark ? "Light" : "Dark"} background</button></header>
         <div className={styles.intro}><p>TEAMMATE IDENTITIES · PROTOTYPE 01</p><h1>A little more someone.</h1><div>Three familiar shapes, with a life of their own. <a href={`/characters/${selected}`}>Meet the interactive {detail.title} →</a></div></div>
         <section className={styles.workspace} aria-label="Teammate identity preview">
             <aside className={styles.sidebar}><p>YOUR TEAMMATES</p>{FEATURED.map(name => <button key={name} aria-pressed={selected === name} onClick={() => setSelected(name)}>{mark(name, 40)}<span>{DETAILS[name].title}<small>{DETAILS[name].role.split(" &")[0]}</small></span></button>)}<div className={styles.note}>Select a teammate.<br />Hover over their portrait.</div></aside>
