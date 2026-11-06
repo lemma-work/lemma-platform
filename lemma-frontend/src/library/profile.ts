@@ -57,6 +57,10 @@ export interface ColumnProfile {
      *  the schema calls the column. A pod that stores `stage` as free text
      *  still only ever puts four things in it. */
     values: string[];
+    /** The values the schema allows, when it fixes them: an ENUM column's
+     *  options. A status picker offers all of these, even one no row holds
+     *  yet, and offers nothing else, since the table would refuse it. */
+    fixed?: string[];
     /** Median character length, for the text-ish roles. */
     length: number;
     longest: number;
@@ -291,8 +295,16 @@ function roleOf(name: string, values: unknown[], primaryKey: string, lengths: nu
     return "text";
 }
 
+/** What a status picker offers: every value the schema allows, or, with no
+ *  fixed list, the values the rows hold. A value a row holds that the list
+ *  does not (written before the list was fixed) is shown on that row alone
+ *  by the picker, never offered to the others, which the table would refuse. */
+export function statusOptions(column: Pick<ColumnProfile, "values" | "fixed">): string[] {
+    return column.fixed ?? column.values;
+}
+
 export function profileTable(
-    columns: { name: string; system?: boolean }[],
+    columns: { name: string; system?: boolean; type?: string; options?: string[] | null }[],
     rows: Record<string, unknown>[],
     options: { primaryKey?: string; complete?: boolean; now?: Date } = {},
 ): TableProfile {
@@ -316,8 +328,11 @@ export function profileTable(
             const lengths = present.map((v) => (text(v) ?? String(v)).length);
             const stamps = present.map((v) => Date.parse(String(v))).filter(Number.isFinite);
             const seen = [...new Set(present.map((v) => String(v)))];
+            const declared = columns.find((column) => column.name === name);
+            const fixed = declared?.type === "ENUM" && declared.options?.length ? declared.options : undefined;
             return {
                 name,
+                ...(fixed ? { fixed } : {}),
                 role: roleOf(name, present, primaryKey, lengths, rows.length),
                 filled: rows.length ? present.length / rows.length : 0,
                 distinct: seen.length,

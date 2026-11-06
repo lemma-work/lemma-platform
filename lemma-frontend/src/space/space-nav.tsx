@@ -6,7 +6,7 @@ import { unbound } from "@/thread/conversation-list";
 import { source, type Pod, type SpaceView, type Tab } from "@/data";
 import { AppsIcon, ContactsIcon, FileIcon, FolderIcon, PlusIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
 import { badge, sayUnread } from "@/channels/model";
-import { chatRows } from "@/channels/chat-list";
+import { chatsOf } from "@/channels/chat-list";
 import { ChannelMark, StartChat } from "@/channels/chat-starter";
 import { allChannels, useChannelList } from "@/channels/queries";
 import { useMaySeeContacts } from "./contact-queries";
@@ -67,8 +67,8 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     const channelList = useChannelList(pod.id, { archived: false });
     const rows = useMemo(() => {
         const chats = unbound(conversations.data).filter((chat) => chat.kind.toUpperCase() !== "TASK");
-        return chatRows(chats, allChannels(channelList.data), pod.name).slice(0, SHOWN_CHATS);
-    }, [conversations.data, channelList.data, pod.name]);
+        return chatsOf({ pod, conversations: chats, channels: allChannels(channelList.data), me: null }).slice(0, SHOWN_CHATS);
+    }, [conversations.data, channelList.data, pod]);
     const contactsOn = useContactsPlace(pod.id);
     const places = recents.filter((tab) => tab.kind !== "channel");
 
@@ -104,24 +104,25 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                     />
                 </div>
                 {rows.map((row) => {
-                    if (row.kind === "chat") {
+                    const channel = row.channel;
+                    if (!channel) {
+                        const id = row.open.id;
                         return (
-                            <button key={row.id} className="side__item snav__chat" aria-current={activeId === "conversation" && openChatId === row.id ? "page" : undefined} onClick={() => onOpenChat(row.id)} title={row.title}>
+                            <button key={row.key} className="side__item snav__chat" aria-current={activeId === "conversation" && openChatId === id ? "page" : undefined} onClick={() => onOpenChat(id)} title={row.title}>
                                 <span>{row.title}</span>
-                                {row.chat.waitingOnYou && <span className="snav__dot" aria-label="needs you" />}
+                                {row.needsYou && <span className="snav__dot" aria-label="needs you" />}
                             </button>
                         );
                     }
-                    const channel = row.channel;
                     const count = badge(channel.unread.lines);
                     const said = sayUnread(channel.unread);
                     const calls = channel.unread.waiting > 0 || channel.unread.mentions > 0;
                     return (
                         <button
-                            key={row.id}
+                            key={row.key}
                             className="side__item snav__chat snav__shared"
                             data-unread={channel.unread.lines > 0 || undefined}
-                            aria-current={activeId === row.id ? "page" : undefined}
+                            aria-current={activeId === "channel:" + channel.id ? "page" : undefined}
                             onClick={() => onOpenChannel({ id: channel.id, title: row.title })}
                             title={row.title}
                             aria-label={said ? row.title + ", " + said : row.title}
@@ -132,7 +133,7 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                         </button>
                     );
                 })}
-                <button className="side__item snav__chat snav__all" aria-current={activeId === "space:chats" || activeId === "space:channels" ? "page" : undefined} onClick={() => onPick("space:chats")}>
+                <button className="side__item snav__chat snav__all" aria-current={activeId === "space:chats" ? "page" : undefined} onClick={() => onPick("space:chats")}>
                     <span>All chats</span>
                 </button>
             </div>
