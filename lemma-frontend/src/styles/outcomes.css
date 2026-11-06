@@ -147,6 +147,61 @@
     color: var(--ink);
 }
 
+.ox-side__close {
+    margin-left: 0;
+}
+
+/* The sidebar put away: a rail of its places as icons, the page beside it
+   wider by the difference. */
+.ox--railed {
+    grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.ox-side--rail {
+    align-items: center;
+    gap: 2px;
+    padding-top: 12px;
+}
+
+.ox-rail__b {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ox-rail__b:hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.ox-rail__b[aria-current="page"] {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+/* The sidebar's toggle sits apart from the places under it. */
+.ox-rail__b:first-child {
+    margin-bottom: 8px;
+}
+
+.ox-rail__dot {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--lemma);
+}
+
 .ox-palette__in kbd {
     padding: 1px 6px;
     border-radius: 5px;
@@ -200,13 +255,13 @@
 
 .ox-place:hover,
 .ox-srow:hover,
-.ox-group__name:hover {
+.ox-group__head:hover {
     background: var(--wash-b);
 }
 
 .ox-place[aria-current="page"],
 .ox-srow[aria-current="page"],
-.ox-group__name[aria-current="page"] {
+.ox-group__head:has(> .ox-group__name[aria-current="page"]) {
     background: var(--wash-a);
 }
 
@@ -243,6 +298,157 @@
     scrollbar-color: var(--line-2) transparent;
 }
 
+/* The chats the reader pinned, above every Lemma, under a quiet label. */
+.ox-pinned {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-bottom: 10px;
+}
+
+.ox-pinned__t {
+    height: 28px;
+    margin: 0;
+    padding: 0 10px;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    line-height: 28px;
+}
+
+/* The list's own header: its name, what it shows, and a new Lemma. The
+   filter wears a dot while the list reads differently from the default. */
+.ox-listhead {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+    padding: 0 3px 0 10px;
+}
+
+.ox-listhead__t {
+    flex: 1;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-listhead__b {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ox-listhead__b:hover,
+.ox-listhead__b[aria-expanded="true"] {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.ox-listhead__b--set::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--lemma);
+}
+
+.ox-listhead__none {
+    margin: 0;
+    padding: 4px 10px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+/* A menu set over the page from a button in the sidebar: fixed, so the
+   scrolling list it opens from cannot cut it off. */
+.ox-menu {
+    position: fixed;
+    z-index: 40;
+    width: 268px;
+    overflow-y: auto;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+}
+
+.ox-menu__h {
+    margin: 0;
+    padding: 10px 10px 4px;
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+.ox-menu__h:first-child {
+    padding-top: 4px;
+}
+
+.ox-menu__i {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px 0 6px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-menu__i:hover {
+    background: var(--wash-b);
+}
+
+.ox-menu__mark {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 18px;
+    color: var(--ink);
+}
+
+.ox-menu__t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-menu__sub {
+    flex: none;
+    max-width: 45%;
+    margin-left: auto;
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-menu__none {
+    margin: 0;
+    padding: 4px 10px 6px 32px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
 /* An outcome: its face and name, the one weight-500 line in the list, with
    space above it. Folded ones pack together into a list of names. */
 .ox-group {
@@ -263,16 +469,19 @@
     gap: 0;
     height: 32px;
     padding-right: 3px;
+    border-radius: 8px;
 }
 
+/* The name opens its Lemma; the chevron after it folds and unfolds the
+   chats under it, as a project's does over its sessions. The row lights as
+   one under the pointer. */
 .ox-group__name {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
     height: 32px;
-    padding: 0 6px 0 10px;
-    border-radius: 8px;
+    padding: 0 4px 0 10px;
     color: var(--ink);
     font-size: 13.5px;
     font-weight: 500;
@@ -285,7 +494,33 @@
     white-space: nowrap;
 }
 
-.ox-group__fold,
+.ox-group__chev {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+
+.ox-group__chev:hover {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.ox-group__chev svg {
+    transition: transform 120ms ease;
+}
+
+.ox-group--folded .ox-group__chev svg {
+    transform: rotate(-90deg);
+}
+
 .ox-group__add {
     display: grid;
     place-items: center;
@@ -299,13 +534,13 @@
     cursor: pointer;
 }
 
-/* The name takes the row, so the controls and signs line up at its end,
-   over the chats' own signs. */
-.ox-group__name {
+/* The space after the name, so the controls and signs line up at the
+   row's end, over the chats' own signs. */
+.ox-group__fill {
     flex: 1;
+    align-self: stretch;
 }
 
-.ox-group__fold:hover,
 .ox-group__add:hover {
     background: var(--wash-a);
     color: var(--ink);
@@ -315,19 +550,16 @@
     margin: 0 4px;
 }
 
-/* An open section's fold and every section's + wait for a pointer. A folded
-   section always shows its chevron: that is what says it is folded. */
+/* A section's → and + wait for a pointer, and take no space until then, so
+   a name runs to the row's end. */
 @media (hover: hover) {
-    .ox-group:not(.ox-group--folded) .ox-group__fold,
     .ox-group__add {
-        opacity: 0;
+        display: none;
     }
 
-    .ox-group__head:hover .ox-group__fold,
     .ox-group__head:hover .ox-group__add,
-    .ox-group__head:focus-within .ox-group__fold,
     .ox-group__head:focus-within .ox-group__add {
-        opacity: 1;
+        display: grid;
     }
 }
 
@@ -865,12 +1097,6 @@
 
 .ox-crumb a:hover {
     color: var(--ink);
-}
-
-.ox-stand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
 }
 
 .ox-split {
@@ -1416,32 +1642,30 @@ a.ox-piece:hover .ox-piece__t {
     opacity: 0.8;
 }
 
+/* Lists on a page are rows, not boxes: no frame around them, a row lit
+   only under the pointer, and the text on the edge the heading starts on --
+   the rows reach out past it by their own padding. */
 .ox-queue {
-    border: 1px solid var(--line-2);
-    border-radius: 14px;
-    background: var(--paper);
-    overflow: hidden;
+    margin: 0 -10px;
 }
 
 .ox-queue__h {
     display: flex;
     gap: 10px;
     align-items: baseline;
-    margin: 0;
-    padding: 10px 16px;
-    background: var(--wash-b);
-    border-bottom: 1px solid var(--line);
+    margin: 18px 0 2px;
+    padding: 0 10px;
     font-size: 13px;
+}
+
+.ox-queue__g:first-child .ox-queue__h {
+    margin-top: 0;
 }
 
 /* One thing waiting on you: its title opens where it came from, and its
    button opens it in place, onto the card or form that answers it. */
 .ox-need {
-    border-bottom: 1px solid var(--line);
-}
-
-.ox-need:last-child {
-    border-bottom: 0;
+    border-radius: 10px;
 }
 
 .ox-item {
@@ -1449,8 +1673,13 @@ a.ox-piece:hover .ox-piece__t {
     grid-template-columns: minmax(0, 1fr) 70px auto;
     gap: 14px;
     align-items: center;
-    min-height: 54px;
-    padding: 6px 16px;
+    min-height: 52px;
+    padding: 6px 10px;
+    border-radius: 10px;
+}
+
+.ox-need[data-open] .ox-item {
+    border-radius: 10px 10px 0 0;
 }
 
 .ox-item:hover,
@@ -1465,7 +1694,8 @@ a.ox-piece:hover .ox-piece__t {
 }
 
 .ox-need__panel {
-    padding: 4px 16px 16px;
+    padding: 4px 10px 14px;
+    border-radius: 0 0 10px 10px;
     background: var(--wash-b);
 }
 
@@ -1721,37 +1951,45 @@ a.ox-piece:hover .ox-piece__t {
     padding: 8px 10px;
 }
 
-/* ── home: asking, and every app ─────────────────────────────────────── */
+/* ── home: a new chat ─────────────────────────────────────────────────── */
 
-/* The page column: what needs you said once, the box to ask, a few lines
-   of what waits, and a row of apps. */
+/* The page column: a greeting, the box, what waits and what to pick up --
+   in the middle of the window, a little above it, where an empty chat puts
+   its box, not at the top like a page of things to read. */
 .ox-home {
-    padding-top: 56px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 100%;
+    padding-top: 48px;
+    padding-bottom: 10vh;
 }
 
 .ox-home__t {
     margin: 0;
-    font-size: 30px;
+    font-size: 28px;
     line-height: 1.15;
     letter-spacing: -0.02em;
+    text-align: center;
 }
 
-.ox-home__sub {
-    margin: 8px 0 0;
-    color: var(--ink-2);
-    font-size: 15px;
+/* Every app, a grid of their covers under the page's name. */
+.ox-appspage .ox-apps {
+    margin-top: 24px;
 }
 
+/* One hairline and a soft lift, and nothing darker when it has the caret:
+   a border plus the depth token's own ring drew the edge twice, and the
+   focused ink edge made the box the heaviest line on the page. */
 .ox-askbox {
     margin-top: 24px;
-    border: 1px solid var(--line-2);
-    border-radius: 16px;
+    border-radius: 20px;
     background: var(--paper);
-    box-shadow: var(--depth-rest);
+    box-shadow: var(--depth-raise);
 }
 
 .ox-askbox:focus-within {
-    border-color: var(--ink-2);
+    box-shadow: 0 0 0 1px var(--line-2), var(--depth-raise);
 }
 
 .ox-askbox textarea {
@@ -1783,11 +2021,18 @@ a.ox-piece:hover .ox-piece__t {
 }
 
 .ox-askbox--over {
-    border-color: var(--ink-2);
     background: var(--wash-a);
+    box-shadow: 0 0 0 1.5px var(--ink-2);
 }
 
+/* A row of what goes with the words, as the composer lays it out: a
+   picture is a 64px tile only as a flex item -- an inline tile takes no
+   width, and its canvas then stretches to the whole box. */
 .ox-askbox__files {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
     padding: 12px 16px 0;
 }
 
@@ -1828,25 +2073,51 @@ a.ox-piece:hover .ox-piece__t {
     margin-left: 0;
 }
 
+/* Who is asked: a face and a name, quiet until the pointer is on it, like
+   the model beside send. */
 .ox-askbox__in {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
+    height: 30px;
+    padding: 0 6px;
+    border-radius: 8px;
     color: var(--ink-2);
     font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-askbox__in:hover {
+    background: var(--wash-b);
 }
 
 .ox-askbox__in select {
+    appearance: none;
     max-width: 240px;
-    height: 28px;
-    padding: 0 6px;
-    border: 1px solid var(--line-2);
-    border-radius: 8px;
-    background: var(--paper);
+    height: 30px;
+    padding: 0 16px 0 0;
+    border: 0;
+    background: none;
     color: var(--ink);
     font: inherit;
-    font-size: 13px;
+    font-size: 13.5px;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    outline: none;
+    /* As wide as the name picked, not the longest one in the list. */
+    field-sizing: content;
+}
+
+.ox-askbox__in:focus-within {
+    box-shadow: 0 0 0 1.5px var(--ink-2);
+}
+
+.ox-askbox__in .ox-icon {
+    position: absolute;
+    right: 6px;
+    pointer-events: none;
 }
 
 .ox-askbox__send {
@@ -2018,8 +2289,18 @@ a.ox-piece:hover .ox-piece__t {
 }
 
 .ox-thread {
+    position: relative;
     display: flex;
     flex-direction: column;
+    min-height: 0;
+}
+
+/* The chat itself: its header, the banner over it, the thread. */
+.ox-thread__main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
     min-height: 0;
 }
 
@@ -2086,82 +2367,109 @@ a.ox-piece:hover .ox-piece__t {
     min-height: 0;
 }
 
+/* Something the chat opened, beside it: the chat's column up to the
+   divider, the pane after it from the top of the window to the bottom, as
+   the workspace splits a chat and what it made. Each has one header, level
+   with the other's. The divider moves the line and remembers where. */
+.ox-thread--beside > .ox-thread__main {
+    margin-right: calc(100% - var(--split-position, 52%));
+}
+
+.ox-beside {
+    position: absolute;
+    inset-block: 0;
+    right: 0;
+    left: var(--split-position, 52%);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--paper);
+}
+
+/* Level with the chat's header beside it: the same height and rule. */
+.ox-beside__bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    height: 48px;
+    padding: 0 10px 0 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+/* What can be done with it -- download, copy its link, share, reload --
+   as the bar over its own page has them, quieter. */
+.ox-beside__acts {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.ox-beside__t {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13.5px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-beside__b {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ox-beside__b:hover {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+/* The workspace's own view of it fills what is under the bar. */
+.ox-beside__body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+
+/* Too narrow for two: what was opened covers the chat, and closing it
+   brings the chat back. */
+@media (max-width: 760px) {
+    .ox-thread--beside > .ox-thread__main {
+        margin-right: 0;
+    }
+
+    .ox-beside {
+        left: 0;
+        z-index: 7;
+    }
+}
+
 .ox-thread__none {
     padding: 24px;
 }
 
-/* a new chat: who it is with, its apps, and the box at the foot */
-
-.ox-newchat {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
+/* The summary: one column narrower than the frame's, read top to bottom --
+   who it is and what it owns, what needs you, what it has been doing, what
+   it is made of -- every part starting on the same edge as the face. */
+.ox-page.ox-lsum {
+    max-width: calc(760px + 2 * var(--ox-gutter));
 }
 
-.ox-newchat__body {
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    gap: 26px;
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    width: min(100%, 808px);
-    margin: 0 auto;
-    padding: 32px 24px 20px;
-}
-
-.ox-newchat__who {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-
-.ox-newchat__id {
-    min-width: 0;
-}
-
-.ox-newchat__name {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 500;
-    letter-spacing: -0.015em;
-}
-
-.ox-newchat__owns {
-    margin: 2px 0 0;
-    color: var(--ink-2);
-    font-size: 14px;
-}
-
-.ox-newchat__h {
-    margin: 0 0 10px;
-    color: var(--ink-2);
-    font-size: 12.5px;
-}
-
-.ox-newchat__foot {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    width: min(100%, 808px);
-    margin: 0 auto;
-    padding: 0 24px 20px;
-}
-
-.ox-newchat__foot .ox-askbox {
-    margin-top: 0;
-}
-
-/* The summary: who it is and what it owns across the top, then two
-   columns -- talking to it and what it has done on the left, its sections,
-   people and places on the right. */
 .ox-lsum__head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 16px;
-    margin-bottom: 20px;
 }
 
 .ox-lsum__id {
@@ -2169,8 +2477,8 @@ a.ox-piece:hover .ox-piece__t {
 }
 
 .ox-lsum__id h1 {
-    margin: 0;
-    font-size: 28px;
+    margin: 2px 0 0;
+    font-size: 26px;
     font-weight: 500;
     line-height: 1.15;
     letter-spacing: -0.02em;
@@ -2182,147 +2490,110 @@ a.ox-piece:hover .ox-piece__t {
     font-size: 15px;
 }
 
-.ox-owns {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px 24px;
-    margin-bottom: 20px;
-    padding: 14px 18px;
-    border: 1px solid var(--line-2);
-    border-radius: 14px;
-}
-
-.ox-owns__t {
-    display: flex;
-    gap: 10px;
-    min-width: 0;
-    margin: 0;
-    font-size: 16px;
-}
-
-.ox-owns__t > span {
-    flex: none;
-    color: var(--ink-2);
-}
-
-.ox-lsum__cols {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    gap: 36px;
-    align-items: start;
-}
-
-.ox-lsum__main {
+/* The page is the new chat, so its box is where a chat keeps one: pinned
+   to the foot of the window while the page scrolls under it, on the page's
+   own paper, which fades in above it so nothing is cut off at a hard line. */
+.ox-lsum__ask {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
     display: flex;
     flex-direction: column;
-    gap: 28px;
-    min-width: 0;
+    gap: 8px;
+    margin-top: 20px;
+    padding: 28px 0 18px;
+    background: linear-gradient(to bottom, transparent, var(--paper) 24px);
 }
 
-/* The column's gap spaces its parts; a heading's own margin would double it. */
-.ox-lsum__main .ox-sec {
+/* A page with its box pinned to the foot ends at the box: the space every
+   other page keeps under its last line would hold the box above the
+   window's edge, with the page showing under it. */
+.ox-main:has(.ox-lsum__ask) {
+    padding-bottom: 0;
+}
+
+.ox-lsum__ask .ox-askbox {
     margin-top: 0;
 }
 
-.ox-lsum__side {
-    position: sticky;
-    top: 20px;
+/* What it owns, or the way to give it something to own: one line under
+   its name, not a card of its own. */
+.ox-lsum__id .ox-lsum__owns {
     display: flex;
-    flex-direction: column;
-    gap: 26px;
-}
-
-/* Its sections, a row each, saying what is in it. */
-.ox-secrows {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid var(--line-2);
-    border-radius: 14px;
-}
-
-.ox-secrow {
-    display: grid;
-    grid-template-columns: 16px auto minmax(0, 1fr);
-    gap: 10px;
-    align-items: center;
-    min-height: 44px;
-    padding: 0 14px;
-    border-bottom: 1px solid var(--line);
-}
-
-.ox-secrow:last-child {
-    border-bottom: 0;
-}
-
-.ox-secrow:hover {
-    background: var(--wash-b);
-}
-
-.ox-secrow > .ox-icon {
-    color: var(--ink-2);
-}
-
-.ox-secrow__t {
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    margin-top: 12px;
+    color: var(--ink);
     font-size: 14px;
 }
 
-.ox-secrow__d {
-    overflow: hidden;
-    color: var(--ink-2);
-    font-size: 12.5px;
-    text-align: right;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.ox-secrow__d--you {
-    color: var(--lemma-ink);
-}
-
-.ox-sideb {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-}
-
-.ox-sideb__h {
-    margin: 0;
-    color: var(--ink-2);
-    font-size: 13px;
-    font-weight: 400;
-}
-
-.ox-sideb__list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    width: 100%;
-    margin: 0;
+/* A button that reads as a link in a sentence. */
+.ox-textbtn {
     padding: 0;
-    list-style: none;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
 }
 
-.ox-sideb__list li {
+.ox-textbtn:hover {
+    text-decoration-color: var(--ink);
+}
+
+/* What it is made of: a row per kind -- its name, how many, the first few
+   by name -- in the rows every list on the page uses. */
+.ox-map {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    font-size: 13.5px;
+    flex-direction: column;
+    margin: 0 -10px;
 }
 
-.ox-sideb__list li > span {
+.ox-map__row {
+    display: grid;
+    grid-template-columns: 16px 104px 36px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    width: 100%;
+    min-height: 38px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-map__row:hover {
+    background: var(--wash-b);
+}
+
+.ox-map__row > .ox-icon {
+    color: var(--ink-2);
+}
+
+.ox-map__n {
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-map__d {
     overflow: hidden;
+    color: var(--ink-2);
+    font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.ox-sideb .ox-vs {
-    margin: 0;
-    font-size: 13px;
+.ox-map__d--you {
+    color: var(--lemma-ink);
 }
 
 /* A section's page: its name once, then what is in it. */
@@ -2445,53 +2716,20 @@ a.ox-piece:hover .ox-piece__t {
     font-size: 12px;
 }
 
-.ox-ownit {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    margin-bottom: 16px;
-    padding: 16px 18px;
-    border-radius: 14px;
-    background: var(--lemma-wash);
-}
-
-.ox-ownit__t {
-    margin: 0 0 2px;
-    font-size: 15px;
-    font-weight: 500;
-}
-
-.ox-ownit .ox-vs {
-    margin: 0;
-    font-size: 13px;
-}
-
-.ox-ownit__acts {
-    display: flex;
-    gap: 8px;
-}
-
 .ox-recent {
-    border: 1px solid var(--line-2);
-    border-radius: 14px;
-    background: var(--paper);
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    margin: 0 -10px;
 }
 
 .ox-recent__row {
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 42px;
-    padding: 4px 16px;
-    border-bottom: 1px solid var(--line);
+    min-height: 38px;
+    padding: 2px 10px;
+    border-radius: 8px;
     font-size: 14px;
-}
-
-.ox-recent__row:last-child {
-    border-bottom: 0;
 }
 
 .ox-recent__row:hover {
@@ -2589,103 +2827,6 @@ a.ox-piece:hover .ox-piece__t {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-}
-
-/* What a Lemma runs, a shelf each: apps, tables, automations. */
-.ox-shelf__head {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    margin-bottom: 10px;
-}
-
-.ox-shelf__t {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 6px;
-    margin: 0;
-    font-size: 13.5px;
-    font-weight: 500;
-}
-
-.ox-shelf__n {
-    color: var(--ink-2);
-    font-family: var(--ui);
-    font-size: 12px;
-    font-weight: 400;
-}
-
-.ox-shelf__all {
-    color: var(--ink-2);
-    font-size: 12.5px;
-}
-
-.ox-shelf__all:hover {
-    color: var(--ink);
-}
-
-.ox-shelf__new {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: auto;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 12.5px;
-    cursor: pointer;
-}
-
-.ox-shelf__new:hover {
-    color: var(--ink);
-}
-
-.ox-shelf__none {
-    margin: 0;
-    color: var(--ink-2);
-    font-size: 13px;
-}
-
-.ox-chiplinks {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-}
-
-.ox-chiplink {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    max-width: 260px;
-    height: 30px;
-    padding: 0 11px;
-    border-radius: 8px;
-    background: var(--paper);
-    box-shadow: inset 0 0 0 1px var(--line-2);
-    color: var(--ink);
-    font-size: 13px;
-}
-
-.ox-chiplink span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.ox-chiplink .ox-icon {
-    color: var(--ink-2);
-}
-
-.ox-chiplink:hover {
-    background: var(--wash-b);
-}
-
-.ox-chiplinks__more {
-    color: var(--ink-2);
-    font-size: 12.5px;
 }
 
 /* Starting with people instead: a group made here, or one on a platform. */
@@ -2914,6 +3055,40 @@ a.ox-piece:hover .ox-piece__t {
     scrollbar-gutter: stable both-edges;
 }
 
+/* Except the computer, which is not a page to read: its screen takes the
+   whole stage, edge to edge, and nothing around it scrolls. */
+.ox-stage .computer-view.library-view {
+    width: 100%;
+    padding-inline: 0;
+}
+
+.ox-stage .library-pane:has(> .computer-view) {
+    overflow: hidden;
+    scrollbar-gutter: auto;
+}
+
+.ox-stage .cbar {
+    padding: 0 12px 0 20px;
+}
+
+/* Beside a chat, the computer's bar is the pane's: its name first, then
+   how the machine is. */
+.ox-beside .cbar {
+    padding: 0 10px 0 16px;
+}
+
+.ox-beside__t--lead {
+    flex: 0 1 auto;
+}
+
+/* At the pane's narrowest the name goes rather than reading "Comp…": the
+   dot, Signed-in sites and Files say what this is. */
+@container (max-width: 400px) {
+    .ox-beside__t--lead {
+        display: none;
+    }
+}
+
 /* ── narrow screens ──────────────────────────────────────────────────── */
 
 @media (max-width: 1100px) {
@@ -2950,22 +3125,18 @@ a.ox-piece:hover .ox-piece__t {
     }
 }
 
-@media (max-width: 900px) {
-    /* The summary's side column goes under what it sits beside. */
-    .ox-lsum__cols {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .ox-lsum__side {
-        position: static;
-    }
-}
-
 @media (max-width: 760px) {
-    /* One column. The sidebar slides over the page from a bar on top. */
-    .ox {
+    /* One column. The sidebar slides over the page from a bar on top, so
+       putting it away -- and its rail -- means nothing here. */
+    .ox,
+    .ox--railed {
         --ox-gutter: 16px;
         grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ox-side--rail,
+    .ox-side__close {
+        display: none;
     }
 
     .ox-side {
@@ -3102,19 +3273,79 @@ a.ox-piece:hover .ox-piece__t {
     margin: 0 14px 8px;
 }
 
-/* A tool at the end of a chat's header: the machine it works on. */
-.ox-thread__tool {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;
-    color: var(--ink-2);
-    font-size: 13px;
+/* A chat's name in its header, with a ▾ for what can be done with it. */
+.ox-chathead {
+    min-width: 0;
+    max-width: 100%;
 }
 
-.ox-thread__tool:hover {
+.ox-more.ox-chathead > summary {
+    display: flex;
+    gap: 4px;
+    width: auto;
+    min-width: 0;
+    height: 30px;
+    padding: 0 6px 0 8px;
+    margin-left: -8px;
     color: var(--ink);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.ox-chathead__t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-chathead > summary .ox-icon {
+    flex: none;
+    color: var(--ink-2);
+}
+
+.ox-chathead .ox-more__menu {
+    right: auto;
+    left: -8px;
+}
+
+/* A shared chat's pin, at the end of its page's own header. */
+.ox-pinbtn {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ox-pinbtn:hover {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.ox-pinbtn[aria-pressed="true"] {
+    color: var(--lemma);
+}
+
+.ox-chathead__rename {
+    width: min(100%, 420px);
+    height: 30px;
+    margin-left: -8px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 8px;
+    outline: none;
+    background: var(--wash-b);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
 }
 
 /* A section's title, with what can be made there beside it. The end of the

@@ -1,4 +1,8 @@
 from __future__ import annotations
+
+import shutil
+from functools import partial
+from pathlib import Path
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 from uuid import uuid4
@@ -15,6 +19,7 @@ from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
 )
+from app.modules.agent.tests.local_git import LocalGit, local_git
 from app.modules.workspace.contracts import PythonExecutionResult
 
 
@@ -56,6 +61,14 @@ def _context(repo: ProjectRepo | None) -> ToolContext:
     )
 
 
+async def _no_sweep(ctx, session) -> None:
+    del ctx, session
+
+
+#: The checkout step without the sweep it ends on, which reads the database
+#: and is `test_worktree_sweep`'s to test.
+_ensure = partial(github_project.ensure_project_checkout, sweep=_no_sweep)
+
 _REPO = ProjectRepo(owner="acme", repo="web")
 _MARKER_KEY = f"{github_project._MARKER_KEY_PREFIX}:session-1:acme/web"
 
@@ -70,7 +83,7 @@ async def test_a_conversation_without_a_project_does_nothing(
     monkeypatch.setattr(github_project, "get_redis", _fail)
     session = _FakeSession()
 
-    assert await github_project.ensure_project_checkout(_context(None), session) is None
+    assert await _ensure(_context(None), session) is None
     assert session.commands == []
 
 
@@ -81,11 +94,11 @@ async def test_clone_runs_once_per_session(monkeypatch: pytest.MonkeyPatch) -> N
     ctx = _context(_REPO)
     session = _FakeSession()
 
-    assert await github_project.ensure_project_checkout(ctx, session) is None
+    assert await _ensure(ctx, session) is None
     assert redis.values[_MARKER_KEY] == "present"
 
     # Twenty commands into a session, the clone is not re-attempted.
-    assert await github_project.ensure_project_checkout(ctx, session) is None
+    assert await _ensure(ctx, session) is None
     assert len(session.commands) == 1
 
 
@@ -94,22 +107,26 @@ async def test_clone_never_runs_over_an_existing_checkout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The guard is in the command itself, so a fresh session cannot clobber a
-    working tree another conversation is using."""
+    working tree another conversation is using: an existing checkout is only
+    fetched, which moves remote-tracking refs and nothing else."""
 
     redis = _FakeRedis()
     monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
     session = _FakeSession()
 
-    await github_project.ensure_project_checkout(_context(_REPO), session)
+    await _ensure(_context(_REPO), session)
 
     command = session.commands[0]
+    path = f"{WORKSPACE_ROOT}/repos/acme/web"
+    # A conversation from before worktrees works in the clone itself, so it is
+    # cloned or fetched there and nothing else is made.
     assert command.startswith(
-        f"[ -e {WORKSPACE_ROOT}/repos/acme/web/.git ] || git clone "
+        f"if [ -e {path}/.git ]; then git -C {path} fetch --quiet origin || stale=1; "
+        f"else git clone https://github.com/acme/web.git {path} || exit; fi"
     )
-    assert "https://github.com/acme/web.git" in command
-    assert command.endswith(f"{WORKSPACE_ROOT}/repos/acme/web")
+    assert "worktree" not in command
     # Nothing that could move or discard work in an existing tree.
-    for destructive in ("pull", "fetch", "reset", "checkout", "clean"):
+    for destructive in ("pull", "reset", "checkout", "switch", "clean", "merge"):
         assert destructive not in command
 
 
@@ -120,7 +137,7 @@ async def test_a_ref_is_cloned_as_a_branch(monkeypatch: pytest.MonkeyPatch) -> N
     repo = ProjectRepo(owner="acme", repo="web", ref="release/2.0")
     session = _FakeSession()
 
-    await github_project.ensure_project_checkout(_context(repo), session)
+    await _ensure(_context(repo), session)
 
     # No quoting appears because nothing needs it: a ref that reached this far
     # already passed a charset with no shell metacharacters in it. The
@@ -138,7 +155,7 @@ async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
         exit_code=128, stderr="remote: Repository not found.\nfatal: could not read"
     )
 
-    notice = await github_project.ensure_project_checkout(_context(_REPO), session)
+    notice = await _ensure(_context(_REPO), session)
 
     assert notice is not None
     assert "acme/web" in notice
@@ -147,10 +164,29 @@ async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
     assert "Repository not found." in notice
     # Cached, so a burst of commands doesn't re-run a slow failing clone...
     assert redis.values[_MARKER_KEY] == "failed"
-    assert (
-        await github_project.ensure_project_checkout(_context(_REPO), session) is None
-    )
+    assert await _ensure(_context(_REPO), session) is None
     assert len(session.commands) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_says_origin_may_be_stale_once() -> None:
+    """The checkout is still there and usable, so it is not a failed clone; the
+    agent is told once that `origin/*` may be behind."""
+    redis = _FakeRedis()
+    session = _FakeSession(
+        exit_code=75,
+        stderr="fatal: unable to access 'https://github.com/acme/web.git/'",
+    )
+
+    notice = await _ensure(_context(_REPO), session, redis=redis)
+
+    assert notice is not None
+    assert "is checked out in" in notice
+    assert "`origin/*` may be behind GitHub" in notice
+    assert "unable to access" in notice
+    assert "could not be cloned" not in notice
+    assert redis.values[_MARKER_KEY] == "present"
+    assert await _ensure(_context(_REPO), session, redis=redis) is None
 
 
 @pytest.mark.asyncio
@@ -162,9 +198,7 @@ async def test_a_session_without_an_id_is_left_alone(
     session = _FakeSession()
     session.session_id = None
 
-    assert (
-        await github_project.ensure_project_checkout(_context(_REPO), session) is None
-    )
+    assert await _ensure(_context(_REPO), session) is None
     assert session.commands == []
 
 
@@ -338,3 +372,112 @@ async def test_a_broken_bridge_never_blocks_the_work_itself(
     result = await _run_tool(tool, _context(_REPO))
 
     assert result.success is True
+
+
+# --- worktrees -----------------------------------------------------------------
+
+
+def _worktree_context(slug: str = "ab12cd34", repo: ProjectRepo = _REPO) -> ToolContext:
+    return ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        workspace_repo=repo,
+        workspace_cwd=repo.worktree_dir(slug),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_gets_a_worktree_of_the_shared_clone() -> None:
+    session = _FakeSession()
+
+    notice = await _ensure(_worktree_context(), session, redis=_FakeRedis())
+
+    assert notice is None
+    command = session.commands[0]
+    clone = f"{WORKSPACE_ROOT}/repos/acme/web"
+    worktree = f"{WORKSPACE_ROOT}/worktrees/acme/web/ab12cd34"
+    assert f"git clone https://github.com/acme/web.git {clone}" in command
+    assert (
+        f'git -C {clone} worktree add --quiet -b lemma/ab12cd34 {worktree} "$start"'
+        in command
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_worktree_that_could_not_be_made_says_so() -> None:
+    redis = _FakeRedis()
+    session = _FakeSession(
+        exit_code=76, stderr="fatal: invalid reference: origin/release"
+    )
+
+    notice = await _ensure(_worktree_context(), session, redis=redis)
+
+    assert notice is not None
+    assert "worktree could not be made" in notice
+    assert f"{WORKSPACE_ROOT}/worktrees/acme/web/ab12cd34" in notice
+    assert "invalid reference" in notice
+    assert redis.values[_MARKER_KEY] == "failed"
+
+
+@pytest.fixture
+def git(tmp_path: Path) -> LocalGit:
+    return local_git(tmp_path)
+
+
+def test_two_conversations_never_share_a_working_tree(git: LocalGit) -> None:
+    first_code, first = git.step("one")
+    second_code, second = git.step("two")
+
+    assert (first_code, second_code) == (0, 0)
+    assert git.run("-C", str(first), "branch", "--show-current") == "lemma/one"
+    assert git.run("-C", str(second), "branch", "--show-current") == "lemma/two"
+    (first / "draft.txt").write_text("unsaved")
+    assert git.run("-C", str(second), "status", "--porcelain") == ""
+    # One clone behind both, and nobody works in it.
+    assert git.run("-C", str(git.clone), "status", "--porcelain") == ""
+
+
+def test_a_new_conversation_starts_from_where_origin_is_now(git: LocalGit) -> None:
+    git.step("one")
+    latest = git.push_commit("second")
+
+    code, worktree = git.step("two")
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == latest
+
+
+def test_a_conversation_on_a_ref_starts_from_that_branch(git: LocalGit) -> None:
+    code, worktree = git.step("one", ref="release")
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == git.run(
+        "-C", str(git.clone), "rev-parse", "origin/release"
+    )
+
+
+def test_a_lost_worktree_comes_back_on_its_branch_with_its_commits(
+    git: LocalGit,
+) -> None:
+    _, worktree = git.step("one")
+    git.run("-C", str(worktree), "commit", "-q", "--allow-empty", "-m", "mine")
+    mine = git.run("-C", str(worktree), "rev-parse", "HEAD")
+    shutil.rmtree(worktree)
+
+    code, worktree = git.step("one")
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == mine
+
+
+def test_an_unreachable_origin_still_leaves_a_worktree_and_says_fetch_failed(
+    git: LocalGit,
+) -> None:
+    git.step("one")
+    git.origin.rename(git.root / "gone.git")
+
+    code, worktree = git.step("two")
+
+    assert code == github_project._FETCH_FAILED_EXIT
+    assert git.run("-C", str(worktree), "branch", "--show-current") == "lemma/two"

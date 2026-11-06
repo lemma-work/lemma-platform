@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTurns, liveNote, openInteraction, relayedBy, spanOf, withRuntimeNotes, type RawMessage } from "../src/thread/turns.ts";
+import { answerOf, buildTurns, liveNote, openInteraction, relayedBy, spanOf, withRuntimeNotes, type RawMessage } from "../src/thread/turns.ts";
 
 /** The rules that were actually wrong, pinned.
  *
@@ -250,7 +250,7 @@ test("somebody else's ask_user is a step, not a question this app can answer", (
         message({ sequence: 2, kind: "TOOL_CALL", tool_name: "ask_user", tool_call_id: "c1", tool_args: { questions: [] },
             metadata: { tool_source: "mcp", tool_server: "helpdesk" } }),
     ]);
-    assert.equal(turn.items.length, 0);
+    assert.deepEqual(turn.items.map((item) => item.kind), ["steps"], "one of the run's steps, not a question card");
     assert.equal(turn.notes[0].label, "Ask user · helpdesk");
 });
 
@@ -290,8 +290,20 @@ test("the running indicator does not repeat a call that has already landed", () 
     ]);
     const streaming = { text: "", thinking: "", tool: { toolName: "exec_command", toolCallId: "x1", args: { cmd: "make" } } };
     assert.deepEqual(liveNote(streaming, turn.notes), []);
+    // ...because the landed step is the one still running, and says so.
+    assert.equal(turn.notes[0].running, true);
     // A streamed call that has not landed yet still gets its live row.
     assert.equal(liveNote({ ...streaming, tool: { ...streaming.tool, toolCallId: "x2" } }, turn.notes).length, 1);
+});
+
+test("a call is running until its return lands", () => {
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "go" }),
+        message({ sequence: 2, kind: "TOOL_CALL", tool_name: "web_search", tool_call_id: "s1", tool_args: { query: "a" } }),
+        message({ sequence: 3, kind: "TOOL_RETURN", tool_call_id: "s1", tool_result: { output: "ok" } }),
+        message({ sequence: 4, kind: "TOOL_CALL", tool_name: "web_fetch", tool_call_id: "f1", tool_args: { url: "b" } }),
+    ]);
+    assert.deepEqual(turn.notes.map((note) => note.running), [false, true]);
 });
 
 test("a run queued behind others on the computer says so until it starts", () => {
@@ -423,4 +435,40 @@ test("a runtime notice lands on the turn it arrived during, once", () => {
     // A turn no longer drawn hands its notice to the last one, not to nobody.
     assert.deepEqual(withRuntimeNotes(turns, [{ text: said, turnId: "gone" }])[1].runtimeNotes, [said]);
     assert.equal(withRuntimeNotes(turns, []), turns);
+});
+
+test("a run's steps sit between what it said, in the order they happened", () => {
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "check the build" }),
+        message({ sequence: 2, role: "assistant", text: "Looking at the failing checks." }),
+        message({ sequence: 3, kind: "TOOL_CALL", tool_name: "exec_command", tool_call_id: "c1", tool_args: { command: "gh pr checks" } }),
+        message({ sequence: 4, kind: "THINKING", text: "Two real failures." }),
+        message({ sequence: 5, kind: "TOOL_CALL", tool_name: "exec_command", tool_call_id: "c2", tool_args: { command: "gh run view" } }),
+        message({ sequence: 6, role: "assistant", text: "Two real failures: unit and e2e." }),
+        message({ sequence: 7, kind: "TOOL_CALL", tool_name: "read_file", tool_call_id: "c3", tool_args: { path: "a.py" } }),
+    ]);
+    assert.deepEqual(turn.items.map((item) => item.kind), ["text", "steps", "text", "steps"]);
+    const [, first, , second] = turn.items;
+    assert.ok(first.kind === "steps" && second.kind === "steps");
+    assert.deepEqual([first.from, first.count, second.from, second.count], [0, 3, 3, 1], "each run is a slice of the turn's steps");
+    assert.equal(turn.notes.length, 4, "every step is still in the turn's trace");
+    assert.equal(turn.notes[0].key, "exec_command");
+});
+
+test("a stale run folds to its answer: the last thing it said, after one line for the work", () => {
+    const call = (sequence: number, id: string): RawMessage => message({ sequence, kind: "TOOL_CALL", tool_name: "web_search", tool_call_id: id, tool_args: { query: id } });
+    const [turn] = buildTurns([
+        message({ sequence: 1, role: "user", text: "what's hot in AI" }),
+        message({ sequence: 2, role: "assistant", text: "I'll pull what's moving this week." }),
+        call(3, "s1"),
+        message({ sequence: 4, kind: "TOOL_RETURN", tool_call_id: "s1", tool_result: { output: "ok" } }),
+        message({ sequence: 5, role: "assistant", text: "Here is the report." }),
+    ]);
+    assert.deepEqual(turn.items.map((item) => item.kind), ["text", "steps", "text"]);
+    assert.equal(answerOf(turn.items), 2, "the commentary and the searches fold above the answer");
+    /* Nothing before the answer, or no answer at all: nothing to fold. */
+    const [said] = buildTurns([message({ sequence: 1, role: "user", text: "hi" }), message({ sequence: 2, role: "assistant", text: "Hello." })]);
+    assert.equal(answerOf(said.items), -1);
+    const [silent] = buildTurns([message({ sequence: 1, role: "user", text: "go" }), call(2, "s2")]);
+    assert.equal(answerOf(silent.items), -1);
 });

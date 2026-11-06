@@ -42,7 +42,7 @@ export function ToTheApp() {
            no front token on this origin, so `doesSessionExist()` is false, the
            SDK answers `unauthenticated` without a request, and the front door
            showed the marketing page to somebody already signed in. */
-        void signedIn().then(yes => { if (live && yes) router.replace("/t"); });
+        void signedIn().then(yes => { if (live && yes) router.replace("/home"); });
         return () => { live = false; };
     }, [router]);
 

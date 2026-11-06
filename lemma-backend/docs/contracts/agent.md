@@ -21,6 +21,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.conversation.message.send` | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages` | Send Pod Conversation Message |
 | `agent.conversation.message.withdraw` | DELETE | `/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}` | Withdraw Queued Conversation Message |
 | `agent.conversation.pending_interaction.list` | GET | `/pods/{pod_id}/conversations/pending-interactions` | List Interactions Waiting On You |
+| `agent.conversation.repository.list` | GET | `/pods/{pod_id}/conversations/repositories` | List Repositories A Conversation Can Open In |
 | `agent.conversation.retry` | POST | `/pods/{pod_id}/conversations/{conversation_id}/retry` | Retry Failed Pod Conversation Run |
 | `agent.conversation.stop` | POST | `/pods/{pod_id}/conversations/{conversation_id}/stop` | Stop Pod Conversation |
 | `agent.conversation.stream` | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | Stream Pod Conversation |

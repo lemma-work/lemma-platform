@@ -45,7 +45,7 @@ export function Hero() {
                         Share it with your people. It learns from all of you and builds itself around how you work.
                     </p>
                     <div className={s.ctas}>
-                        <Link className={s.primary} href="/t">Get started free</Link>
+                        <Link className={s.primary} href="/home">Get started free</Link>
                         <a className={s.textLink} href={githubUrl} target="_blank" rel="noopener noreferrer">Star it on GitHub →</a>
                     </div>
                     <Channels />

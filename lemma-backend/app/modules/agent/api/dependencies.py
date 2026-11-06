@@ -19,6 +19,10 @@ from app.modules.agent.application.conversations.update import UpdateConversatio
 from app.modules.agent.application.pauses.decide import DecidePause
 from app.modules.agent.application.turns.stop import StopConversation
 from app.modules.agent.application.turns.withdraw import WithdrawQueuedMessage
+from app.modules.agent.domain.ports import ProjectRepositories
+from app.modules.agent.infrastructure.github_project_repositories import (
+    GithubProjectRepositories,
+)
 from app.modules.agent.services.agent_service import AgentService
 
 
@@ -31,8 +35,20 @@ def get_agent_service(uow: UoWDep) -> AgentService:
 # a stream) build theirs from it with the use case's ``build``.
 
 
-def get_start_conversation(uow: UoWDep) -> StartConversation:
-    return StartConversation.build(uow)
+def get_project_repositories() -> ProjectRepositories:
+    """GitHub, through the pod's connector. A dependency so a test answers instead."""
+    return GithubProjectRepositories()
+
+
+ProjectRepositoriesDep = Annotated[
+    ProjectRepositories, Depends(get_project_repositories)
+]
+
+
+def get_start_conversation(
+    uow: UoWDep, project_repositories: ProjectRepositoriesDep
+) -> StartConversation:
+    return StartConversation.build(uow, project_repositories=project_repositories)
 
 
 def get_update_conversation(uow: UoWDep) -> UpdateConversation:

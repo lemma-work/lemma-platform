@@ -3,7 +3,7 @@
 import { LoadingRows } from "@/ui/loading";
 
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Prose } from "@/thread/markdown";
 import {
     BackIcon, ChevronRightIcon, DownloadIcon, ExternalIcon, FileIcon, FolderIcon,
@@ -129,9 +129,14 @@ function Save({ path, name, sizeBytes }: { path: string; name: string; sizeBytes
  *  cost something, opening a file and opening the browser, are both a click
  *  somebody made.
  */
-export function ComputerView({ podId, conversationId, visible }: {
+export function ComputerView({ podId, conversationId, visible, lead, trail }: {
     podId: string;
     conversationId: string | null;
+    /** The start and end of its bar, from the page or pane it is in -- where
+     *  this is, and that page's own controls -- so there is one bar, not the
+     *  page's over this one's. */
+    lead?: ReactNode;
+    trail?: ReactNode;
     /** Whether this pane is the one on screen.
      *
      *  The pane stays mounted behind whatever tab is in front so a walk three
@@ -191,7 +196,7 @@ export function ComputerView({ podId, conversationId, visible }: {
     if (!live()) {
         return (
             <section className="library-view computer-view" aria-label="Computer">
-                <header className="library-heading"><div><h1>Your computer</h1></div></header>
+                {lead || trail ? <Bar lead={lead} trail={trail} /> : <header className="library-heading"><div><h1>Your computer</h1></div></header>}
                 <div className="computer-empty">
                     <TerminalIcon size={26} />
                     <p>The sample has no machine behind it. Sign in to see yours.</p>
@@ -202,7 +207,7 @@ export function ComputerView({ podId, conversationId, visible }: {
 
     if (preparing) return (
         <section className="library-view computer-view" aria-label="Computer">
-            <header className="library-heading"><h1>Your computer</h1></header>
+            {lead || trail ? <Bar lead={lead} trail={trail} /> : <header className="library-heading"><h1>Your computer</h1></header>}
             <WorkspaceStartup status={workspace.data} />
         </section>
     );
@@ -212,14 +217,16 @@ export function ComputerView({ podId, conversationId, visible }: {
             {/* The screen first, because that is what a computer is from the
                 outside, and the state is said once — on it — rather than
                 repeated in a badge beside it. */}
-            <header className="cbar">
-                <span className={"cbar__dot cbar__dot--" + state} aria-hidden="true" />
-                <span className="cbar__state">{say.headline}</span>
-                <span className="cbar__note">{say.note}</span>
+            <Bar lead={lead} trail={trail}>
+                <span className="cbar__how" title={say.note ? say.headline + ". " + say.note : say.headline}>
+                    <span className={"cbar__dot cbar__dot--" + state} aria-hidden="true" />
+                    <span className="cbar__state">{say.headline}</span>
+                    <span className="cbar__note">{say.note}</span>
+                </span>
                 <span className="cbar__spacer" />
                 <button className="cbar__button" aria-pressed={drawer === "logins"} onClick={() => setDrawer(was => was === "logins" ? null : "logins")}>Signed-in sites</button>
                 <button className="cbar__button" aria-pressed={drawer === "files"} onClick={() => setDrawer(was => was === "files" ? null : "files")}>Files</button>
-            </header>
+            </Bar>
             <div className={"cbody" + (drawer ? " cbody--drawer" : "")}>
             <div className="cstage">
                 <Screen
@@ -357,6 +364,18 @@ export function ComputerView({ podId, conversationId, visible }: {
             </aside>}
             </div>
         </section>
+    );
+}
+
+/** The view's one bar: where it is, from the page around it; how the machine
+ *  is, and what opens beside the screen; and the page's own controls. */
+function Bar({ lead, trail, children }: { lead?: ReactNode; trail?: ReactNode; children?: ReactNode }) {
+    return (
+        <header className="cbar">
+            {lead}
+            {children ?? <span className="cbar__spacer" />}
+            {trail && <span className="cbar__trail">{trail}</span>}
+        </header>
     );
 }
 
