@@ -33,6 +33,9 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.source_controller import (
         router as sources,
     )
+    from app.modules.agent_surfaces.api.controllers.identity_link_controller import (
+        router as identity_links,
+    )
     from app.modules.agent_surfaces.api.controllers.user_surfaces_controller import (
         router as user_surfaces,
     )
@@ -60,6 +63,7 @@ def _routers():
         notices,
         surface,
         sources,
+        identity_links,
         surface_setup_guide,
         surface_platform_setup,
         slack_app_creation,
@@ -120,9 +124,11 @@ def _register_work() -> None:
     # (webhooks, notifications) and so must know their kinds; the worker runs
     # them. Facts subscribed here (pod lifecycle, a run finishing, a changed
     # mobile) are written by whichever process commits the fact.
+    import app.modules.agent_surfaces.events.account_deleted_work  # noqa: F401
     import app.modules.agent_surfaces.events.ingest_work  # noqa: F401
     import app.modules.agent_surfaces.events.channel_delivery_work  # noqa: F401
     import app.modules.agent_surfaces.events.mobile_work  # noqa: F401
+    import app.modules.agent_surfaces.events.proved_account_work  # noqa: F401
     import app.modules.agent_surfaces.events.periodic_work  # noqa: F401
     import app.modules.agent_surfaces.events.platform_update_work  # noqa: F401
     import app.modules.agent_surfaces.events.pod_lifecycle_work  # noqa: F401

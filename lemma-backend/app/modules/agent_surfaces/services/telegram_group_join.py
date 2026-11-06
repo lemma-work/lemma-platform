@@ -21,6 +21,9 @@ question put to the bot.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.groups import group_place
+from app.modules.channels.contracts.places import adopt_place, set_place_owner
+
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from dataclasses import dataclass
@@ -43,9 +46,6 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
@@ -76,7 +76,7 @@ async def claim_telegram_group_join(
     Called before any session is open: spending the code is a Redis call and
     the hello a Telegram one, and neither should hold a connection.
     """
-    telegram = _telegram_adapter(request, adapters)
+    telegram = telegram_adapter_for(request, adapters)
     if telegram is None:
         return False
     parsed = await telegram.parse_inbound_event(request.payload, request.headers)
@@ -97,7 +97,7 @@ async def claim_telegram_group_join(
     return True
 
 
-def _telegram_adapter(
+def telegram_adapter_for(
     request: SurfaceIngressRequest, adapters: SurfacePlatformAdapterRegistry
 ) -> SurfacePlatformAdapterPort | None:
     """The Telegram adapter, when this delivery could be a Telegram update."""
@@ -130,15 +130,15 @@ async def _adopt(
     surface = await SurfaceRepository(uow).get(claim.surface_id)
     if surface is None or surface.surface_type is not SurfacePlatform.TELEGRAM:
         return None
-    groups = SurfaceGroupRepository(uow.session)
-    group, created = await groups.ensure_noting_creation(
+    group, created = await adopt_place(
+        uow,
         pod_id=surface.pod_id,
-        surface=surface,
-        external_channel_id=str(parsed.external_channel_id),
-        title=_title(parsed),
+        place=group_place(
+            surface, chat=str(parsed.external_channel_id), title=_title(parsed)
+        ),
     )
     if group.owner_user_id is None:
-        await groups.set_owner(group.id, claim.user_id)
+        await set_place_owner(uow, group.id, claim.user_id)
     hello = await hello_for(uow, surface)
     credentials = await SurfaceCredentialResolver(uow=uow).for_surface(surface)
     await uow.commit()

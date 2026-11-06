@@ -45,6 +45,10 @@ class FakeFiles:
             ],
         }
 
+    def retry_processing(self, path):
+        self.calls.append(("retry_processing", path))
+        return {"path": path, "status": "PENDING"}
+
     def download_child(self, path, *, page_start=None, page_end=None):
         self.calls.append(("download_child", path, page_start, page_end))
         return b"<!-- PAGE 1 -->\n\n# Title"
@@ -110,6 +114,15 @@ def test_mv(monkeypatch):
     result = runner.invoke(app, ["--pod", POD, "file", "mv", "/me/a.md", "/me/b.md"])
     assert result.exit_code == 0, result.stdout
     assert fake.calls == [("move", "/me/a.md", "/me/b.md")]
+
+
+def test_retry_reprocesses_a_file_that_failed_for_good(monkeypatch):
+    fake = FakeFiles()
+    _patch(monkeypatch, fake)
+    result = runner.invoke(app, ["--pod", POD, "file", "retry", "/reports/q3.pdf"])
+    assert result.exit_code == 0, result.stdout
+    assert fake.calls == [("retry_processing", "/reports/q3.pdf")]
+    assert "PENDING" in result.stdout
 
 
 def test_children(monkeypatch):

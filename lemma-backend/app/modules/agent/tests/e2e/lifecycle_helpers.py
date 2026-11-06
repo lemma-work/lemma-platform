@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
@@ -27,6 +28,7 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import (
+    AgentRunApprovalDecision,
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationStatus,
@@ -35,14 +37,39 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.agent.tools.approval_denials import show_card
+from app.modules.agent.application.conversations.read import ConversationReads
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.pauses.reconcile import ReconcileDecision
+from app.modules.agent.application.pauses.resolve import ResolvePause
+from app.modules.agent.application.pauses.resume import ResumeRun
+from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
+from app.modules.agent.application.turns.admit import AdmitMessage
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.application.turns.stop import StopConversation
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
+from app.modules.agent.services.send_window import SendWindow
+from app.modules.agent.infrastructure.tools.approval.denials import show_card
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.usage.contracts.execution import UsageService
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.pause_opening import (
+    AgentHostPermissionRequest,
+    PauseOpening,
+)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.wait import AgentWaitType, WaitSpec
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import QueueState
 
 SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id="system:lemma")
 
@@ -71,15 +98,55 @@ async def owner_uow(seeded: Seeded) -> AsyncIterator[SqlAlchemyUnitOfWork]:
             yield uow
 
 
-def conversation_service(
+# The use cases these tests drive, built as their own ``build`` builds them but
+# with no usage service unless a test hands one in: what these tests check is
+# the lifecycle, not the account's allowance.
+
+
+def resolve_pause(
     uow: SqlAlchemyUnitOfWork, *, usage_service: UsageService | None = None
-) -> ConversationService:
-    return ConversationService(
-        uow=uow,
-        conversation_repository=ConversationRepository(uow),
+) -> ResolvePause:
+    agents = AgentRepository(uow)
+    return ResolvePause(
+        uow,
+        reconcile=ReconcileDecision(
+            uow,
+            resume_returns=ResumeToolReturnBuilder(uow, agents),
+            resume=ResumeRun(uow, agent_repository=agents, usage_service=usage_service),
+        ),
+    )
+
+
+def admit_message(
+    uow: SqlAlchemyUnitOfWork, *, usage_service: UsageService | None = None
+) -> AdmitMessage:
+    return AdmitMessage(
+        uow,
         agent_repository=AgentRepository(uow),
+        supersede=SupersedeStalePauses.build(uow),
         usage_service=usage_service,
     )
+
+
+def send_message(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    usage_service: UsageService | None = None,
+    send_window: SendWindow | None = None,
+) -> SendMessage:
+    agents = AgentRepository(uow)
+    return SendMessage(
+        uow,
+        agent_repository=agents,
+        start_conversation=StartConversation(uow, agent_repository=agents),
+        reads=ConversationReads(uow, agents),
+        admit=admit_message(uow, usage_service=usage_service),
+        send_window=send_window or SendWindow(uow.session),
+    )
+
+
+def stop_conversation(uow: SqlAlchemyUnitOfWork) -> StopConversation:
+    return StopConversation.build(uow)
 
 
 async def seeded_conversation(
@@ -127,13 +194,13 @@ async def seeded_conversation(
     )
 
 
-async def running_run(seeded: Seeded, *, metadata: JsonObject | None = None) -> UUID:
+async def running_run(seeded: Seeded, *, state: RunState | None = None) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        run = await ConversationRepository(uow).create_agent_run(
+        run = await Runs(uow).create_agent_run(
             conversation_id=seeded.conversation_id,
             agent_id=seeded.agent_id,
             agent_runtime=SYSTEM_RUNTIME,
-            metadata=metadata or {"source": "e2e_lifecycle"},
+            state=state,
         )
         await uow.commit()
     return run.id
@@ -141,11 +208,29 @@ async def running_run(seeded: Seeded, *, metadata: JsonObject | None = None) -> 
 
 async def append(seeded: Seeded, run_id: UUID | None, draft: MessageDraft) -> Message:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        saved = await ConversationRepository(uow).append_message(
+        saved = await Messages(uow).append_message(
             conversation_id=seeded.conversation_id, agent_run_id=run_id, draft=draft
         )
         await uow.commit()
     return saved
+
+
+def opening_for(tool_name: str, tool_args: JsonObject) -> PauseOpening | None:
+    """The pause a stored call of ``tool_name`` opens, as the harness opens it."""
+    marker = tool_args.get("agent_host_permission")
+    if tool_name == "request_approval" and isinstance(marker, dict):
+        return PauseOpening(
+            kind=PauseKind.HOST_PERMISSION,
+            host_permission=AgentHostPermissionRequest.model_validate(
+                {**marker, "tool_name": tool_args.get("tool_name")}
+            ),
+        )
+    kind = {
+        "ask_user": PauseKind.QUESTION,
+        "request_approval": PauseKind.APPROVAL,
+        "browser_sign_in": PauseKind.SIGN_IN,
+    }.get(tool_name)
+    return PauseOpening(kind=kind) if kind is not None else None
 
 
 async def pausing_call(
@@ -154,7 +239,7 @@ async def pausing_call(
     *,
     tool_name: str,
     tool_args: JsonObject,
-    metadata: JsonObject | None = None,
+    state: MessageState | None = None,
 ) -> str:
     tool_call_id = f"call-{uuid4().hex[:12]}"
     await append(
@@ -164,7 +249,8 @@ async def pausing_call(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             tool_args=tool_args,
-            metadata=metadata,
+            state=state,
+            pause=opening_for(tool_name, tool_args),
         ),
     )
     inner = tool_args.get("tool_name")
@@ -189,7 +275,9 @@ async def queued_message(seeded: Seeded, run_id: UUID, text: str) -> Message:
         seeded,
         run_id,
         MessageDraft.of_text(
-            text, role=MessageRole.USER, metadata={"during_active_run": True}
+            text,
+            role=MessageRole.USER,
+            state=MessageState(queue_state=QueueState.QUEUED),
         ),
     )
 
@@ -201,7 +289,7 @@ async def finish(
     conversation_status: ConversationStatus | None = None,
 ) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=status,
             conversation_status=conversation_status,
@@ -221,7 +309,7 @@ async def runs(conversation_id: UUID) -> list[AgentRunModel]:
 
 async def messages(conversation_id: UUID) -> list[Message]:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        found, _ = await ConversationRepository(uow).list_messages(
+        found, _ = await Messages(uow).list_messages(
             conversation_id=conversation_id, limit=500
         )
     return found
@@ -229,7 +317,7 @@ async def messages(conversation_id: UUID) -> list[Message]:
 
 async def conversation(conversation_id: UUID) -> Conversation:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        loaded = await ConversationRepository(uow).get_conversation(
+        loaded = await Conversations(uow).get_conversation(
             conversation_id, include_runs=False
         )
     assert loaded is not None
@@ -259,3 +347,54 @@ async def refused_before_asking(
         args=dict(args),
         permission_ids=permission_ids,
     )
+
+
+def wait_pause(
+    *,
+    conversation_id: UUID,
+    run_id: UUID,
+    pod_id: UUID,
+    tool_call_id: str,
+    wait_type: AgentWaitType,
+    wake_at: datetime | None,
+    spec: JsonObject,
+    external_ref: str | None = None,
+) -> Pause:
+    """A ``wait_for`` pause as its tool writes it, for ``Pauses.open``."""
+    return Pause(
+        conversation_id=conversation_id,
+        run_id=run_id,
+        pod_id=pod_id,
+        tool_call_id=tool_call_id,
+        tool_name="wait_for",
+        kind=PauseKind.WAIT,
+        wait_type=wait_type,
+        external_ref=external_ref or str(uuid4()),
+        wake_at=wake_at,
+        wait_spec=WaitSpec.model_validate(spec),
+    )
+
+
+async def pause_by_id(pause_id: UUID) -> Pause | None:
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        return await Pauses(uow).by_id(pause_id)
+
+
+async def record_decision(
+    conversation_id: UUID,
+    tool_call_id: str,
+    *,
+    decision: AgentRunApprovalDecision,
+    by: UUID,
+    response: JsonObject | None = None,
+) -> None:
+    """A decision committed with nothing after it: no return, no resume."""
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        pauses = Pauses(uow)
+        pause = await pauses.get(
+            conversation_id=conversation_id, tool_call_id=tool_call_id
+        )
+        assert pause is not None, "no pause was opened for the call"
+        assert pause.resolve(decision, response, by=by)
+        assert await pauses.save(pause)
+        await uow.commit()

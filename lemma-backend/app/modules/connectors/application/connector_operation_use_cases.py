@@ -11,7 +11,7 @@ from a function routes through here), exhausting the pool under load.
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 from uuid import UUID
 
@@ -30,6 +30,7 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
 )
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
+    ConnectorReauthRequiredError,
     OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
     OperationExecutionTimeoutError,
@@ -54,6 +55,21 @@ from app.modules.connectors.services.connector_operation_service import (
 from app.modules.connectors.services.installation_execution import (
     resolve_installation_execution,
 )
+from app.modules.connectors.services.reauth_recovery import (
+    clear_reauth_mark,
+    credential_is_renewable,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _CredentialRetry:
+    """How refreshing a rejected credential and retrying the call went."""
+
+    #: The retried call's answer, when it worked.
+    response: OperationExecutionResponse | None = None
+    #: Whether the failure is a definitive rejection of the credential -- the
+    #: only failure that may mark the account for a reconnect.
+    credential_rejected: bool = False
 
 
 def _token_pod_id(request: Request) -> UUID | None:
@@ -317,27 +333,35 @@ class ConnectorOperationUseCases:
         """
         try:
             async with uow_scope(self._uow_factory) as uow:
-                return await self._build(uow).execute_resolved(resolved)
+                response = await self._build(uow).execute_resolved(resolved)
         except OperationExecutionUnauthorizedError:
             # The credential was rejected. Rather than refreshing before every
             # call on the chance this happens, refresh here, once, and retry
             # once. This also covers the case an expiry check never can: a
             # credential revoked at the provider while still unexpired.
-            retried = await self._retry_with_refreshed_credentials(
+            retry = await self._retry_with_refreshed_credentials(
                 resolved, user_id=user_id, request=request
             )
-            if retried is not None:
-                return retried
-            # Still rejected after a refresh: the account is unusable until the
-            # user reconnects. Flagged in a fresh short scope, then the original
-            # error is re-raised unchanged.
-            await self._flag_account_reauth_required(resolved)
+            if retry.response is not None:
+                return retry.response
+            if retry.credential_rejected:
+                # Definitively rejected: the account is unusable until the user
+                # reconnects. Flagged in a fresh short scope, then the original
+                # error is re-raised unchanged.
+                await self._flag_account_reauth_required(resolved)
             raise
         except OperationExecutionAccessDeniedError:
-            # A scope/permission problem, not a stale credential -- refreshing
-            # would not help, so flag and surface it directly.
-            await self._flag_account_reauth_required(resolved)
+            # A 403 refuses this operation, not the account: the provider knew
+            # who was asking and said they may not do this one thing -- a scope
+            # they never granted, a dataset they cannot read. It surfaces as
+            # the provider's own permission error. Marking the account here
+            # disabled every other operation it could still do, and nothing
+            # unmarked it. Knowing the caller is also proof the credential
+            # works, so it clears a mark resolution let through.
+            await self._clear_account_reauth_pending(resolved)
             raise
+        await self._clear_account_reauth_pending(resolved)
+        return response
 
     async def _retry_with_refreshed_credentials(
         self,
@@ -345,16 +369,22 @@ class ConnectorOperationUseCases:
         *,
         user_id: UUID,
         request: Request,
-    ) -> OperationExecutionResponse | None:
-        """Refresh the credential once and retry once; None if that did not help.
+    ) -> _CredentialRetry:
+        """Refresh the credential once and retry once.
 
-        Bounded deliberately at one attempt: a provider that rejects a
-        freshly-minted credential is telling us the account needs reconnecting,
-        and retrying past that just multiplies latency on a call that is going
-        to fail anyway.
+        Bounded deliberately at one attempt: retrying past a second rejection
+        just multiplies latency on a call that is going to fail anyway.
+
+        Whether the account is then marked depends on *why* it did not help,
+        because the mark refuses every later call and only a definitive answer
+        justifies that. The issuer refusing the refresh (a revoked grant) has
+        already marked it, inside the refresh. A credential nothing can renew,
+        rejected twice, is gone. But a refresh that merely failed -- a timeout,
+        a 5xx -- says nothing about the grant, and a credential the issuer has
+        just renewed is demonstrably alive: a 401 after that is about the call.
         """
         if resolved.account_id is None or resolved.account_user_id is None:
-            return None
+            return _CredentialRetry()
         try:
             # No caller context: refreshing is bookkeeping on the account,
             # done as its owner, and resolution already decided the caller
@@ -362,7 +392,7 @@ class ConnectorOperationUseCases:
             async with uow_scope(self._uow_factory) as uow:
                 service = self._build(uow)
                 if service.connector_service is None:
-                    return None
+                    return _CredentialRetry()
                 refreshed = await service.connector_service.get_account_credentials(
                     resolved.account_id,
                     resolved.account_user_id,
@@ -370,19 +400,46 @@ class ConnectorOperationUseCases:
                     force_refresh=True,
                 )
                 credentials = refreshed.model_dump(exclude_none=True)
+        except ConnectorReauthRequiredError:
+            # The issuer withdrew the grant; the refresh marked the account.
+            return _CredentialRetry(credential_rejected=True)
         except ConnectorDomainError, httpx.HTTPError, OSError, TimeoutError:
-            # Refresh itself failed: no refresh token on the account, or the
-            # provider is unreachable. Fall back to the reauth path rather than
-            # masking the original rejection. Anything outside this set is a bug
-            # here, not an upstream problem, and should surface as one.
-            return None
+            # The refresh could not be completed: the provider is unreachable or
+            # unwell. The original rejection stands, and the account is left as
+            # it is for the next use to try again. Anything outside this set is
+            # a bug here, not an upstream problem, and should surface as one.
+            return _CredentialRetry()
 
         retry = replace(resolved, third_party_credentials=credentials)
         try:
             async with uow_scope(self._uow_factory) as uow:
-                return await self._build(uow).execute_resolved(retry)
+                return _CredentialRetry(
+                    response=await self._build(uow).execute_resolved(retry)
+                )
         except OperationExecutionUnauthorizedError:
-            return None
+            return _CredentialRetry(
+                credential_rejected=not credential_is_renewable(credentials)
+            )
+
+    async def _clear_account_reauth_pending(
+        self, resolved: ResolvedConnectorExecution
+    ) -> None:
+        """Unmark an account the provider has just accepted the credential of."""
+        if (
+            not resolved.account_reauth_pending
+            or resolved.account_id is None
+            or resolved.account_user_id is None
+        ):
+            return
+        async with uow_scope(self._uow_factory) as uow:
+            connector_service = self._build(uow).connector_service
+            if connector_service is None:
+                return
+            await clear_reauth_mark(
+                connector_service.account_repository,
+                connector_service.uow,
+                resolved.account_id,
+            )
 
     async def _flag_account_reauth_required(
         self, resolved: ResolvedConnectorExecution

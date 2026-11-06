@@ -18,10 +18,12 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
     AgentWaitType,
     AgentWaitWakeReason,
+    WaitSpec,
 )
 from app.modules.agent.domain.wait_decision import (
     UNREADABLE_GRACE_SECONDS,
@@ -30,7 +32,7 @@ from app.modules.agent.domain.wait_decision import (
     deadline_of,
     decide_wait,
 )
-from app.modules.agent.tools.waiting.models import (
+from app.modules.agent.infrastructure.tools.waiting.models import (
     POLL_CAP_SECONDS,
     POLL_START_SECONDS,
     next_poll_delay,
@@ -41,19 +43,30 @@ _NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 
 
 def _wait(wait_type: AgentWaitType, *, deadline_in: float = 3600, **spec):
-    return AgentConversationWaitEntity(
+    return Pause(
         conversation_id=uuid4(),
-        agent_run_id=uuid4(),
+        run_id=uuid4(),
         pod_id=uuid4(),
         tool_call_id="tc-1",
+        tool_name="wait_for",
+        kind=PauseKind.WAIT,
         wait_type=wait_type,
-        scheduled_at=_NOW,
-        spec={
-            "started_at": _NOW.isoformat(),
-            "deadline_at": (_NOW + timedelta(seconds=deadline_in)).isoformat(),
-            "target_ref": "target-1",
-            **spec,
-        },
+        wake_at=_NOW,
+        wait_spec=WaitSpec.model_validate(
+            {
+                "started_at": _NOW.isoformat(),
+                "deadline_at": (_NOW + timedelta(seconds=deadline_in)).isoformat(),
+                "target_ref": "target-1",
+                **spec,
+            }
+        ),
+    )
+
+
+def _with_deadline(wait: Pause, raw: object) -> None:
+    assert wait.wait_spec is not None
+    wait.wait_spec = WaitSpec.model_validate(
+        {**wait.wait_spec.model_dump(mode="json"), "deadline_at": raw}
     )
 
 
@@ -144,7 +157,7 @@ def test_a_wait_with_no_usable_deadline_is_treated_as_due(raw):
     and check, while one that is never woken is simply lost.
     """
     wait = _wait(AgentWaitType.PROCESS)
-    wait.spec = {**wait.spec, "deadline_at": raw}
+    _with_deadline(wait, raw)
 
     assert deadline_of(wait, fallback=_NOW) == _NOW
     decided = _decide(wait)
@@ -155,7 +168,7 @@ def test_a_wait_with_no_usable_deadline_is_treated_as_due(raw):
 def test_a_naive_deadline_is_read_as_utc():
     """Postgres hands back naive datetimes on some paths; a wait must not shift."""
     wait = _wait(AgentWaitType.PROCESS)
-    wait.spec = {**wait.spec, "deadline_at": "2026-09-17T13:00:00"}
+    _with_deadline(wait, "2026-09-17T13:00:00")
 
     assert deadline_of(wait, fallback=_NOW) == datetime(
         2026, 9, 17, 13, 0, tzinfo=timezone.utc
@@ -168,8 +181,8 @@ def test_rearming_counts_the_poll():
 
     wait.rearm(_NOW + timedelta(seconds=10))
 
-    assert wait.scheduled_at == _NOW + timedelta(seconds=10)
-    assert wait.spec["poll_attempt"] == 1
+    assert wait.wake_at == _NOW + timedelta(seconds=10)
+    assert wait.wait_spec and wait.wait_spec.poll_attempt == 1
 
 
 def test_the_poll_backs_off_to_a_cap():

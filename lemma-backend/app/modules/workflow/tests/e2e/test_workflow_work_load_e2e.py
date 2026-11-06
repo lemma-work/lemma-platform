@@ -33,7 +33,11 @@ from app.modules.workflow.tests.e2e.workflow_work_support import (
     flow_work,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+# drives_work: the runtime below must be the only one claiming. A session
+# worker left running took `workflow.start` items too and ran their functions
+# for real instead of through the loopback runtime, so those runs never
+# finished and the wait ran into the 300s test timeout.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.drives_work]
 
 RUNS = int(os.environ.get("WORKFLOW_LOAD_RUNS", "400"))
 RUNTIME_APP = "lemma-work-load-runtime"

@@ -9,7 +9,7 @@ from uuid import uuid4
 from app.core.config import settings
 from app.modules.agent_surfaces.services.surface_sign_in import sign_in_prompt_envelope
 
-_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_OPERATIONS = "app.modules.agent.contracts.channels"
 
 
 async def _envelope(tool_args: dict, *, narration: str | None = None):

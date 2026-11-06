@@ -21,6 +21,7 @@ from app.modules.calls.domain.voice import (
     UserSpeaking,
     VoiceEvent,
 )
+from app.modules.calls.infrastructure.engines.google_auth import api_key_headers
 from app.modules.calls.infrastructure.engines.gemini_live import (
     CALLER_TURN_GRACE_SECONDS,
     GeminiLiveEngine,
@@ -31,7 +32,9 @@ pytestmark = pytest.mark.unit
 
 def _engine() -> GeminiLiveEngine:
     return GeminiLiveEngine(
-        api_key="test", model="gemini-3.8-live", instructions="be brief"
+        headers=api_key_headers("test"),
+        model="gemini-3.8-live",
+        instructions="be brief",
     )
 
 

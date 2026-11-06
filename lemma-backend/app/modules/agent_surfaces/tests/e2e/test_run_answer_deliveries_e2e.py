@@ -1,7 +1,7 @@
 """E2E for a run's answer as a channel line with a delivery: one outbound path.
 
 A finished run's answer is posted as the agent's line at the place it was
-asked (``surface.reply_for_run``), with a ``channel_message_deliveries`` row
+asked (``agent.channel_reply``), with a ``channel_message_deliveries`` row
 for that place; ``surface.channel_delivery`` sends it and records the
 platform's id for the message on the row. Against a real database, the real
 surface service and the fake platform servers:
@@ -14,7 +14,9 @@ surface service and the fake platform servers:
 * WhatsApp's later report that a message never arrived (131047) finds the
   delivery by the id it recorded and marks it ``DEAD`` with the reason;
 * a Slack answer that streamed is one line whose delivery is the stream's
-  message: ``SENT`` with the stream's ``ts``, and nothing posted again.
+  message: ``SENT`` with the stream's ``ts``, and nothing posted again;
+* a run that answered, heard the person say more and answered again is two
+  lines, each sent, the earlier answer first.
 """
 
 from __future__ import annotations
@@ -40,9 +42,7 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.reply_for_run_work import (
-    register_reply_for_run_work,
-)
+from app.modules.agent.events.channel_answer_work import register_run_answer_work
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _seed_external_user,
@@ -92,29 +92,42 @@ ANSWER = "Three invoices are due."
 
 
 async def _finished(run_id: UUID, conversation_id: UUID, pod_id: UUID) -> None:
-    """The finalize's fact, as the agent module emits it."""
+    """The finalize's fact, as the agent module emits it: for a person's
+    conversation, which names whose it is."""
     async with async_session_maker() as session:
         uow = SqlAlchemyUnitOfWork(session)
+        user_id = await session.scalar(
+            text("SELECT user_id FROM agent_conversations WHERE id = :c"),
+            {"c": conversation_id},
+        )
         await facts.emit(
             uow,
             AgentRunFinished(
                 run_id=run_id,
                 conversation_id=conversation_id,
                 pod_id=pod_id,
+                user_id=user_id,
                 status="COMPLETED",
                 conversation_status="COMPLETED",
                 origin="surface",
-                has_reply_target=True,
             ),
         )
         await uow.commit()
 
 
 async def _a_finished_run(
-    client: AsyncClient, db_session: AsyncSession, test_pod, user, fake_telegram, name
+    client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    user,
+    fake_telegram,
+    name,
+    *,
+    earlier: str | None = None,
 ) -> tuple[UUID, UUID]:
     """A real Telegram conversation whose run finished with ``ANSWER``, and the
-    fact that says so -- not yet worked."""
+    fact that says so -- not yet worked. ``earlier``: an answer the run gave
+    before the person said more."""
     surface_id, secret, _ = await a_telegram_bot(
         db_session,
         client,
@@ -158,6 +171,18 @@ async def _a_finished_run(
             ),
             {"r": run_id, "a": ANSWER},
         )
+        if earlier is not None:
+            await session.execute(
+                text(
+                    "INSERT INTO agent_messages (id, conversation_id, agent_run_id, "
+                    "sequence, role, kind, text, answer, created_at) "
+                    "SELECT gen_random_uuid(), :c, :r, "
+                    "coalesce(max(sequence), 0) + 1, 'assistant', 'TEXT', :t, "
+                    "'BEFORE_STEER', now() "
+                    "FROM agent_messages WHERE conversation_id = :c"
+                ),
+                {"c": conversation_id, "r": run_id, "t": earlier},
+            )
         await session.commit()
     await _finished(run_id, conversation_id, UUID(test_pod["id"]))
     return conversation_id, run_id
@@ -187,7 +212,7 @@ def _telegram_answers(message_store) -> list[dict]:
 def _lines_only_registry() -> WorkRegistry:
     """The answer's line is written; nothing sends it."""
     registry = WorkRegistry()
-    register_reply_for_run_work(registry)
+    register_run_answer_work(registry)
     return registry
 
 
@@ -230,6 +255,48 @@ async def test_a_run_finished_twice_is_one_line_and_one_send(
     assert len(_telegram_answers(message_store)) == 1, message_store.get_all("TELEGRAM")
     # No second record of the send: the answer is not a surface_deliveries row.
     assert await scalar("SELECT count(*) FROM surface_deliveries") == 0
+
+
+async def test_an_answer_given_before_the_person_said_more_goes_first(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    """The person said more as the run answered, so it answered that too: two
+    lines for the one run, each sent, in the order they were given."""
+    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    earlier = "Two invoices are paid."
+    _, run_id = await _a_finished_run(
+        authenticated_client,
+        db_session,
+        test_pod,
+        fixed_test_user,
+        fake_telegram,
+        "steered-bot",
+        earlier=earlier,
+    )
+    await drain(surface_registry(), due=True)
+
+    lines = sorted(await _answer_lines(run_id), key=lambda line: line.seq)
+    assert [(line.body, line.client_message_id) for line in lines] == [
+        (earlier, f"run:{run_id}:1"),
+        (ANSWER, f"run:{run_id}"),
+    ]
+    for line in lines:
+        [delivery] = await deliveries_of_line(line.id)
+        assert delivery.status is DeliveryStatus.SENT
+    said = [
+        json.dumps(item)
+        for item in message_store.get_all("TELEGRAM")
+        if "invoices are" in json.dumps(item)
+    ]
+    assert len(said) == 2, said
+    assert earlier in said[0] and ANSWER in said[1]
 
 
 # -------------------------------------------------------- send-then-crash

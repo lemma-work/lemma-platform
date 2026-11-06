@@ -916,6 +916,14 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           clearStreamingTool();
           continue;
         }
+        if (parsed.tokenKind === "stream_reset") {
+          // What streamed so far is withdrawn: a retry starting the answer
+          // over, or text the server learned late was reasoning (it follows
+          // with the stream again, classified). It carries no text.
+          clearStreamingText();
+          clearStreamingThinking();
+          continue;
+        }
         if (parsed.token) {
           if (parsed.tokenKind === "tool") {
             streamingToolTokenRef.current += parsed.token;

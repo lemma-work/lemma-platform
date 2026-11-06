@@ -25,7 +25,8 @@ it again:
 - PER_MEMBER: the person's pinned pod account while it is still theirs, else
   their member default, else (on their own call) their org default, added to
   the pod as PERSONAL.
-- Either way the account must exist and not need reauth.
+- Either way the account must exist, and not need a reconnect that trying it
+  again cannot rule out (``reauth_recovery``).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.config import settings
-from app.modules.connectors.domain.account import AccountEntity, AccountStatus
+from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
 from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
@@ -54,6 +55,7 @@ from app.modules.connectors.domain.ports import AccountRepositoryPort
 from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
     PodAccountRepository,
 )
+from app.modules.connectors.services.reauth_recovery import reauth_blocks_use
 
 #: ``(pod_account) -> None``, raising when the caller may not use it.
 SharedAccountCheck = Callable[[PodAccountEntity], Awaitable[None]]
@@ -134,7 +136,7 @@ class PodAccountPicker:
             # Deleted between the two reads; the cascade removes the pod
             # account too, which is the state this already is in.
             raise needs_account(pod_connector)
-        if account.status is AccountStatus.REAUTH_REQUIRED:
+        if reauth_blocks_use(account, auth_config):
             raise ReauthRequiredError(
                 slug=pod_connector.slug,
                 connector_id=auth_config.connector_id,

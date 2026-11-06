@@ -30,6 +30,19 @@ class CallsSettings(BaseSettings):
     gemini_api_key: SecretStr | None = Field(
         default=None, description="Gemini API key for the `gemini_live` engine."
     )
+    gemini_vertex_project: str | None = Field(
+        default=None,
+        description=(
+            "A Google Cloud project to run `gemini_live` in through Vertex AI, "
+            "as this server's own service account (Workload Identity on GKE). "
+            "Takes the place of `GEMINI_API_KEY`; the account needs "
+            "`roles/aiplatform.user`."
+        ),
+    )
+    gemini_vertex_location: str = Field(
+        default="us-central1",
+        description="The Vertex AI region a `gemini_live` call opens in, or `global`.",
+    )
     gemini_live_model: str = Field(
         default="gemini-3.8-live",
         description="The Gemini Live model a `gemini_live` call opens.",
@@ -127,6 +140,7 @@ class CallsSettings(BaseSettings):
 
     @field_validator(
         "gemini_api_key",
+        "gemini_vertex_project",
         "gemini_live_voice",
         "openai_api_key",
         "deepgram_api_key",

@@ -72,7 +72,6 @@ def _identity(row: ContactIdentityModel) -> ContactHandle:
         value=row.value,
         strength=IdentityStrength(row.strength),
         verified_at=row.verified_at,
-        last_inbound_at=row.last_inbound_at,
         issuer=row.issuer,
         value_raw=row.value_raw,
     )
@@ -86,8 +85,13 @@ def _contact(row: ContactModel, identities: Sequence[ContactIdentityModel]) -> C
         created_at=row.created_at,
         identities=tuple(_identity(identity) for identity in identities),
         merged_into_id=row.merged_into_id,
+        merged_into_user_id=row.merged_into_user_id,
         answered_at=row.answered_at,
     )
+
+
+#: The most pods' contacts one handle is looked up in at once (``holders_of``).
+MAX_HANDLE_HOLDERS = 200
 
 
 class ContactRepository:
@@ -254,7 +258,9 @@ class ContactRepository:
         whose name, or a handle as stored or as it arrived, holds these
         characters, in any case."""
         query = select(ContactModel).where(
-            ContactModel.pod_id == pod_id, ContactModel.merged_into_id.is_(None)
+            ContactModel.pod_id == pod_id,
+            ContactModel.merged_into_id.is_(None),
+            ContactModel.merged_into_user_id.is_(None),
         )
         if matching:
             pattern = f"%{_escaped(matching)}%"
@@ -327,19 +333,65 @@ class ContactRepository:
         )
         return bool(result.rowcount)
 
-    async def note_inbound(
-        self, *, pod_id: UUID, kind: IdentityKind, value: str
-    ) -> None:
-        """The contact just wrote from this handle: they want an answer here."""
-        await self.session.execute(
-            update(ContactIdentityModel)
-            .where(
-                ContactIdentityModel.pod_id == pod_id,
-                ContactIdentityModel.kind == kind.value,
-                ContactIdentityModel.value == normalize_handle(kind, value),
+    async def holders_of(self, *, kind: IdentityKind, value: str) -> list[Contact]:
+        """Every pod's contact holding this handle -- one per pod at most."""
+        ids = await self._holder_ids(kind=kind, value=value)
+        if not ids:
+            return []
+        rows = await self._contacts_by_ids(ids)
+        identities = await self._identities_of([row.id for row in rows])
+        return [
+            _contact(row, [found for found in identities if found.contact_id == row.id])
+            for row in rows
+        ]
+
+    async def _holder_ids(self, *, kind: IdentityKind, value: str) -> list[UUID]:
+        return list(
+            await self.session.scalars(
+                select(ContactIdentityModel.contact_id)
+                .where(
+                    ContactIdentityModel.kind == kind.value,
+                    ContactIdentityModel.value == normalize_handle(kind, value),
+                )
+                # One per pod: as many as the pods one account has spoken in.
+                .limit(MAX_HANDLE_HOLDERS)
             )
-            .values(last_inbound_at=datetime.now(timezone.utc))
         )
+
+    async def _contacts_by_ids(self, ids: list[UUID]) -> list[ContactModel]:
+        return list(
+            await self.session.scalars(
+                select(ContactModel).where(ContactModel.id.in_(ids))
+            )
+        )
+
+    async def fold_into_member(
+        self, *, contact: Contact, kind: IdentityKind, value: str, user_id: UUID
+    ) -> bool:
+        """The handle is a member's: take it from the contact. ``True`` when it
+        was all the contact was -- the contact is then that member, holding
+        nothing, and marked so; ``False`` when they keep other handles."""
+        handle = normalize_handle(kind, value)
+        await self.session.execute(
+            delete(ContactIdentityModel).where(
+                ContactIdentityModel.contact_id == contact.id,
+                ContactIdentityModel.kind == kind.value,
+                ContactIdentityModel.value == handle,
+            )
+        )
+        others = [
+            one
+            for one in contact.identities
+            if not (one.kind is kind and one.value == handle)
+        ]
+        if others:
+            return False
+        await self.session.execute(
+            update(ContactModel)
+            .where(ContactModel.id == contact.id)
+            .values(merged_into_user_id=user_id)
+        )
+        return True
 
     async def lock(self, *, pod_id: UUID, contact_ids: Sequence[UUID]) -> list[Contact]:
         """These contacts, row-locked in id order, so two merges of one pair queue.
@@ -473,6 +525,8 @@ class ContactRepository:
                 pods.c.organization_id == organization_id,
                 ContactModel.answered_at.is_not(None),
                 ContactModel.merged_into_id.is_(None),
+                # A member is no contact: not counted, once known to be one.
+                ContactModel.merged_into_user_id.is_(None),
             )
         )
         return int(total or 0)

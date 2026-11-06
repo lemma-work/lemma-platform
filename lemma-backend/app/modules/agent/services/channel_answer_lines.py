@@ -22,24 +22,22 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.redaction import redact_text
 from app.core.text.thinking_tags import strip_context_echo, strip_thinking_tokens
 from app.modules.agent.contracts.run_failures import user_safe_stored_reason
-from app.modules.agent.contracts.run_replies import (
+from app.modules.agent.contracts.channel_replies import (
     RunReplyMaterial,
     answer_line_client_id,
+    earlier_answer_client_id,
 )
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.channels.contracts import (
-    Channel,
-    ChannelKind,
     ChannelMessage,
     NewLine,
     Principal,
     Sender,
-    channel_by_id,
     post,
 )
-from app.modules.channels.contracts.places import places_of
+from app.modules.channels.contracts.placement import answer_placement
 
 #: What a line says when its run failed and left no reason of its own.
 COULD_NOT_ANSWER = "I couldn't answer this: something went wrong on my side."
@@ -57,14 +55,20 @@ async def post_answer(
     line: ChannelMessage,
     material: RunReplyMaterial | None,
 ) -> ChannelMessage | None:
-    """The run's answer to ``line``; nothing for a run that wrote none."""
-    if material is None or not material.answer:
+    """The run's answer to ``line``; nothing for a run that wrote none.
+
+    Whatever it answered before the person said more comes first, a line
+    each (``domain/steered_answers``)."""
+    if material is None:
         return None
     if material.private and not line.members_only:
         return None
+    await _post_earlier(
+        uow, run_id=run_id, conversation=conversation, line=line, material=material
+    )
     # The same boundary as a platform's answer: no reasoning, and none of the
     # platform's own context blocks a model repeated back.
-    text = strip_context_echo(strip_thinking_tokens(material.answer))
+    text = _shown(material.answer)
     if not text:
         return None
     return await _post_line(
@@ -79,6 +83,37 @@ async def post_answer(
     )
 
 
+def _shown(answer: str | None) -> str:
+    return strip_context_echo(strip_thinking_tokens(answer or ""))
+
+
+async def _post_earlier(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation: ConversationModel,
+    line: ChannelMessage,
+    material: RunReplyMaterial,
+) -> None:
+    """Each answer the run gave before a steer, as a line of its own."""
+    for number, answer in enumerate(material.earlier, start=1):
+        text = _shown(answer)
+        if not text:
+            continue
+        await _post_line(
+            uow,
+            line=line,
+            agent_id=effective_agent_id(
+                conversation.agent_id, pod_id=conversation.pod_id
+            ),
+            for_user_id=conversation.user_id,
+            text=text,
+            client_message_id=earlier_answer_client_id(run_id, number),
+            conversation_id=conversation.id,
+            run_id=run_id,
+        )
+
+
 async def post_why_unanswered(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -91,6 +126,17 @@ async def post_why_unanswered(
     In Lemma only: a group's place is not told about a run nobody there saw."""
     if material is None:
         return None
+    if material.status in ("FAILED", "STOPPED") and (
+        line.members_only or not material.private
+    ):
+        # What it did say before it failed was said.
+        await _post_earlier(
+            uow,
+            run_id=run_id,
+            conversation=conversation,
+            line=line,
+            material=material,
+        )
     if material.status == "FAILED":
         reason = clipped(user_safe_stored_reason(material.error))
         text = f"I couldn't answer this: {reason}" if reason else COULD_NOT_ANSWER
@@ -163,10 +209,8 @@ async def _post_line(
             select(AgentModel.name).where(AgentModel.id == agent_id)
         )
     )
-    channel = await channel_by_id(uow, line.channel_id)
-    in_thread, place = where_the_answer_goes(
-        channel, line, place_threads=await _place_threads(uow, line)
-    )
+    placement = await answer_placement(uow, line)
+    place = placement.target_source_id
     if not carried or line.members_only:
         place = None
     return await post(
@@ -184,64 +228,18 @@ async def _post_line(
             client_message_id=client_message_id,
             conversation_id=conversation_id,
             agent_run_id=run_id,
-            thread_root_id=in_thread,
-            reply_to_id=line.id,
+            thread_root_id=placement.thread_root_id,
+            reply_to_id=placement.reply_to_id,
         ),
         deliver_to=[place] if place else [],
     )
 
 
-#: The platforms whose channels thread a bot's answer under the message it
-#: answers. Elsewhere -- WhatsApp, Telegram, a chat made in Lemma -- an answer
-#: is a message of the chat like any other, aimed at what it answers.
-THREADED_PLATFORMS = frozenset({"SLACK", "TEAMS"})
-
-
-async def _place_threads(uow: SqlAlchemyUnitOfWork, line: ChannelMessage) -> bool:
-    """Whether the place ``line`` is at threads a bot's answers there."""
-    if line.place_id is None:
-        return False
-    for source in await places_of(uow, line.channel_id):
-        if source.id == line.place_id:
-            return source.platform.upper() in THREADED_PLATFORMS
-    return False
-
-
-def where_the_answer_goes(
-    channel: Channel | None, line: ChannelMessage, *, place_threads: bool = False
-) -> tuple[UUID | None, UUID | None]:
-    """The thread an answer is a reply in, and the place it is carried to.
-
-    A member's own channel and a group read as a chat: an answer to a line
-    in the main timeline is in the main timeline too, right after it and
-    pointing at it (``reply_to_id``), and is carried to the group's place as
-    a reply to that message there. A group mirroring a platform that threads a
-    bot's answers (``place_threads``: Slack, Teams) keeps its habit: the
-    answer is a reply in the line's thread, there and here. A line already in
-    a thread is answered in that thread. A contact's channel answers a
-    member's line in its thread, off the contact's own line of talk, and
-    never carries it: the answer is the member's, made with their access,
-    not the contact's to read.
-    """
-    kind = channel.kind if channel is not None else None
-    if line.thread_root_id is not None:
-        in_thread: UUID | None = line.thread_root_id
-    elif kind is ChannelKind.DIRECT:
-        in_thread = None
-    elif kind is ChannelKind.GROUP:
-        in_thread = line.id if place_threads else None
-    else:
-        in_thread = line.id
-    return in_thread, line.place_id if kind is ChannelKind.GROUP else None
-
-
 __all__ = [
     "COULD_NOT_ANSWER",
     "STOPPED_BEFORE_ANSWERING",
-    "THREADED_PLATFORMS",
     "clipped",
     "post_answer",
     "post_why_unanswered",
     "say_refused",
-    "where_the_answer_goes",
 ]

@@ -40,7 +40,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.workload_authority import invoking_person_context
 from app.core.config import settings
 from app.core.domain.errors import DomainError
-from app.modules.connectors.domain.account import AccountEntity, AccountStatus
+from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigStatus,
@@ -78,6 +78,7 @@ from app.modules.connectors.services.pod_account_rule import (
     connect_url,
     needs_account,
 )
+from app.modules.connectors.services.reauth_recovery import reauth_blocks_use
 
 #: ``(user_id, pod_id) -> Context``: a person, as themselves, in a pod. For the
 #: account half of a standing binding, whose person is not the one asking.
@@ -342,7 +343,7 @@ class PodConnectorResolver:
                 "You can only use your own account for this installation.",
                 details={"reason": "not_your_account"},
             )
-        if account.status is AccountStatus.REAUTH_REQUIRED:
+        if reauth_blocks_use(account, auth_config):
             raise ReauthRequiredError(
                 slug=auth_config.name,
                 connector_id=auth_config.connector_id,
@@ -529,6 +530,32 @@ async def _require_account_use(ctx: Context, pod_account: PodAccountEntity) -> N
         ) from refusal
 
 
+async def may_use_shared_account(ctx: Context, pod_account: PodAccountEntity) -> bool:
+    """Whether a call made now by ``ctx`` could run as this shared account --
+    the same question ``_require_account_use`` asks, answered as a bool."""
+    try:
+        await _require_account_use(ctx, pod_account)
+    except ConnectorAccessDeniedError:
+        return False
+    return True
+
+
+def reauth_required_for(
+    ctx: Context, pod_connector: PodConnectorEntity, resolved: ResolvedPodConnector
+) -> ReauthRequiredError:
+    """A marked account resolution let through, whose refresh then confirmed
+    the grant is gone: the answer resolution gives an account it refuses
+    outright, with the pod's reconnect link rather than the bare account one."""
+    return ReauthRequiredError(
+        slug=pod_connector.slug,
+        connector_id=resolved.auth_config.connector_id,
+        connect_url=connect_url(pod_connector.pod_id, pod_connector.slug),
+        acting_person_is_owner=(
+            acting_person(ctx) == resolved.pod_account.owner_user_id
+        ),
+    )
+
+
 def _restricted_without_person() -> ConnectorAccessDeniedError:
     return ConnectorAccessDeniedError(
         "This shared account is restricted to some members, and this run "
@@ -544,5 +571,7 @@ __all__ = [
     "acting_person",
     "connect_url",
     "free_slug",
+    "may_use_shared_account",
     "needs_account",
+    "reauth_required_for",
 ]

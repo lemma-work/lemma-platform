@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from app.core.analytics.domain_events import projection
 from app.core.analytics import AnalyticsActor, emit
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.analytics.events.wiring import (
+    ProjectionReads,
     actor_or_system,
     origin_of,
-    provide_uow_factory,
 )
 from app.modules.analytics.services.buckets import COUNT_EDGES, bucket
-from app.modules.identity.contracts.organizations import organization_member_count
 from app.modules.identity.domain.events import (
     OrganizationCreatedEvent,
     OrganizationMemberAddedEvent,
@@ -30,9 +28,9 @@ WIRED = frozenset(
 )
 async def on_identity_event(
     event: dict[str, object],
-    uow_factory: UnitOfWorkFactory | None = None,
+    reads: ProjectionReads | None = None,
 ) -> None:
-    uow_factory = uow_factory or provide_uow_factory()
+    reads = reads or ProjectionReads()
     event_type = event.get("event_type")
     if event_type not in {
         UserSignedUpEvent.get_event_type(),
@@ -51,6 +49,7 @@ async def on_identity_event(
                 "auth.signed_up",
                 actor=AnalyticsActor.user(parsed.user_id),
                 origin=origin,
+                properties={"method": parsed.method},
             )
         elif event_type == OrganizationCreatedEvent.get_event_type():
             parsed_org = OrganizationCreatedEvent.model_validate(event)
@@ -64,10 +63,9 @@ async def on_identity_event(
             parsed_member = OrganizationMemberAddedEvent.model_validate(event)
             # Counted here rather than carried on the event: a count written at
             # publish time is already stale by the time it is consumed.
-            async with uow_factory() as uow:
-                member_count = await organization_member_count(
-                    uow, parsed_member.organization_id
-                )
+            member_count = await reads.organization_member_count(
+                parsed_member.organization_id
+            )
             emit(
                 "organization.member_joined",
                 actor=AnalyticsActor.user(parsed_member.user_id),

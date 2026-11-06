@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.workspace_cli.helper import (
+from app.modules.agent.infrastructure.tools.workspace_cli.helper import (
     CHARACTER_LIMIT_STDERR,
     CHARACTER_LIMIT_STDOUT,
     render_terminal_result,
 )
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandResult,
     ExecutePythonRequest,
 )
@@ -110,8 +110,12 @@ def test_a_result_can_carry_a_notice_about_the_call_itself():
 )
 def test_the_two_clocks_are_independent(kwargs, expected):
     """Patience and early-return are different questions, and were conflated."""
-    from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-    from app.modules.agent.tools.workspace_cli.workspace_cli import exec_clocks
+    from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+        ExecCommandRequest,
+    )
+    from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+        exec_clocks,
+    )
 
     assert exec_clocks(ExecCommandRequest(**kwargs)) == expected
 
@@ -121,8 +125,12 @@ def test_a_foreground_command_may_wait_ten_minutes_and_no_longer():
     that needs ten minutes in the foreground should not need `wait_for`."""
     from pydantic import ValidationError
 
-    from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-    from app.modules.agent.tools.workspace_cli.workspace_cli import exec_clocks
+    from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+        ExecCommandRequest,
+    )
+    from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+        exec_clocks,
+    )
 
     assert exec_clocks(ExecCommandRequest(cmd="x", timeout_seconds=600)) == (600, None)
     with pytest.raises(ValidationError):
@@ -132,8 +140,10 @@ def test_a_foreground_command_may_wait_ten_minutes_and_no_longer():
 def test_the_documented_defaults_are_the_real_ones():
     """The description said 30 s; the default patience is 60 s and 30 s is the
     early return, so an agent planning around the text was off by half."""
-    from app.modules.agent.tools.workspace_cli import workspace_cli
-    from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+    from app.modules.agent.infrastructure.tools.workspace_cli import workspace_cli
+    from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+        ExecCommandRequest,
+    )
 
     fields = ExecCommandRequest.model_fields
     timeout_text = fields["timeout_seconds"].description or ""
@@ -155,7 +165,9 @@ def test_every_render_call_passes_the_cap_the_caller_asked_for():
     import ast
     from pathlib import Path
 
-    source = Path("app/modules/agent/tools/workspace_cli/workspace_cli.py")
+    source = Path(
+        "app/modules/agent/infrastructure/tools/workspace_cli/workspace_cli.py"
+    )
     tree = ast.parse(source.read_text())
     calls = [
         node

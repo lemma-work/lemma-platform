@@ -484,6 +484,49 @@ def test_the_non_shard_lanes_match_their_workflows() -> None:
     )
 
 
+def test_the_protected_shards_run_every_file_once_and_feed_one_verdict() -> None:
+    """The split protected lane must still be one lane, judged as one.
+
+    Every Desktop DMG waits on this workflow's run conclusion for the exact
+    commit (`require-backend-protected-e2e`), so the layout must run every test
+    file exactly once, the matrix must come from the generated layout rather
+    than a hand-written list, every shard must hand the fixtures the prebuilt
+    images, and one job must both publish the commit-linked evidence and refuse
+    a run in which any shard did not succeed.
+    """
+    planner = _load_planner()
+    assert planner.verify_protected() == 0
+
+    workflow = yaml.safe_load(
+        (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
+    )
+    jobs = workflow["jobs"]
+    text = (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
+    assert "jq -c '.shards' .github/protected-e2e-shards.json" in text
+    shard_job = jobs["protected-runtime"]
+    assert shard_job["strategy"]["fail-fast"] is False
+    assert shard_job["environment"] == "backend-protected-e2e"
+    assert "sandbox-images" in shard_job["needs"]
+    steps = {step.get("name"): step for step in shard_job["steps"]}
+    assert "WORKSPACE_E2E_IMAGE" in steps["Resolve sandbox image tags"]["run"]
+    run = steps["Run protected suite"]
+    assert "-o timeout=300" in run["run"]
+    assert set(run["env"]) >= {
+        "E2E_REAL",
+        "E2E_LLM_MODE",
+        "LEMMA_E2E_OAUTH_CREDENTIALS",
+    }
+
+    verdict = jobs["protected-e2e-passed"]
+    assert set(verdict["needs"]) == set(jobs) - {"protected-e2e-passed"}
+    published = [
+        step
+        for step in verdict["steps"]
+        if step.get("with", {}).get("name") == "backend-protected-e2e-${{ github.sha }}"
+    ]
+    assert published, "the commit-linked evidence artifact is no longer published"
+
+
 #: Markers declared in `pytest.ini` that no test carries, and why that is
 #: deliberate. Both are named in CI marker filters, so they read as load-bearing
 #: and are not: `not protected` in every shard excludes nothing, and

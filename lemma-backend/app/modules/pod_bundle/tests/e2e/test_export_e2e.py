@@ -168,6 +168,9 @@ async def test_export_pod_bundle_roundtrip(
     # No pod connectors, so the format a reader of 3 reads whole.
     assert pod["format_version"] == 3
     assert pod["name"] == test_pod["name"]
+    # The export names itself, so an import of this archive can say where it
+    # came from (`infrastructure.bundle_identity`).
+    assert pod["bundle_id"] == export_id
 
     # Table manifest + seeded data.csv (the table was named in data_tables).
     table_json = root / "tables" / table_name / f"{table_name}.json"

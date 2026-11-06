@@ -157,6 +157,9 @@ fn setup(
         // rejected by an ACL that has never heard of it.
         app.add_capability(capability)?;
     }
+    if let Some(server) = configured_hosted_server(&read_config()) {
+        grant_hosted_workspace_capability(&handle, &server);
+    }
 
     let resume = resume_attempt(mode);
     if let Some(target) = resume.as_ref() {

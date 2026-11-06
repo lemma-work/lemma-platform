@@ -203,7 +203,7 @@ async def test_lines_that_waited_out_the_window_go_as_one_push(pod: Pod):
     assert await waiting(crew["id"], user) == 0
 
 
-async def test_a_push_the_budget_held_goes_with_the_next_whatever_it_says(
+async def test_a_held_push_goes_with_the_next_whatever_it_says(
     pod: Pod,
 ):
     """A held push is found by why it was held, not by the sentence beside

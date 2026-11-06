@@ -1015,6 +1015,13 @@ def _pod_connectors(client: Any, state: Any, pod: str | None = None) -> Any:
 _POD_OPTION = typer.Option(None, "--pod", help="The pod; defaults to the selected one.")
 
 
+def _use_pod(state: Any, pod: str | None) -> None:
+    """Make ``--pod`` on this command the pod everything below it reaches,
+    exactly as the global ``lemma --pod`` does."""
+    if pod:
+        state.config.setdefault("_runtime", {})["pod"] = pod
+
+
 def _resolve_account(client: Any, state: Any, account: str | None) -> str | None:
     """Accept an account id OR the email it was connected with (deprecated path).
 
@@ -1192,6 +1199,7 @@ def execute_operation(
         None, "--auth-config", "-c", hidden=True
     ),
     account: str | None = typer.Option(None, "--account", "--account-id", hidden=True),
+    pod: str | None = _POD_OPTION,
 ) -> None:
     """Execute an operation through one of the selected pod's connectors.
 
@@ -1217,6 +1225,7 @@ def execute_operation(
     def run(client, s):  # type: ignore[no-untyped-def]
         from lemma_sdk.errors import LemmaAPIError
 
+        _use_pod(s, pod)
         resolved = _resolve_auth_config(client, auth_config) if auth_config else None
         pod_route = resolved is None and account is None and "account_id" not in payload
         if pod_route and not _pod_selected(s):
@@ -1583,7 +1592,11 @@ def _resolve_operation(
 def run_connector_operation(
     ctx: typer.Context,
     connector: str = typer.Argument(
-        ..., help="The pod connector's slug (gmail, support-inbox)."
+        ...,
+        help=(
+            "A pod connector's slug (gmail, support-inbox), one of your "
+            "installations, or a catalog id."
+        ),
     ),
     operation: str = typer.Argument(
         ..., help="Operation id, or plain-English intent ('list recent emails')."
@@ -1614,13 +1627,18 @@ def run_connector_operation(
     # Deprecated: the account, as picked before pod connectors. Hidden, still
     # served, and warned about; CONNECTOR is then read as an installation.
     account: str | None = typer.Option(None, "--account", "--account-id", hidden=True),
+    pod: str | None = _POD_OPTION,
 ) -> None:
     """Run a connector operation in ONE call: resolve, check, execute.
 
-    CONNECTOR is one of the selected pod's connectors, by slug. It decides the
-    account the call runs as: yours for a per-member connector, the one its
-    owner shared for a shared connector. This never guesses silently: the
-    resolved operation is printed, so the next run can name it exactly.
+    CONNECTOR is one of the pod's connectors by slug, one of your own
+    installations by name, or a catalog id (gmail). Nothing has to be declared
+    first: the first run adds your installation to the pod as your own
+    account, and something you have not connected answers CONNECTION_REQUIRED
+    with a `connect_url` to open. The connector decides the account the call
+    runs as: yours for a per-member connector, the one its owner shared for a
+    shared connector. This never guesses silently: the resolved operation is
+    printed, so the next run can name it exactly.
 
     Omit `--data` on an operation that needs input and it prints the input schema
     instead of failing — the same thing `--dry-run` does on purpose.
@@ -1637,6 +1655,7 @@ def run_connector_operation(
     _warn_legacy_flags(payload, account=account, auth_config=None)
 
     def run(client, s):  # type: ignore[no-untyped-def]
+        _use_pod(s, pod)
         auth_config = _resolve_auth_config(client, connector) if legacy else None
         if auth_config is None and not _pod_selected(s):
             # No pod: CONNECTOR is an installation, run as the caller's own
@@ -1771,7 +1790,12 @@ def add_pod_connector(
         ..., help="Pod-local name agents, apps and bundles address it by."
     ),
     install: str = typer.Argument(
-        ..., help="The org installation: auth-config name, id, or connector id."
+        ...,
+        help=(
+            "The org installation (auth-config name or id), or a connector id: "
+            "its org default, or Lemma's own app installed now when the org has "
+            "none and you may install connectors."
+        ),
     ),
     mode: str = typer.Option(
         "PER_MEMBER",
@@ -1790,14 +1814,21 @@ def add_pod_connector(
         None, "--purpose", help="Shown to members asked to connect."
     ),
 ) -> None:
-    """Declare one of the org's installations in the selected pod."""
+    """Declare one of the org's installations, or a catalog connector, in the
+    selected pod."""
     state = state_from_ctx(ctx)
 
     def run(client, s):  # type: ignore[no-untyped-def]
+        try:
+            target = {"auth_config_id": _auth_config_id(client, install)}
+        except typer.BadParameter:
+            # Nothing installed by that name: a catalog connector id, which the
+            # server installs (or says who may) rather than this refusing.
+            target = {"connector_id": install}
         return _pod_connectors(client, s, pod).declare_pod_connector(
             slug,
-            _auth_config_id(client, install),
-            mode.upper(),
+            mode=mode.upper(),
+            **target,
             shared_pod_account_id=shared_account,
             required=required,
             purpose=purpose,

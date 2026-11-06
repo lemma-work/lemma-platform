@@ -35,6 +35,11 @@ pytestmark = [
     pytest.mark.slow,
     pytest.mark.asyncio,
     pytest.mark.drives_work,
+    # A hundred thousand fires, one by one: 236-242s on a CI runner and a
+    # laptop alike, at its last green commit as on main -- so close to
+    # the suite-wide 300s that a slower runner crossed it. Its own waits
+    # allow far more; this is a backstop for a hang, not a delivery budget.
+    pytest.mark.timeout(600),
 ]
 
 ROWS = 100_000

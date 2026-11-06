@@ -1,0 +1,10 @@
+{
+  "name": "review_nudges",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 11,15 * * 1-5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Read the pull_requests table. For every pull request with no reviewed_at opened more than four hours ago, ask its reviewer, or whoever reviewed most this week, to look at it."
+}

@@ -58,10 +58,7 @@ from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
-from app.modules.agent_surfaces.services.notification_rate_limiter import (
-    EmailBudget,
-    PushBudget,
-)
+from app.modules.agent_surfaces.services.notification_rate_limiter import EmailBudget
 from app.modules.agent_surfaces.services.channel_places import place_of
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -180,7 +177,7 @@ def _egress_double() -> SurfaceEgress:
 
 
 #: Where `agent` publishes the conversation operations delivery calls.
-_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_OPERATIONS = "app.modules.agent.contracts.channels"
 
 #: Where a pod's own name is read, for the email ``From`` header.
 _POD_NAMES = "app.modules.agent_surfaces.services.group_names.pod_name_for"
@@ -514,9 +511,7 @@ def _resolver(*, provisioner=None, seats=None, **collaborators):
     )
 
 
-def _pushes(
-    *, provisioner=None, email_budget=None, push_budget=None, **collaborators
-) -> MemberPushes:
+def _pushes(*, provisioner=None, email_budget=None, **collaborators) -> MemberPushes:
     """`MemberPushes` over the same doubles, its places in memory."""
     surface_repo, external_users, membership = _collaborators(**collaborators)
     return MemberPushes(
@@ -528,7 +523,6 @@ def _pushes(
         surface_provisioner=provisioner,
         seats=InMemoryChannelSeats(),
         email_budget=email_budget,
-        push_budget=push_budget,
     )
 
 
@@ -1073,21 +1067,6 @@ async def test_a_push_nothing_can_carry_says_why(monkeypatch):
 
     assert delivered.sent is False
     assert delivered.reason == UndeliverableReason.EMAIL_NOT_CONFIGURED
-
-
-async def test_the_push_budget_skips_the_push():
-    """A runaway loop must not put forty messages on a colleague's phone; the
-    lines it writes wait in their channel."""
-    surface = _email_surface()
-    pushes = _pushes(
-        surfaces=(surface,), push_budget=PushBudget(limit=0, redis=_FakeRedis())
-    )
-
-    delivered = await pushes.push(_push(pod_id=surface.pod_id))
-
-    assert delivered.sent is False
-    assert "this hour" in (delivered.reason or "")
-    pushes.egress.egress.open_cold_email_thread.assert_not_awaited()
 
 
 async def test_the_daily_email_cap_stops_the_email(monkeypatch):

@@ -288,16 +288,21 @@ E2B_METADATA_NAMESPACE=
 # Only for a deployment whose plans sell workspace sizes. JSON, keyed
 # `{cpu}x{memory_mb}`, one template per size.
 E2B_WORKSPACE_SIZE_TEMPLATES=
+# The size E2B_WORKSPACE_TEMPLATE was built at; the builder's default.
+E2B_WORKSPACE_TEMPLATE_SIZE=1x2048
 ```
 
-These six are the whole backend-side E2B surface. In particular:
+These seven are the whole backend-side E2B surface. In particular:
 
 - **A workspace size is a template.** E2B fixes CPU and memory when a template
   is built, so a deployment whose plans size workspaces builds one workspace
-  template per size — `build_templates.py --name-suffix -4x8192` with
-  `E2B_WORKSPACE_CPU_COUNT=4` and `E2B_WORKSPACE_MEMORY_MB=8192` — and maps
-  the sizes here, e.g. `{"4x8192": "lemma-workspace-4x8192"}`. A size with no
-  entry is served from `E2B_WORKSPACE_TEMPLATE`, and logged. Without a plan
+  template per size — `build_templates.py --target workspace --size 4x8192`,
+  which names it `lemma-workspace-4x8192` — and maps the sizes here, e.g.
+  `{"4x8192": "lemma-workspace-4x8192"}`. The size the default template was
+  built at needs no entry: `E2B_WORKSPACE_TEMPLATE_SIZE` says what it is
+  (`1x2048`, what the builder makes with no size given), and a plan selling it
+  is served from `E2B_WORKSPACE_TEMPLATE`. Any other size with no entry is
+  served from `E2B_WORKSPACE_TEMPLATE` too, and logged. Without a plan
   provider nothing asks for a size and this is never read. A workspace that
   already exists keeps the template it was created on: here the sandbox is its
   disk, so it cannot be rebuilt at a new size without carrying its files across.
@@ -745,6 +750,12 @@ LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
 EMBEDDING_PROVIDER=auto       # auto | local | openai_compat
 EMBEDDING_DIMENSION=768
 RERANKER_MODE=off             # off | local | openai_compat
+# The provider's exact model id; on Fireworks that is the full
+# `accounts/fireworks/models/...` form. A rerank slower than the timeout, or
+# one that fails, leaves search in first-stage order and logs
+# `datastore.reranker.openai_compat_failed.degraded`.
+OPENAI_COMPAT_RERANKER_MODEL=qwen3-reranker-8b
+RERANKER_TIMEOUT_SECONDS=5
 
 WEB_SEARCH_PROVIDER=auto      # auto | duckduckgo | searxng | brave
 BRAVE_SEARCH_API_KEY=
@@ -811,8 +822,11 @@ configured above.
 ```dotenv
 CALL_VOICE_ENGINE=gemini_live      # gemini_live | openai_realtime | cascade
 
-# gemini_live: one native-audio session.
+# gemini_live: one native-audio session, with a Gemini API key or through
+# Vertex AI as this server's own service account (no key; see below).
 GEMINI_API_KEY=
+GEMINI_VERTEX_PROJECT=                   # set it to use Vertex AI instead of the key
+GEMINI_VERTEX_LOCATION=us-central1       # or global
 GEMINI_LIVE_MODEL=gemini-3.8-live
 GEMINI_LIVE_VOICE=
 
@@ -838,6 +852,15 @@ CALL_MAX_MINUTES=60
 CALLS_PER_USER=2
 CALL_QUIET_WINDOW_MS=700
 ```
+
+With `GEMINI_VERTEX_PROJECT` set, `gemini_live` connects to Vertex AI's Live
+API with the token of the service account the server runs as, read from the
+metadata server GKE (Workload Identity) and Compute Engine provide; nothing is
+stored, and it takes the place of `GEMINI_API_KEY`. Grant that account
+`roles/aiplatform.user` in the project, and set `GEMINI_LIVE_MODEL` to a Live
+model Vertex AI serves in that location, which is not always named as the
+Gemini API names it. Outside Google Cloud there is no metadata server, so use
+the key.
 
 The cascade talker answers every turn, so pick a model that can answer without
 reasoning first: a thinking-only model spends the caller's silence on tokens

@@ -49,6 +49,16 @@
           <li>Keep this computer on for agents and schedules.</li>
         </ul>
         <button class="linklike" id="choose-local" type="button">Use Local Lemma</button>
+        <button class="linklike" id="choose-server" type="button" aria-expanded="false" aria-controls="server-form">Connect to your own Lemma server</button>
+        <form id="server-form" novalidate hidden>
+          <label for="server-url">Server address</label>
+          <div class="server-row">
+            <input id="server-url" name="server" type="text" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="lemma.example.com">
+            <button class="primary" id="connect-server" type="submit">Connect</button>
+          </div>
+          <p class="server-hint">A Lemma your team deployed itself. You sign in on that server.</p>
+          <p class="setup-error" id="server-setup-error" role="alert" hidden></p>
+        </form>
       </section>
     </div>
     <div class="welcome-notes">

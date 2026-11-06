@@ -14,9 +14,11 @@ intake and the shipped reader, and asserts on what a conversation ends up with.
 
 from __future__ import annotations
 
+from app.modules.agent.agent_host.control import admission
+from app.modules.agent.domain.state_kinds import PauseKind
+
 import asyncio
 import base64
-from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4, uuid7
 
@@ -24,7 +26,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandRejection,
     AgentHostEvent,
@@ -42,45 +44,44 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
     MessageKind,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     RemoteHarness,
     AgentHostRunConfig,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+from app.modules.agent.agent_host.harness.dispatch import (
     _resumed_tool_call_id,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentRuntimeProfileModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
-from app.modules.agent.services.mcp_pausing_calls import (
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.agent_host.mcp_pausing_calls import (
     close_pausing_tool_call,
     record_pausing_tool_call,
 )
 from app.modules.agent.services.wait_wake_service import AgentWaitService
-from app.modules.agent.tools.waiting.models import WaitForRequest
-from app.modules.agent.tools.waiting.pydantic_adapter import wait_for
+from app.modules.agent.infrastructure.tools.waiting.models import WaitForRequest
+from app.modules.agent.infrastructure.tools.waiting.tools import wait_for
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     publish_harnesses,
     conversation_with_a_leased_run,
     paired_machine,
     stale_after,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.agent.domain.value_objects import RunTrigger
 
 pytestmark = pytest.mark.e2e
 
@@ -232,7 +233,7 @@ async def test_a_whole_turn_survives_the_trip_from_host_to_conversation(
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
         ),
     )
@@ -330,7 +331,7 @@ async def test_the_stream_carries_a_permission_request_without_ending_the_run(
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
         ),
     )
@@ -380,7 +381,7 @@ class _RecordingArtifactWriter:
         self.mime_types: list[str] = []
 
     async def materialize_event(self, *, payload, **_kwargs):
-        from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
+        from app.modules.agent.agent_host.harness.artifacts import (
             AgentHostArtifactMaterialization,
             _inline_images,
         )
@@ -444,7 +445,7 @@ async def test_an_image_the_agent_produced_reaches_the_conversation(
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
         ),
     )
@@ -534,7 +535,7 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
         async for event in harness._consume(
             agent_run_id=run_id,
             agent=_agent(pod_id),
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=UUID(scenario.owner_user["id"]),
                 pod_id=pod_id,
                 conversation_id=conversation_id,
@@ -641,7 +642,7 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
     conversation_id, run_id, host_id = await _seed_run(db_session, scenario, pod_id)
     await db_session.commit()
 
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(scenario.owner_user["id"]),
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -653,13 +654,14 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
         lambda: SqlAlchemyUnitOfWork(db_session),
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=WAIT_TOOL_NAME,
+        tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"reason": "waiting for the nightly build", "seconds": 600},
     )
     await db_session.commit()
 
     answer = await wait_for(
-        SimpleNamespace(deps=ctx, tool_call_id=tool_call_id),
+        ctx.model_copy(update={"tool_call_id": tool_call_id}),
         WaitForRequest(
             reason="waiting for the nightly build",
             seconds=600,
@@ -720,14 +722,13 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
 
     # The run has to be over before the timer fires, or the wake sees a live run
     # and quietly declines to start a second one.
-    await ConversationRepository(SqlAlchemyUnitOfWork(db_session)).finish_agent_run(
+    await Runs(SqlAlchemyUnitOfWork(db_session)).finish_agent_run(
         agent_run_id=run_id, status=AgentRunStatus.COMPLETED
     )
     await db_session.commit()
 
     uow = SqlAlchemyUnitOfWork(db_session)
-    waits = AgentConversationWaitRepository(uow)
-    wait = await waits.find_active_for_run(run_id)
+    (wait,) = await Pauses(uow).pending(run_id=run_id, kinds=(PauseKind.WAIT,))
     assert wait is not None and wait.tool_call_id == tool_call_id
 
     woke = await AgentWaitService(uow).wake(wait=wait)
@@ -746,13 +747,13 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
         .all()
     )
     assert len(runs) == 2, "the timer did not start the run that carries on"
-    assert runs[-1].run_metadata["source"] == "wait_resume"
+    assert runs[-1].trigger is RunTrigger.WAKE
     # Named so the dispatch can prompt the woken agent with what it woke to,
     # rather than re-sending a request its provider session already holds.
-    assert runs[-1].run_metadata["resumed_tool_call_id"] == tool_call_id
+    assert runs[-1].resumed_tool_call_id == tool_call_id
     assert _resumed_tool_call_id(runs[-1].to_entity()) == tool_call_id
 
-    messages, _ = await ConversationRepository(uow).list_messages(
+    messages, _ = await Messages(uow).list_messages(
         conversation_id=conversation_id, limit=50
     )
     returned = [
@@ -785,7 +786,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
     await db_session.commit()
 
     uow_factory = lambda: SqlAlchemyUnitOfWork(db_session)  # noqa: E731
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(scenario.owner_user["id"]),
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -797,11 +798,12 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=WAIT_TOOL_NAME,
+        tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"reason": "polling", "seconds": 5},
     )
     refusal = await wait_for(
-        SimpleNamespace(deps=ctx, tool_call_id=rejected_id),
+        ctx.model_copy(update={"tool_call_id": rejected_id}),
         WaitForRequest(reason="polling", seconds=5),
     )
     assert refusal.success is False
@@ -810,7 +812,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         conversation_id=conversation_id,
         agent_run_id=run_id,
         tool_call_id=rejected_id,
-        tool_name=WAIT_TOOL_NAME,
+        tool_name="wait_for",
         result=refusal,
     )
     await db_session.commit()
@@ -819,11 +821,12 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=WAIT_TOOL_NAME,
+        tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"reason": "the nightly build", "seconds": 600},
     )
     slept = await wait_for(
-        SimpleNamespace(deps=ctx, tool_call_id=real_id),
+        ctx.model_copy(update={"tool_call_id": real_id}),
         WaitForRequest(reason="the nightly build", seconds=600),
     )
     assert slept.success is True
@@ -832,16 +835,16 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         conversation_id=conversation_id,
         agent_run_id=run_id,
         tool_call_id=real_id,
-        tool_name=WAIT_TOOL_NAME,
+        tool_name="wait_for",
         result=slept,
     )
-    await ConversationRepository(uow_factory()).finish_agent_run(
+    await Runs(uow_factory()).finish_agent_run(
         agent_run_id=run_id, status=AgentRunStatus.COMPLETED
     )
     await db_session.commit()
 
     uow = uow_factory()
-    wait = await AgentConversationWaitRepository(uow).find_active_for_run(run_id)
+    (wait,) = await Pauses(uow).pending(run_id=run_id, kinds=(PauseKind.WAIT,))
     assert wait is not None and wait.tool_call_id == real_id
     assert await AgentWaitService(uow).wake(wait=wait) is True
     await db_session.commit()
@@ -863,7 +866,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
     # under the sleeping call has to be the wake, not the acknowledgement the
     # model already read. `append_pause_tool_return` is idempotent, so a return
     # written early is the wake never being written at all.
-    messages, _ = await ConversationRepository(uow).list_messages(
+    messages, _ = await Messages(uow).list_messages(
         conversation_id=conversation_id, limit=50
     )
     returns = {
@@ -940,7 +943,8 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         prompt=[{"role": "user", "content": "Say the dispatch secret."}],
         run_deadline=now + timedelta(minutes=30),
     )
-    admitted = await repository.enqueue_run(
+    admitted = await admission.enqueue_run(
+        repository.uow,
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
@@ -950,7 +954,8 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
     )
     assert admitted.kind == AgentHostCommandKind.START_RUN
     # Admission is exactly-once: re-admitting the same run returns the same command.
-    again = await repository.enqueue_run(
+    again = await admission.enqueue_run(
+        repository.uow,
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
@@ -1028,7 +1033,7 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=UUID(scenario.owner_user["id"]),
             pod_id=pod_id,
             conversation_id=conversation_id,
@@ -1100,7 +1105,8 @@ async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
         prompt=[{"role": "user", "content": "run"}],
         run_deadline=now + timedelta(minutes=30),
     )
-    _admitted = await repository.enqueue_run(
+    _admitted = await admission.enqueue_run(
+        repository.uow,
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,

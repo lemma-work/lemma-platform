@@ -15,7 +15,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
 from app.modules.icon.contracts.provisioning import create_icon_service
-from app.modules.agent.contracts.workflow_control import build_agent_control_adapter
+from app.modules.agent.contracts.automation import build_agent_control_adapter
 from app.modules.function.contracts.workflow_control import (
     build_function_control_adapter,
 )

@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import type { Pod } from "@/data";
-import { ageOf, viewOfItem, type Go, type QueueItem, type QueueKind } from "./model";
-import { Empty, to } from "./parts";
+import type { Go, QueueItem, QueueKind } from "./model";
+import { NeedRow } from "./answer";
+import { Empty } from "./parts";
 
 const KINDS: { kind: QueueKind; title: string; hint: string }[] = [
     { kind: "decide", title: "Decide", hint: "Approvals and choices only a person can make" },
@@ -12,8 +13,8 @@ const KINDS: { kind: QueueKind; title: string; hint: string }[] = [
 ];
 
 /** Everything waiting on you, across every Lemma, oldest first. Each row
- *  says which Lemma it is for and how long it has waited, and opens where
- *  it is answered: its chat, or the workflow run whose form it is. */
+ *  says which Lemma it is for and how long it has waited, and is answered
+ *  in place where it can be (see `NeedRow`). */
 export function NeedsYou({ pods, queue, loading, go }: { pods: readonly Pod[]; queue: readonly QueueItem[]; loading: boolean; go: Go }) {
     const [now] = useState(() => Date.now());
     const [only, setOnly] = useState<QueueKind | "all">("all");
@@ -40,22 +41,13 @@ export function NeedsYou({ pods, queue, loading, go }: { pods: readonly Pod[]; q
                         return (
                             <section key={kind} className="ox-queue__g">
                                 <p className="ox-queue__h"><span>{title}</span><span className="ox-vs">{hint}</span></p>
-                                {items.map((item) => (
-                                    <a key={item.key} className="ox-item" {...to(viewOfItem(item), go)}>
-                                        <span className="ox-item__t">
-                                            <span className="ox-item__w">{item.title}</span>
-                                            <span className="ox-item__o">{item.podName}{item.detail ? ` · ${item.detail}` : ""}</span>
-                                        </span>
-                                        <span className={"ox-item__age" + (now - item.sinceMs > 86_400_000 ? " ox-item__age--old" : "")}>{ageOf(item.sinceMs, now)}</span>
-                                        <span className="ox-btn ox-btn--small">Open</span>
-                                    </a>
-                                ))}
+                                {items.map((item) => <NeedRow key={item.key} item={item} pods={pods} now={now} go={go} />)}
                             </section>
                         );
                     })}
                 </div>
             )}
-            <p className="ox-vs ox-queue__foot">Each one opens its chat, or the workflow run it came from. Answer there, and it leaves this list.</p>
+            <p className="ox-vs ox-queue__foot">Questions, approvals and forms are answered right here. A title opens the chat or the run it came from.</p>
         </div>
     );
 }

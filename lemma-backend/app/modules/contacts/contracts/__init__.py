@@ -41,6 +41,7 @@ from app.modules.contacts.infrastructure.repository import (
 from app.modules.contacts.infrastructure.visitor_sessions import (
     VisitorSessionRepository,
 )
+from app.modules.contacts.services.member_folds import MemberFold, fold_into_member
 from app.modules.contacts.services.proofs import ContactProofs
 
 __all__ = [
@@ -48,6 +49,7 @@ __all__ = [
     "ContactRef",
     "IdentityKind",
     "IdentityStrength",
+    "MemberFold",
     "ProofTooWeak",
     "UnusableHandle",
     "VerifiedHandles",
@@ -58,11 +60,11 @@ __all__ = [
     "contact_handles",
     "find_contact",
     "find_contact_by_user",
+    "fold_into_member",
     "is_stop_request",
     "lock_answered_contacts_count",
     "normalize_handle",
     "note_answered",
-    "note_inbound",
     "note_never_answered",
     "open_anonymous_contact",
     "open_contact",
@@ -270,15 +272,6 @@ async def note_never_answered(
     them: they no longer take a place in the count. Whether they had one."""
     return await ContactRepository(uow.session).note_never_answered(
         pod_id=pod_id, contact_id=contact_id
-    )
-
-
-async def note_inbound(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, kind: IdentityKind, value: str
-) -> None:
-    """Record that a contact just wrote from this handle."""
-    await ContactRepository(uow.session).note_inbound(
-        pod_id=pod_id, kind=kind, value=value
     )
 
 

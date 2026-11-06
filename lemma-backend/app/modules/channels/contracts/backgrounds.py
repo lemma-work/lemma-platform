@@ -12,12 +12,16 @@ Who is reading decides what of it they are shown (``domain/projection``),
 applied at the reading, not the choosing:
 
 * ``MEMBER_IN_LEMMA`` -- a member's run answering them in Lemma. Every line,
-  but not an answer another member's access made (``withheld_from``); what a
-  contact wrote is shown marked as said by somebody outside the pod.
+  but not an answer another member's access made (``withheld_from``); what
+  somebody outside the pod wrote is shown marked as theirs.
 * ``MEMBER_IN_GROUP`` -- a member's run answering in a group on a platform,
-  where everybody in the group reads the answer. Not what people outside the
-  pod wrote, nor the bot's answers to them, nor members' notes: counted, not
-  shown.
+  where everybody in the group reads the answer. Everything said in the group,
+  what people outside the pod wrote marked as theirs, and the bot's answers to
+  them; not members' notes, which never reached the group: counted, not shown.
+  A run that could not see what the room said answered the room wrongly, and
+  hiding it bought nothing -- the run could read the same lines from the
+  channel. What it reads from outside is information, never a request: the
+  authorizer asks the member before such a run acts (``outside_text``).
 * ``CONTACT`` -- a contact's run: what the channel lets them read.
 * ``PLATFORM`` -- a platform's own history, read live (Slack, Teams): its
   rule was applied as it was read. A line the pod heard is still a reference;
@@ -36,7 +40,12 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.entities import ChannelMessage, SenderKind
-from app.modules.channels.domain.projection import Reader, may_read, withheld_from
+from app.modules.channels.domain.projection import (
+    Reader,
+    is_outside,
+    may_read,
+    withheld_from,
+)
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.message_models import ChannelMessageModel
 from app.modules.channels.infrastructure.rows import MAX_LINES
@@ -98,8 +107,6 @@ class BackgroundRefs(BaseModel):
     source_id: UUID | None = None
     #: How the pod's bot is named in a group.
     agent_name: str | None = None
-    #: Left out as it was chosen (``PLATFORM``): counted, never kept.
-    withheld: int = 0
     items: tuple[BackgroundItem, ...] = ()
 
 
@@ -194,10 +201,12 @@ async def _pod_members(
     backgrounds: Sequence[BackgroundRefs],
     lines: dict[UUID, ChannelMessage],
 ) -> dict[UUID, set[UUID]]:
-    """Who of the lines' speakers is in the pod now, for the views that ask."""
+    """Who of the lines' speakers is in the pod now, for every view that marks
+    what was said outside it (``is_outside``): all but a platform's, whose
+    marks came with it."""
     asked: dict[UUID, set[UUID]] = {}
     for refs in backgrounds:
-        if refs.view not in (BackgroundView.MEMBER_IN_GROUP, BackgroundView.CONTACT):
+        if refs.view is BackgroundView.PLATFORM:
             continue
         speakers = asked.setdefault(refs.pod_id, set())
         for item in refs.items:
@@ -214,7 +223,7 @@ def _shown(
     refs: BackgroundRefs, lines: dict[UUID, ChannelMessage], members: set[UUID]
 ) -> ShownBackground:
     shown: list[SaidLine] = []
-    withheld = refs.withheld
+    withheld = 0
     for item in refs.items:
         if item.line_id is None:
             if refs.view is BackgroundView.PLATFORM and item.text:
@@ -252,20 +261,15 @@ def _as_read(
         if from_agent
         else sender.display_name
     )
-    # Said by somebody the pod does not hold: a contact, or a member since gone.
-    outside = not from_agent and sender.user_id not in members
+    outside = is_outside(sender, held=members)
     match refs.view:
         case BackgroundView.MEMBER_IN_LEMMA:
             shown = refs.user_id is not None and not withheld_from(
                 line, user_id=refs.user_id
             )
-            outside, author = sender.kind is SenderKind.CONTACT, sender.display_name
+            author = sender.display_name
         case BackgroundView.MEMBER_IN_GROUP:
-            shown = not (
-                line.members_only
-                or outside
-                or (from_agent and not sender.used_a_members_access)
-            )
+            shown = not line.members_only
         case BackgroundView.CONTACT:
             shown = refs.contact_id is not None and may_read(
                 Reader.contact(refs.contact_id, source_id=refs.source_id), line

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -84,22 +83,29 @@ async def test_a_failing_projection_does_not_stop_the_rest(
 async def test_ten_thousand_events_never_hold_up_the_offering_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A saturated sink (slow projection, full queue) costs the commit path ~nothing."""
+    """A saturated sink (slow projection, full queue) costs the commit path ~nothing.
+
+    Told by what the burst left behind rather than by timing each offer. No
+    offer awaits, so the flusher never gets the loop between them: an offer
+    could only make room by projecting itself, which is what would hold a commit
+    up, and otherwise everything past the queue's bound is dropped on the spot.
+    """
     monkeypatch.setattr(domain_events, "_projections", {})
+    projected = 0
 
     @projection(_Probe.get_event_type())
     async def slow(event: dict) -> None:
+        nonlocal projected
+        projected += 1
         await asyncio.sleep(0.01)
 
     sink = DomainEventSink(max_queued=1_000, batch=200, interval_seconds=0.01)
     burst = [_Probe(n=i) for i in range(10_000)]
-    worst = 0.0
     for start in range(0, len(burst), 10):  # one "commit" of 10 events
-        began = time.perf_counter()
         sink.offer(burst[start : start + 10])
-        worst = max(worst, time.perf_counter() - began)
-    assert sink.dropped >= 8_000
-    assert worst < 0.01, f"an offer took {worst * 1000:.1f} ms"
+    assert projected == 0
+    assert sink.dropped == 9_000
+    assert len(sink._queue) == 1_000  # noqa: SLF001 - bounded, not grown
     task = sink._task  # noqa: SLF001 - the flusher must still be alive
     assert task is not None and not task.done()
     sink._queue.clear()  # noqa: SLF001 - do not wait out 1000 slow projections

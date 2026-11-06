@@ -549,6 +549,9 @@ jobs:
         with:
           workspaces: desktop
           prefix-key: guest-runtime-${{ matrix.target }}
+          # Saved from main only. A tag's copy can be restored by nothing but
+          # that tag, and only adds to the repository's cache limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -1305,6 +1308,9 @@ jobs:
           workspaces: desktop
           prefix-key: desktop-native
           shared-key: ${{ runner.os }}-${{ runner.arch }}
+          # Saved from main only. A tag's copy can be restored by nothing but
+          # that tag, and only adds to the repository's cache limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Resolve nightly tag
         id: tag
@@ -1732,6 +1738,9 @@ jobs:
           workspaces: desktop
           prefix-key: desktop-native
           shared-key: ${{ runner.os }}-${{ runner.arch }}
+          # Saved from main only. A tag's copy can be restored by nothing but
+          # that tag, and only adds to the repository's cache limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Resolve nightly tag
         id: tag

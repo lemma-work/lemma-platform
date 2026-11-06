@@ -22,6 +22,7 @@ class StepContext:
 
     run_id: UUID
     flow_id: UUID
+    flow_name: str
     pod_id: UUID
     user_id: UUID
     context: ContextReader

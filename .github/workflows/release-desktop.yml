@@ -194,6 +194,9 @@ jobs:
           workspaces: desktop
           prefix-key: desktop-native
           shared-key: ${{ runner.os }}-${{ runner.arch }}
+          # Saved from main only. A tag's copy can be restored by nothing but
+          # that tag, and only adds to the repository's cache limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Download and verify native runtime artifacts
         shell: bash
@@ -989,6 +992,9 @@ jobs:
           workspaces: desktop
           prefix-key: desktop-native
           shared-key: ${{ runner.os }}-${{ runner.arch }}
+          # Saved from main only. A tag's copy can be restored by nothing but
+          # that tag, and only adds to the repository's cache limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Download and verify native runtime artifacts
         shell: pwsh

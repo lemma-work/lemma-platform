@@ -21,7 +21,7 @@ import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
 import { capabilityList, POD_DEFAULT_TOOLSETS } from "@/stage/colleagues";
 import { readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
 import {
-    connectorCreateBody, connectorPatchBody, readAskOutcome, readCoverage, readPodConnector, readPodConnectors,
+    connectorCreateBody, connectorPatchBody, freshSlug, readAskOutcome, readCoverage, readPodConnector, readPodConnectors,
     type PodConnectorDraft, type PodConnectorPatch,
 } from "./pod-connectors";
 import {
@@ -2345,10 +2345,10 @@ function sampleContacts(podId: string): Contact[] {
     if (!CONTACTS.has(podId)) {
         const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
         CONTACTS.set(podId, [
-            { id: podId + "-contact-dana", name: "Dana Ruiz", createdAt: day(1), anonymous: false, handles: [{ kind: "EMAIL", value: "dana@client.example", strength: "CHANNEL" }] },
-            { id: podId + "-contact-tiago", name: "Tiago", createdAt: day(3), anonymous: false, handles: [{ kind: "PHONE", value: "16505551234", strength: "CHANNEL" }] },
-            { id: podId + "-contact-ana", name: null, createdAt: day(6), anonymous: false, handles: [{ kind: "HOST", value: "w:cust-42", strength: "HOST" }, { kind: "EMAIL", value: "ana@shop.example", strength: "CODE" }] },
-            { id: podId + "-contact-visitor", name: null, createdAt: day(0), anonymous: true, handles: [{ kind: "WEB", value: podId + "-session", strength: "SESSION" }] },
+            { id: podId + "-contact-dana", name: "Dana Ruiz", createdAt: day(1), anonymous: false, channelId: "sample-contact", handles: [{ kind: "EMAIL", value: "dana@client.example", strength: "CHANNEL" }] },
+            { id: podId + "-contact-tiago", name: "Tiago", createdAt: day(3), anonymous: false, channelId: null, handles: [{ kind: "PHONE", value: "16505551234", strength: "CHANNEL" }] },
+            { id: podId + "-contact-ana", name: null, createdAt: day(6), anonymous: false, channelId: null, handles: [{ kind: "HOST", value: "w:cust-42", strength: "HOST" }, { kind: "EMAIL", value: "ana@shop.example", strength: "CODE" }] },
+            { id: podId + "-contact-visitor", name: null, createdAt: day(0), anonymous: true, channelId: "sample-visitor", handles: [{ kind: "WEB", value: podId + "-session", strength: "SESSION" }] },
         ]);
     }
     return CONTACTS.get(podId) ?? [];
@@ -3165,17 +3165,26 @@ export const fixtureSource: PodSource = {
     },
     async addPodConnector(podId: string, draft: PodConnectorDraft) {
         await wait(350);
-        if (POD_CONNECTORS.some((one) => one.slug === draft.slug)) {
+        if (draft.slug && POD_CONNECTORS.some((one) => one.slug === draft.slug)) {
             throw Object.assign(new Error("This pod already has a connector named '" + draft.slug + "'."), { statusCode: 409, code: "POD_CONNECTOR_CONFLICT" });
         }
-        const install = INSTALLS.find((one) => one.id === draft.authConfigId);
+        /* By catalog id, as the server does: the default installation of that
+           app, else Lemma's own, installed now. */
+        let install = draft.authConfigId
+            ? INSTALLS.find((one) => one.id === draft.authConfigId)
+            : INSTALLS.find((one) => one.connector_id === draft.connectorId && one.is_default);
+        if (!install && draft.connectorId) {
+            install = { id: "ac-" + draft.connectorId, connector_id: draft.connectorId, kind: "composio", name: draft.connectorId, status: "ACTIVE", is_default: true, config_source: "SYSTEM_DEFAULT" };
+            INSTALLS.push(install);
+        }
+        const slug = draft.slug || freshSlug(install?.name ?? "connector", POD_CONNECTORS.map((one) => String(one.slug)));
         const row = settleConnector({
-            ...connectorCreateBody(draft), id: "pc-" + draft.slug, pod_id: podId, connector_id: install?.connector_id ?? "",
-            installation_name: install?.name ?? "", visibility: "POD", status: "READY",
+            ...connectorCreateBody(draft), slug, auth_config_id: install?.id ?? draft.authConfigId, id: "pc-" + slug, pod_id: podId,
+            connector_id: install?.connector_id ?? "", installation_name: install?.name ?? "", visibility: "POD", status: "READY",
         });
         POD_CONNECTORS = [...POD_CONNECTORS, row];
         refreshUsedBy();
-        return readPodConnector(POD_CONNECTORS.find((one) => one.slug === draft.slug))!;
+        return readPodConnector(POD_CONNECTORS.find((one) => one.slug === slug))!;
     },
     async changePodConnector(_podId: string, slug: string, patch: PodConnectorPatch) {
         await wait(300);

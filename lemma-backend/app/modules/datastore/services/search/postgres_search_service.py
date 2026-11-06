@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 import time
 from uuid import UUID
 
@@ -30,6 +32,46 @@ from app.modules.datastore.infrastructure.reranker import create_reranker
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchStageSeconds:
+    embed: float
+    retrieve: float
+    rerank: float
+    total: float
+
+
+class _StageTimings:
+    """Where one search spent its time, for the completion event.
+
+    Retrieval is what is left once the embedding call is taken out, so the
+    three stages add up to the whole search.
+    """
+
+    def __init__(self) -> None:
+        self._started = time.perf_counter()
+        self._seconds = {"embed": 0.0, "rerank": 0.0}
+        self._retrieve = 0.0
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._seconds[name] += time.perf_counter() - started
+
+    def retrieved(self) -> None:
+        self._retrieve = time.perf_counter() - self._started - self._seconds["embed"]
+
+    def seconds(self) -> SearchStageSeconds:
+        return SearchStageSeconds(
+            embed=round(self._seconds["embed"], 3),
+            retrieve=round(self._retrieve, 3),
+            rerank=round(self._seconds["rerank"], 3),
+            total=round(time.perf_counter() - self._started, 3),
+        )
 
 
 class PostgresSearchService:
@@ -219,6 +261,7 @@ class PostgresSearchService:
             if rerank_active
             else limit
         )
+        timings = _StageTimings()
 
         if method == SearchMethod.TEXT:
             rows = await self.chunk_repo.text_search(
@@ -233,7 +276,8 @@ class PostgresSearchService:
             ranked = list(rows)
             diversify = False
         elif method == SearchMethod.VECTOR:
-            emb = await self._embed(query)
+            with timings.stage("embed"):
+                emb = await self._embed(query)
             rows = await self.chunk_repo.vector_search(
                 emb,
                 pod_id=self.pod_id,
@@ -246,7 +290,8 @@ class PostgresSearchService:
             ranked = list(rows)
             diversify = False
         else:
-            emb = await self._embed(query)
+            with timings.stage("embed"):
+                emb = await self._embed(query)
             per_side = max(limit * 3, pool)
             vector_results = await self.chunk_repo.vector_search(
                 emb,
@@ -269,12 +314,37 @@ class PostgresSearchService:
             ranked = self._merge_ranked_results(vector_results, text_results)
             diversify = True
 
+        timings.retrieved()
         results = [DatastoreFileSearchResult(**row) for row in ranked]
+        candidates = len(results)
         if rerank_active and results:
-            results = await self.reranker.rerank(query, results, top_n=len(results))
-        if diversify:
-            return self._diversify_file_results(results, limit)
-        return results[:limit]
+            # Only the pool goes to the reranker. Hybrid fetches `per_side`
+            # from each side for the fusion, so the merged list can be several
+            # times the pool -- and a reranker's cost grows with every chunk it
+            # is sent, on a hosted model that times out on a few hundred. The
+            # fused order already puts the best of them first.
+            results = results[:pool]
+            with timings.stage("rerank"):
+                results = await self.reranker.rerank(query, results, top_n=len(results))
+        returned = (
+            self._diversify_file_results(results, limit)
+            if diversify
+            else results[:limit]
+        )
+        seconds = timings.seconds()
+        logger.info(
+            "datastore.search.completed",
+            pod_id=str(self.pod_id),
+            method=method.value,
+            candidates=candidates,
+            reranked=len(results) if rerank_active else 0,
+            returned=len(returned),
+            embed_seconds=seconds.embed,
+            retrieve_seconds=seconds.retrieve,
+            rerank_seconds=seconds.rerank,
+            total_seconds=seconds.total,
+        )
+        return returned
 
     def _merge_ranked_results(
         self,

@@ -76,10 +76,15 @@ class AgentRunCompletedEvent(AgentDomainEvent):
     #:
     #: Optional because two paths finish a run without one: the stop-request
     #: handler and the status sweeps end a run from a row. A consumer that needs
-    #: these must handle their absence, and `agent.contracts.conversations`
+    #: these must handle their absence, and `agent.contracts.analytics`
     #: answers for those events and for any still in flight across a rollout.
     pod_id: UUID | None = None
     organization_id: UUID | None = None
     agent_id: UUID | None = None
     user_id: UUID | None = None
     started_at: datetime | None = None
+    #: How much the run did: model tokens in and out, and tool calls, from the
+    #: usage the finalizer records for billing. ``None`` when the runtime
+    #: reported no usage, which is not the same as reporting zero.
+    token_count: int | None = None
+    tool_call_count: int | None = None

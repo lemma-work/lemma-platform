@@ -11,20 +11,18 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.pausing_tools import (
-    PAUSING_TOOL_NAMES,
-    USER_PAUSING_TOOL_NAMES,
-)
-from app.modules.agent.tools.browser.models import (
+from app.modules.agent.domain.pauses import CALL_NAMES, PERSON_KINDS
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.tools.browser.models import (
     BrowserSignInRequest,
     BrowserSignInResponse,
 )
-from app.modules.agent.tools.browser.sign_in import (
+from app.modules.agent.infrastructure.tools.browser.sign_in import (
     SIGN_IN_TOOL_NAME,
     sign_in_internal,
 )
-from app.modules.agent.tools.tool_errors import (
-    AgentInputRequired,
+from app.modules.agent.domain.tools import AgentInputRequired
+from app.modules.agent.infrastructure.providers.control_flow import (
     is_control_flow_exception,
 )
 
@@ -32,14 +30,14 @@ from app.modules.agent.tools.tool_errors import (
 def test_the_tool_is_registered_as_one_a_person_resolves() -> None:
     """Without this, history reconstruction reports the pending call as a failed
     tool and the approvals list never shows it, so nobody can answer."""
-    assert SIGN_IN_TOOL_NAME in USER_PAUSING_TOOL_NAMES
-    assert SIGN_IN_TOOL_NAME in PAUSING_TOOL_NAMES
+    assert CALL_NAMES[PauseKind.SIGN_IN] == SIGN_IN_TOOL_NAME
+    assert PauseKind.SIGN_IN in PERSON_KINDS
 
 
 def test_the_pause_is_control_flow_and_must_not_be_swallowed() -> None:
     """A graceful tool boundary that caught this would turn the pause into a
     tool error, and the run would carry on as if nobody had been asked."""
-    assert is_control_flow_exception(AgentInputRequired("call-1", SIGN_IN_TOOL_NAME))
+    assert is_control_flow_exception(AgentInputRequired("call-1", PauseKind.SIGN_IN))
 
 
 class _Deps:
@@ -115,7 +113,7 @@ def patched(monkeypatch):
             return _AUTHORITY
 
         monkeypatch.setattr(
-            "app.modules.agent.tools.authority.tool_authorization_context",
+            "app.modules.agent.infrastructure.tools.authority.tool_authorization_context",
             _authority,
         )
 

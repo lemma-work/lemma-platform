@@ -3,8 +3,22 @@ import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
 import { aboutSectionOf, type AboutSection } from "@/space/about-sections";
 
-/** The one segment every workspace URL hangs off. */
+/** The segment every workspace URL hangs off. The app is `/t`; the classic
+ *  workspace that this grammar was written for now lives at `/l`. Both read
+ *  every address, so a link written for one opens in the other, and links
+ *  that left Lemma before the move -- in an email, a WhatsApp message, a
+ *  bookmark -- still say `/t` and still open. */
 export const ROOT = "/t";
+export const CLASSIC_ROOT = "/l";
+
+/** Where an address is written: in the classic workspace, its own root, so
+ *  moving around it stays there; anywhere else -- the app, a test, the
+ *  server -- `/t`, which reads it. */
+function rootHere(): string {
+    if (typeof window === "undefined") return ROOT;
+    const path = window.location.pathname;
+    return path === CLASSIC_ROOT || path.startsWith(CLASSIC_ROOT + "/") ? CLASSIC_ROOT : ROOT;
+}
 
 /** The organization's own page — every teammate at once, zoomed out — sits
  *  where a pod id would. Pod ids are UUIDs, so no teammate can be called it. */
@@ -79,7 +93,7 @@ function segmentsOf(pathname: string): string[] | null {
  */
 export function readAddress(pathname: string): Address {
     const segments = segmentsOf(pathname);
-    if (!segments || segments[0] !== ROOT.slice(1)) return NOWHERE;
+    if (!segments || (segments[0] !== ROOT.slice(1) && segments[0] !== CLASSIC_ROOT.slice(1))) return NOWHERE;
 
     const podId = segments[1] ?? null;
     if (!podId) return NOWHERE;
@@ -164,10 +178,20 @@ export function readAddress(pathname: string): Address {
 /** The URL for somewhere. The inverse of `readAddress` for every address that
  *  `readAddress` can produce, which is what the round-trip test asserts. */
 export function writeAddress(address: Address): string {
-    if (address.team) return ROOT + "/" + TEAM_SEGMENT;
-    if (!address.podId) return ROOT;
-    const path = [ROOT, encodeURIComponent(address.podId), ...tailOf(address)];
+    const root = rootHere();
+    if (address.team) return root + "/" + TEAM_SEGMENT;
+    if (!address.podId) return root;
+    const path = [root, encodeURIComponent(address.podId), ...tailOf(address)];
     return path.join("/");
+}
+
+/** A teammate's Connections part, opened on one connector when there is one
+ *  to name: the place `connectionsPath` is inside the app, for a link that
+ *  should stay in it rather than load it again. Written like every other
+ *  address, so from the classic workspace it stays there. */
+export function connectionsPlace(podId: string, slug?: string): string {
+    const place = writeAddress({ ...NOWHERE, podId, tabId: "space:about", section: "connections" });
+    return place + (slug ? "?connector=" + encodeURIComponent(slug) : "");
 }
 
 function tailOf(address: Address): string[] {
@@ -228,6 +252,17 @@ function tailOf(address: Address): string[] {
  *  only that list has — so the shell matches those by id once it arrives,
  *  rather than inventing an app frame pointed at nothing.
  */
+/** The tabs every source's `listTabs` returns for every pod, whatever else it
+ *  lists. Not rebuilt from an id (`tabFromId`), but a link to one names a tab
+ *  that will be in the strip once it loads — so the shell can wait for it,
+ *  which it must not do for an `app:` tab that may never arrive.
+ */
+const ALWAYS_LISTED = new Set(["conversation", "library", "profile"]);
+
+export function isAlwaysListed(tabId: string): boolean {
+    return ALWAYS_LISTED.has(tabId);
+}
+
 export function tabFromId(tabId: string): Tab | null {
     if (tabId === "history") return { id: "history", kind: "history", label: "History" };
     if (tabId === "computer") return { id: "computer", kind: "computer", label: "Computer" };
@@ -238,9 +273,9 @@ export function tabFromId(tabId: string): Tab | null {
     }
     if (tabId.startsWith("channel:")) {
         const channelId = tabId.slice("channel:".length);
-        /* Named "Channel" until the page has read it and says what it is
+        /* Named "Chat" until the page has read it and says what it is
            called. */
-        return channelId ? { id: tabId, kind: "channel", label: "Channel", channelId } : null;
+        return channelId ? { id: tabId, kind: "channel", label: "Chat", channelId } : null;
     }
     if (tabId.startsWith("run:")) {
         const runId = tabId.slice("run:".length);

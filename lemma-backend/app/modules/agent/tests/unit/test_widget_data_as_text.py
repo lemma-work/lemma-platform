@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     DisplayResourceRequest,
     widget_data,
 )

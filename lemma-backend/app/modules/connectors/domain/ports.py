@@ -119,6 +119,16 @@ class ConnectRequestRepositoryPort(Protocol):
         self, state: str, *, not_before: datetime
     ) -> Optional[ConnectRequestEntity]: ...
 
+    async def get_reusable_pending(
+        self,
+        *,
+        user_id: UUID,
+        auth_config_id: UUID,
+        return_to: str | None,
+        purpose: str | None,
+        not_before: datetime,
+    ) -> Optional[ConnectRequestEntity]: ...
+
 
 class ConnectorTriggerRepositoryPort(Protocol):
     async def get(self, id: str) -> Optional[ConnectorTriggerEntity]: ...

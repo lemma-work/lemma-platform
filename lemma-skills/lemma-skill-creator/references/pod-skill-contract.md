@@ -76,15 +76,13 @@ For a new, non-colliding skill:
 
 ```bash
 lemma files tree /skills
-lemma files mkdir /skills/<name>
 lemma files write /skills/<name>/SKILL.md --from ./<name>/SKILL.md --no-search
-lemma files mkdir /skills/<name>/references
 lemma files write /skills/<name>/references/<file>.md --from ./<name>/references/<file>.md --no-search
 lemma files tree /skills/<name>
 lemma files cat /skills/<name>/SKILL.md
 ```
 
-Create only the resource directories the draft actually uses. Repeat `mkdir` and `write --from` for each required text resource. Use `lemma files upload <local-file> <remote-path> --no-search` only for a new non-text file that cannot be written as text; remember that the skill loader cannot return binary content as text.
+`write` and `upload` create missing folders on the way, so there is no `mkdir` step. Repeat `write --from` for each required text resource. Use `lemma files upload <local-file> <remote-path> --no-search` only for a new non-text file that cannot be written as text; remember that the skill loader cannot return binary content as text.
 
 For an existing pod-owned skill, inspect and back up each file before replacing it:
 

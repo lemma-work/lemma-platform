@@ -7,29 +7,29 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
-    AGENT_HOST_SESSION_METADATA_KEY,
+from app.modules.agent.agent_host.domain.host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.domain.context import AgentContext
-from app.modules.agent.infrastructure.agent_host.control_updates import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.agent_host.control.control_updates import (
     apply_control_updates,
 )
-from app.modules.agent.infrastructure.agent_host.event_stream import StreamedEvent
-from app.modules.agent.infrastructure.agent_host.session_memory import (
+from app.modules.agent.agent_host.control.event_stream import StreamedEvent
+from app.modules.agent.agent_host.control.session_memory import (
+    load_binding,
     remember_provider_session,
     record_pending_instructions,
     resume_session_id,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.events import (
+from app.modules.agent.agent_host.harness.events import (
     AgentHostEventNormalizer,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import (
+from app.modules.agent.agent_host.harness.harness_events import (
     RunEventApplier,
 )
-from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
@@ -75,9 +75,12 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     )
     # Deliberately the legacy root: a conversation recorded before the move
     # keeps the cwd it was stamped with, and rebinding must not re-home it.
-    await ConversationRepository(uow).set_conversation_metadata_key(
-        conversation_id, "cwd", "/workspace/c/test/sandbox"
-    )
+    # Unconditionally, as a row written before the move carries it: `record_cwd`
+    # only fills a null, and the conversation already has its default.
+    stamped = await db_session.get(ConversationModel, conversation_id)
+    assert stamped is not None
+    stamped.cwd = "/workspace/c/test/sandbox"
+    await db_session.flush()
     previous = await db_session.get(AgentRunModel, old_run_id)
     assert previous is not None
     previous.status = "FAILED"
@@ -112,7 +115,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         run_id=new_run.id,
         digest="new-instructions",
     )
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     assert conversation is not None
     applier = RunEventApplier(lambda: SqlAlchemyUnitOfWork(db_session), None)
     await applier.events_for(
@@ -128,7 +131,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
                 "host_cwd": host_cwd,
             },
         ),
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=UUID(scenario.owner_user["id"]),
             pod_id=scenario.pod_id,
             conversation_id=conversation_id,
@@ -147,9 +150,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         == "renewed-session"
     )
     assert not await remember_provider_session(uow, old)
-    stored = await ConversationRepository(uow).get_conversation_metadata_key(
-        conversation_id, AGENT_HOST_SESSION_METADATA_KEY
-    )
+    stored = await load_binding(uow, conversation_id)
     assert isinstance(stored, dict)
     assert stored["session_id"] == "renewed-session"
     assert stored["run_id"] == str(new_run.id)
@@ -157,12 +158,8 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     assert stored["host_id"] == str(machine["host_id"])
     assert "instructions_digest" not in stored
     assert stored["pending_instructions"]["digest"] == "new-instructions"
-    assert (
-        await ConversationRepository(uow).get_conversation_metadata_key(
-            conversation_id, "cwd"
-        )
-        == "/workspace/c/test/sandbox"
-    )
+    kept = await Conversations(uow).get_conversation(conversation_id)
+    assert kept is not None and kept.cwd == "/workspace/c/test/sandbox"
     assert (
         await remember_provider_session(
             uow,
@@ -175,9 +172,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         )
         is True
     )
-    stored = await ConversationRepository(uow).get_conversation_metadata_key(
-        conversation_id, AGENT_HOST_SESSION_METADATA_KEY
-    )
+    stored = await load_binding(uow, conversation_id)
     assert stored["host_cwd"] == host_cwd
     assert stored["instructions_digest"] == "new-instructions"
     assert "pending_instructions" not in stored
@@ -213,9 +208,4 @@ async def test_another_host_or_stale_epoch_cannot_write_a_session_binding(
             now=datetime.now(timezone.utc),
             lease_seconds=60,
         )
-        assert (
-            await ConversationRepository(uow).get_conversation_metadata_key(
-                conversation_id, AGENT_HOST_SESSION_METADATA_KEY
-            )
-            is None
-        )
+        assert await load_binding(uow, conversation_id) == {}

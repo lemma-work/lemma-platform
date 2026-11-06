@@ -6,10 +6,6 @@ row anywhere. That makes this the deployment's front door -- what these
 functions read out of the environment is exactly what a new pod can talk to on
 day one.
 
-The catalog is customizable at runtime (`register_system_openai_catalog_customizer`)
-because a deployment can front a gateway that exposes a different model list
-than the environment names, and the display names have to follow.
-
 Split from the profile service because none of it touches the database: it is
 configuration read into value objects, and the service is storage.
 """
@@ -53,7 +49,31 @@ SystemOpenAICatalogCustomizer = Callable[
     [list[RuntimeModelCatalogEntry]], list[RuntimeModelCatalogEntry]
 ]
 
+#: Not dead, whatever an in-repo grep says. A deployment's provider overlay
+#: registers it at startup -- lemma-cloud maps short public names onto
+#: Fireworks' provider ids (`deepseek-v4.1-flash` ->
+#: `accounts/fireworks/models/deepseek-v4p1-flash-1017`) and declares vision
+#: here. #1112 removed it as registered only by tests; without it every system
+#: model is sent to the provider under its public name, which the provider
+#: rejects, and every run on the system profile fails.
 _system_openai_catalog_customizer: SystemOpenAICatalogCustomizer | None = None
+
+
+def register_system_openai_catalog_customizer(
+    customizer: SystemOpenAICatalogCustomizer | None,
+) -> None:
+    """Register (or clear with ``None``) the system OpenAI catalog customizer.
+
+    Call once at application startup from an extension module. The customizer
+    receives the env-built catalog -- each entry with ``provider_model_name ==
+    name`` and the TEXT+TOOLS baseline (plus any env-declared vision) -- and
+    returns a rewritten catalog. This is the supported seam for a provider
+    overlay to keep short public model names user-facing while sending the real
+    provider model ID to the API and declaring per-model vision, without the
+    operator hand-configuring provider IDs in the environment.
+    """
+    global _system_openai_catalog_customizer
+    _system_openai_catalog_customizer = customizer
 
 
 def _load_runtime_env() -> None:
@@ -109,8 +129,7 @@ def _declare_reasoning_models(
 ) -> list[RuntimeModelCatalogEntry]:
     """Mark the deployment's reasoning models, and give them its effort.
 
-    Applied after the customizer, so a customizer that rebuilds entries cannot
-    quietly drop what the operator configured. The effort becomes each model's
+    The effort becomes each model's
     catalog default -- the lowest layer, which a profile, agent or step
     overrides -- and is sent only to a model marked here, because an
     OpenAI-compatible endpoint rejects the field on one that does not reason.
@@ -158,27 +177,10 @@ def _openai_compat_vision_model_names() -> set[str]:
     return {name.strip() for name in (raw or "").split(",") if name.strip()}
 
 
-def register_system_openai_catalog_customizer(
-    customizer: SystemOpenAICatalogCustomizer | None,
-) -> None:
-    """Register (or clear with ``None``) the system OpenAI catalog customizer.
-
-    Call once at application startup from an extension module. The customizer
-    receives the env-built catalog — each entry with ``provider_model_name ==
-    name`` and the TEXT+TOOLS baseline (plus any env-declared vision) — and
-    returns a rewritten catalog. This is the supported seam for a provider
-    overlay to keep short public model names user-facing while sending the real
-    provider model ID to the API and declaring per-model vision, without the
-    operator hand-configuring provider IDs in the environment.
-    """
-    global _system_openai_catalog_customizer
-    _system_openai_catalog_customizer = customizer
-
-
 def _build_system_openai_catalog(
     *, require_models: bool = True
 ) -> list[RuntimeModelCatalogEntry]:
-    """Build the configured system OpenAI catalog, then customize it."""
+    """Build the configured system OpenAI catalog."""
     _ensure_runtime_env_loaded()
     raw_model_names = (
         os.getenv("LEMMA_OPENAI_MODEL_NAMES") or agent_settings.lemma_openai_model_names
@@ -204,8 +206,7 @@ def _build_system_openai_catalog(
         RuntimeModelCatalogEntry(
             name=model_name,
             display_name=_display_model_name(model_name),
-            # The operator configures the exact provider model IDs, so the public
-            # name is the provider name unless a customizer remaps it.
+            # The public name is the provider name unless a customizer remaps it.
             provider_model_name=model_name,
             capabilities=_openai_compat_model_capabilities(
                 model_name, vision_model_names
@@ -216,6 +217,8 @@ def _build_system_openai_catalog(
         )
         for model_name in model_names
     ]
+    # Before the reasoning declaration, so a customizer that rebuilds entries
+    # cannot quietly drop what the operator configured.
     if _system_openai_catalog_customizer is not None:
         catalog = _system_openai_catalog_customizer(catalog)
     return _declare_reasoning_models(catalog)
@@ -285,7 +288,7 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
             #
             # The same flag also puts a non-standard field in the request body,
             # which a strict endpoint rejects outright.
-            # `_UsageOnlyStreamOptionsChatModel` keeps that half off the wire --
+            # `OpenAICompatibleChatModel` keeps that half off the wire --
             # see its docstring for why the two halves have to be separated.
             # The deployment's reasoning effort is not here: it is a catalog
             # default on the models that reason, see

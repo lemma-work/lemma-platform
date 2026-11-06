@@ -304,20 +304,18 @@ def lint_python(scope: Scope, report: Report, fix: bool) -> None:
 class NodePackage:
     root: str
     eslint_paths: tuple[str, ...] | None  # None: no eslint in this package
-    typecheck: tuple[str, ...]
+    # One tsc program each. The frontend's tests are kept out of its
+    # tsconfig.json because that is the program `next build` fails on.
+    tsconfigs: tuple[str, ...]
 
 
 NODE_PACKAGES = (
     NodePackage(
         "lemma-frontend",
         ("src", "server", "scripts", "tests", "server.mjs"),
-        ("npx", "--no-install", "tsc", "--noEmit"),
+        ("tsconfig.json", "tests/tsconfig.json"),
     ),
-    NodePackage(
-        "lemma-typescript",
-        None,
-        ("npx", "--no-install", "tsc", "--noEmit", "-p", "tsconfig.test.json"),
-    ),
+    NodePackage("lemma-typescript", None, ("tsconfig.test.json",)),
 )
 
 
@@ -368,7 +366,12 @@ def lint_frontend(scope: Scope, report: Report, fix: bool, fast: bool) -> None:
                 REPO_ROOT / "lemma-typescript",
             )
             sdk_built = True
-        report.run(f"{label} · tsc", list(package.typecheck), cwd)
+        for tsconfig in package.tsconfigs:
+            report.run(
+                f"{label} · tsc -p {tsconfig}",
+                ["npx", "--no-install", "tsc", "--noEmit", "-p", tsconfig],
+                cwd,
+            )
 
 
 # ── Rust ──────────────────────────────────────────────────────────────────────

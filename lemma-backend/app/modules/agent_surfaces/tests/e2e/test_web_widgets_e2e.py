@@ -38,6 +38,7 @@ from app.core.public_web import public_web_settings
 from app.modules.datastore.events.contact_merged_work import (
     register_contact_merged_work as register_datastore_contact_merged_work,
 )
+from app.modules.agent.domain.folded_turns import FOLDED_CHAT_ENDS, FOLDED_CHAT_OPENS
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
@@ -1528,11 +1529,13 @@ async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
+    monkeypatch,
 ):
     """Two browsers chat, then both prove one email: one contact, one channel,
     and one conversation in it. The second browser's conversation lost its seat
     to the first's when their channels became one; its next word continues the
-    conversation that holds the seat, rather than claiming it a second time."""
+    conversation that holds the seat, rather than claiming it a second time --
+    and the agent answering it has read what was said in both."""
     pod_id = test_pod["id"]
     owner = UUID(fixed_test_user["id"])
     widget = await _widget(authenticated_client, pod_id, name="Two browsers")
@@ -1574,6 +1577,7 @@ async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
         assert verified.status_code == 200, verified.text
     await _carry_out_merges()
 
+    requests = record_model_requests(monkeypatch)
     again = await _say(
         authenticated_client,
         db_session,
@@ -1605,6 +1609,21 @@ async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
     for said in ("Hi from my laptop", "Hi from my phone", "Hello again.", "Still me"):
         assert said in texts, (said, texts)
     assert texts.count("Hi from my phone") == 1
+    # The phone's words, and the agent's answer to them, were in no run of the
+    # conversation that kept the seat: carried on purpose, once, and read as
+    # the other chat's rather than as the newest thing said in this one.
+    seen = requests[0]["text"]
+    _read_in_order(
+        seen,
+        "Hi from my laptop",
+        "Hello.",
+        FOLDED_CHAT_OPENS,
+        "Hi from my phone",
+        "Hello again.",
+        FOLDED_CHAT_ENDS,
+        "Still me",
+    )
+    assert seen.count("Hi from my phone") == 1
 
 
 async def _carry_out_merges() -> None:

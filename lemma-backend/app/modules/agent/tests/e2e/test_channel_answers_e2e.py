@@ -24,7 +24,7 @@ from app.core.infrastructure.db.uow_factory import (
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunStatus,
@@ -41,7 +41,8 @@ from app.modules.agent.events.channel_question_work import (
 )
 from app.modules.agent.events.pause_expiry_work import register_pause_expiry_work
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.channel_answers import answer_line, turn_client_id
 from app.modules.agent.services.pause_questions import (
     sync_pause_questions,
@@ -49,7 +50,8 @@ from app.modules.agent.services.pause_questions import (
     tool_ref,
 )
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.pauses.decide import DecidePause
+from app.modules.agent.application.turns.send_message import SendMessage
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     append,
@@ -128,7 +130,7 @@ async def _answering_conversation(line_id: UUID) -> UUID:
 
 async def _finish_with(run_id: UUID, answer: str) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -186,7 +188,7 @@ async def test_the_pods_agent_answers_a_line_once_however_often_it_is_retried(
         if message.role is MessageRole.USER
     ]
     assert [message.text for message in asked] == ["What is on today?"]
-    assert asked[0].metadata["client_message_id"] == turn_client_id(said.id)
+    assert asked[0].state.client_message_id == turn_client_id(said.id)
 
     await _finish_with(run.id, "Two meetings.")
     finished = _finished(run, pod_id=pod_id, user_id=owner)
@@ -340,7 +342,7 @@ async def test_a_line_answered_after_the_conversation_decided_shows_that_decisio
     asked = await _question(seeded, call)
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            await build_conversation_service(uow).resolve_user_approval(
+            await DecidePause.build(uow).decide(
                 conversation_id=seeded.conversation_id,
                 approval_id=call,
                 user_id=seeded.user_id,
@@ -362,7 +364,7 @@ async def test_a_question_decided_elsewhere_closes_with_that_decision(scenario):
     call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            await build_conversation_service(uow).resolve_user_approval(
+            await DecidePause.build(uow).decide(
                 conversation_id=seeded.conversation_id,
                 approval_id=call,
                 user_id=seeded.user_id,
@@ -391,7 +393,7 @@ async def test_a_question_written_past_stops_waiting_rather_than_being_denied(
     call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            await build_conversation_service(uow).add_user_message_and_start_run(
+            await SendMessage.build(uow).send(
                 conversation_id=seeded.conversation_id,
                 user_id=seeded.user_id,
                 content="Never mind, show me the invoices.",
@@ -494,7 +496,7 @@ async def test_an_approval_nobody_decided_in_time_is_not_approved_anywhere(scena
     # the decision on record, and a late tap adopts it.
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            late = await build_conversation_service(uow).resolve_user_approval(
+            late = await DecidePause.build(uow).decide(
                 conversation_id=seeded.conversation_id,
                 approval_id=call,
                 user_id=seeded.user_id,
@@ -505,11 +507,7 @@ async def test_an_approval_nobody_decided_in_time_is_not_approved_anywhere(scena
     assert late.decision is AgentRunApprovalDecision.DENY
     async with create_uow_from_session_maker(async_session_maker) as uow:
         assert (
-            await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
-                conversation_id=seeded.conversation_id,
-                pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-            )
-            == []
+            await Pauses(uow).pending(seeded.conversation_id, kinds=PERSON_KINDS) == []
         )
 
 

@@ -13,6 +13,7 @@
  */
 
 import { readAddress } from "@/shell/address";
+import { fromTrial, isFramePath, podOfFramePath } from "@/outcomes/paths";
 import { characterForSeed, CHARACTERS, type CharacterName } from "@/shell/cast";
 import { readableName } from "@/library/reading";
 
@@ -64,8 +65,11 @@ function crowd(seed: string, howMany: number): CharacterName[] {
  *  nobody — pass something stable for a visit, such as the path.
  */
 export function waitingFor(destination: string | null, seed = "lemma"): Waiting {
-    const path = pathOf(destination);
-    const podId = path ? readAddress(path).podId : null;
+    /* A sign-in can be sent to `/o/…` before the server has redirected it,
+       so it is read as where it is going. */
+    const at = pathOf(destination);
+    const path = at && fromTrial(at);
+    const podId = !path ? null : isFramePath(path) ? podOfFramePath(path) : readAddress(path).podId;
 
     if (podId) return { name: sayableName(podId), faces: [characterForSeed(podId)] };
     return { name: null, faces: crowd(seed, 3) };

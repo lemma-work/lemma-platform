@@ -12,8 +12,8 @@ import pytest
 
 from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.tools.toolset_selection import (
+from app.modules.agent.domain.value_objects import AgentToolset, ConversationOrigin
+from app.modules.agent.domain.toolsets import (
     ALWAYS_ON_TOOLSETS,
     DECLARABLE_TOOLSETS,
     AgentGrantSummary,
@@ -38,8 +38,8 @@ def _agent(*toolsets: AgentToolset, kind: AgentKind = AgentKind.USER):
 
 
 def _conversation(*, is_sub_agent: bool = False):
-    metadata = {"is_sub_agent": True} if is_sub_agent else {}
-    return SimpleNamespace(id=uuid4(), metadata=metadata)
+    origin = ConversationOrigin.SUBAGENT if is_sub_agent else ConversationOrigin.CHAT
+    return SimpleNamespace(id=uuid4(), metadata={}, origin=origin)
 
 
 def _grants(*resource_types: ResourceType) -> AgentGrantSummary:
@@ -138,17 +138,20 @@ def test_no_grants_derives_nothing():
     assert derived_toolsets(AgentGrantSummary()) == frozenset()
 
 
-def test_a_sub_agent_loses_the_withheld_ones_even_though_they_are_always_on():
-    """The subtraction has to run last.
+def test_a_sub_agent_is_refused_the_withheld_ones_even_though_they_are_always_on():
+    """The refusal is decided last.
 
-    MESSAGING and SNOOZE are universal now, so an ordering that added them after
-    the sub-agent filter would hand a child run the two toolsets it is
-    specifically withheld from.
+    MESSAGING is universal now, so an ordering that added it after the
+    sub-agent rule would hand a child run the toolset it is refused. Refused,
+    not removed: a child is shown its parent's tools, so its request starts
+    with its parent's bytes. WAIT stays usable: a child waits on its own long
+    builds durably.
     """
     resolved = resolve_toolsets(_agent(), _conversation(is_sub_agent=True))
 
-    assert AgentToolset.MESSAGING not in resolved.names
-    assert AgentToolset.WAIT not in resolved.names
+    assert AgentToolset.MESSAGING in resolved.refused
+    assert AgentToolset.WAIT in resolved.names
+    assert AgentToolset.WAIT not in resolved.refused
     assert AgentToolset.SUBAGENTS not in resolved.names
     # The rest of the always-on set survives.
     assert AgentToolset.USER_INTERACTION in resolved.names
@@ -179,7 +182,7 @@ def test_an_unknown_name_on_an_old_row_is_skipped():
 def test_the_pod_default_assistant_still_gets_its_fixed_set():
     """A run with no agent is Lem, which has no grants of its own — it runs with
     the user's permissions and takes its toolsets from the default set."""
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
+    from app.modules.agent.domain.toolsets import POD_DEFAULT_AGENT_TOOLSETS
 
     resolved = resolve_toolsets(None, _conversation())
 
@@ -191,7 +194,9 @@ def test_a_new_agent_starts_with_web_search_and_memory():
     two defaults are the ones every author turns on anyway; the expensive
     decisions -- a sandbox, fan-out, a voice bill -- stay off."""
     from app.modules.agent.api.schemas import CreateAgentRequest
-    from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
+    from app.modules.agent.domain.toolsets import (
+        NEW_AGENT_DEFAULT_TOOLSETS,
+    )
 
     request = CreateAgentRequest(name="scout", instruction="look things up")
 

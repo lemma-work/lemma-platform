@@ -156,9 +156,22 @@ def _smoke_test(overlay: Path, requires: list[str]) -> None:
     # install would then move `current`, leaving the sandbox reporting a version
     # it is not running. Checking where each module came from is the difference
     # between "the import worked" and "the thing we just installed works".
+    #
+    # PYTHONPATH alone does not put it in front. The image's
+    # `lemma-runtime-overlay.pth` inserts `<root>/current/site-packages` at
+    # position 0 when the interpreter starts, after PYTHONPATH is read -- so in
+    # a sandbox that already had an overlay, every module resolved to the
+    # *previous* version, the check failed, and no sandbox could ever take a
+    # newer bundle. The program sets the path itself before importing anything.
+    current = str(overlay.parent.parent / CURRENT_LINK)
     program = (
         "import importlib, sys\n"
         f"overlay = {str(overlay)!r}\n"
+        f"current = {current!r}\n"
+        "sys.path[:] = [overlay] + [\n"
+        "    p for p in sys.path\n"
+        "    if p != overlay and p != current and not p.startswith(current + '/')\n"
+        "]\n"
         f"missing = []\n"
         f"for name in {list(requires)!r}:\n"
         "    module = importlib.import_module(name)\n"

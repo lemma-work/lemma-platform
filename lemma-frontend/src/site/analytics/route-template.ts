@@ -1,100 +1,99 @@
 /**
  * Turn a concrete pathname into the route template that produced it.
  *
- * Every URL in this app names the thing it is showing: `/pod/{uuid}/agents/{uuid}`,
- * `/pod/{uuid}/flows/{uuid}/runs/{uuid}`, `/s/{kind}/pod/{uuid}`. posthog-js
- * attaches the current URL to *every* event it sends -- not just pageviews --
- * and writes the first one it ever saw into a persistent person property. So
- * without normalisation, the analytics store accumulates a map of which pods,
- * agents, flows and conversations exist and who opened them, which is precisely
- * the business context the backend emitter's allowlist exists to keep out.
+ * Every URL in this app names the thing it is showing: `/t/{pod}/table/{name}`,
+ * `/o/outcome/{pod}/run/{id}`, `/s/{kind}/{…}`. posthog-js attaches the current
+ * URL to *every* event it sends -- not just pageviews -- and writes the first one
+ * it ever saw into a persistent person property. So without normalisation, the
+ * analytics store accumulates a map of which pods, tables, files and
+ * conversations exist and who opened them, which is precisely the business
+ * context the backend emitter's allowlist exists to keep out.
  *
  * There is no App Router API that hands back the pattern -- `useSelectedLayoutSegments`
  * returns the *values* -- so this is a maintained list plus a drift test that
- * regenerates it from `app/` and fails when the two disagree.
+ * regenerates it from `app/` and fails when the two disagree
+ * (`tests/analytics-routes.test.ts`).
+ *
+ * The app (`/t`) and the classic workspace (`/l`) are one catch-all route
+ * each, and every place inside them would template to the same row. They are
+ * read with their own address grammars instead, so a pageview says which kind
+ * of place it was -- a table, a chat, an app -- and never which one. A
+ * workspace address under `/t`, from a link written before the app took it,
+ * is read with the workspace's grammar; `/o` redirects to `/t`.
  */
 
-/** Every page route in `app/`, with route groups `(auth)`/`(dashboard)` stripped
- *  because they do not appear in URLs. Kept in sync by `route-template.test.ts`. */
+import { isNewPlace, readAddress } from "@/shell/address";
+import { NEW_CHAT, readView, type View } from "@/outcomes/address";
+import { fromTrial, isFramePath } from "@/outcomes/paths";
+
+/** Every page route in `app/`, with route groups such as `(marketing)` stripped
+ *  because they do not appear in URLs. */
 export const ROUTE_TEMPLATES: readonly string[] = [
     "/",
-    "/t/[[...podId]]",
-    "/d/[code]",
-    "/connect",
-    "/demo/[...path]",
-    "/characters/[[...path]]",
+    "/[...legacy]",
     "/about",
     "/auth/[[...path]]",
     "/blog",
     "/blog/[slug]",
     "/changelog",
-    "/connectors",
+    "/characters",
+    "/characters/arch",
+    "/characters/bean",
+    "/characters/bloom",
+    "/characters/bolt",
+    "/characters/cloud",
+    "/characters/coil",
+    "/characters/cube",
+    "/characters/frame",
+    "/characters/gem",
+    "/characters/grid",
+    "/characters/kite",
+    "/characters/knot",
+    "/characters/loop",
+    "/characters/moon",
+    "/characters/peak",
+    "/characters/pleat",
+    "/characters/prism",
+    "/characters/ring",
+    "/characters/spark",
+    "/characters/spool",
+    "/characters/sprout",
+    "/characters/stack",
+    "/characters/wave",
+    "/characters/wedge",
+    "/connect",
     "/contact",
-    "/conversations",
     "/create-pod",
-    "/docs",
-    "/docs/[...slug]",
-    "/docs/how-lemma-works",
+    "/d/[code]",
+    "/delete-account",
+    "/demo/computer",
+    "/demo/landing",
+    "/demo/launch",
+    "/demo/loading",
+    "/demo/query-context",
+    "/docs/[[...slug]]",
     "/download",
-    "/home",
     "/import/github/[owner]/[repo]",
     "/invitations/[invitationId]/accept",
     "/invitations/[invitationId]/reject",
-    "/landing",
-    "/loading-preview",
-    "/login",
+    "/l/[[...podId]]",
     "/logout",
     "/oauth/complete",
-    "/organizations/[id]/settings/agent-runtimes",
-    "/organizations/[id]/settings/billing",
-    "/organizations/[id]/settings/members",
-    "/organizations/[id]/settings/pods",
-    "/organizations/[id]/settings/usage",
     "/organizations/new",
-    "/pod/[id]",
-    "/pod/[id]/agents/[agentId]",
-    "/pod/[id]/agents/new",
-    "/pod/[id]/ai",
-    "/pod/[id]/ai/assistant",
-    "/pod/[id]/app/pages",
-    "/pod/[id]/app/view",
-    "/pod/[id]/assistants",
-    "/pod/[id]/assistants/[assistantId]",
-    "/pod/[id]/assistants/new",
-    "/pod/[id]/channels",
-    "/pod/[id]/connectors",
-    "/pod/[id]/computer",
-    "/pod/[id]/conversations",
-    "/pod/[id]/conversations/[conversationId]",
-    "/pod/[id]/data",
-    "/pod/[id]/files",
-    "/pod/[id]/flows",
-    "/pod/[id]/flows/[flowId]",
-    "/pod/[id]/flows/[flowId]/runs/[runId]",
-    "/pod/[id]/flows/new",
-    "/pod/[id]/functions",
-    "/pod/[id]/functions/[functionId]",
-    "/pod/[id]/functions/new",
-    "/pod/[id]/schedules",
-    "/pod/[id]/settings",
-    "/pod/[id]/settings/automation",
-    "/pod/[id]/settings/members",
-    "/pod/[id]/settings/models",
-    "/pod/[id]/settings/usage",
-    "/pod/[id]/surfaces",
-    "/pod/[id]/widgets/view",
-    "/pods",
     "/privacy",
-    "/profile",
-    "/profile/billing",
-    "/profile/usage",
+    "/product/[slug]",
+    "/product/vignettes",
+    "/product/vignettes/[id]",
     "/remix",
     "/s/[kind]/[...path]",
     "/sign-in-to-site/[conversationId]/[toolCallId]",
-    "/signup",
+    "/slack/allowed",
+    "/slack/connect",
+    "/slack/install",
+    "/slack/installed",
+    "/t/[[...path]]",
     "/templates",
     "/templates/[slug]",
-    "/terms",
     "/tos",
 ] as const;
 
@@ -103,7 +102,8 @@ export const ROUTE_TEMPLATES: readonly string[] = [
  *  Fail closed, like the backend emitter: a path this build does not know is a
  *  path whose segments we cannot vouch for, and echoing it back would defeat the
  *  entire point of this module the first time somebody adds a route. The drift
- *  test keeps this effectively unreachable in production. */
+ *  test keeps this effectively unreachable in production, and the root
+ *  `[...legacy]` route catches what is left. */
 export const UNMATCHED_ROUTE = "/_unmatched";
 
 type Segment =
@@ -133,9 +133,8 @@ function splitPath(path: string): string[] {
 /** How well a template matches, or null for no match.
  *
  *  Score is the number of literal segments matched, so a literal always beats a
- *  dynamic slot at the same position. That is what keeps `/pod/x/agents/new`
- *  from being read as an agent whose id is the word "new" -- a collision this
- *  app has six of. */
+ *  dynamic slot at the same position -- and every real route beats the root
+ *  `[...legacy]` catch-all, which matches no literal at all. */
 function score(segments: Segment[], parts: string[]): number | null {
     let literals = 0;
     let i = 0;
@@ -168,6 +167,83 @@ const PARSED: ReadonlyArray<{ template: string; segments: Segment[] }> =
         segments: parseTemplate(template),
     }));
 
+/** A workspace place, by kind. Ids, names and paths become placeholders; what
+ *  survives is either a fixed word of the grammar or a value `readAddress`
+ *  only produces from a fixed list (a space's own lists, a part of About).
+ *  Under the root it was read from, `/l` or `/t`. */
+function workspaceTemplate(pathname: string, root: string): string {
+    const address = readAddress(pathname);
+    if (address.team) return root + "/teammates";
+    if (!address.podId) return root;
+    const pod = root + "/[pod]";
+    const { tabId } = address;
+    if (!tabId) return pod;
+
+    const colon = tabId.indexOf(":");
+    const kind = colon < 0 ? tabId : tabId.slice(0, colon);
+    const rest = colon < 0 ? "" : tabId.slice(colon + 1);
+    switch (kind) {
+        case "conversation":
+            return pod + "/conversation" + (address.conversationId ? "/[id]" : "");
+        case "profile":
+            return pod + "/profile" + (address.agentName ? "/[agent]" : "");
+        case "space":
+            return pod + "/" + rest + (rest === "about" && address.section ? "/" + address.section : "");
+        case "library":
+        case "history":
+        case "computer":
+            return pod + "/" + kind;
+        case "table":
+        case "app":
+        case "bot":
+        case "workflow":
+            return pod + "/" + kind + "/[name]";
+        case "run":
+        case "channel":
+            return pod + "/" + kind + "/[id]";
+        case "record":
+            return pod + "/record/[table]/[id]";
+        case "file":
+            return pod + "/file/[...path]";
+        default:
+            return pod;
+    }
+}
+
+/** An app view, by kind, the same way. */
+function viewTemplate(view: View): string {
+    const pod = "/t/outcome/[pod]";
+    switch (view.name) {
+        case "today": return "/t";
+        case "outcomes": return "/t/outcomes";
+        case "needs": return "/t/needs-you";
+        case "people": return "/t/people";
+        case "hire": return "/t/new-lemma";
+        case "chats": {
+            const { open } = view;
+            if (open.kind === "none") return "/t/chats";
+            const tail = open.kind === "chat" ? "c" : open.kind === "shared" ? "g" : "contacts";
+            /* A chat not started yet is the one fixed word an id slot holds. */
+            const id = open.kind === "chat" && open.id === NEW_CHAT ? NEW_CHAT : "[id]";
+            return "/t/chats/[pod]/" + tail + "/" + id;
+        }
+        case "outcome":
+            if (view.tab === "home") return pod;
+            if (!view.section) return pod + "/" + view.tab;
+            /* A view of Automations or Chats is only ever one of a fixed few
+               words; a settings section is whatever the address said. */
+            return pod + "/" + view.tab + "/" + (view.tab === "settings" ? "[section]" : view.section);
+        case "computer": return pod + "/computer" + (view.conversationId ? "/[id]" : "");
+        case "run": return pod + "/run/[id]";
+        case "app": return pod + "/app/[name]";
+        case "table": return pod + "/table/[name]";
+        case "workflow": return pod + "/workflow/[name]";
+        case "agent": return pod + "/agent/[name]";
+        case "record": return pod + "/record/[table]/[id]";
+        case "file": return pod + "/file/[...path]";
+    }
+}
+
 /**
  * Map a concrete pathname onto its route template.
  *
@@ -177,6 +253,11 @@ const PARSED: ReadonlyArray<{ template: string; segments: Segment[] }> =
 export function toRouteTemplate(pathname: string): string {
     const parts = splitPath(pathname);
     if (parts.length === 0) return "/";
+    if (parts[0] === "l") return workspaceTemplate(pathname, "/l");
+    if (parts[0] === "t" || parts[0] === "o") {
+        const path = fromTrial(pathname);
+        return isFramePath(path) ? viewTemplate(readView(path)) : workspaceTemplate(path, "/t");
+    }
 
     let best: string | null = null;
     let bestScore = -1;
@@ -209,4 +290,38 @@ export function toTemplateUrl(rawUrl: string): string | null {
     } catch {
         return null;
     }
+}
+
+/**
+ * Whether moving from one pathname to the next is a new pageview.
+ *
+ * Both frames rewrite their own address as they settle: a bare `/l` becomes the
+ * place it opened, and a new chat gets its id once it has one. Each rewrite
+ * changes the pathname, and counting each one made every arrival two or three
+ * pageviews. The workspace already decides which moves are worth a Back
+ * (`isNewPlace`), and a pageview is the same question. The app's rewrites are
+ * a new chat being named, and a workspace address under `/t` being read and
+ * written again as the app's own path for the same place.
+ */
+export function isNewView(previous: string | null, next: string): boolean {
+    if (previous === null) return true;
+    if (previous === next) return false;
+    const was = fromTrial(previous);
+    const now = fromTrial(next);
+    const [from] = splitPath(was);
+    const [to] = splitPath(now);
+    if (from === "l" && to === "l") return isNewPlace(readAddress(was), readAddress(now));
+    if (from === "t" && to === "t") {
+        const framed = isFramePath(now);
+        if (!isFramePath(was)) return framed ? false : isNewPlace(readAddress(was), readAddress(now));
+        if (!framed) return true;
+        const before = readView(was);
+        const after = readView(now);
+        const named =
+            before.name === "chats" && after.name === "chats" &&
+            before.open.kind === "chat" && after.open.kind === "chat" &&
+            before.open.podId === after.open.podId && before.open.id === NEW_CHAT;
+        return !named;
+    }
+    return true;
 }

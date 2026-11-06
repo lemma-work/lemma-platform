@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { AttachIcon, SendIcon } from "@/ui/icons";
+import { AttachIcon, SendIcon, VoiceIcon } from "@/ui/icons";
 import { canSend, namePasted, offered, toAttachments, type Attachment } from "@/thread/attachments";
 import { AttachedFiles } from "@/thread/attached";
 
@@ -14,8 +14,10 @@ import { AttachedFiles } from "@/thread/attached";
  *  Files take the same road as the words rather than being uploaded here:
  *  there is no `pod_cwd` to put them in until the conversation exists, and
  *  reading it off the conversation is the Chat tab's job. */
-export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
+export function AskBox({ placeholder, fill, onFilled, onAsk, onCall, model }: {
     placeholder: string;
+    /** Start a voice call instead; offered only where the server can place one. */
+    onCall?: () => void;
     /** The model the conversation it starts answers on, under the box. */
     model?: ReactNode;
     /** Words put in the box from outside, e.g. a starter on Home. */
@@ -170,6 +172,11 @@ export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
                         }
                     }}
                 />
+                {onCall && (
+                    <button type="button" className="askbox__wave" onClick={onCall} title="Start a call" aria-label="Start a call">
+                        <VoiceIcon size={20} />
+                    </button>
+                )}
                 <button type="submit" className="askbox__send" disabled={!canSend(text.trim(), held)} aria-label="Send">
                     <SendIcon size={17} weight="bold" />
                 </button>

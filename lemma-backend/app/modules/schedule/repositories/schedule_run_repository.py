@@ -380,7 +380,9 @@ class ScheduleRunRepository:
         await self.session.flush()
         return model.to_entity()
 
-    async def consecutive_terminal_failures(self, schedule_id: UUID) -> int:
+    async def consecutive_terminal_failures(
+        self, schedule_id: UUID, *, since: datetime | None = None
+    ) -> int:
         """Length of the current failure streak, counted back from the newest run.
 
         Bounded, because this runs on *every* run completion and the ledger is
@@ -415,13 +417,19 @@ class ScheduleRunRepository:
         The operator hears of it instead, from
         ``schedule.filter.dead_lettered.degraded``. So is a fire the upgrade found
         waiting too long to start, and failed rather than replayed.
+
+        ``since`` is when a person last reactivated the schedule: runs that
+        completed before it belong to the streak that paused it, which the
+        reactivation forgave.
         """
+        after_reset = [] if since is None else [ScheduleRun.completed_at > since]
         rows = (
             await self.session.execute(
                 select(ScheduleRun.status, ScheduleRun.target_outcome)
                 .where(
                     ScheduleRun.schedule_id == schedule_id,
                     ScheduleRun.completed_at.is_not(None),
+                    *after_reset,
                     ScheduleRun.status != ScheduleRunStatus.FILTERED.value,
                     or_(
                         ScheduleRun.error_type.is_(None),

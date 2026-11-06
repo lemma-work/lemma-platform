@@ -228,7 +228,7 @@ def test_a_notice_too_long_for_a_whatsapp_button_goes_as_text():
 
 def _chat_context(text: str, *, outsider: bool = False):
     from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-    from app.modules.agent.contracts.audience import Audience
+    from app.modules.agent.domain.outsiders import Audience
     from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 
     return SurfaceChatContext(
@@ -268,7 +268,7 @@ async def test_a_typed_retry_reruns_the_failed_request(
     # Doubled where `agent` publishes it: the other module's contract, not a
     # part of the unit under test.
     monkeypatch.setattr(
-        "app.modules.agent.contracts.conversations_for_surfaces.retry_failed_run",
+        "app.modules.agent.contracts.channels.retry_failed_run",
         rerun,
     )
     adapter = AsyncMock()

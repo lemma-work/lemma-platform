@@ -6,10 +6,11 @@ and the background a later run is handed. Written as the message enters the
 person's conversation. The agent's answer is a line too, posted before it is
 sent and carried by its delivery (``run_reply_lines``).
 
-A group's messages are written earlier too, by ``group_log``, as they arrive:
+A group's messages are written earlier, by ``group_log``, as they arrive:
 most of a group is not said to the bot, and all of it is what "what did we
-decide yesterday?" asks about. The same platform message is one line however
-many times it is written.
+decide yesterday?" asks about. The turn that takes one up adds to that line
+and writes no other. The same platform message is one line however many
+times it arrives.
 """
 
 from __future__ import annotations
@@ -18,14 +19,15 @@ from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
+from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts import channel_conversations
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts import channels as agent_channels
+from app.modules.agent.contracts.channels import Audience
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
 from app.modules.channels.contracts.deliveries import deliveries_of, delivery_sent
-from app.modules.channels.contracts.lines import thread_root_at
+from app.modules.channels.contracts.placement import heard_thread_root
 from app.modules.channels.contracts import (
     AccountKey,
     ChannelMessage,
@@ -36,14 +38,12 @@ from app.modules.channels.contracts import (
     Sender,
     Source,
     SourceKind,
+    answered_in,
     post,
     source_by_id,
     source_for,
 )
 
-
-#: Platforms whose channels have threads, kept as threads on the timeline.
-THREADED = frozenset({"SLACK", "TEAMS"})
 
 #: A web chat's platform, as its channel source names it.
 WEB = "WEB"
@@ -111,7 +111,7 @@ def reply_ref_of(event: ParsedInboundSurfaceEvent) -> dict[str, object]:
             },
         }
     )
-    return target.model_dump(mode="json", exclude={"raw_payload"})
+    return target.model_dump(mode="json", exclude={"raw_payload", "unasked"})
 
 
 def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
@@ -130,7 +130,9 @@ def web_place(*, widget_id: UUID, session_id: UUID) -> Place:
 class ChannelLines(Protocol):
     """Where a surface writes what it heard, as channel lines."""
 
-    async def heard(self, context: SurfaceChatContext, *, text: str) -> None: ...
+    async def heard(
+        self, context: SurfaceChatContext, *, text: str
+    ) -> ChannelMessage | None: ...
 
 
 class ChannelLinesInDatabase:
@@ -139,8 +141,10 @@ class ChannelLinesInDatabase:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
 
-    async def heard(self, context: SurfaceChatContext, *, text: str) -> None:
-        await note_heard(self.uow, context, text=text)
+    async def heard(
+        self, context: SurfaceChatContext, *, text: str
+    ) -> ChannelMessage | None:
+        return await note_heard(self.uow, context, text=text)
 
 
 #: The lines over one unit of work, for a writer that opens its own scopes.
@@ -149,17 +153,25 @@ type ChannelLinesFor = Callable[[SqlAlchemyUnitOfWork], ChannelLines]
 
 async def note_heard(
     uow: SqlAlchemyUnitOfWork, context: SurfaceChatContext, *, text: str
-) -> None:
-    """The message this run answers, as its sender's line in the channel.
+) -> ChannelMessage | None:
+    """The message this run answers, as its sender's line in the channel --
+    the line, or None where there is no place to write it.
+
+    Written once. A group's message is a line from the moment it arrived
+    (``group_log``): the turn only says which conversation answers it, and who
+    said it where the log could not name them (``answered_in``). Anything the
+    log did not write -- a person's own chat, a voice note with no words until
+    the turn hears them, a group's first message before the pod knew the
+    group -- is written here.
 
     ``text`` is what the conversation is given -- a voice note's words, not
     the empty body it arrived with.
     """
     if context.source_id is None:
-        return
+        return None
     source = await source_by_id(uow, context.source_id)
     if source is None:
-        return
+        return None
     name = context.message_metadata.sender_display_name
     contact_id = context.audience.contact_id
     sender = (
@@ -167,6 +179,18 @@ async def note_heard(
         if contact_id is not None
         else Sender.member(context.message_user_id, display_name=name)
     )
+    external_message_id = context.message_external_message_id
+    if source.kind is SourceKind.CHAT and external_message_id is not None:
+        taken_up = await answered_in(
+            uow,
+            channel_id=source.channel_id,
+            source_id=source.id,
+            external_message_id=external_message_id,
+            conversation_id=context.conversation_id,
+            sender=sender,
+        )
+        if taken_up is not None:
+            return taken_up
     event = context.event
     said = await LineMarkup(uow).read(
         event,
@@ -175,7 +199,7 @@ async def note_heard(
         text=text,
         bot=Bot(surface_id=context.surface_id, name=context.agent_display_name),
     )
-    await post(
+    return await post(
         uow,
         channel_id=source.channel_id,
         line=NewLine(
@@ -184,39 +208,37 @@ async def note_heard(
             parts=said.parts,
             source_id=source.id,
             conversation_id=context.conversation_id,
-            external_message_id=context.message_external_message_id,
+            external_message_id=external_message_id,
             external_thread_id=event.external_thread_id,
             # A Slack or Teams thread is a thread here too.
-            thread_root_id=await _thread_root(
+            thread_root_id=await heard_thread_root(
                 uow,
                 source,
                 external_thread_id=event.external_thread_id,
-                external_message_id=context.message_external_message_id,
+                external_message_id=external_message_id,
             ),
             # What answers this line in place: its thread, the message replied to.
             reply_ref=reply_ref_of(event),
         ),
         mentions=said.mentions,
         mentioned_agents=said.agents,
+        # Written by the turn answering it: put to that conversation's agent.
+        door_agent_id=await _door_agent(uow, context),
     )
 
 
-async def _thread_root(
-    uow: SqlAlchemyUnitOfWork,
-    source: Source,
-    *,
-    external_thread_id: str | None,
-    external_message_id: str | None = None,
+async def _door_agent(
+    uow: SqlAlchemyUnitOfWork, context: SurfaceChatContext
 ) -> UUID | None:
-    """The line a reply in a shared Slack or Teams place hangs from."""
-    if source.kind is not SourceKind.CHAT or source.platform not in THREADED:
-        return None
-    return await thread_root_at(
-        uow,
-        source_id=source.id,
-        external_thread_id=external_thread_id,
-        external_message_id=external_message_id,
+    """The agent this turn's message was put to: its conversation's, which
+    answers it here. Any other agent the line names, or that answers every
+    line in the channel, is started by ``channels`` -- the one rule."""
+    conversation = await agent_channels.surface_conversation(
+        uow, context.conversation_id
     )
+    if conversation is None:
+        return None
+    return effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
 
 
 async def note_heard_on_web(
@@ -241,7 +263,7 @@ async def note_heard_on_web(
         place=web_place(widget_id=widget_id, session_id=session_id),
         home=ContactsHome(contact_id=contact_id),
     )
-    await channel_conversations.place_in_channel(
+    await agent_channels.place_in_channel(
         uow, conversation_id=conversation_id, channel_id=source.channel_id
     )
     await post(

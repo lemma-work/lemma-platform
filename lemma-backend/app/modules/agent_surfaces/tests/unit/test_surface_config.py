@@ -71,11 +71,6 @@ EXPECTED = [
         False,
     ),
     (
-        "surface_outsider_turns_per_person_per_10_minutes",
-        "SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES",
-        10,
-    ),
-    (
         "surface_outsider_turns_per_group_per_day",
         "SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY",
         200,
@@ -99,6 +94,16 @@ EXPECTED = [
         "surface_web_submissions_per_widget_per_day",
         "SURFACE_WEB_SUBMISSIONS_PER_WIDGET_PER_DAY",
         500,
+    ),
+    (
+        "surface_web_attachment_max_bytes",
+        "SURFACE_WEB_ATTACHMENT_MAX_BYTES",
+        10 * 1024 * 1024,
+    ),
+    (
+        "surface_web_attachments_max_bytes",
+        "SURFACE_WEB_ATTACHMENTS_MAX_BYTES",
+        25 * 1024 * 1024,
     ),
     (
         "surface_web_reads_per_widget_per_day",

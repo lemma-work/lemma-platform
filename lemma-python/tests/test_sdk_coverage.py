@@ -49,6 +49,14 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # the space's Settings › AI tools page. The clients themselves speak OAuth
     # and MCP, not this API. A Python facade is a deliberate follow-up.
     "mcp_access.",
+    # A member proving which Telegram account is theirs: minted, watched and
+    # confirmed in their own signed-in Lemma session, which is half the proof.
+    # Driven by the app's people and profile screens, not by software.
+    "telegram_identity_link.",
+    # A person deleting their own account: done in the app or on the website's
+    # deletion page, after reading what it does, never by software acting for
+    # them -- workload tokens are refused on the route anyway.
+    "user.current.delete",
     # Membership/governance surface not yet exposed in CLI/SDK facades
     "org.invitation.",
     "org.member.",

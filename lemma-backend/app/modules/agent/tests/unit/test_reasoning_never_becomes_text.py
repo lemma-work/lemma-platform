@@ -42,14 +42,15 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+from app.modules.agent.infrastructure.harness.lemma.thinking import (
     replays_prior_run_reasoning,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_message_writer import split_reasoning_drafts
+from app.modules.agent.domain.value_objects import AnswerKind
 
 # Built from ordinals so the tags survive tooling that reads source as markup.
 OPEN = chr(60) + "think" + chr(62)
@@ -279,7 +280,7 @@ def test_reasoning_written_into_the_answer_becomes_a_thought_and_an_answer():
         MessageKind.TEXT,
     ], "the thought comes first because that is the order it happened in"
     assert drafts[0].text == "General knowledge. Answer directly."
-    assert drafts[0].metadata["is_final_answer"] is False
+    assert drafts[0].state.answer is AnswerKind.NOT_FINAL
     assert drafts[1].text == "Paris."
 
 
@@ -453,6 +454,59 @@ async def test_a_retry_does_not_inherit_the_abandoned_attempts_half_thought(
         str(frame["data"]) for frame in published if frame.get("kind") == "text"
     )
     assert answer == "Paris."
+
+
+@pytest.mark.asyncio
+async def test_reasoning_the_prompt_opened_is_taken_back_off_the_answer(monkeypatch):
+    """A model whose template opens the block in the prompt streams its
+    reasoning as text, and only its ``</think>`` says so. The client is told to
+    clear what it showed and handed it again as a thought; the model's next
+    response is held as a thought from its first token."""
+    from app.modules.agent.services import run_event_pump as pump_module
+
+    published: list[dict] = []
+
+    async def _capture(conversation_id, payload, **kwargs):  # noqa: ARG001
+        published.append(payload)
+
+    monkeypatch.setattr(pump_module, "publish_conversation_event", _capture)
+
+    pump = pump_module.RunEventPump(message_writer=None, finalizer=None)
+    run = RunIdentity(conversation_id=uuid4(), agent_run_id=uuid4())
+    outcome = pump_module.RunOutcome()
+
+    async def _token(data: str) -> None:
+        await pump.handle(
+            event=AgentEvent(
+                type=AgentEventType.TOKEN,
+                data={"kind": "text", "data": data},
+                agent_run_id=run.agent_run_id,
+            ),
+            run=run,
+            outcome=outcome,
+        )
+
+    def _shown_as_answer() -> str:
+        shown = ""
+        for frame in published:
+            if frame.get("kind") == "stream_reset":
+                shown = ""
+            elif frame.get("kind") == "text":
+                shown += str(frame["data"])
+        return shown
+
+    await _token("The person is someone@example.com, ")
+    await _token(f"so I will greet them.{CLOSE}Hello!")
+    await pump._drain_tokens(run)
+    assert "stream_reset" in [frame.get("kind") for frame in published]
+    assert _shown_as_answer() == "Hello!"
+
+    published.clear()
+    await _token("Again someone@example.com")
+    assert "someone@example.com" not in _shown_as_answer()
+    await _token(f"{CLOSE}Done.")
+    await pump._drain_tokens(run)
+    assert _shown_as_answer() == "Done."
 
 
 @pytest.mark.asyncio

@@ -111,6 +111,11 @@ def stage_files(
     return staged if isinstance(staged, dict) else payload
 
 
+#: What the SDK wrapper sent with ``dangerously_skip_version_check`` and no
+#: pinned toolkit versions: the toolkit's current tools.
+_LATEST_TOOL_VERSION = "latest"
+
+
 class _UnsupportedComposioDetails(OperationDetailsPort):
     description: str | None = None
     input_schema_content: str | None = None
@@ -182,14 +187,20 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             try:
                 composio = self._composio_client_factory()
                 arguments = stage_files(composio, operation_name, payload or {})
-                response = composio.tools.execute(
-                    operation_name,
-                    arguments,
+                # The API call itself, not ``composio.tools.execute``: that
+                # wrapper first fetches the tool's schema (a GET per slug per
+                # process, so on most calls across a fleet) only to drive its
+                # own file upload, which is off here and done by
+                # ``stage_files``. Retries off, as the wrapper has them:
+                # executing is a write a silent retry could repeat.
+                response = composio.client.without_retries.tools.execute(
+                    tool_slug=operation_name,
+                    arguments=arguments,
                     connected_account_id=connection_id,
-                    dangerously_skip_version_check=True,
+                    version=_LATEST_TOOL_VERSION,
                 )
                 if hasattr(response, "model_dump"):
-                    return response.model_dump()
+                    return response.model_dump(exclude={"log_id", "session_info"})
                 return response
             finally:
                 allow_tracking.reset(tracking_token)

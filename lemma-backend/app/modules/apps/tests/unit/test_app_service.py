@@ -64,10 +64,10 @@ async def _get_public_app_asset(
 async def test_public_slug_route_serves_only_apps_published_to_everyone(visibility):
     """`/public/apps` has no session, so only a PUBLIC app belongs on it.
 
-    Apps are created PUBLIC now, so reaching this refusal takes a deliberate
-    narrowing in the share dialog -- and that narrowing has to hold, or the
-    dialog's "pod only" is decoration. An empty or unrecognized stored value is
-    not PUBLIC either: it is refused rather than read as the default.
+    Apps are created private to the pod, and one opened to everyone in the
+    share dialog has to be narrowable again, or the dialog's "pod only" is
+    decoration. An empty or unrecognized stored value is not PUBLIC either: it
+    is refused rather than read as the default.
     """
     repo = AsyncMock()
     storage = AsyncMock()
@@ -122,13 +122,13 @@ async def test_public_slug_route_serves_a_private_app_to_its_checked_viewer():
 
 
 @pytest.mark.asyncio
-async def test_created_app_is_public_and_reaches_the_public_slug_route():
-    """The default has to be the one the public route accepts.
+async def test_a_created_app_is_private_yet_reaches_its_checked_viewer():
+    """New apps are private to the pod, and still open on their own host.
 
-    These two live in different modules, and when they disagreed every app
-    404'd on the host it was deployed to. Asserting the default string is not
-    enough -- this walks a created app back through the serving gate, so the
-    pair cannot drift apart again.
+    The default and the serving gate live in different modules, and when they
+    disagreed every app 404'd on the host it was deployed to. Asserting the
+    default string is not enough -- this walks a created app back through the
+    gate: refused anonymously, served to a viewer checked against it.
     """
     repo = AsyncMock()
     storage = AsyncMock()
@@ -147,7 +147,7 @@ async def test_created_app_is_public_and_reaches_the_public_slug_route():
         ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
     )
 
-    assert created.visibility == "PUBLIC"
+    assert created.visibility == "POD"
 
     created.id = uuid4()
     created.current_release_id = uuid4()
@@ -160,9 +160,12 @@ async def test_created_app_is_public_and_reaches_the_public_slug_route():
     )
     storage.read_file.return_value = b"<html><body>flow</body></html>"
 
-    asset = await _get_public_app_asset(service, "taskflow")
+    assert await _get_public_app_asset(service, "taskflow") is None
+
+    asset = await _get_public_app_asset(service, "taskflow", viewer_app_id=created.id)
 
     assert asset.is_entrypoint is True
+    assert asset.private is True
 
 
 async def _delete_app(service, pod_id, name, user_id, ctx=None):

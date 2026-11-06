@@ -11,9 +11,6 @@ from __future__ import annotations
 
 import hashlib
 
-#: On a child conversation's metadata, next to ``parent_run_id``.
-SPAWN_KEY = "spawn_key"
-
 
 def spawn_key(*, target_name: str | None, task: str) -> str:
     """A digest of who was spawned and what they were asked to do."""

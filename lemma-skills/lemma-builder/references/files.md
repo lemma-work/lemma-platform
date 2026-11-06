@@ -31,7 +31,7 @@ figures + page renders) for full-document reading and page-accurate viewing.
 `/me`.
 
 ```bash
-lemma files mkdir /knowledge
+lemma files mkdir /knowledge                                  # optional: upload and write create missing folders
 lemma files upload ./handbook.pdf /knowledge/handbook.pdf      # documents auto-index
 lemma files upload ./summary.md /me/reports/summary.md
 lemma files upload ./data.csv /scratch/data.csv --no-search    # skip indexing
@@ -153,11 +153,14 @@ converted markdown** — otherwise they assume they only get search snippets.
 
 ## Limits & gotchas
 
-- **Bundles carry folder metadata only** (`files/<folder>/.folder.json`); file
-  bytes upload separately (`lemma files upload`) — script them in `seed/` and the
-  README.
+- **Bundles carry folder metadata by default** (`files/<folder>/.folder.json`);
+  file bytes travel only when named on export (`pods export --folder /knowledge`)
+  and asked for on import (`pods import --with-files`). Otherwise upload them
+  (`lemma files upload`) — script that in `seed/` and the README.
 - Indexing lags briefly after upload — `stat` shows status (`COMPLETED` = searchable,
-  `NOT_REQUIRED` = stored but not a document, `PENDING`/`PROCESSING`/`FAILED`).
+  `NOT_REQUIRED` = stored but not a document, `PENDING`/`PROCESSING` = in progress
+  or retrying, `FAILED_PERMANENT` = gave up; the reason is in `last_processing_error`, and
+  `lemma files retry <path>` re-runs it once that is fixed).
 - Don't expect markdown/search for XLSX/CSV/JSON/email/images — these are stored, not
   indexed; keep structured data in tables, or parse a one-off with the python or
   `liteparse-documents` skill (its lane is documents **outside** the pod, plus the

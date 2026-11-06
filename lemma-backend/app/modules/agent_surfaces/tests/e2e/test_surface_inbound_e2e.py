@@ -13,13 +13,18 @@ What is pinned here:
   backdated, the retention job run) -- is one row and one run;
 * an ingest that fails after taking its message claim is retried and routed
   once (the claim is the row's own);
-* an ingest out of attempts goes FAILED and asks the sender to resend, once.
+* an ingest out of attempts goes FAILED and asks the sender to resend, once;
+* a surface whose connector refuses (its account needs reconnecting, or was
+  unshared) goes FAILED on the first try, notes why on the surface, and is not
+  a dead item;
+* a sender over their usage limit is told so, once, not asked to resend.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 import pytest
@@ -30,6 +35,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import RetryPolicy
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.services.surface_deliveries import SendResult
+from app.modules.agent_surfaces.services.surface_problems import problem_of
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _seed_external_user,
     _telegram_payload,
@@ -367,3 +373,154 @@ async def test_an_ingest_out_of_attempts_fails_and_asks_the_sender_once(
         )
         == "SENT"
     )
+
+
+async def _status_and_reason(surface_id: str) -> tuple[str, str]:
+    async with async_session_maker() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT status, reason FROM surface_inbound_messages "
+                    "WHERE surface_id = :s"
+                ),
+                {"s": surface_id},
+            )
+        ).one()
+    return row.status, row.reason or ""
+
+
+@pytest.mark.drives_work
+async def test_a_surface_whose_connector_refuses_fails_once_without_retrying(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    telegram_webhook_mode,
+    monkeypatch,
+):
+    """Prod, 2026-10-28: a Slack surface whose shared account had needed
+    reconnecting for a month failed every inbound message three times, left a
+    dead item each, and held the failing-jobs alert at 100% for hours. No retry
+    reconnects an account, and nothing can be sent on it, so the first try is
+    the last and nobody is asked to send again."""
+    surface_id, secret, account = await _bot(
+        db_session,
+        authenticated_client,
+        test_pod,
+        fixed_test_user,
+        fake_telegram,
+        "stale-bot",
+    )
+    await _seed_sender(db_session, fixed_test_user, 6110006)
+    # Its owner stops sharing the bot's account: the connector runs as nothing.
+    async with async_session_maker() as session, session.begin():
+        await session.execute(
+            text("DELETE FROM pod_accounts WHERE account_id = :a"), {"a": account.id}
+        )
+    sent: list[str] = []
+
+    async def sender(row) -> SendResult:
+        sent.append(row.content["text"])
+        return SendResult(delivered=True)
+
+    registry = surface_registry(sender=sender)
+    await _post(
+        authenticated_client,
+        surface_id,
+        secret,
+        _telegram_payload(text="Anyone there?", message_id=8806, sender_id=6110006),
+    )
+    for _ in range(3):
+        await drain(registry, due=True)
+
+    status, reason = await _status_and_reason(surface_id)
+    assert status == "FAILED"
+    assert reason.startswith("surface_connector_refused: CONNECTOR_NEEDS_ACCOUNT")
+    # A finished item is deleted; a dead or retried one would still be here.
+    assert (
+        await scalar("SELECT count(*) FROM work_items WHERE kind = 'surface.ingest'")
+        == 0
+    )
+    assert sent == []
+    # Said where the surface's members look, not in the chat.
+    assert "none is shared with this pod" in (await problem_of(UUID(surface_id)) or "")
+
+
+@pytest.mark.drives_work
+async def test_a_sender_over_their_usage_limit_is_told_once_not_asked_to_resend(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    telegram_webhook_mode,
+    monkeypatch,
+):
+    """Prod, 2026-10-28: WhatsApp messages from a person at their weekly limit
+    were tried three times and then answered "please send it again", which
+    cannot help until the limit resets."""
+    from app.modules.agent_surfaces.services import turn_starter
+    from app.modules.usage.config import usage_settings
+    from app.modules.usage.infrastructure.models import UsageRecord
+
+    surface_id, secret, _ = await _bot(
+        db_session,
+        authenticated_client,
+        test_pod,
+        fixed_test_user,
+        fake_telegram,
+        "capped-bot",
+    )
+    await _seed_sender(db_session, fixed_test_user, 6110007)
+    # A week already spent past its limit, as the ledger has it.
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
+    async with async_session_maker() as session, session.begin():
+        session.add(
+            UsageRecord(
+                organization_id=UUID(test_pod["organization_id"]),
+                user_id=UUID(fixed_test_user["id"]),
+                source_type="agent_run",
+                profile_id="system:lemma",
+                profile_scope="SYSTEM",
+                model_name="e2e-mock-model",
+                occurred_at=datetime.now(UTC),
+                cost_amount=Decimal("1.5"),
+            )
+        )
+    registry = surface_registry()
+    for message_id in (8807, 8808):
+        await _post(
+            authenticated_client,
+            surface_id,
+            secret,
+            _telegram_payload(
+                text="One more question", message_id=message_id, sender_id=6110007
+            ),
+        )
+    for _ in range(3):
+        await drain(registry, due=True)
+
+    async with async_session_maker() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT status, reason FROM surface_inbound_messages "
+                    "WHERE surface_id = :s"
+                ),
+                {"s": surface_id},
+            )
+        ).all()
+    assert [r.status for r in rows] == ["FAILED", "FAILED"]
+    assert all(r.reason.startswith("usage_limit: ") for r in rows)
+    assert (
+        await scalar("SELECT count(*) FROM work_items WHERE kind = 'surface.ingest'")
+        == 0
+    )
+    told = [
+        sent.get("text")
+        for sent in message_store.get_all("TELEGRAM")
+        if sent.get("chat_id") in (6110007, "6110007")
+    ]
+    assert told == [turn_starter.USAGE_LIMIT_REPLY]

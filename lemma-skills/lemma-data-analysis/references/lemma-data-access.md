@@ -22,8 +22,8 @@ Read `lemma tables get <table>` before querying. Capture:
 - the analytical grain and whether multiple rows can represent one event/entity;
 - the meaning of `created_at` and `updated_at` versus business event timestamps.
 
-Lemma adds `id`, `created_at`, and `updated_at` to every table and `user_id` to
-RLS tables. Treat them as system-managed fields. A sample proves shape, not
+Lemma adds `created_at` and `updated_at` to every table, an `id` (UUID v7)
+primary key unless the table names its own, and `user_id` to RLS tables. Treat them as system-managed fields. A sample proves shape, not
 coverage or completeness.
 
 ## Choose the access path
@@ -58,8 +58,8 @@ lemma records export orders ./inputs/orders.csv --limit 25000
 lemma records export orders ./inputs/orders.jsonl --limit 25000
 ```
 
-CSV is the default; `.jsonl` and `.json` are supported. The default export limit
-is 10,000 rows. Count the intended population first, pass an explicit limit, and
+The format follows the file extension (`.csv`, `.jsonl`, `.json`), or pass
+`--format`. The default export limit is 10,000 rows. Count the intended population first, pass an explicit limit, and
 verify the exported row count so a capped extract is never mistaken for the
 population. Keep the first extract immutable; derive cleaned data separately.
 

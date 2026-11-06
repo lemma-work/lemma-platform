@@ -34,6 +34,11 @@ EXPECTED = [
     ("datastore_query_max_cost", "DATASTORE_QUERY_MAX_COST", 1_000_000.0),
     ("datastore_query_max_plan_rows", "DATASTORE_QUERY_MAX_PLAN_ROWS", 5_000_000),
     (
+        "datastore_outcome_read_interval_minutes",
+        "DATASTORE_OUTCOME_READ_INTERVAL_MINUTES",
+        60,
+    ),
+    (
         "datastore_search_readable_id_pushdown_limit",
         "DATASTORE_SEARCH_READABLE_ID_PUSHDOWN_LIMIT",
         5_000,
@@ -211,6 +216,7 @@ MOVED_FROM_CORE = [
     ),
     ("reranker_mode", "RERANKER_MODE", "off"),
     ("reranker_retrieve_n", "RERANKER_RETRIEVE_N", 50),
+    ("reranker_timeout_seconds", "RERANKER_TIMEOUT_SECONDS", 5.0),
     ("local_reranker_model", "LOCAL_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"),
     # The 0.8.0 config audit: the last core field only this module read.
     (

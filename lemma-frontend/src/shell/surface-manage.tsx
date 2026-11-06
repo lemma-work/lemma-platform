@@ -6,9 +6,10 @@ import {
     connectionLine, connectionTrouble, contactsSupported, filtersSupported, isOwnBot, needsRebind, readConnection, rebindChoices,
     routesSupported, surfaceApp, surfaceDraft, surfacePatch, type SurfaceDraft,
 } from "@/data/surface-settings";
-import { connectionsPlace, connectorLabel } from "@/data/pod-connectors";
+import { connectorLabel } from "@/data/pod-connectors";
+import { connectionsPlace } from "@/shell/address";
 import { ProblemLine } from "@/connect/connection-problem";
-import { answerChoices } from "@/data/contacts";
+import { answerChoices, groupsNote } from "@/data/contacts";
 import { useBotGroups } from "@/channels/queries";
 import { GroupSheets, type GroupSheet } from "@/channels/source-sheets";
 import { BotGroupRow } from "@/channels/bot-groups";
@@ -42,7 +43,7 @@ export function SurfaceManage({ pod, surface, onBack, onSaved, onLeave }: {
     /* Who answers here: the space, or an agent with a channel of its own. */
     const bot = surface.mine ? pod.name : surface.agentName || pod.name;
     return <div className="surface-setup smanage">
-        <button className="linkish smanage__back" onClick={onBack}><BackIcon size={14} aria-hidden="true" /> All channels</button>
+        <button className="linkish smanage__back" onClick={onBack}><BackIcon size={14} aria-hidden="true" /> Back</button>
         <div className="smanage__head">
             <ChannelIcon platform={surface.platform} size={32} />
             <div className="smanage__title">
@@ -254,8 +255,9 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                     </select>
                     <small>
                         {!isOwnBot(surface)
-                            ? "Only a bot on your own account or number answers contacts."
+                            ? "Privately, only a bot on your own account or number answers people outside " + pod.name + "."
                             : answerChoices(pod.name).find(choice => choice.value === draft.contactsAnswer)?.note}
+                        {isGroupPlatform(surface.platform) && " " + groupsNote(pod.name)}
                     </small>
                 </label>
             )}

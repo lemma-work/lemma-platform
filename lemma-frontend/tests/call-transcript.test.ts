@@ -11,11 +11,31 @@ test('fragments from one speaker become one line, not one line each', () => {
     const lines = fold([
         { speaker: 'them', text: 'what were' },
         { speaker: 'them', text: ' the Q1' },
-        { speaker: 'them', text: ' totals', final: true },
+        { speaker: 'them', text: ' totals' },
+        { speaker: 'them', text: 'what were the Q1 totals', final: true },
     ]);
     assert.equal(lines.length, 1);
     assert.equal(lines[0].text, 'what were the Q1 totals');
     assert.equal(lines[0].done, true);
+});
+
+test('the closing chunk is the whole line and replaces the fragments, not repeats them', () => {
+    // Every engine closes a line with its full text. Added to the fragments,
+    // each reply showed twice.
+    const lines = fold([
+        { speaker: 'us', text: 'Sure thing. ' },
+        { speaker: 'us', text: 'I can help.' },
+        { speaker: 'us', text: 'Sure thing. I can help.', final: true },
+    ]);
+    assert.deepEqual(lines.map((line) => line.text), ['Sure thing. I can help.']);
+});
+
+test('a corrected final wins over what the fragments said', () => {
+    const lines = fold([
+        { speaker: 'them', text: 'three menu' },
+        { speaker: 'them', text: 'three venues in Goa', final: true },
+    ]);
+    assert.equal(lines[0].text, 'three venues in Goa');
 });
 
 test('the other speaker starts a new line even mid-sentence', () => {

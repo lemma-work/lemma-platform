@@ -316,6 +316,101 @@ fn a_call_still_held_at_the_end_of_the_turn_is_released() {
     assert_eq!(tool(&owed[0]).tool.name, "read_file");
 }
 
+/// A tool-progress beat, as `claude-agent-acp` forwards one.
+fn beat(id: &str, tool: &str, seconds: u64) -> Value {
+    json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": id, "status": "in_progress",
+        "_meta": { "claudeCode": { "toolName": tool,
+                                   "toolResponse": { "elapsedTimeSeconds": seconds } } },
+    })
+}
+
+/// Claude Code beats for a tool while it runs, under ids of its own. Opened as
+/// calls, the beats of every long call were released when the turn ended:
+/// empty cards after the agent's closing words.
+#[test]
+fn a_claude_heartbeat_is_not_a_call() {
+    let mut normalizer = normalizer(Dialect::ClaudeCode);
+    let exec = "mcp__lemma_tools__lemma_exec_command";
+    let opened = normalizer.session_update_value(&json!({
+        "sessionUpdate": "tool_call", "toolCallId": "toolu_6", "status": "pending",
+        "rawInput": { "cmd": "make test" }, "kind": "other",
+        "_meta": { "claudeCode": { "toolName": exec } },
+    }));
+    assert_eq!(kinds(&opened), vec![EventType::ToolCall]);
+    for (n, seconds) in [(0, 30), (1, 60)] {
+        let heartbeat = beat(&format!("toolu_6-heartbeat-{n}"), exec, seconds);
+        assert!(normalizer.session_update_value(&heartbeat).is_empty());
+    }
+    let closed = normalizer.session_update_value(&json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "toolu_6", "status": "completed",
+        "rawOutput": [{ "type": "text", "text": "{\"exit_code\": 0}" }],
+    }));
+    assert_eq!(kinds(&closed), vec![EventType::ToolCallResult]);
+    // One that races past the result changes nothing either.
+    let late = beat("toolu_6-heartbeat-2", exec, 90);
+    assert!(normalizer.session_update_value(&late).is_empty());
+    assert!(normalizer.finish(None).is_empty(), "the turn owes nothing");
+}
+
+/// A heartbeat says its call is running, so its input is final: a call still
+/// held goes on the record where it ran, not after the closing words.
+#[test]
+fn a_heartbeat_releases_the_call_it_beats_for() {
+    let mut normalizer = normalizer(Dialect::ClaudeCode);
+    let held = normalizer.session_update_value(&json!({
+        "sessionUpdate": "tool_call", "toolCallId": "toolu_4", "status": "pending",
+        "rawInput": {}, "kind": "execute", "_meta": { "claudeCode": { "toolName": "Bash" } },
+    }));
+    assert!(held.is_empty(), "the call waits for its final input");
+    let partial = normalizer.session_update_value(&json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "toolu_4",
+        "rawInput": { "command": "make" }, "kind": "execute",
+        "_meta": { "claudeCode": { "toolName": "Bash" } },
+    }));
+    assert!(partial.is_empty(), "a streamed prefix is not the input");
+    let released = normalizer.session_update_value(&beat("toolu_4-heartbeat-0", "Bash", 30));
+    assert_eq!(kinds(&released), vec![EventType::ToolCall]);
+    assert_eq!(released[0].object_id.as_deref(), Some("toolu_4"));
+    assert_eq!(tool(&released[0]).input["cmd"], "make");
+    assert!(normalizer.finish(None).is_empty(), "the call went out once");
+}
+
+/// A beat under an id that names no call this run has seen -- a sub-agent
+/// waiting out an API retry beats under one of its own -- is dropped.
+#[test]
+fn a_beat_for_no_call_is_dropped() {
+    let mut normalizer = normalizer(Dialect::ClaudeCode);
+    let retry = normalizer.session_update_value(&json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": "agent_msg_1", "status": "in_progress",
+        "_meta": { "claudeCode": { "toolName": "Agent", "toolResponse": {
+            "elapsedTimeSeconds": 0, "subagentType": "general-purpose",
+            "subagentRetry": { "attempt": 1, "max_retries": 10 },
+        } } },
+    }));
+    assert!(retry.is_empty());
+    let unseen = beat("toolu_0-heartbeat-0", "Bash", 30);
+    assert!(normalizer.session_update_value(&unseen).is_empty());
+    assert!(normalizer.finish(None).is_empty(), "the turn owes nothing");
+}
+
+/// A report that carries input is a call, whatever its id, even when no
+/// `tool_call` opened it.
+#[test]
+fn a_first_report_with_input_is_a_call() {
+    let mut normalizer = normalizer(Dialect::ClaudeCode);
+    for (id, command) in [("toolu_3", "ls"), ("toolu_3-heartbeat-0", "pwd")] {
+        let events = normalizer.session_update_value(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": id, "status": "in_progress",
+            "rawInput": { "command": command },
+            "_meta": { "claudeCode": { "toolName": "Bash",
+                                       "toolResponse": { "elapsedTimeSeconds": 30 } } },
+        }));
+        assert_eq!(kinds(&events), vec![EventType::ToolCall], "{id}");
+        assert_eq!(tool(&events[0]).input["cmd"], command);
+    }
+}
+
 /// A result for a call the adapter never opened still pairs with a call.
 #[test]
 fn a_result_without_an_opening_is_opened_first() {

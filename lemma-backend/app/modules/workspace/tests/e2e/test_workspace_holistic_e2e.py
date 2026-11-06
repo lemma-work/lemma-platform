@@ -7,8 +7,8 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
     ListProcessesRequest,
@@ -16,7 +16,7 @@ from app.modules.agent.tools.workspace_cli.models import (
     TerminateProcessRequest,
     WriteStdinRequest,
 )
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     exec_command_internal,
     execute_python_internal,
     list_processes_internal,
@@ -44,7 +44,7 @@ async def _context(authenticated_client, fixed_test_org, fixed_test_user):
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     pod = response.json()
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
@@ -265,8 +265,8 @@ async def test_browser_process_and_signed_access_reach_the_sandbox(
     assert browser_started.success, browser_started
     assert browser_started.exit_code == 0
 
-    from app.modules.agent.tools.web.models import WebFetchRequest
-    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+    from app.modules.agent.infrastructure.tools.web.models import WebFetchRequest
+    from app.modules.agent.infrastructure.tools.web.web_fetch import web_fetch_internal
 
     captured = await web_fetch_internal(
         ctx,

@@ -3,7 +3,7 @@
   "core": 123,
   "lemma-cli": 175,
   "modules/agent": 320,
-  "modules/agent_surfaces": 189,
+  "modules/agent_surfaces": 188,
   "modules/apps": 8,
   "modules/connectors": 148,
   "modules/datastore": 50,

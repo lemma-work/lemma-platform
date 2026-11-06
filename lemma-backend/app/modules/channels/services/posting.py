@@ -22,15 +22,15 @@ from app.modules.channels.contracts.facts import (
     ChannelDeliveryDue,
     ChannelMessagePosted,
 )
+from app.modules.channels.domain.answering import answering_agents
 from app.modules.channels.domain.entities import (
-    AgentAnswers,
     Channel,
     ChannelKind,
     ChannelMessage,
     Principal,
     Question,
     SeatedBy,
-    SenderKind,
+    Sender,
 )
 from app.modules.channels.infrastructure.cases import CaseRepository
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
@@ -48,6 +48,7 @@ from app.modules.channels.infrastructure.questions import (
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.revisions import holding
 from app.modules.channels.infrastructure.source_repository import SourceRepository
+from app.modules.channels.infrastructure.taken_up import answered_in
 
 
 class ChannelNotFound(LookupError):
@@ -66,6 +67,9 @@ class Post:
     deliver_to: Sequence[UUID] = ()
     #: The pod's own agent, which answers everything in a member's channel.
     pod_agent_id: UUID | None = None
+    #: For a line heard on a platform: the agent of the bot it came through,
+    #: which answers it there (``domain/answering``).
+    door_agent_id: UUID | None = None
 
 
 class Timeline:
@@ -94,9 +98,8 @@ class Timeline:
             except LookupError as gone:
                 raise ChannelNotFound(str(gone)) from gone
             question = await self._ask(channel, message, post.question)
-            # Heard again, perhaps now knowing who said it: they are seated.
-            await self._seat(channel, message)
             if written:
+                await self._seat(channel, message)
                 await self._name(channel, message, post)
                 await self._move_contact(channel, message)
         # Read against the head just written: their own line is read.
@@ -123,6 +126,33 @@ class Timeline:
             ),
         )
         return message.model_copy(update={"question": question})
+
+    async def answered_in(
+        self,
+        channel: Channel,
+        *,
+        source_id: UUID,
+        external_message_id: str,
+        conversation_id: UUID,
+        sender: Sender,
+    ) -> ChannelMessage | None:
+        """A platform message written as it arrived, now taken up by a
+        conversation (``infrastructure.taken_up``) -- and whoever the turn
+        named as its speaker seated, as a post seats whoever speaks. Nothing
+        else of a post follows: the line was told, delivered and announced
+        when it was written. ``None`` for a message that is no line here."""
+        message = await answered_in(
+            self.session,
+            source_id,
+            external_message_id,
+            conversation_id=conversation_id,
+            sender=sender,
+        )
+        if message is None:
+            return None
+        await self._seat(channel, message)
+        await self._read_own(channel, message)
+        return message
 
     async def _in_place(self, channel: Channel, post: Post) -> None:
         """Every place the line goes to is of this channel. Its thread, the
@@ -190,7 +220,6 @@ class Timeline:
             self.session,
             message=message,
             people=post.mentions,
-            agents=post.mentioned_agents,
             fresh=True,
         )
 
@@ -203,28 +232,22 @@ class Timeline:
     async def _answering(
         self, channel: Channel, message: ChannelMessage, post: Post
     ) -> list[UUID]:
-        """The agents that answer a member's line written in Lemma -- wherever
-        it is carried: those it names, those in the channel that answer every
+        """The agents this line starts, wherever it was said (``domain/
+        answering``): those it names, those in the channel that answer every
         line, and -- in a member's own channel with none -- the pod's agent.
-        A line heard on a platform is answered there, by ``agent_surfaces``.
-        A members' note is answered only by the agents it names -- as a note
-        -- never by one answering every line: notes are members talking."""
-        sender = message.sender
-        if sender.kind is not SenderKind.MEMBER or message.heard_outside:
-            return []
-        answering = list(dict.fromkeys(post.mentioned_agents))
-        if message.members_only:
-            return answering
-        for member in await self.members.agents(channel.id):
-            if (
-                member.answers is AgentAnswers.EVERY_LINE
-                and member.agent_id is not None
-                and member.agent_id not in answering
-            ):
-                answering.append(member.agent_id)
-        if not answering and channel.kind is ChannelKind.DIRECT and post.pod_agent_id:
-            answering.append(post.pod_agent_id)
-        return answering
+        A line heard on a platform is answered at its door by the bot it came
+        through (``agent_surfaces``); the others the rule names start here,
+        and answer at its place too."""
+        return answering_agents(
+            sender_kind=message.sender.kind,
+            members_only=message.members_only,
+            named=post.mentioned_agents,
+            seated=await self.members.agents(channel.id),
+            channel_kind=channel.kind,
+            pod_agent_id=post.pod_agent_id,
+            door_agent_id=post.door_agent_id,
+            heard=message.heard_outside,
+        )
 
     async def _deliver(
         self,

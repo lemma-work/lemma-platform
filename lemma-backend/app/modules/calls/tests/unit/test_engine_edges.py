@@ -14,9 +14,14 @@ from pydantic import JsonValue
 from app.core.auth_exemptions import is_self_authenticated_websocket
 from app.modules.calls.config import CallsSettings
 from app.modules.calls.domain.frames import offer
-from app.modules.calls.domain.voice import EngineClosed, Interrupted
+from app.modules.calls.domain.voice import EngineClosed, EngineUnavailable, Interrupted
 from app.modules.calls.infrastructure.engines.openai_realtime import (
     OpenAIRealtimeEngine,
+)
+from app.modules.calls.infrastructure.engines.google_auth import (
+    service_account_headers,
+    vertex_endpoint,
+    vertex_model,
 )
 from app.modules.calls.services.engines import engines_offered
 
@@ -114,3 +119,49 @@ async def test_a_session_the_provider_refused_ends_the_call_and_a_later_error_do
 )
 def test_only_a_calls_socket_path_skips_the_http_gate(path: str, exempt: bool) -> None:
     assert is_self_authenticated_websocket(path) is exempt
+
+
+def test_a_vertex_project_offers_gemini_live_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_VERTEX_PROJECT", "lemma-development")
+    settings = CallsSettings(_env_file=None)
+    assert "gemini_live" in engines_offered(settings)
+
+
+def test_vertex_names_the_regional_endpoint_and_the_full_model_path() -> None:
+    live = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    assert (
+        vertex_endpoint("us-central1")
+        == "wss://us-central1-aiplatform.googleapis.com" + live
+    )
+    assert vertex_endpoint("global") == "wss://aiplatform.googleapis.com" + live
+    assert (
+        vertex_model("p", "us-central1", "models/gemini-live")
+        == "projects/p/locations/us-central1/publishers/google/models/gemini-live"
+    )
+    full = "projects/p/locations/global/publishers/google/models/x"
+    assert vertex_model("other", "us-central1", full) == full
+
+
+async def test_the_service_account_token_becomes_a_bearer_header() -> None:
+    import httpx
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Metadata-Flavor"] == "Google"
+        return httpx.Response(200, json={"access_token": "t0k", "expires_in": 3599})
+
+    headers = service_account_headers(transport=httpx.MockTransport(answer))
+    assert await headers() == {"Authorization": "Bearer t0k"}
+
+
+async def test_no_metadata_server_is_an_unavailable_voice_not_a_crash() -> None:
+    import httpx
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no metadata server here")
+
+    headers = service_account_headers(transport=httpx.MockTransport(refuse))
+    with pytest.raises(EngineUnavailable):
+        await headers()

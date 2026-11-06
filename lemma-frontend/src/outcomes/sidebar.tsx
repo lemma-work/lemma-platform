@@ -9,6 +9,8 @@ import { ChannelMark } from "@/channels/chat-mark";
 import { ChannelIcon, channelName } from "@/shell/channels";
 import { TeammateFace } from "@/space/teammate-face";
 import { HumanProfile } from "@/session/human-profile";
+import { AllowanceNote } from "@/usage/allowance-note";
+import { HelpMenu } from "@/tour/help-menu";
 import { useMe } from "@/session/use-me";
 import { key } from "@/session/storage";
 import {
@@ -37,12 +39,14 @@ function readChosen(): Map<string, boolean> {
     }
 }
 
+const NOTHING = () => undefined;
+
 /** The frame's left side: a few places, then every Lemma -- its face and
  *  name -- with what is recent with it under it: chats, automations that
  *  ran, tables that changed. The busiest first, the quiet ones folded to
  *  their name. People outside who wrote in are in Needs you while they
  *  wait, and on the Lemma's Contacts tab. */
-export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, me, onFind, onSettings, onNewOrg, open }: {
+export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, me, onFind, onSettings, onPlan, onNewOrg, open }: {
     org: Org | null;
     orgs: readonly Org[];
     onPickOrg: (id: string) => void;
@@ -56,12 +60,14 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     onFind: () => void;
     /** The reader's own settings and the organization's. */
     onSettings: () => void;
+    /** The plan, from a warning that the allowance is close or spent. */
+    onPlan: () => void;
     onNewOrg: () => void;
     /** Shown on a narrow screen, over the page. */
     open: boolean;
 }) {
     const reader = useMe();
-    const [channels, feeds] = useChannelsByPod(pods);
+    const [channels, feeds] = useChannelsByPod(pods, { live: true });
     const [chosen, setChosen] = useState<Map<string, boolean>>(readChosen);
     const [now] = useState(() => Date.now());
     const choose = useCallback((podId: string, opened: boolean) => {
@@ -143,9 +149,12 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
                     />
                 ))}
             </nav>
+            {/* Silent unless the allowance is close or spent; above the
+                account, because it is about the account. */}
+            <AllowanceNote orgId={org?.id ?? null} onOpenPlan={onPlan} />
             <div className="ox-side__foot" aria-label={me}>
                 <HumanProfile compact onOpen={onSettings} />
-                <a className="ox-classic" href="/t">Classic view</a>
+                <HelpMenu nudge={false} onNudged={NOTHING} />
             </div>
         </aside>
     );
@@ -213,7 +222,7 @@ export function markOf(row: SideRow): ReactNode {
 export function kindOf(row: SideRow): string {
     if (row.kind === "automation") return row.runs && row.runs > 1 ? `Automation · ${row.runs} runs` : "Automation";
     if (row.kind === "table") return "Table, changed lately";
-    if (row.kind === "line") return "Your own line";
+    if (row.kind === "line") return "Your own chat";
     const places = row.platforms.map(channelName).join(", ");
     if (row.kind === "shared") return places ? "Group on " + places : "Shared chat";
     return places ? "Chat from " + places : "Chat";

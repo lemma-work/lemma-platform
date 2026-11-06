@@ -28,6 +28,7 @@ fn run_contract_uses_digest_env_file_private_gateway_and_all_app_ports() {
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
         Path::new(RELAY_DIRECTORY),
+        None,
     );
     let joined = arguments.join(" ");
 
@@ -98,6 +99,7 @@ fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
         Path::new(RELAY_DIRECTORY),
+        None,
     );
     let joined = arguments.join(" ");
 
@@ -150,6 +152,7 @@ fn every_sandbox_runs_with_a_bounded_log() {
             Path::new("/var/lib/lemma/run/private-env"),
             "192.168.64.1",
             Path::new(RELAY_DIRECTORY),
+            None,
         );
         let joined = arguments.join(" ");
         assert!(
@@ -192,6 +195,7 @@ fn run_arguments(parameters: &EnsureParameters) -> Vec<String> {
         Path::new("/var/lib/lemma/run/private-env"),
         "192.168.64.1",
         Path::new(RELAY_DIRECTORY),
+        None,
     )
 }
 
@@ -545,4 +549,50 @@ fn a_running_sandbox_whose_relay_grant_changed_is_replaced() {
         existing_container_verdict(&running(true), &workspace_parameters(true)),
         ExistingContainer::Replace
     );
+}
+
+/// A sandbox on the macOS guest resolves through the guest's own resolver on
+/// the bridge, which asks the Mac first; one on a guest without the relay keeps
+/// nerdctl's default and is given no `--dns` at all.
+#[test]
+fn a_sandbox_names_the_bridge_resolver_only_where_the_relay_serves() {
+    let parameters = EnsureParameters {
+        sandbox_id: "function-1".into(),
+        workload_kind: WorkloadKind::Function,
+        image: "ghcr.io/lemma/function@sha256:def".into(),
+        env: BTreeMap::new(),
+        metadata: BTreeMap::new(),
+        runtime_token: None,
+        apps: function_apps(),
+        resources: ResourceSpec::default(),
+        callback: CallbackSpec::default(),
+        host_access: true,
+        host_loopback: false,
+    };
+    let with_relay = build_run_arguments(
+        &parameters,
+        None,
+        None,
+        None,
+        Path::new("/var/lib/lemma/run/private-env"),
+        "192.168.64.1",
+        Path::new(RELAY_DIRECTORY),
+        Some(crate::host_dns::SANDBOX_DNS_ADDRESS),
+    );
+    let at = with_relay
+        .iter()
+        .position(|argument| argument == "--dns")
+        .expect("the bridge resolver is named");
+    assert_eq!(with_relay[at + 1], "10.4.0.1");
+    let image = with_relay
+        .iter()
+        .position(|argument| *argument == parameters.image)
+        .unwrap();
+    assert!(
+        at < image,
+        "--dns is an option, so it goes before the image"
+    );
+
+    let without = run_arguments(&parameters);
+    assert!(!without.iter().any(|argument| argument == "--dns"));
 }

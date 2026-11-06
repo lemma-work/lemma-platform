@@ -302,17 +302,6 @@ class SourceRepository:
         )
         return _sources(rows)
 
-    async def by_request(self, *, account_id: UUID, request_id: str) -> Source | None:
-        found = (
-            await self.session.execute(
-                _with_surface().where(
-                    ChannelSourceModel.account_id == account_id,
-                    ChannelSourceModel.request_id == request_id,
-                )
-            )
-        ).first()
-        return source_entity(found[0], surface_id=found[1]) if found else None
-
     async def by_request_on_surfaces(
         self,
         *,
@@ -354,19 +343,11 @@ class SourceRepository:
 
     # -- what was heard ---------------------------------------------------------
 
-    async def heard(self, source_id: UUID, delivery_ref: Mapping[str, object]) -> None:
-        """The account heard this place just now; this is how to answer it."""
-        at = now()
-        await self.session.execute(
-            update(ChannelSourceModel)
-            .where(ChannelSourceModel.id == source_id)
-            .values(delivery_ref=dict(delivery_ref), last_inbound_at=at, updated_at=at)
-        )
-
     async def addressed(
         self, source_id: UUID, delivery_ref: Mapping[str, object]
     ) -> None:
-        """How to write to this place, learnt from writing to it first."""
+        """How to write to this place, learnt from what was heard there or from
+        writing to it first."""
         await self.session.execute(
             update(ChannelSourceModel)
             .where(ChannelSourceModel.id == source_id)
@@ -374,14 +355,14 @@ class SourceRepository:
         )
 
     async def reply_address(
-        self, conversation_id: UUID
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
     ) -> tuple[Source, dict[str, object] | None] | None:
         """Where a conversation's answer goes, and what answers it in place.
 
         The place of the latest line a person said in it, with what its
         account kept to answer that line; else the latest line with a place
         at all -- heard there or carried there -- and that place's last word. None for a conversation said
-        nowhere outside Lemma.
+        nowhere outside Lemma. ``at_source_id``: a line said at that place.
         """
         message = ChannelMessageModel
         heard = (
@@ -392,6 +373,7 @@ class SourceRepository:
                 .where(
                     message.conversation_id == conversation_id,
                     message.sender_kind != SenderKind.AGENT.value,
+                    *([message.source_id == at_source_id] if at_source_id else []),
                 )
                 .order_by(message.seq.desc())
                 .limit(1)
@@ -400,6 +382,8 @@ class SourceRepository:
         if heard is not None:
             source = source_entity(heard[0], surface_id=heard[1])
             return source, heard[2] if heard[2] is not None else source.delivery_ref
+        if at_source_id is not None:
+            return None
         placed = (
             await self.session.execute(
                 _with_surface()

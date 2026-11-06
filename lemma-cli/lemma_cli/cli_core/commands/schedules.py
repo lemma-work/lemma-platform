@@ -18,7 +18,7 @@ from ..deprecation import warn_deprecated
 from ..io import emit, list_items, to_plain
 from ..payload import build_request, read_json
 from ..sdk import pod_client
-from ..state import fail, run_with_client, state_from_ctx
+from ..state import CliState, err_console, fail, run_with_client, state_from_ctx
 
 app = typer.Typer(help="Schedule commands.")
 runs_app = typer.Typer(help="Schedule run commands: what each event or tick became.")
@@ -99,19 +99,41 @@ def list_schedules(
     if result is None:
         return
     if state.output == "json":
-        emit(state, result)
+        emit(state, _shown(result))
         return
     # The list carried an `Agent Id` column and nothing for workflows, so a
     # workflow-targeted schedule showed a blank target — `schedules get` had to
     # be run just to learn what a schedule starts. Compute the target the same
     # way `pods describe` does.
-    payload = to_plain(result)
+    payload = _shown(result)
     items = [
         {**item, "target": schedule_target(item)}
         for item in list_items(payload)
         if isinstance(item, dict)
     ]
     emit(state, {**payload, "items": items} if isinstance(payload, dict) else items)
+
+
+#: Response keys that are deprecated and always null. Left out of what is
+#: printed: an agent reading a schedule took ``account_id`` for a field it
+#: should fill in, though a schedule names a pod connector now.
+_DEAD_FIELDS = ("account_id",)
+
+
+def _shown(result: object) -> Any:
+    """A schedule, or a page of them, without its dead fields."""
+    payload = to_plain(result)
+
+    def strip(item: object) -> object:
+        if not isinstance(item, dict):
+            return item
+        return {k: v for k, v in item.items() if not (k in _DEAD_FIELDS and v is None)}
+
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        return {**payload, "items": [strip(item) for item in payload["items"]]}
+    if isinstance(payload, list):
+        return [strip(item) for item in payload]
+    return strip(payload)
 
 
 def schedule_target(schedule: dict[str, Any]) -> str:
@@ -136,7 +158,7 @@ def get_schedule(
         lambda client, s: pod_client(client, s, pod).schedules.get(schedule),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
 
 
 def _text_field(payload: dict[str, object], key: str) -> str | None:
@@ -211,9 +233,30 @@ def create_schedule(
             "fire at all, this directs the work afterwards."
         ),
     ),
-    cron: str | None = typer.Option(None, "--cron"),
+    cron: str | None = typer.Option(
+        None,
+        "--cron",
+        help=(
+            "5-field cron, e.g. '0 9 * * 1-5'. Read in --timezone, and in UTC "
+            "when that is not given."
+        ),
+    ),
     at: str | None = typer.Option(
-        None, "--at", help="ISO timestamp for a one-time schedule."
+        None,
+        "--at",
+        help=(
+            "ISO timestamp for a one-time schedule. Without an offset it is "
+            "read in --timezone, or UTC."
+        ),
+    ),
+    tz: str | None = typer.Option(
+        None,
+        "--timezone",
+        "--tz",
+        help=(
+            "IANA zone --cron/--at are read in, e.g. Europe/Berlin. Default "
+            "UTC. Follows daylight saving, which a UTC cron cannot."
+        ),
     ),
     datastore: str | None = typer.Option(
         None, "--datastore", help="Table name for datastore schedules."
@@ -262,12 +305,27 @@ def create_schedule(
         extra, agent=agent, workflow=workflow, connector=connector
     )
     account = _deprecated_account(extra, account)
+    # One schedule has one trigger. Each later one used to replace the config
+    # the earlier built, so `--cron … --webhook-source …` quietly lost the cron.
+    triggers = [
+        flag
+        for flag, given in (
+            ("--cron/--at", cron or at),
+            ("--datastore", datastore),
+            ("--webhook-source", webhook_source),
+        )
+        if given
+    ]
+    if len(triggers) > 1:
+        fail(f"A schedule has one trigger; pick one of {', '.join(triggers)}.")
     schedule_type = "TIME"
     config: dict[str, object] = {}
     if cron:
         config["cron"] = cron
     if at:
         config["scheduled_at"] = at
+    if tz:
+        config["timezone"] = tz
     if datastore:
         schedule_type = "DATASTORE"
         if not on and not extra.get("config", {}).get("operations"):
@@ -311,7 +369,31 @@ def create_schedule(
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
+        _note_next_fire(state, result)
+
+
+def _note_next_fire(state: CliState, result: object) -> None:
+    """Say on stderr when a new TIME schedule will first fire, in UTC and in
+    its own zone -- so nobody has to create a test schedule and wait to find
+    out which zone a cron is read in."""
+    if state.output == "json":
+        return
+    payload = to_plain(result)
+    if not isinstance(payload, dict) or not payload.get("next_fire_at"):
+        return
+    utc = payload["next_fire_at"]
+    local = payload.get("next_fire_at_local")
+    raw_config = payload.get("config")
+    config: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
+    zone = config.get("timezone") or "UTC"
+    detail = f" ({local} in {zone})" if local and zone != "UTC" else ""
+    hint = (
+        ""
+        if config.get("timezone")
+        else " The cron is read in UTC; pass --timezone <IANA zone> to change it."
+    )
+    err_console.print(f"[dim]next fire:[/dim] {utc} UTC{detail}.{hint}")
 
 
 @app.command("update")
@@ -370,7 +452,7 @@ def update_schedule(
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
 
 
 @app.command("pause")
@@ -388,7 +470,7 @@ def pause_schedule(
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
 
 
 @app.command("resume")
@@ -406,7 +488,7 @@ def resume_schedule(
         ),
     )
     if result is not None:
-        emit(state, result)
+        emit(state, _shown(result))
 
 
 @app.command("delete")

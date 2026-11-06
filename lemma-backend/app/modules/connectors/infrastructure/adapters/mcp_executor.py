@@ -11,14 +11,23 @@ the start of every session, because a session here lasts exactly one tool call
 and some servers gate their tools behind session-scoped state. See
 ``MCP_SESSION_SETUP_KEY``.
 
+Sessions are per call; the TCP/TLS connections under them are not. Every client
+the default factory builds borrows one process-wide pool (per event loop), so a
+call to a server this process spoke to recently skips the handshake. Requests
+still carry only their own call's headers -- a pooled connection holds no
+credential.
+
 The MCP client factory is injectable so tests can drive an in-memory server.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import weakref
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
@@ -133,8 +142,79 @@ McpClientFactory = Callable[..., Any]
 #: keeping a session alive across calls -- which would need replica affinity and
 #: eviction, and would put session state where nothing else in this module keeps
 #: any. Discovery replays it too, so the tools it unlocks are discovered rather
-#: than merely callable.
+#: than merely callable. (The HTTP connections under a session *are* pooled; see
+#: ``_shared_pool``. A connection carries no MCP state, a session does.)
 MCP_SESSION_SETUP_KEY = "session_setup"
+
+
+# Idle connections kept per pool, and how long one may sit idle. The expiry is
+# kept under the idle timeout common HTTP servers apply, so a reused connection
+# is rarely one the server has already decided to close. Concurrency is not
+# capped: every session also holds a long-lived GET stream, and a cap shared by
+# every tenant's calls would queue one tenant behind another's.
+_POOL_LIMITS = httpx2.Limits(
+    max_connections=None, max_keepalive_connections=64, keepalive_expiry=20.0
+)
+# The SDK's own defaults (`create_mcp_http_client`): connect/write/pool bounded,
+# reads long enough for a server that streams its answer.
+_DEFAULT_HTTP_TIMEOUT = httpx2.Timeout(30.0, read=300.0)
+
+# One pool per event loop, because an httpcore pool's connections and locks
+# belong to the loop that made them. Weak keys, so a loop that is gone (a test's,
+# a worker restart's) takes its pool with it.
+_POOLS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, httpx2.AsyncHTTPTransport
+] = weakref.WeakKeyDictionary()
+
+
+def _shared_pool() -> httpx2.AsyncHTTPTransport:
+    loop = asyncio.get_running_loop()
+    pool = _POOLS.get(loop)
+    if pool is None:
+        pool = httpx2.AsyncHTTPTransport(limits=_POOL_LIMITS)
+        _POOLS[loop] = pool
+    return pool
+
+
+class _BorrowedTransport(httpx2.AsyncBaseTransport):
+    """A view of the shared pool that a per-call client may close.
+
+    fastmcp closes the client it was handed when the session ends, and a
+    client closes its transport. Closing the pool itself would drop every
+    other call's connections, so closing this is a no-op; idle connections
+    age out under the pool's own keep-alive expiry instead.
+    """
+
+    def __init__(self, pool: httpx2.AsyncHTTPTransport):
+        self._pool = pool
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return await self._pool.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _pooled_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx2.Timeout | None = None,
+    auth: httpx2.Auth | None = None,
+    follow_redirects: bool = False,
+) -> httpx2.AsyncClient:
+    """An HTTP client for one MCP session, on the process-wide pool.
+
+    Headers, auth and cookies live on this client, never on the pool, so what
+    one call authenticates with cannot reach another call's request even when
+    both ride the same connection. Redirect handling is the SDK's (it follows
+    only within the endpoint's origin) whatever ``follow_redirects`` says.
+    """
+    return httpx2.AsyncClient(
+        headers=headers,
+        auth=auth,
+        timeout=timeout or _DEFAULT_HTTP_TIMEOUT,
+        follow_redirects=follow_redirects,
+        transport=_BorrowedTransport(_shared_pool()),
+    )
 
 
 def default_mcp_client_factory(
@@ -147,7 +227,10 @@ def default_mcp_client_factory(
     # otherwise hang whichever request drove it -- including discovery, which
     # runs inline while creating an install.
     return Client(
-        StreamableHttpTransport(url=server_url, headers=headers), timeout=timeout
+        StreamableHttpTransport(
+            url=server_url, headers=headers, httpx_client_factory=_pooled_http_client
+        ),
+        timeout=timeout,
     )
 
 
@@ -267,6 +350,60 @@ def raise_on_tool_error(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class StoredToolSchemas:
+    """What discovery stored for the tool being called.
+
+    Passing this says "these are the tool's schemas"; omitting it says "not
+    known", and the SDK then lists the server's tools to find out, as before.
+    """
+
+    input_schema: Mapping[str, object] | None
+    output_schema: Mapping[str, object] | None
+
+
+def _seed_tool_schema(
+    client: object, tool_name: str, schemas: StoredToolSchemas | None
+) -> None:
+    """Tell the session the tool's output schema so ``call_tool`` need not list.
+
+    The mcp SDK validates every successful tool result against the tool's
+    output schema, and when its per-session cache lacks the tool it fetches the
+    whole ``tools/list`` first. A session here lasts one call, so the cache is
+    always empty and every call paid a full listing -- often slower than the
+    call itself. The stored schema is what that listing returned at discovery.
+
+    Seeded with the stored schema rather than ``None`` (which would skip
+    validation): fastmcp reads the same cache to unwrap a wrapped scalar result
+    and coerce typed fields, so seeding the schema keeps results shaped exactly
+    as a listing would have. If the server has since changed a tool's output,
+    validation now uses the discovered schema until the install is rediscovered.
+
+    The cache is private SDK state, so this only seeds when it is there, of the
+    expected type, and not already holding the tool; anything else falls back
+    to the SDK listing on its own. Not seeded either when the tool's input
+    schema carries ``x-mcp-header`` annotations: the listing is also where the
+    SDK learns which arguments to mirror into request headers, and skipping it
+    would silently drop them.
+    """
+    if schemas is None or schemas.input_schema is None:
+        return
+    if "x-mcp-header" in json.dumps(schemas.input_schema, default=str):
+        return
+    try:
+        session = getattr(client, "session", None)
+    except RuntimeError:
+        # fastmcp raises rather than returning None when not connected.
+        return
+    cache = getattr(session, "_tool_output_schemas", None)
+    if not isinstance(cache, dict) or tool_name in cache:
+        return
+    output = schemas.output_schema
+    # An empty schema is how a tool without one is sometimes stored, and the SDK
+    # reads any non-None schema as "structured content is required".
+    cache[tool_name] = dict(output) if output else None
+
+
 class McpExecutor:
     def __init__(self, client_factory: McpClientFactory | None = None):
         self._client_factory = client_factory or default_mcp_client_factory
@@ -281,6 +418,7 @@ class McpExecutor:
         third_party_credentials: dict[str, Any] | None,
         connection_config: dict[str, Any] | None = None,
         deadline_seconds: float | None = None,
+        tool_schemas: StoredToolSchemas | None = None,
     ) -> Any:
         server_url = (connection_config or {}).get("server_url")
         if not server_url:
@@ -310,6 +448,11 @@ class McpExecutor:
         try:
             client = self._client_factory(server_url, headers, deadline_seconds)
             async with client:
+                # Only the called tool is seeded. A setup step's tool is not
+                # (nothing stored describes it), so an install with a setup
+                # replay still lists once per session -- and that listing then
+                # supplies the called tool's live schema too.
+                _seed_tool_schema(client, tool_name, tool_schemas)
                 await apply_session_setup(client, connection_config)
                 # `raise_on_error=False` is load-bearing. fastmcp defaults it to
                 # True, so a tool answering `isError` raised `ToolError` -- a

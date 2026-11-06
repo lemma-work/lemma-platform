@@ -113,6 +113,53 @@
         "title": "AccountCredentialsUpdateSchema",
         "type": "object"
       },
+      "AccountDeletionRequest": {
+        "description": "Proof that the person means this account, typed back by them.",
+        "properties": {
+          "confirm_email": {
+            "description": "The account's own email address, typed by the person. Compared case-insensitively; anything else is refused with ACCOUNT_DELETION_CONFIRMATION_MISMATCH.",
+            "title": "Confirm Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_email"
+        ],
+        "title": "AccountDeletionRequest",
+        "type": "object"
+      },
+      "AccountDeletionResponse": {
+        "description": "What deleting the account did.\n\nBy the time it is read no token of the person's opens anything; their\nsessions and login are removed by work that commits with the deletion.",
+        "properties": {
+          "deleted": {
+            "description": "Always true: this request deleted the account. A request for an account that is already deleted never gets here; it is refused 403 ACCOUNT_INACTIVE.",
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "organizations_deleted": {
+            "description": "Organizations the person was the only member of, deleted with their pods.",
+            "title": "Organizations Deleted",
+            "type": "integer"
+          },
+          "organizations_left": {
+            "description": "Organizations others are still in, which the person left; their shared work stays there under \"Deleted user\".",
+            "title": "Organizations Left",
+            "type": "integer"
+          },
+          "pods_deleted": {
+            "title": "Pods Deleted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted",
+          "organizations_left",
+          "organizations_deleted",
+          "pods_deleted"
+        ],
+        "title": "AccountDeletionResponse",
+        "type": "object"
+      },
       "AccountInstallationsSchema": {
         "description": "What an account can actually reach, asked of the provider.",
         "properties": {
@@ -3182,6 +3229,7 @@
         "type": "object"
       },
       "AuthConfigUpdateSchema": {
+        "additionalProperties": false,
         "properties": {
           "config": {
             "anyOf": [
@@ -3627,10 +3675,11 @@
         "type": "object"
       },
       "BundleSourceKind": {
-        "description": "Where an imported bundle comes from — a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path.",
+        "description": "Where an imported bundle comes from — a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path; ``TEMPLATE`` is a bundle that ships\nwith the backend under ``pod_bundle/templates/``, named rather than located.",
         "enum": [
           "URL",
-          "GITHUB"
+          "GITHUB",
+          "TEMPLATE"
         ],
         "title": "BundleSourceKind",
         "type": "string"
@@ -3686,167 +3735,6 @@
         "title": "CallResponse",
         "type": "object"
       },
-      "CaseEventResponse": {
-        "properties": {
-          "actor": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PersonRef"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The member who made it, when one did."
-          },
-          "at": {
-            "format": "date-time",
-            "title": "At",
-            "type": "string"
-          },
-          "kind": {
-            "description": "`opened`, `assigned`, `handed_back`, `attention`, `acknowledged`, `first_response`, `status`, `closed`, `reopened` or `merged`.",
-            "title": "Kind",
-            "type": "string"
-          },
-          "value": {
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "description": "What it changed to: `status`, `user_id`, `reason`, `seq`, ...",
-            "title": "Value",
-            "type": "object"
-          }
-        },
-        "required": [
-          "at",
-          "kind"
-        ],
-        "title": "CaseEventResponse",
-        "type": "object"
-      },
-      "CaseResponse": {
-        "properties": {
-          "assigned_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Assigned At"
-          },
-          "assignee": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PersonRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "attention": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AttentionResponse"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "closed_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Closed At"
-          },
-          "closed_by": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PersonRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "events": {
-            "description": "Oldest first; the newest 200 of a long case.",
-            "items": {
-              "$ref": "#/components/schemas/CaseEventResponse"
-            },
-            "title": "Events",
-            "type": "array"
-          },
-          "first_response_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The first member line to the contact in it.",
-            "title": "First Response At"
-          },
-          "first_response_by": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PersonRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "opened_at": {
-            "format": "date-time",
-            "title": "Opened At",
-            "type": "string"
-          },
-          "opened_seq": {
-            "description": "The channel's newest line when it opened: the case is the lines after.",
-            "title": "Opened Seq",
-            "type": "integer"
-          },
-          "status": {
-            "$ref": "#/components/schemas/ContactStatus"
-          }
-        },
-        "required": [
-          "id",
-          "status",
-          "opened_at",
-          "opened_seq"
-        ],
-        "title": "CaseResponse",
-        "type": "object"
-      },
       "ChannelAnswerRequest": {
         "properties": {
           "answer": {
@@ -3860,33 +3748,6 @@
           "answer"
         ],
         "title": "ChannelAnswerRequest",
-        "type": "object"
-      },
-      "ChannelCasesResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/CaseResponse"
-            },
-            "title": "Items",
-            "type": "array"
-          },
-          "next_cursor": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Cursor"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "ChannelCasesResponse",
         "type": "object"
       },
       "ChannelCreateRequest": {
@@ -4001,7 +3862,7 @@
                 "type": "null"
               }
             ],
-            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "description": "A contact's channel: its case, the one `status`, `assignee` and `attention` are read from. A channel keeps one case.",
             "title": "Case Id"
           },
           "created_at": {
@@ -4253,34 +4114,6 @@
           "items"
         ],
         "title": "ChannelListResponse",
-        "type": "object"
-      },
-      "ChannelMemberListResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ChannelMemberResponse"
-            },
-            "title": "Items",
-            "type": "array"
-          },
-          "next_cursor": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Pass as `cursor` for the next page.",
-            "title": "Next Cursor"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "ChannelMemberListResponse",
         "type": "object"
       },
       "ChannelMemberResponse": {
@@ -4826,7 +4659,7 @@
                 "type": "null"
               }
             ],
-            "description": "A contact's channel: its current case, the one `status`, `assignee` and `attention` are read from (`/cases` lists them all).",
+            "description": "A contact's channel: its case, the one `status`, `assignee` and `attention` are read from. A channel keeps one case.",
             "title": "Case Id"
           },
           "created_at": {
@@ -6237,6 +6070,19 @@
             "description": "When an agent first answered them; what the contact limit counts.",
             "title": "Answered At"
           },
+          "channel_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Their own chat with the pod, to open it without looking it up; absent until they first write.",
+            "title": "Channel Id"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -7469,7 +7315,7 @@
               }
             ],
             "deprecated": true,
-            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
+            "description": "Deprecated -- do not send; name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
             "title": "Account Id"
           },
           "agent_name": {
@@ -7486,7 +7332,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config",
             "type": "object"
           },
@@ -12323,6 +12169,81 @@
         "title": "IdentityKind",
         "type": "string"
       },
+      "IdentityLinkRequest": {
+        "properties": {
+          "contact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Somebody in a group the pod took for a stranger, who the caller says is them: the code then works only from that Telegram account.",
+            "title": "Contact Id"
+          },
+          "surface_id": {
+            "description": "The pod's Telegram bot to open it with.",
+            "format": "uuid",
+            "title": "Surface Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface_id"
+        ],
+        "title": "IdentityLinkRequest",
+        "type": "object"
+      },
+      "IdentityLinkResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "url": {
+            "description": "Opens a private chat with the bot, in Telegram.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "url",
+          "expires_at"
+        ],
+        "title": "IdentityLinkResponse",
+        "type": "object"
+      },
+      "IdentityLinkStatusResponse": {
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TelegramAccountResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/LinkState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "IdentityLinkStatusResponse",
+        "type": "object"
+      },
       "IdentityStrength": {
         "description": "Who vouched for a handle.\n\n``CHANNEL``: the platform the message came through, in a payload whose\nsignature was checked (WhatsApp, Telegram), or the receiving mail service's\nauthentication verdict (email). ``HOST`` and ``CODE``: see their values.\n``MEMBER``: a pod member added it by hand,\nwhich says who the member believes it is and nothing about who writes from\nit -- so it never makes a message count as that contact on its own.",
         "enum": [
@@ -12461,7 +12382,7 @@
       },
       "ImportStartRequest": {
         "additionalProperties": false,
-        "description": "Body for starting a URL-based import.",
+        "description": "Body for starting an import.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -12479,7 +12400,7 @@
           },
           "kind": {
             "$ref": "#/components/schemas/BundleSourceKind",
-            "description": "URL (a lemma signed download URL) or GITHUB (a public repo)."
+            "description": "URL (a lemma signed download URL), GITHUB (a public repo), or TEMPLATE (a template that ships with Lemma, by name)."
           },
           "owner": {
             "anyOf": [
@@ -12516,6 +12437,19 @@
             ],
             "description": "GITHUB repo name.",
             "title": "Repo"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For TEMPLATE: the template's name, e.g. 'support'. Required with TEMPLATE and refused with any other kind.",
+            "title": "Template"
           },
           "url": {
             "anyOf": [
@@ -13207,6 +13141,16 @@
         ],
         "title": "LinkPart",
         "type": "object"
+      },
+      "LinkState": {
+        "enum": [
+          "WAITING",
+          "OPENED",
+          "OTHER_ACCOUNT",
+          "GONE"
+        ],
+        "title": "LinkState",
+        "type": "string"
       },
       "ListeningResponse": {
         "description": "How a schedule on a connected MCP server's event is hearing from it.",
@@ -14461,12 +14405,25 @@
                 "type": "null"
               }
             ],
-            "description": "The pod agent to call; empty calls the pod's default agent.",
+            "description": "The pod agent to call in a new conversation; empty calls the pod's default agent. A call in an existing chat is with that chat's agent.",
             "title": "Agent Name"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hold the call in this chat -- your own, in this pod -- so the call, the agent's work and the transcript are that one chat; a call already held there is picked up again. Empty starts a new conversation.",
+            "title": "Conversation Id"
           },
           "display_name": {
             "default": "your teammate",
-            "description": "What the agent is called on the call.",
+            "description": "What the agent is called in a new call's title.",
             "maxLength": 120,
             "minLength": 1,
             "title": "Display Name",
@@ -14482,7 +14439,7 @@
                 "type": "null"
               }
             ],
-            "description": "The call conversation's title.",
+            "description": "A new call conversation's title; an existing chat keeps its own.",
             "title": "Title"
           }
         },
@@ -15637,6 +15594,348 @@
         "title": "OrganizationUpdateRequest",
         "type": "object"
       },
+      "OutcomeHistoryResponse": {
+        "properties": {
+          "weeks": {
+            "description": "Oldest first, ending with this week. Only the weeks read by the pod's current measure: changing the measure starts a new history.",
+            "items": {
+              "$ref": "#/components/schemas/OutcomeWeekResponse"
+            },
+            "title": "Weeks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "weeks"
+        ],
+        "title": "OutcomeHistoryResponse",
+        "type": "object"
+      },
+      "OutcomeInput": {
+        "description": "What the pod owns, as a person or its agent sets it.\n\nThe fields are the front matter of the plan file the workspace keeps at\n``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,\n``unit``, ``due`` and ``measure`` -- held here so there is one copy of\nthem. The plan's prose (what must be true, how the work is done, who holds\nwhat, what never happens) stays in the file.",
+        "properties": {
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The finish line's date. Required for kind=date, refused for week.",
+            "title": "Due"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind",
+            "description": "week: a bar held every week. date: a finish line by `due`."
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One read-only SQL query over the pod's tables that answers a single number: one row, one column. Counted for every member alike, so only someone who can read every row it touches may set it.",
+            "title": "Measure"
+          },
+          "sentence": {
+            "description": "What it owns, as one sentence a person can check.",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Sentence",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The number the measure is held to: 90 with unit '%' for a share, 22 for a finish line of 22 steps. Unset while it is still being worked out.",
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 24,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'%' when the measure answers a share from 0 to 100; otherwise what it counts, such as 'steps' or 'posts'.",
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind"
+        ],
+        "title": "OutcomeInput",
+        "type": "object"
+      },
+      "OutcomeKind": {
+        "description": "The two shapes of what a pod owns.\n\n``week`` is a bar held every week, which never finishes (\"Every customer\nhears back within a day\"). ``date`` is a finish line, reached once by its\n``due`` date (\"The launch ships by the date it is due\"). The values are the plan\nfile's own (``kind: week`` in ``/plan.md``), so a plan a person or the\npod's agent wrote reads straight across.",
+        "enum": [
+          "week",
+          "date"
+        ],
+        "title": "OutcomeKind",
+        "type": "string"
+      },
+      "OutcomeSetResponse": {
+        "properties": {
+          "measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When `value` was read; null when it was not.",
+            "title": "Measured At"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/PodOutcome"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a new or changed measure answered when it was checked; null when it answered null, or was not read because it did not change.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "OutcomeSetResponse",
+        "type": "object"
+      },
+      "OutcomeStandingResponse": {
+        "properties": {
+          "measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured At"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the pod owns, or null when it owns nothing yet."
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the measure could not be read, in plain words.",
+            "title": "Problem"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What its measure answers now, counted over every row for everyone in the pod alike. Null with no measure, when it answers null, or when it could not be read (see `problem`).",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "OutcomeStandingResponse",
+        "type": "object"
+      },
+      "OutcomeTemplateCard": {
+        "description": "One Lemma a person can start, as the shelf shows it.",
+        "properties": {
+          "brings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Brings",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "face": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which character's face it wears.",
+            "title": "Face"
+          },
+          "id": {
+            "description": "The template's name, passed as `template` to start one.",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind"
+          },
+          "name": {
+            "description": "The short name a Lemma made from it starts with.",
+            "title": "Name",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TemplateOutcome",
+            "description": "What it owns once started, with {due} filled in."
+          },
+          "place": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where its work usually happens.",
+            "title": "Place"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/TemplatePlan"
+          },
+          "position": {
+            "default": 100,
+            "title": "Position",
+            "type": "integer"
+          },
+          "sentence": {
+            "description": "What it owns. A finish line's carries {due}.",
+            "title": "Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "sentence",
+          "kind",
+          "outcome"
+        ],
+        "title": "OutcomeTemplateCard",
+        "type": "object"
+      },
+      "OutcomeWeekResponse": {
+        "properties": {
+          "measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When `value` was read; null when it never was.",
+            "title": "Measured At"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why its last reading could not be taken.",
+            "title": "Problem"
+          },
+          "starts_on": {
+            "description": "The Monday the week starts on (UTC).",
+            "format": "date",
+            "title": "Starts On",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The target when the week was read.",
+            "title": "Target"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The week's last reading. Null for a week it was not read in, or that answered null.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "starts_on"
+        ],
+        "title": "OutcomeWeekResponse",
+        "type": "object"
+      },
       "OutreachDelivery": {
         "properties": {
           "id": {
@@ -16296,6 +16595,7 @@
         "type": "string"
       },
       "PodAccountUpdateRequest": {
+        "additionalProperties": false,
         "properties": {
           "allow_sandbox_use": {
             "anyOf": [
@@ -16400,6 +16700,16 @@
             "$ref": "#/components/schemas/PodJoinPolicy",
             "default": "INVITE_ONLY"
           },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipes": {
             "items": {
               "$ref": "#/components/schemas/PodRecipe"
@@ -16459,14 +16769,34 @@
       "PodConnectorCreateRequest": {
         "properties": {
           "auth_config_id": {
-            "description": "The organization installation this connector uses.",
-            "format": "uuid",
-            "title": "Auth Config Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The organization installation this connector uses. Give this or `connector_id`.",
+            "title": "Auth Config Id"
+          },
+          "connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A catalog connector (`gmail`) instead of an installation: its organization default, or -- when the organization has none and you may install connectors -- Lemma's own app for it, installed now.",
+            "title": "Connector Id"
           },
           "mode": {
             "$ref": "#/components/schemas/PodConnectorMode",
-            "description": "PER_MEMBER: each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
+            "default": "PER_MEMBER",
+            "description": "PER_MEMBER (the default): each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
           },
           "purpose": {
             "anyOf": [
@@ -16501,20 +16831,22 @@
             "title": "Shared Pod Account Id"
           },
           "slug": {
-            "description": "Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`.",
-            "title": "Slug",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`. Left out: the installation's name, made free in this pod.",
+            "title": "Slug"
           },
           "visibility": {
             "$ref": "#/components/schemas/PodConnectorVisibility",
             "default": "POD"
           }
         },
-        "required": [
-          "slug",
-          "auth_config_id",
-          "mode"
-        ],
         "title": "PodConnectorCreateRequest",
         "type": "object"
       },
@@ -16710,7 +17042,8 @@
         "type": "string"
       },
       "PodConnectorUpdateRequest": {
-        "description": "Fields left out are unchanged; `shared_pod_account_id: null` clears it.",
+        "additionalProperties": false,
+        "description": "Fields left out are unchanged; `shared_pod_account_id: null` clears it.\nIts slug and installation are fixed: a different one is a different\nconnector, which apps, agents and bundles already address.",
         "properties": {
           "mode": {
             "anyOf": [
@@ -17399,6 +17732,101 @@
           "roles"
         ],
         "title": "PodMemberUpdateRoleRequest",
+        "type": "object"
+      },
+      "PodOutcome": {
+        "description": "What the pod owns, as stored on its config.",
+        "properties": {
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The finish line's date. Required for kind=date, refused for week.",
+            "title": "Due"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind",
+            "description": "week: a bar held every week. date: a finish line by `due`."
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One read-only SQL query over the pod's tables that answers a single number: one row, one column. Counted for every member alike, so only someone who can read every row it touches may set it.",
+            "title": "Measure"
+          },
+          "row_security_checked": {
+            "description": "The tables with row security the measure counts that were checked when it was set, by id: whoever set it administers each. Set by the server. A measure that counts a table with row security not listed here is not read until someone who administers that table sets it again.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Row Security Checked",
+            "type": "array"
+          },
+          "sentence": {
+            "description": "What it owns, as one sentence a person can check.",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Sentence",
+            "type": "string"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the pod took this on: set by the server when it is first set, and kept while only its wording, target or measure change.",
+            "title": "Since"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The number the measure is held to: 90 with unit '%' for a share, 22 for a finish line of 22 steps. Unset while it is still being worked out.",
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 24,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'%' when the measure answers a share from 0 to 100; otherwise what it counts, such as 'steps' or 'posts'.",
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind"
+        ],
+        "title": "PodOutcome",
         "type": "object"
       },
       "PodPermissionCatalogResponse": {
@@ -19062,6 +19490,7 @@
               }
             ],
             "deprecated": true,
+            "description": "Deprecated and always null; see `pod_connector`.",
             "title": "Account Id"
           },
           "agent_id": {
@@ -19237,6 +19666,31 @@
               }
             ],
             "title": "Name"
+          },
+          "next_fire_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "TIME schedules: the next instant it fires, in UTC. Absent while paused, after a one-time schedule has fired, and for other types.",
+            "title": "Next Fire At"
+          },
+          "next_fire_at_local": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`next_fire_at` read in the schedule's `config.timezone` (UTC when it sets none), as an ISO 8601 time with its offset.",
+            "title": "Next Fire At Local"
           },
           "paused_by_failures": {
             "description": "True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.",
@@ -20864,6 +21318,186 @@
         "title": "SourceUpdateRequest",
         "type": "object"
       },
+      "StartLemmaRequest": {
+        "description": "Body for starting a Lemma: from a template, or from its own words.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it is for. A template's own when omitted.",
+            "title": "Description"
+          },
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a template that is a finish line: the date it is due by.",
+            "title": "Due"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its short name: the template's when omitted, and required without one. A name already taken in the organization gets a number after it.",
+            "title": "Name"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutcomeInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it owns, for a Lemma started without a template. Without a measure: nothing it could count exists yet, so its agent sets one once it has built what it counts."
+          },
+          "template": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A template from GET /pods/bundle/templates. It decides what the Lemma owns and brings the tables, skill and schedules that count it.",
+            "title": "Template"
+          }
+        },
+        "required": [
+          "organization_id"
+        ],
+        "title": "StartLemmaRequest",
+        "type": "object"
+      },
+      "StartLemmaResponse": {
+        "properties": {
+          "conversation_id": {
+            "description": "The chat where its agent sets itself up, opened with the person's first message. From a template, its first turn starts once the template is applied.",
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "import_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The template's import, readable at GET /pods/{pod_id}/bundle/imports/{import_id} while it is applied; null without a template.",
+            "title": "Import Id"
+          },
+          "pod": {
+            "$ref": "#/components/schemas/StartedPodResponse"
+          }
+        },
+        "required": [
+          "pod",
+          "conversation_id"
+        ],
+        "title": "StartLemmaResponse",
+        "type": "object"
+      },
+      "StartedPodResponse": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name it got, numbered when the one asked for was taken.",
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "name"
+        ],
+        "title": "StartedPodResponse",
+        "type": "object"
+      },
       "StepRecordResponse": {
         "properties": {
           "completed_at": {
@@ -22204,6 +22838,79 @@
         "title": "TableDetailResponse",
         "type": "object"
       },
+      "TableGrantRequest": {
+        "properties": {
+          "add_columns": {
+            "description": "Columns they may fill in a new row; empty to only read.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Columns",
+            "type": "array"
+          },
+          "read_columns": {
+            "description": "Columns everybody in the group may read.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Read Columns",
+            "type": "array"
+          }
+        },
+        "title": "TableGrantRequest",
+        "type": "object"
+      },
+      "TableGrantResponse": {
+        "properties": {
+          "add_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Columns",
+            "type": "array"
+          },
+          "granted_by": {
+            "format": "uuid",
+            "title": "Granted By",
+            "type": "string"
+          },
+          "read_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Read Columns",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "read_columns",
+          "add_columns",
+          "granted_by"
+        ],
+        "title": "TableGrantResponse",
+        "type": "object"
+      },
+      "TableGrantsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TableGrantResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TableGrantsResponse",
+        "type": "object"
+      },
       "TableListResponse": {
         "description": "Schema for table list response.",
         "properties": {
@@ -22406,6 +23113,93 @@
         "title": "TableSummaryResponse",
         "type": "object"
       },
+      "TelegramAccountItem": {
+        "description": "A Telegram account the current user proved from a Lemma session.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The name Telegram last gave the account.",
+            "title": "Name"
+          },
+          "proved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proved At"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TelegramAccountItem",
+        "type": "object"
+      },
+      "TelegramAccountResponse": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "name",
+          "username"
+        ],
+        "title": "TelegramAccountResponse",
+        "type": "object"
+      },
+      "TelegramAccountsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TelegramAccountItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TelegramAccountsResponse",
+        "type": "object"
+      },
       "TelegramLinkRequest": {
         "properties": {
           "surface_name": {
@@ -22565,6 +23359,79 @@
           "expires_at"
         ],
         "title": "TelegramManagedBotSetupResponse",
+        "type": "object"
+      },
+      "TemplateOutcome": {
+        "description": "What a template's Lemma owns, before its date is known: a finish\nline's sentence still carries ``{due}``.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind"
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Counts rows of the tables the template brings.",
+            "title": "Measure"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind"
+        ],
+        "title": "TemplateOutcome",
+        "type": "object"
+      },
+      "TemplatePlan": {
+        "description": "The first lines of the plan a Lemma made from this template starts with.",
+        "properties": {
+          "how": {
+            "items": {
+              "type": "string"
+            },
+            "title": "How",
+            "type": "array"
+          },
+          "never": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Never",
+            "type": "array"
+          }
+        },
+        "title": "TemplatePlan",
         "type": "object"
       },
       "ThreadResponse": {
@@ -23417,7 +24284,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -27134,7 +28001,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.9.0"
+    "version": "0.10.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -31899,6 +32766,92 @@
         }
       }
     },
+    "/pods/bundle/templates": {
+      "get": {
+        "description": "The templates that ship with this server, one card each: what a Lemma made from it owns and how that is counted, its face, where its work happens, what it brings and the first lines of its plan. Start one with POST /pods/start.",
+        "operationId": "pod.bundle.templates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTemplateCard"
+                  },
+                  "title": "Response Pod.Bundle.Templates",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Templates to start a Lemma from",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle",
+          "result": "entity",
+          "verb": "templates"
+        }
+      }
+    },
+    "/pods/start": {
+      "post": {
+        "description": "Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.",
+        "operationId": "pod.start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartLemmaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartLemmaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start a Lemma",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod",
+            "agent.conversation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
     "/pods/{pod_id}": {
       "delete": {
         "description": "Delete a pod",
@@ -33634,7 +34587,7 @@
     },
     "/pods/{pod_id}/bundle/imports": {
       "post": {
-        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo. Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
+        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
         "operationId": "pod.bundle.import.start",
         "parameters": [
           {
@@ -34256,7 +35209,7 @@
     },
     "/pods/{pod_id}/calls": {
       "post": {
-        "description": "Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.",
+        "description": "Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new conversation. The call is held in that conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.",
         "operationId": "call.open",
         "parameters": [
           {
@@ -34309,7 +35262,17 @@
                 }
               }
             },
-            "description": "The agent was not found."
+            "description": "The agent, or the conversation, was not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "That conversation cannot hold a call."
           },
           "422": {
             "content": {
@@ -34319,7 +35282,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The caller cannot run the model the agent runs on."
           },
           "503": {
             "content": {
@@ -34428,44 +35391,6 @@
                 }
               ],
               "title": "Kind"
-            }
-          },
-          {
-            "description": "Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.",
-            "in": "query",
-            "name": "visibility",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/Visibility"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.",
-              "title": "Visibility"
-            }
-          },
-          {
-            "description": "Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.",
-            "in": "query",
-            "name": "q",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.",
-              "title": "Q"
             }
           },
           {
@@ -34812,95 +35737,6 @@
       }
     },
     "/pods/{pod_id}/channels/me": {
-      "get": {
-        "description": "The reader's own channel with the pod; 404 until it is made.",
-        "operationId": "channel.me.get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChannelDetailResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "A cursor this API did not give."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
-          }
-        },
-        "summary": "Get My Channel",
-        "tags": [
-          "Channels"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "channel.me",
-          "result": "entity",
-          "verb": "get"
-        }
-      },
       "post": {
         "description": "Make the reader's own channel with the pod; 200 with it if it exists.",
         "operationId": "channel.me.create",
@@ -35468,265 +36304,7 @@
         }
       }
     },
-    "/pods/{pod_id}/channels/{channel_id}/cases": {
-      "get": {
-        "description": "A contact's channel's cases, the most recently opened first, each with\nwhat happened in it: time to first response, reopens and time to close\nare read from here. Only a contact's channel has cases.",
-        "operationId": "channel.case.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "channel_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Channel Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cursor"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 20,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChannelCasesResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "A cursor this API did not give."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
-          }
-        },
-        "summary": "List Cases",
-        "tags": [
-          "Channels"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "channel.case",
-          "result": "collection",
-          "verb": "list"
-        }
-      }
-    },
     "/pods/{pod_id}/channels/{channel_id}/members": {
-      "get": {
-        "description": "Who is in a channel -- members, contacts and agents -- in the order\nthey joined, a page at a time.",
-        "operationId": "channel.member.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "channel_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Channel Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 200,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cursor"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "maximum": 500,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChannelMemberListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "A cursor this API did not give."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
-          }
-        },
-        "summary": "List Members",
-        "tags": [
-          "Channels"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "channel.member",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
       "post": {
         "description": "Add members of the pod, and the pod's agents, to a group. An agent\nalready in it answers as now asked.",
         "operationId": "channel.member.add",
@@ -37937,6 +38515,334 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/table-grants": {
+      "get": {
+        "description": "The tables the group's people outside the pod may read or add to --\nthose the caller may read themselves.",
+        "operationId": "channel.table_grant.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableGrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "List Table Grants",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}": {
+      "delete": {
+        "description": "The group no longer reads or adds to the table. Whoever may manage the\ngroup may take it back, whether or not they can read the table.",
+        "operationId": "channel.table_grant.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Remove Table Grant",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.table_grant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "void",
+          "verb": "remove"
+        }
+      },
+      "put": {
+        "description": "Give the group these columns of the table to read, and those to fill.\n\nEverybody in the group reads what is granted -- the people outside the\npod included -- through the granting member's own access. A person's act:\nan agent or a function, which may be reading what strangers wrote in the\ngroup, is refused (403).",
+        "operationId": "channel.table_grant.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TableGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Set Table Grant",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.table_grant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "entity",
+          "verb": "set"
+        }
+      }
+    },
     "/pods/{pod_id}/connector-accounts": {
       "get": {
         "operationId": "pod.connector_account.list",
@@ -38299,6 +39205,7 @@
         }
       },
       "post": {
+        "description": "Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.",
         "operationId": "pod.connector.create",
         "parameters": [
           {
@@ -45572,6 +46479,231 @@
         }
       }
     },
+    "/pods/{pod_id}/outcome": {
+      "delete": {
+        "description": "Let the pod's outcome go. Nothing else about the pod changes, and the weeks its measure was read in are kept: setting the same measure again brings back every week no other measure has been read in since.",
+        "operationId": "outcome.clear",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear what the pod owns",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "outcome",
+            "pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "void",
+          "verb": "clear"
+        }
+      },
+      "put": {
+        "description": "Set what the pod owns, replacing what it had: a bar held every week (kind=week) or a finish line by a date (kind=date), with the target and unit it is held to and the measure that counts it. A measure is one read-only SQL query over the pod's tables that answers a single number, read for every member alike; a new or changed one is read once before it is kept, and refused when the caller cannot read every row it counts (403), names a table that is not there (404), or does not answer one number (422).",
+        "operationId": "outcome.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeSetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set what the pod owns",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "outcome",
+            "pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "entity",
+          "verb": "set"
+        }
+      }
+    },
+    "/pods/{pod_id}/outcome/history": {
+      "get": {
+        "description": "The last `weeks` weeks of the pod's measure, each on its last reading. The measure is read on a schedule and when it is set; a week it was never read in has a null value.",
+        "operationId": "outcome.history",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "weeks",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "maximum": 52,
+              "minimum": 1,
+              "title": "Weeks",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Where the pod has stood, week by week",
+        "tags": [
+          "query"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "entity",
+          "verb": "history"
+        }
+      }
+    },
+    "/pods/{pod_id}/outcome/standing": {
+      "get": {
+        "description": "What the pod owns and what its measure answers now. The measure is read over every row of the tables it names, so every member sees the same number, including members who cannot open some of those rows; only someone who can read all of them may set it. A measure that cannot be read comes back as a `problem` rather than an error.",
+        "operationId": "outcome.standing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeStandingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Where the pod stands",
+        "tags": [
+          "query"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "entity",
+          "verb": "standing"
+        }
+      }
+    },
     "/pods/{pod_id}/permissions/catalog": {
       "get": {
         "operationId": "pod.permissions.catalog",
@@ -48646,6 +49778,249 @@
         }
       }
     },
+    "/pods/{pod_id}/telegram-identity-links": {
+      "post": {
+        "description": "A one-time code that proves, once confirmed, a Telegram account is the\ncaller's. Ten minutes long, one use.",
+        "operationId": "telegram_identity_link.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}": {
+      "get": {
+        "description": "Whether the caller's code was opened yet, and from which account.",
+        "operationId": "telegram_identity_link.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityLinkStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}/confirm": {
+      "post": {
+        "description": "The account the code was opened from is the caller's: bind it.",
+        "operationId": "telegram_identity_link.confirm",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "entity",
+          "verb": "confirm"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-identity-links/{code}/decline": {
+      "post": {
+        "description": "The account the code was opened from is not the caller's: spend it.",
+        "operationId": "telegram_identity_link.decline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decline Identity Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "telegram_identity_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "telegram_identity_link",
+          "result": "void",
+          "verb": "decline"
+        }
+      }
+    },
     "/pods/{pod_id}/web-widgets": {
       "get": {
         "operationId": "agent.web_widget.list",
@@ -51187,6 +52562,82 @@
         }
       }
     },
+    "/surfaces/me/telegram-accounts": {
+      "get": {
+        "description": "The Telegram accounts the current user proved from a Lemma session, still\ntheirs: every bot knows them as this user.",
+        "operationId": "agent.surface.list_my_telegram_accounts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List My Telegram Accounts",
+        "tags": [
+          "Agent Surfaces (Me)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface",
+          "result": "entity",
+          "verb": "list_my_telegram_accounts"
+        }
+      }
+    },
+    "/surfaces/me/telegram-accounts/{account_id}": {
+      "delete": {
+        "description": "Unlink one of them: from its next message the account is a stranger's.",
+        "operationId": "agent.surface.unlink_my_telegram_account",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unlink My Telegram Account",
+        "tags": [
+          "Agent Surfaces (Me)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface",
+          "result": "void",
+          "verb": "unlink_my_telegram_account"
+        }
+      }
+    },
     "/surfaces/teams/admin-consent/callback": {
       "get": {
         "operationId": "agent.surface.teams_admin_consent_callback",
@@ -53583,6 +55034,96 @@
       }
     },
     "/users/me": {
+      "delete": {
+        "description": "Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by \"Deleted user\". From the answer on, no token the person holds opens anything, this request's included; their sessions and login are removed within moments, after which the address can sign up again. A client should discard its tokens on success. A request for an account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.",
+        "operationId": "user.current.delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ACCOUNT_DELETION_CONFIRMATION_MISMATCH: the typed address is not this account's. Nothing changed."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ACCOUNT_INACTIVE: the account was already deleted, or switched off."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ACCOUNT_DELETION_SOLE_OWNER (details.organizations names them), or the billing provider's code. Nothing changed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "ACCOUNT_DELETION_UNAVAILABLE: this deployment bills and has no billing guard. Nothing changed."
+          }
+        },
+        "summary": "Delete Current User",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "user.current"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "user.current",
+          "result": "entity",
+          "verb": "delete"
+        }
+      },
       "get": {
         "description": "Get the current authenticated user's information",
         "operationId": "user.current.get",

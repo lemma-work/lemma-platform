@@ -4,7 +4,9 @@ import type { ContactResponse, WebWidgetResponse } from "lemma-sdk";
 import {
     EMPTY_WIDGET_DRAFT,
     answerChoices,
+    contactChannelId,
     contactName,
+    groupsNote,
     contactSubline,
     everyPage,
     outreachProblem,
@@ -34,6 +36,25 @@ test("a contact with no name is called by a handle a person can read", () => {
     const contact = readContact(wire);
     assert.equal(contactName(contact), "Signed in on your site");
     assert.equal(contactSubline(contact), "ana@shop.example");
+});
+
+test("a contact's chat is what the backend says, and looked up only when it says nothing", async () => {
+    const asked: string[] = [];
+    const find = async (contactId: string) => { asked.push(contactId); return "found-chat"; };
+
+    const said = readContact({ ...wire, channel_id: "their-chat" } as unknown as ContactResponse);
+    assert.equal(await contactChannelId(said, find), "their-chat");
+
+    const none = readContact({ ...wire, channel_id: null } as unknown as ContactResponse);
+    assert.equal(none.channelId, null);
+    assert.equal(await contactChannelId(none, find), null);
+    assert.deepEqual(asked, [], "a contact the backend says has no chat is not looked up");
+
+    // A backend from before contacts carried their chat leaves the field out.
+    const older = readContact(wire);
+    assert.equal(older.channelId, undefined);
+    assert.equal(await contactChannelId(older, find), "found-chat");
+    assert.deepEqual(asked, ["c1"]);
 });
 
 test("a host id is never shown; a phone number is", () => {
@@ -104,6 +125,11 @@ test("the three answers are offered in order of who gets in", () => {
     assert.deepEqual(answerChoices("Kit").map((choice) => choice.value), ["off", "known", "anyone"]);
 });
 
+test("each answer is said of private messages, and groups are left to their own switch", () => {
+    for (const choice of answerChoices("Kit")) assert.match(choice.note, /privately/);
+    assert.equal(groupsNote("Kit"), "Groups follow “Answer people outside Kit”.");
+});
+
 test("a list is followed to its last page, and a page that repeats ends it", async () => {
     const pages: Record<string, { items: number[]; next: string | null }> = {
         start: { items: [1, 2], next: "b" },
@@ -138,6 +164,6 @@ test("a visitor who left no address is written to in their chat on the website",
     assert.deepEqual(writableHandles({ handles: [web, email] }), [email]);
     assert.deepEqual(writableHandles({ handles: [{ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }] }), []);
     assert.equal(outreachSaid({ status: "SENT", platform: "WEB", reason: null }), "In their chat on your website, for when they next open it.");
-    assert.equal(outreachSaid({ status: "PENDING", platform: "WEB", reason: null }), "In their channel, on its way to their chat on your website.");
-    assert.equal(outreachSaid({ status: "SENT", platform: "RESEND", reason: null }), "Sent by email. It is in their channel.");
+    assert.equal(outreachSaid({ status: "PENDING", platform: "WEB", reason: null }), "Saved here, on its way to their chat on your website.");
+    assert.equal(outreachSaid({ status: "SENT", platform: "RESEND", reason: null }), "Sent by email. It is in their chat here.");
 });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
+import { NOWHERE, TEAMMATES, isAlwaysListed, isNewPlace, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
 
 /** The grammar has one obligation above all the others: a URL this app wrote
  *  must be a URL this app can read back. Everything below either asserts that
@@ -52,6 +52,13 @@ test("every place has a URL, and every URL reads back as the place", () => {
         assert.equal(writeAddress(address), url, "writing " + (address.tabId ?? "the teammate"));
         assert.deepEqual(readAddress(url), address, "reading " + url);
     }
+});
+
+test("the classic workspace at /l reads every address the app at /t does", () => {
+    for (const [address, url] of PLACES) {
+        assert.deepEqual(readAddress("/l" + url.slice("/t".length)), address, "reading " + url + " under /l");
+    }
+    assert.deepEqual(readAddress("/x/" + POD), NOWHERE, "any other root names nowhere");
 });
 
 test("a link to the space's old Settings page opens the teammate's page", () => {
@@ -208,6 +215,18 @@ test("an app is not rebuilt from its id", () => {
     assert.equal(tabFromId("profile"), null);
 });
 
+test("a link to a tab every pod lists is waited for, an app is not", () => {
+    // The shell draws Home until the pod's tab list arrives. A link to the
+    // conversation that did not wait was overwritten with `/home` meanwhile.
+    assert.equal(isAlwaysListed("conversation"), true);
+    assert.equal(isAlwaysListed("library"), true);
+    assert.equal(isAlwaysListed("profile"), true);
+    // An app may have been deleted since the link was sent; waiting for it
+    // would hold the address still for good.
+    assert.equal(isAlwaysListed("app:launch-plan"), false);
+    assert.equal(isAlwaysListed("space:home"), false);
+});
+
 test("a malformed id rebuilds nothing", () => {
     assert.equal(tabFromId("table:"), null);
     assert.equal(tabFromId("file:"), null);
@@ -237,7 +256,7 @@ test("a bare space address filled in with the restored view replaces", () => {
 });
 
 test("a channel rebuilds from its id alone, named until its page reads it", () => {
-    assert.deepEqual(tabFromId("channel:7f3c9a2e"), { id: "channel:7f3c9a2e", kind: "channel", label: "Channel", channelId: "7f3c9a2e" });
+    assert.deepEqual(tabFromId("channel:7f3c9a2e"), { id: "channel:7f3c9a2e", kind: "channel", label: "Chat", channelId: "7f3c9a2e" });
     assert.equal(tabFromId("channel:"), null);
     // A channel's address is one id and nothing after it.
     assert.deepEqual(readAddress("/t/" + POD + "/channel"), at(null));

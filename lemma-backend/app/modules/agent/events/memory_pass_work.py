@@ -9,16 +9,16 @@ ahead of a person's turn. One at a time per pod (``memory_pod_key``): every
 agent in a pod shares ``/memory/AGENTS.md``, and two passes rewriting it at
 once would each drop what the other added.
 
-Retried once. A model or network blip is worth another try; a refusal that
-would only repeat -- the person over their usage limit, the model no longer
-configured, the pass running past its own limits -- is not.
+Retried once. A model or network blip is worth another try, and so is a
+keeper that ran out of steps before writing anything (``MemoryPassUnfinished``;
+one that wrote something has kept it). A refusal that would only repeat -- the
+person over their usage limit, the model no longer configured, the turn too
+long to read within the pass's own limits -- is not.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
-
-from pydantic_ai.exceptions import UsageLimitExceeded
 
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.work import (
@@ -32,6 +32,7 @@ from app.core.infrastructure.work import (
 )
 from app.modules.agent.events.turn_payloads import MemoryPassWork
 from app.modules.agent.events.work_kinds import AGENT_MEMORY
+from app.modules.agent.infrastructure.providers.control_flow import is_usage_limit
 
 MEMORY_PASS_RETRY = RetryPolicy(
     max_attempts=2,
@@ -44,20 +45,23 @@ MEMORY_PASS_RETRY = RetryPolicy(
 
 
 async def keep_memory(ctx: JobContext, payload: MemoryPassWork) -> None:
-    from app.modules.agent.services.harness_wiring import worker_uow_factory
-    from app.modules.agent.services.memory_pass import MemoryPass
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.application.background.memory_pass import MemoryPass
 
     ctx.raise_if_stopping()
     try:
-        await MemoryPass(worker_uow_factory()).keep(
+        await MemoryPass(SessionUnitOfWorkFactory(async_session_maker)).keep(
             conversation_id=payload.conversation_id,
             run_id=payload.run_id,
             user_id=payload.user_id,
         )
     except DomainError as exc:
         raise PermanentFailure(exc.message) from exc
-    except UsageLimitExceeded as exc:
-        raise PermanentFailure(str(exc)) from exc
+    except Exception as exc:
+        if is_usage_limit(exc):
+            raise PermanentFailure(str(exc)) from exc
+        raise
 
 
 def register_memory_pass_work(registry: WorkRegistry) -> None:

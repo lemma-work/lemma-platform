@@ -25,6 +25,11 @@ class EmbeddingCapability:
 
 _embedding_capability = EmbeddingCapability()
 _embedding_init_task: asyncio.Task[None] | None = None
+#: The embedder a blocking preload last proved in this process. A process that
+#: enters the lifespan again -- each live-server test does, and a Desktop
+#: embedded worker beside its API -- would otherwise embed a sentence again to
+#: prove a model already loaded and answering.
+_proven_embedder: object | None = None
 
 
 _PRELOAD_RETRY_INITIAL_SECONDS = 30.0
@@ -116,7 +121,7 @@ async def _try_local_embeddings(composition, timeout: float) -> bool:
 @asynccontextmanager
 async def _preload_local_embeddings(context):
     """Initialize local embeddings according to the deployment startup policy."""
-    global _embedding_init_task
+    global _embedding_init_task, _proven_embedder
     del context
     from app.core.config import settings
     from app.modules.datastore.composition import get_datastore_composition
@@ -142,11 +147,15 @@ async def _preload_local_embeddings(context):
         # Preserve the existing fail-fast contract outside managed Desktop.
         _embedding_capability.status = "preparing"
         _embedding_capability.detail = "Preparing the local search model"
+        embedder = composition.embedder_provider()
+        if embedder is _proven_embedder:
+            _embedding_capability.status = "ready"
+            _embedding_capability.detail = "Local semantic search is ready"
+            yield
+            return
         logger.debug("datastore.module.preloading_local_embedding_model.observed")
         async with asyncio.timeout(timeout):
-            vector = await composition.embedder_provider().embed(
-                "lemma embedding readiness"
-            )
+            vector = await embedder.embed("lemma embedding readiness")
         if len(vector) != settings.embedding_dimension:
             _embedding_capability.status = "degraded"
             raise RuntimeError(
@@ -154,6 +163,7 @@ async def _preload_local_embeddings(context):
             )
         _embedding_capability.status = "ready"
         _embedding_capability.detail = "Local semantic search is ready"
+        _proven_embedder = embedder
         logger.debug("datastore.module.local_embedding_model_ready.observed")
         yield
         return
@@ -202,6 +212,9 @@ def _routers():
     from app.modules.datastore.api.controllers.processing_controller import (
         router as processing,
     )
+    from app.modules.datastore.api.controllers.outcome_controller import (
+        router as outcome,
+    )
 
     # `signed_link` before `file`, and the order is load-bearing: routes match
     # in registration order, and `file` owns `/files/{file_id}` — which happily
@@ -217,6 +230,7 @@ def _routers():
         public_file,
         signed_file,
         changes,
+        outcome,
     ]
 
 
@@ -233,6 +247,10 @@ def _register_work() -> None:
     import app.modules.datastore.events.contact_merged_work  # noqa: F401
     import app.modules.datastore.events.pod_provision_work  # noqa: F401
 
+    # Every process: setting what a pod owns (API) writes `datastore.outcome_week`
+    # through the `PodOutcomeChanged` fact this module subscribes it to.
+    import app.modules.datastore.events.outcome_week_work  # noqa: F401
+
     # Every process: a schedule or MCP subscription change (API) writes
     # `changes.sync_subscribers`; the worker claims every change-log kind.
     import app.modules.datastore.changes.horizon  # noqa: F401
@@ -243,6 +261,7 @@ def _register_work() -> None:
 def _register_periodic_work() -> None:
     import app.modules.datastore.events.handlers  # noqa: F401
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
+    import app.modules.datastore.events.outcome_week_sweep  # noqa: F401
 
     # Work-runtime kinds, registered here so the worker's dispatchers can
     # claim them; the API registers ``file_work`` by importing the repository

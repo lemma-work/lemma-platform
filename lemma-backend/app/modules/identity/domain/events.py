@@ -15,6 +15,12 @@ class UserSignedUpEvent(DomainEvent):
     user_id: UUID
     email: str
     first_name: str | None = None
+    #: How the person signed up, when the path that finished it can say: the
+    #: OAuth provider's id (``google``, ``active-directory``) or ``email_code``.
+    #: ``None`` from the email-verification link, which a password sign-up, an
+    #: OAuth account with an unverified address and a code sign-in that takes
+    #: back a preregistered address all end on.
+    method: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:
@@ -100,6 +106,21 @@ class UserMobileChangedEvent(DomainEvent):
     """Invalidate external identity caches after a profile phone change."""
 
     event_type: str = "identity.user.mobile.changed"
+    user_id: UUID
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return IDENTITY_EVENTS_STREAM
+
+
+class UserDeletedEvent(DomainEvent):
+    """The person deleted their account; their sign-in has to go with it.
+
+    Carries the id and nothing else: the row it names has already been
+    scrubbed, and an event is no place to keep what the deletion removed.
+    """
+
+    event_type: str = "identity.user.deleted"
     user_id: UUID
 
     @classmethod

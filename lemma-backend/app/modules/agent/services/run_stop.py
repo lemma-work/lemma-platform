@@ -18,17 +18,15 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter, pod_namespace
+from app.modules.agent.services.run_signals import STOP, signal_run
 from app.modules.agent.domain.value_objects import (
     AgentRunFinishResult,
     AgentRunStatus,
-    JsonObject,
 )
 from app.modules.agent.events.work_kinds import AGENT_TURN_KINDS, turn_key
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.realtime import (
-    completed_payload,
-    publish_conversation_event,
-)
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import completed_payload
 from app.modules.agent.services.run_followups import stage_run_followups
 
 
@@ -51,20 +49,27 @@ async def turn_is_running(
 
 async def stop_run(
     uow: SqlAlchemyUnitOfWork,
-    repository: ConversationRepository,
+    repository: Runs,
     *,
     pod_id: UUID,
     conversation_id: UUID,
     run_id: UUID,
-    stamp: JsonObject | None = None,
+    stop_requested_after_sequence: int | None = None,
 ) -> AgentRunFinishResult | None:
     """Stop ``run_id`` in ``uow``'s transaction; see the module docstring."""
     if await turn_is_running(uow, pod_id=pod_id, run_id=run_id):
+        # The worker running it hears this once it commits, rather than on
+        # its next poll (``services/run_signals``).
+        signal_run(uow.session, pod_id=pod_id, run_id=run_id, op=STOP)
         return await repository.finish_agent_run(
-            agent_run_id=run_id, status=AgentRunStatus.STOP_REQUESTED, stamp=stamp
+            agent_run_id=run_id,
+            status=AgentRunStatus.STOP_REQUESTED,
+            stop_requested_after_sequence=stop_requested_after_sequence,
         )
     finish = await repository.finish_agent_run(
-        agent_run_id=run_id, status=AgentRunStatus.STOPPED, stamp=stamp
+        agent_run_id=run_id,
+        status=AgentRunStatus.STOPPED,
+        stop_requested_after_sequence=stop_requested_after_sequence,
     )
     if finish is None or not finish.updated:
         return finish

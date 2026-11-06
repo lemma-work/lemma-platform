@@ -20,6 +20,7 @@ import httpx
 
 from app.core.config import reveal_secret, settings
 from app.core.embeddings.embeddings import Embedder, EmbeddingProviderError
+from app.core.net.http_client import get_shared_http_client
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -30,6 +31,14 @@ logger = get_logger(__name__)
 _MAX_ATTEMPTS = 4
 _BASE_BACKOFF_SECONDS = 0.5
 _MAX_BACKOFF_SECONDS = 8.0
+#: Per request. A batch of fifty document chunks is the slow case; the shared
+#: client's own read timeout is sized for connector calls.
+_REQUEST_TIMEOUT_SECONDS = 60.0
+#: Per attempt, for one short text -- a search query, which a person is waiting
+#: on. A provider that has not answered one sentence in this long is stuck on
+#: that request, and the retry below gets a fresh one rather than sitting out
+#: the batch timeout.
+_SINGLE_TEXT_TIMEOUT_SECONDS = 10.0
 
 
 def _is_worth_retrying(exc: Exception) -> bool:
@@ -59,10 +68,17 @@ class OpenAICompatEmbedder(Embedder):
         self.dimension = dimension or settings.embedding_dimension
 
     async def embed(self, text: str) -> List[float]:
-        embeddings = await self.embed_batch([text])
+        embeddings = await self._embed(
+            [text], attempt_timeout=_SINGLE_TEXT_TIMEOUT_SECONDS
+        )
         return embeddings[0]
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        return await self._embed(texts, attempt_timeout=_REQUEST_TIMEOUT_SECONDS)
+
+    async def _embed(
+        self, texts: List[str], *, attempt_timeout: float
+    ) -> List[List[float]]:
         if not texts:
             return []
 
@@ -76,25 +92,30 @@ class OpenAICompatEmbedder(Embedder):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         all_embeddings: List[List[float]] = []
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            for i in range(0, len(texts), self.BATCH_SIZE):
-                batch = texts[i : i + self.BATCH_SIZE]
-                response = await self._post_batch(client, url, headers, batch, index=i)
-                # OpenAI-shaped response: {"data": [{"embedding": [...], "index": n}]}.
-                # Sort by index so the order matches the input batch.
-                data = sorted(
-                    response.json().get("data", []),
-                    key=lambda item: item.get("index", 0),
-                )
-                for item in data:
-                    vector = [float(value) for value in item.get("embedding", [])]
-                    if len(vector) != self.dimension:
-                        raise ValueError(
-                            f"Embedding model {self.model!r} returned "
-                            f"{len(vector)} dimensions; expected {self.dimension}. "
-                            "Set EMBEDDING_DIMENSION to match the model."
-                        )
-                    all_embeddings.append(vector)
+        # The process-wide client, not one per call: a search embeds its query
+        # before it can read anything, and a fresh client paid a new TCP and
+        # TLS handshake to the provider on every one of them.
+        client = get_shared_http_client()
+        for i in range(0, len(texts), self.BATCH_SIZE):
+            batch = texts[i : i + self.BATCH_SIZE]
+            response = await self._post_batch(
+                client, url, headers, batch, index=i, timeout=attempt_timeout
+            )
+            # OpenAI-shaped response: {"data": [{"embedding": [...], "index": n}]}.
+            # Sort by index so the order matches the input batch.
+            data = sorted(
+                response.json().get("data", []),
+                key=lambda item: item.get("index", 0),
+            )
+            for item in data:
+                vector = [float(value) for value in item.get("embedding", [])]
+                if len(vector) != self.dimension:
+                    raise ValueError(
+                        f"Embedding model {self.model!r} returned "
+                        f"{len(vector)} dimensions; expected {self.dimension}. "
+                        "Set EMBEDDING_DIMENSION to match the model."
+                    )
+                all_embeddings.append(vector)
         return all_embeddings
 
     async def _post_batch(
@@ -105,6 +126,7 @@ class OpenAICompatEmbedder(Embedder):
         batch: List[str],
         *,
         index: int,
+        timeout: float,
     ) -> httpx.Response:
         """One batch, retried while the provider is only temporarily unwilling.
 
@@ -123,6 +145,7 @@ class OpenAICompatEmbedder(Embedder):
                         "input": batch,
                         "dimensions": self.dimension,
                     },
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 return response

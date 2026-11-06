@@ -1,7 +1,7 @@
 """Sending a run's answer line to the place its question came from.
 
 A finished run's answer is the agent's line in the channel
-(``events/reply_for_run_work``), with a delivery to the place the run was
+(``agent.channel_reply``), with a delivery to the place the run was
 asked at. This is that delivery's send, which keeps what an answer has always
 been on a platform:
 
@@ -16,9 +16,14 @@ been on a platform:
   for an answer that never came.
 * **Every try of one delivery is the same message** where the platform dedupes
   on a key (Resend).
+* **An answer given before the person said more** (``is_earlier_answer``) is a
+  message of its own: no files, no stream to finish -- and none at all where
+  the run's live stream already shows it.
 
-The answer goes where the run's conversation answers (the message it took up,
-in its thread), not where the place last spoke.
+The answer goes where its line was placed as it was posted -- the thread of
+the line it answers, pointing at it (``channels.contracts.placement``) --
+translated for the platform by ``place_aim``: never where the place, or the
+conversation, last spoke.
 """
 
 from __future__ import annotations
@@ -31,7 +36,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.run_replies import run_reply_material
+from app.modules.agent.contracts.channel_replies import (
+    is_earlier_answer,
+    run_reply_material,
+)
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
@@ -42,6 +50,7 @@ from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.live_display import (
     LiveDisplay,
     forget_live_display,
+    live_display_of,
     remainder_after,
     take_live_display,
 )
@@ -49,7 +58,13 @@ from app.modules.agent_surfaces.services.pending_envelope import (
     RunFiles,
     discard_display_paths,
 )
-from app.modules.channels.contracts import ChannelMessage, Delivery, SenderKind
+from app.modules.agent_surfaces.services.place_aim import aimed_at
+from app.modules.channels.contracts import (
+    ChannelMessage,
+    Delivery,
+    SenderKind,
+    Source,
+)
 from app.modules.channels.contracts.deliveries import (
     delivery_noted,
     delivery_unnoted,
@@ -71,6 +86,21 @@ def send_errors() -> tuple[type[BaseException], ...]:
 def delivery_key(delivery: Delivery) -> str:
     """The key every try of this delivery is sent under."""
     return f"channel-delivery-{delivery.id}"
+
+
+#: Why an answer given before a steer was not sent: the person read it as the
+#: run's live stream wrote it.
+SHOWN_IN_STREAM = "Already shown in the run's live stream."
+
+
+async def _streamed_already(run_id: UUID, text: str) -> bool:
+    """Whether the run's live stream shows ``text`` -- it streams everything
+    the run writes, an answer it went on past included."""
+    display = await live_display_of(run_id)
+    if display is None:
+        return False
+    said = " ".join(text.split())
+    return bool(said) and said in " ".join(display.streamed.split())
 
 
 def is_run_answer(line: ChannelMessage) -> bool:
@@ -95,9 +125,20 @@ class RunAnswerSends:
         platform: str,
         text: str,
         metadata: dict[str, object],
+        source: Source | None = None,
     ) -> Outcome:
+        """Send the answer ``line`` to ``source``, aimed where the line was
+        placed; without ``source``, where its conversation answers."""
         run_id, conversation_id = line.agent_run_id, line.conversation_id
         assert run_id is not None and conversation_id is not None  # is_run_answer
+        send_metadata = {**metadata, IDEMPOTENCY_KEY: delivery_key(delivery)}
+        at = await aimed_at(self.uow_factory, line, source) if source else None
+        if is_earlier_answer(line.client_message_id):
+            if await _streamed_already(run_id, text):
+                return Outcome.delivered(platform, reason=SHOWN_IN_STREAM)
+            return await self._deliver(
+                delivery, conversation_id, text, send_metadata, platform=platform, at=at
+            )
         failed = await self._run_failed(run_id)
         if not failed:
             streamed = await self._finish_stream(
@@ -105,10 +146,31 @@ class RunAnswerSends:
             )
             if streamed is not None:
                 return streamed
-        send_metadata = {**metadata, IDEMPOTENCY_KEY: delivery_key(delivery)}
         if failed:
             send_metadata["retry_action"] = True
-        run = None if failed else RunFiles(run_id)
+        return await self._deliver(
+            delivery,
+            conversation_id,
+            text,
+            send_metadata,
+            platform=platform,
+            run=None if failed else RunFiles(run_id),
+            at=at,
+        )
+
+    async def _deliver(
+        self,
+        delivery: Delivery,
+        conversation_id: UUID,
+        text: str,
+        send_metadata: dict[str, object],
+        *,
+        platform: str,
+        run: RunFiles | None = None,
+        at: Source | None = None,
+    ) -> Outcome:
+        """Send ``text`` as a new message, with ``run``'s held files, at
+        ``at`` -- the place, aimed where the line goes in it."""
         receipt: DeliveryReceipt | None = None
         raised: BaseException | None = None
         with track_sends() as sends:
@@ -119,6 +181,7 @@ class RunAnswerSends:
                         message=text,
                         metadata=send_metadata,
                         attach_files_of=run,
+                        at=at,
                     )
                     if receipt is not None and receipt.external_message_id:
                         # As it answers: its status report finds the row.
@@ -182,7 +245,7 @@ class RunAnswerSends:
         if remainder is None and display.sealed:
             remainder = ""
         if remainder is not None and await self._close(
-            delivery, conversation_id, display, remainder
+            delivery, run_id, conversation_id, display, remainder
         ):
             await forget_live_display(run_id)
             logger.info(
@@ -191,7 +254,7 @@ class RunAnswerSends:
                 sealed=display.sealed,
             )
             return Outcome.delivered(platform, external_message_id=display.message_id)
-        await self._take_down(conversation_id, display)
+        await self._take_down(run_id, conversation_id, display)
         await forget_live_display(run_id)
         # The stream is gone: its id no longer says the answer arrived, should
         # this sender die before the answer is posted in its place.
@@ -203,6 +266,7 @@ class RunAnswerSends:
     async def _close(
         self,
         delivery: Delivery,
+        run_id: UUID,
         conversation_id: UUID,
         display: LiveDisplay,
         remainder: str,
@@ -218,6 +282,7 @@ class RunAnswerSends:
             async with self.uow_factory() as uow:
                 return await self.egress_for(uow).progress.finish_with_answer(
                     conversation_id=conversation_id,
+                    run_id=run_id,
                     progress_handle=display.handle,
                     message=remainder,
                     already_streamed=bool(display.streamed.strip()),
@@ -230,12 +295,16 @@ class RunAnswerSends:
             )
             return False
 
-    async def _take_down(self, conversation_id: UUID, display: LiveDisplay) -> None:
+    async def _take_down(
+        self, run_id: UUID, conversation_id: UUID, display: LiveDisplay
+    ) -> None:
         """Remove a stream the answer will not close, before posting the answer."""
         try:
             async with self.uow_factory() as uow:
                 await self.egress_for(uow).progress.clear_progress(
-                    conversation_id=conversation_id, progress_handle=display.handle
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    progress_handle=display.handle,
                 )
         except send_errors():
             logger.warning(

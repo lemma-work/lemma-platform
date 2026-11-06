@@ -148,7 +148,9 @@ class OrganizationService:
             get_email_domain_org=self.organization_repository.get_email_domain_org,
         )
 
-        organization = await self.organization_repository.create(entity)
+        organization = await self.organization_repository.create(
+            entity, created_by_user_id=owner_user_id
+        )
 
         owner_member = OrganizationMemberEntity(
             user_id=owner_user_id,

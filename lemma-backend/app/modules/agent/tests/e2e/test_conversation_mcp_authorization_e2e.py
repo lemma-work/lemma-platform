@@ -15,8 +15,8 @@ from sqlalchemy import delete, update
 
 from app.modules.agent.infrastructure.models import AgentModel, AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
-from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
-from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
+from app.modules.agent.agent_host.mcp_authorization import RelayingHost
+from app.modules.agent.agent_host.mcp import ConversationMCPService
 from app.modules.agent.tests.e2e.agent_host_helpers import paired_machine
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (

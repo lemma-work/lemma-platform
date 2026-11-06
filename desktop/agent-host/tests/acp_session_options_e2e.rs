@@ -224,6 +224,17 @@ async fn claude_code_gets_lemmas_instructions_and_settings_in_the_sessions_meta(
         // Lemma serves web search on this run, and not a page fetch.
         assert!(disallowed.contains(&json!("WebSearch")));
         assert!(!disallowed.contains(&json!("WebFetch")));
+        // Claude Code's own publishing, notifying and scheduling never run in
+        // Lemma: a claude.ai artifact took a report built from pod data
+        // outside the pod.
+        for tool in [
+            "Artifact",
+            "PushNotification",
+            "CronCreate",
+            "ScheduleWakeup",
+        ] {
+            assert!(disallowed.contains(&json!(tool)), "{tool}: {disallowed:?}");
+        }
     }
     // Given in the session, so never again as the person's own words.
     for prompt in prompts(&traffic) {
@@ -262,13 +273,17 @@ async fn claude_code_with_its_own_settings_keeps_them() {
         options["env"].get("ENABLE_TOOL_SEARCH").is_none(),
         "{options}"
     );
-    // Lemma's browser is the one the person watches, whatever the setting.
-    assert!(
-        options["disallowedTools"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("mcp__claude-in-chrome"))
-    );
+    // Lemma's browser is the one the person watches, and a deliverable goes to
+    // a pod file rather than a claude.ai artifact, whatever the setting.
+    let disallowed = options["disallowedTools"].as_array().unwrap();
+    for tool in [
+        "mcp__claude-in-chrome",
+        "Artifact",
+        "ArtifactData",
+        "RemoteTrigger",
+    ] {
+        assert!(disallowed.contains(&json!(tool)), "{tool}: {disallowed:?}");
+    }
 }
 
 /// Claude Code's tool search held Lemma's tools back until the model looked

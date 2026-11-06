@@ -89,7 +89,7 @@ from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedup
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
-from app.modules.agent_surfaces.services.group_log import RosterReads, roster_reads
+from app.modules.agent_surfaces.services import live_group_roster as roster
 from app.modules.agent_surfaces.services.run_background import (
     reply_all_audience,
     run_background,
@@ -119,6 +119,10 @@ type ReplySink = Callable[[SurfaceReplyContext], Awaitable[bool]]
 
 _COULD_NOT_READ = "I couldn't read that message. Could you send it again?"
 PROCESSING_FAILED_REPLY = "I couldn't process that message. Please send it again."
+USAGE_LIMIT_REPLY = (
+    "I can't answer this right now: the usage limit for this account has been "
+    "reached. Please try again once it resets."
+)
 
 
 class SurfaceTurnStarter:
@@ -134,7 +138,7 @@ class SurfaceTurnStarter:
         pooled_numbers: PooledNumberReader | None = None,
         ingest_memo: AttachmentIngestMemo | None = None,
         reprepare: Reprepare | None = None,
-        roster_reads: RosterReads = roster_reads,
+        roster_reads: roster.RosterReads = roster.roster_reads,
         write_scope: WriteScope | None = None,
         reply_sink: ReplySink | None = None,
         channel_lines: ChannelLinesFor = ChannelLinesInDatabase,
@@ -265,19 +269,20 @@ class SurfaceTurnStarter:
         # routinely several webhooks on a chat surface, so "I'll get to this"
         # was mostly the agent talking to itself about its own plumbing -- and
         # it is no longer true: `PendingUserMessagesCapability` steers these
-        # into the run already going, which answers all of them at once.
+        # into the run already going -- those said where it was asked; one said
+        # elsewhere waits for a turn of its own (`agent.domain.run_places`).
         try:
             async with self.write_scope() as uow:
                 finished = await write_inbound_message(
                     context, message_text, metadata, uow, lines=self.channel_lines(uow)
                 )
                 # Their message reopened a closed reply window: what waited for
-                # it is written out now, before the answer this message will get
-                # is even started, and the destination pump sends it at once.
+                # it is posted now, before the answer this message will get is
+                # even started, so it goes to their place ahead of that answer.
                 await stage_held_replies(
                     uow,
                     conversation_id=context.conversation_id,
-                    pod_id=context.pod_id,
+                    source_id=context.source_id,
                     platform=context.platform,
                 )
         except RuntimeUnavailableError as refused:

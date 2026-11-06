@@ -93,16 +93,40 @@ async def test_the_stored_key_matches_the_delivered_key(event):
             installation_id=str(INSTALLATION_ID),
         )
     )
+    # Each carries the fields GitHub always sends and the event id is built
+    # from; a delivery without them gets no id and is dropped before routing.
     payloads = {
-        "push": {"after": "abc"},
-        "pull_request": {"action": "opened", "pull_request": {"id": 1, "head": {}}},
-        "pull_request_review": {"action": "submitted", "review": {"id": 7}},
-        "pull_request_review_comment": {"action": "created", "comment": {"id": 8}},
+        "push": {"ref": "refs/heads/main", "before": "abc0", "after": "abc"},
+        "pull_request": {
+            "action": "opened",
+            "pull_request": {"id": 1, "head": {"sha": "abc"}},
+        },
+        "pull_request_review": {
+            "action": "submitted",
+            "review": {"id": 7, "state": "approved", "body": None},
+        },
+        "pull_request_review_comment": {
+            "action": "created",
+            "comment": {"id": 8, "updated_at": "2026-11-01T10:00:00Z"},
+        },
         "issues": {"action": "opened", "issue": {"id": 2}},
         "issue_comment": {"action": "created", "comment": {"id": 3}},
-        "workflow_run": {"workflow_run": {"id": 4, "status": "completed"}},
-        "check_suite": {"check_suite": {"id": 5, "status": "completed"}},
-        "check_run": {"action": "completed", "check_run": {"id": 9}},
+        "workflow_run": {
+            "action": "completed",
+            "workflow_run": {"id": 4, "status": "completed", "run_attempt": 1},
+        },
+        "check_suite": {
+            "action": "completed",
+            "check_suite": {
+                "id": 5,
+                "status": "completed",
+                "updated_at": "2026-11-01T10:00:00Z",
+            },
+        },
+        "check_run": {
+            "action": "completed",
+            "check_run": {"id": 9, "status": "completed"},
+        },
         "release": {"action": "published", "release": {"id": 6}},
     }
     payload = {

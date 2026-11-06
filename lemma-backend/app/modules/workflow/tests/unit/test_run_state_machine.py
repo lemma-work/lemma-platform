@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.workflow.domain.context import TriggerContext
+from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
@@ -78,6 +79,30 @@ def test_machine_suspend_keeps_run_running_and_resumes_open_step():
     assert run.status == WorkflowRunStatus.RUNNING
     assert run.step_history[-1].status == StepStatus.COMPLETED
     assert run.execution_context.to_view()["agent"] == {"answer": 42}
+
+
+def test_a_run_remembers_it_waited_on_a_form_after_the_form_is_answered():
+    """Answering the form completes the step, which is the only other place the
+    wait showed. Whether the run needed a person outlives that."""
+    run = _run()
+    step = run.begin_step("intake")
+    run.suspend_step(step, None, human_wait=True)
+    run.resume("intake", {"amount": 1})
+    run.complete()
+
+    assert run.step_history[-1].status == StepStatus.COMPLETED
+    assert WorkflowRunTerminalEvent.from_run(run).waited_on_form is True
+
+
+def test_waiting_on_platform_work_is_not_waiting_on_a_form():
+    run = _run()
+    step = run.begin_step("agent")
+    run.current_node_id = "agent"
+    run.suspend_step(step, None, human_wait=False)
+    run.resume("agent", {"answer": 42})
+    run.complete()
+
+    assert WorkflowRunTerminalEvent.from_run(run).waited_on_form is False
 
 
 def test_cancel_from_waiting_cancels_step():

@@ -167,11 +167,11 @@ _running: ContextVar[JobContext | None] = ContextVar("pod_bundle_job", default=N
 
 
 class _Yielding(BaseException):
-    """A stopping worker unwinding a job body to its ``_run`` frame.
+    """A stopping worker unwinding a job body to its ``run_body`` frame.
 
     A ``BaseException`` on purpose, like ``CancelledError``: the bodies end in
     ``except Exception`` blocks that mark the job FAILED, and a shutdown is not
-    a failure. ``_run`` turns it into the runtime's ``Released``.
+    a failure. ``run_body`` turns it into the runtime's ``Released``.
     """
 
 
@@ -189,7 +189,7 @@ def yield_point() -> None:
 type _Body = Callable[[dict[str, Any]], Awaitable[None]]
 
 
-async def _run(
+async def run_body(
     ctx: JobContext, payload: BaseModel, body: _Body, origin: Origin | None
 ) -> None:
     token = _running.set(ctx)
@@ -202,43 +202,43 @@ async def _run(
         _running.reset(token)
 
 
-_IMPORT = Origin(OriginKind.IMPORT)
+IMPORT = Origin(OriginKind.IMPORT)
 
 
 async def run_export(ctx: JobContext, payload: ExportJob) -> None:
     from app.modules.pod_bundle.events.handlers import export_pod_bundle
 
-    await _run(ctx, payload, export_pod_bundle, payload.bound_origin())
+    await run_body(ctx, payload, export_pod_bundle, payload.bound_origin())
 
 
 async def run_plan(ctx: JobContext, payload: ImportJob) -> None:
     from app.modules.pod_bundle.events.handlers import plan_pod_import
 
-    await _run(ctx, payload, plan_pod_import, _IMPORT)
+    await run_body(ctx, payload, plan_pod_import, IMPORT)
 
 
 async def run_import_github(ctx: JobContext, payload: GithubImportJob) -> None:
     from app.modules.pod_bundle.events.handlers import import_pod_github
 
-    await _run(ctx, payload, import_pod_github, _IMPORT)
+    await run_body(ctx, payload, import_pod_github, IMPORT)
 
 
 async def run_import_url(ctx: JobContext, payload: UrlImportJob) -> None:
     from app.modules.pod_bundle.events.handlers import import_pod_url
 
-    await _run(ctx, payload, import_pod_url, _IMPORT)
+    await run_body(ctx, payload, import_pod_url, IMPORT)
 
 
 async def run_apply(ctx: JobContext, payload: ImportJob) -> None:
     from app.modules.pod_bundle.events.handlers import apply_pod_import
 
-    await _run(ctx, payload, apply_pod_import, _IMPORT)
+    await run_body(ctx, payload, apply_pod_import, IMPORT)
 
 
 async def run_publish(ctx: JobContext, payload: PublishJob) -> None:
     from app.modules.pod_bundle.events.publish_task import publish_pod_github
 
-    await _run(ctx, payload, publish_pod_github, payload.bound_origin())
+    await run_body(ctx, payload, publish_pod_github, payload.bound_origin())
 
 
 # --- dead ---------------------------------------------------------------------
@@ -367,6 +367,7 @@ class BundleJobQueue:
 __all__ = [
     "APPLY",
     "EXPORT",
+    "IMPORT",
     "IMPORT_GITHUB",
     "IMPORT_URL",
     "PLAN",
@@ -376,13 +377,17 @@ __all__ = [
     "ExportJob",
     "GithubImportJob",
     "ImportJob",
+    "MAX_RUNTIME",
+    "RETRY",
     "PublishJob",
     "UrlImportJob",
     "apply_key",
     "carried_origin",
+    "end_dead_job",
     "export_key",
     "plan_key",
     "publish_key",
     "register_bundle_work",
+    "run_body",
     "yield_point",
 ]

@@ -80,6 +80,8 @@ class InMemoryChannelSeats:
         self._seated: dict[_SeatKey, UUID] = {}
         self._answers: dict[UUID, ReplyAddress] = {}
         self._lines: list[_Line] = []
+        #: ``(chat, surface, agent)`` where that agent answers every line.
+        self.every_line: set[tuple[str, UUID, UUID]] = set()
 
     @property
     def sources(self) -> dict[_PlaceKey, Source]:
@@ -187,15 +189,20 @@ class InMemoryChannelSeats:
         )
         return self._now(self._put(source))
 
-    async def heard_at(
-        self, source_id: UUID, delivery_ref: Mapping[str, object]
-    ) -> None:
-        self._touch(source_id, delivery_ref, heard=True)
-
     async def addressed_at(
         self, source_id: UUID, delivery_ref: Mapping[str, object]
     ) -> None:
-        self._touch(source_id, delivery_ref, heard=False)
+        source = self._by_id(source_id)
+        if source is None:
+            return
+        self._put(
+            source.model_copy(
+                update={
+                    "delivery_ref": dict(delivery_ref),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+        )
 
     async def lock_person(
         self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
@@ -217,8 +224,16 @@ class InMemoryChannelSeats:
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:
         return self.channels.setdefault(("DIRECT", pod_id, user_id), uuid4())
 
-    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None:
+    async def reply_address(
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
+    ) -> ReplyAddress | None:
         answer = self._answers.get(conversation_id)
+        if at_source_id is not None and (
+            answer is None or answer.source.id != at_source_id
+        ):
+            # Asked at a place this double heard nothing at: its last word.
+            place = self._by_id(at_source_id)
+            return ReplyAddress(source=place, ref=place.delivery_ref) if place else None
         if answer is None:
             return None
         # The place as it is now, not as it was when the line was said.
@@ -265,6 +280,11 @@ class InMemoryChannelSeats:
             if found:
                 freshest[person] = found[0]
         return freshest
+
+    async def answers_every_line_at(
+        self, *, external_channel_id: str, surface_id: UUID, agent_id: UUID
+    ) -> bool:
+        return (external_channel_id, surface_id, agent_id) in self.every_line
 
     async def places_hearing(
         self,
@@ -360,21 +380,6 @@ class InMemoryChannelSeats:
             ),
             None,
         )
-
-    def _touch(
-        self, source_id: UUID, delivery_ref: Mapping[str, object], *, heard: bool
-    ) -> None:
-        source = self._by_id(source_id)
-        if source is None:
-            return
-        now = datetime.now(timezone.utc)
-        update: dict[str, object] = {
-            "delivery_ref": dict(delivery_ref),
-            "updated_at": now,
-        }
-        if heard:
-            update["last_inbound_at"] = now
-        self._put(source.model_copy(update=update))
 
     def _channel(self, pod_id: UUID, home: Home, place: _PlaceKey) -> UUID:
         match home:

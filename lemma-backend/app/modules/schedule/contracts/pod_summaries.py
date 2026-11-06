@@ -95,7 +95,12 @@ async def _readable_total(*, session, pod_id: UUID, ctx: Context) -> int:
 
 async def _readable_page(
     *, session, pod_id: UUID, ctx: Context, limit: int
-) -> list[PodScheduleSummary]:
+) -> tuple[list[PodScheduleSummary], int]:
+    """A page of them, and -- in the same statement -- how many there are.
+
+    The window count runs before the limit, over the same readable rows; an
+    empty page means there are none, since ``limit`` is positive.
+    """
     rows = (
         await session.execute(
             select(
@@ -106,6 +111,7 @@ async def _readable_page(
                 Schedule.workflow_id,
                 Schedule.is_active,
                 Schedule.config,
+                func.count().over(),
             )
             .where(
                 Schedule.pod_id == pod_id,
@@ -116,6 +122,7 @@ async def _readable_page(
             .limit(limit)
         )
     ).all()
+    total = int(rows[0][-1]) if rows else 0
     return [
         PodScheduleSummary(
             name=name,
@@ -134,8 +141,9 @@ async def _readable_page(
             workflow_id,
             is_active,
             config,
+            _total,
         ) in rows
-    ]
+    ], total
 
 
 async def list_schedule_summaries(
@@ -150,7 +158,6 @@ async def list_schedule_summaries(
     The total goes through the same filter as the rows: a count over everything
     would tell the reader how many schedules they are not allowed to see.
     """
-    return (
-        await _readable_page(session=session, pod_id=pod_id, ctx=ctx, limit=limit),
-        await _readable_total(session=session, pod_id=pod_id, ctx=ctx),
-    )
+    if limit <= 0:
+        return [], await _readable_total(session=session, pod_id=pod_id, ctx=ctx)
+    return await _readable_page(session=session, pod_id=pod_id, ctx=ctx, limit=limit)

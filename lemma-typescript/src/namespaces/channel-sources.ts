@@ -1,6 +1,7 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { SourceUpdateRequest } from "../openapi_client/models/SourceUpdateRequest.js";
 import type { WhatsAppGroupRequest } from "../openapi_client/models/WhatsAppGroupRequest.js";
+import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 import { ChannelSourcesService } from "../openapi_client/services/ChannelSourcesService.js";
 import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
 
@@ -16,6 +17,13 @@ import { ChannelsService } from "../openapi_client/services/ChannelsService.js";
  * groups, it cannot join one; it comes back `pending` until WhatsApp confirms
  * it) and `telegramLink` (a one-use, hour-long link that adds the bot to a
  * group the caller picks).
+ *
+ * And the caller proving which Telegram account is theirs, so the bot knows
+ * them in its groups: `identityLink` mints a ten-minute code to open in a
+ * private chat with the bot -- for somebody in a group the pod took for a
+ * stranger (`contactId`), it works only from that account -- `identityLinkStatus`
+ * says whether it was opened and from which account, and the caller then
+ * confirms or declines that account. Nothing is bound until they confirm.
  */
 export class ChannelSourcesNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
@@ -27,8 +35,6 @@ export class ChannelSourcesNamespace {
       ChannelsService.channelList(
         podId,
         undefined, // kind
-        undefined, // visibility
-        undefined, // q
         false,
         undefined,
         undefined,
@@ -74,6 +80,64 @@ export class ChannelSourcesNamespace {
   telegramLink(podId: string, surfaceName: string) {
     return this.client.request(() =>
       ChannelSourcesService.channelTelegramLinkCreate(podId, { surface_name: surfaceName }),
+    );
+  }
+
+  /** A ten-minute code proving, once confirmed, a Telegram account is the
+   *  caller's. With `contactId`, only that person's account may open it. */
+  identityLink(podId: string, surfaceId: string, options: { contactId?: string } = {}) {
+    return this.client.request(() =>
+      AgentSurfacesService.telegramIdentityLinkCreate(podId, {
+        surface_id: surfaceId,
+        contact_id: options.contactId ?? null,
+      }),
+    );
+  }
+
+  /** Whether the caller's code was opened, and from which account. */
+  identityLinkStatus(podId: string, code: string) {
+    return this.client.request(() => AgentSurfacesService.telegramIdentityLinkGet(podId, code));
+  }
+
+  /** The account that opened the code is the caller's: bind it. */
+  confirmIdentityLink(podId: string, code: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.telegramIdentityLinkConfirm(podId, code),
+    );
+  }
+
+  /** The tables a group's people outside the pod may read or add to. */
+  tableGrants(podId: string, channelId: string) {
+    return this.client.request(() => ChannelsService.channelTableGrantList(podId, channelId));
+  }
+
+  /** Give a group a table: the columns everybody there may read, and those
+   *  they may fill in a new row. Everybody in the group reads what is granted. */
+  setTableGrant(
+    podId: string,
+    channelId: string,
+    table: string,
+    grant: { readColumns: string[]; addColumns: string[] },
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelTableGrantSet(podId, channelId, table, {
+        read_columns: grant.readColumns,
+        add_columns: grant.addColumns,
+      }),
+    );
+  }
+
+  /** The group no longer reads or adds to the table. */
+  removeTableGrant(podId: string, channelId: string, table: string) {
+    return this.client.request(() =>
+      ChannelsService.channelTableGrantRemove(podId, channelId, table),
+    );
+  }
+
+  /** The account that opened the code is not the caller's: spend it. */
+  declineIdentityLink(podId: string, code: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.telegramIdentityLinkDecline(podId, code),
     );
   }
 }

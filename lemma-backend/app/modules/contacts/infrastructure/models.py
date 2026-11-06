@@ -10,6 +10,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -28,6 +29,12 @@ class ContactModel(UUIDAuditBase):
     __table_args__ = (
         Index("ix_contacts_pod_created", "pod_id", "created_at"),
         Index("ix_contacts_merged_into", "merged_into_id"),
+        # One person or the other: a contact is never both another contact
+        # and a member at once.
+        CheckConstraint(
+            "merged_into_id IS NULL OR merged_into_user_id IS NULL",
+            name="ck_contacts_merged_once",
+        ),
         # What the organization's contact limit counts, before every turn.
         Index(
             "ix_contacts_answered",
@@ -45,6 +52,15 @@ class ContactModel(UUIDAuditBase):
     #: the survivor forgets the contacts that became it.
     merged_into_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
+    )
+    #: The member this contact proved to be (``services/member_folds``): the
+    #: row stays, holding no handles, so a line or a conversation still naming
+    #: it says it was this person, outside the pod, then.
+    merged_into_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "users.id", ondelete="SET NULL", name="fk_contacts_merged_into_user"
+        ),
+        nullable=True,
     )
     #: When an agent first answered them: what the organization's contact
     #: limit counts, so a crowded group nobody spoke to the bot in costs nothing.
@@ -67,6 +83,8 @@ class ContactIdentityModel(UUIDAuditBase):
             "pod_id", "kind", "value", name="uq_contact_identities_pod_handle"
         ),
         Index("ix_contact_identities_contact", "contact_id"),
+        # A handle across pods: a proved account's contacts in every pod.
+        Index("ix_contact_identities_kind_value", "kind", "value"),
     )
 
     contact_id: Mapped[UUID] = mapped_column(
@@ -81,8 +99,9 @@ class ContactIdentityModel(UUIDAuditBase):
     verified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    #: When the contact last wrote from this handle. WhatsApp allows a business
-    #: to write freely only within 24 hours of it.
+    #: No longer written or read: when a contact last wrote is the place's
+    #: (``channel_sources.last_inbound_at``). Kept until a contract migration
+    #: drops it.
     last_inbound_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

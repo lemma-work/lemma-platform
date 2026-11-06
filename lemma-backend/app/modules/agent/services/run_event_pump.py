@@ -14,13 +14,15 @@ terminal, which is how the driver knows to stop consuming.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator
+from uuid import UUID
 
 
 from app.core.log.log import get_logger
 from app.core.text.thinking_tags import ThinkingStreamSplitter
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.run_log import RunStepDraft
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -31,13 +33,18 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
 )
-from app.modules.agent.services.run_message_writer import split_reasoning_drafts
-from app.modules.agent.services.serialization import message_to_payload
-from app.modules.agent.services.realtime import (
+from app.modules.agent.domain.live_events import message_to_payload
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import (
     message_payload,
-    publish_conversation_event,
     status_payload,
     token_payload,
+)
+from app.modules.agent.services.run_event_shapes import (
+    STREAM_RESET_KIND as _STREAM_RESET_KIND,
+    _as_token_lanes,
+    _split_message_event,
+    _usage_from_event,
 )
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_phase_spans import observe_first_output
@@ -47,10 +54,6 @@ from app.modules.agent.services.run_finalizer import (
 )
 
 logger = get_logger(__name__)
-
-#: The retry path's "discard what you have" signal, sent as a token with no
-#: payload (`PydanticAIHarness._stream_reset_event`).
-_STREAM_RESET_KIND = "stream_reset"
 
 
 class TurnYielded(BaseException):
@@ -112,6 +115,8 @@ class RunOutcome:
     final_status: ConversationStatus | None = None
     final_error: str | None = None
     usage_data: AgentRunUsage | None = None
+    #: Tool calls this run wrote, for the run's analytics when no usage counted them.
+    tool_calls_seen: int = 0
     terminal_seen: bool = False
 
 
@@ -121,6 +126,9 @@ _STATUS_OF_TERMINAL_EVENT = {
     AgentEventType.WAITING: ConversationStatus.WAITING,
     AgentEventType.STOPPED: ConversationStatus.STOPPED,
 }
+
+
+_ENDINGS = frozenset({AgentEventType.COMPLETED})
 
 
 class RunEventPump:
@@ -138,6 +146,10 @@ class RunEventPump:
         # `RunMessageWriter` had to rename. The WAITING event that follows a
         # pause still carries the provider's, and a surface answers by it.
         self._stored_ids: dict[str, str] = {}
+        # Rows written since the run's last log step, which the next one covers
+        # -- or, when the run ends first, the last one.
+        self._since_last_step: list[UUID] = []
+        self._last_step: int | None = None
 
     async def handle(
         self,
@@ -147,6 +159,8 @@ class RunEventPump:
         outcome: RunOutcome,
     ) -> bool:
         """True when this event was terminal and the run has been finalized."""
+        if event.type in _STATUS_OF_TERMINAL_EVENT or event.type in _ENDINGS:
+            await self._carry_the_rest(run)
         terminal = await self._apply(event=event, run=run, outcome=outcome)
         # These finalize without a final status of their own, and the run
         # metrics read it: unset, every one of them was counted completed. Set
@@ -188,6 +202,17 @@ class RunEventPump:
             await self._persist_message(event, run)
             return False
 
+        if event.type == AgentEventType.RUN_STEP:
+            assert isinstance(event.data, RunStepDraft)
+            # Every row the run wrote since its last step is carried by this one.
+            written, self._since_last_step = self._since_last_step, []
+            self._last_step = await self.message_writer.append_step(
+                conversation_id=run.conversation_id,
+                agent_run_id=run.agent_run_id,
+                draft=replace(event.data, covers=(*event.data.covers, *written)),
+            )
+            return False
+
         if event.type == AgentEventType.STATUS:
             await publish_conversation_event(
                 run.conversation_id,
@@ -207,6 +232,7 @@ class RunEventPump:
                 error_code=event.error_code,
                 error_reason=event.error_reason,
                 usage_data=outcome.usage_data,
+                tool_calls_seen=outcome.tool_calls_seen,
                 run=run,
             )
             return True
@@ -219,6 +245,7 @@ class RunEventPump:
                 status=AgentRunStatus.FAILED,
                 error=rejected_run_error_message(event.data),
                 usage_data=outcome.usage_data,
+                tool_calls_seen=outcome.tool_calls_seen,
                 run=run,
             )
             return True
@@ -233,6 +260,7 @@ class RunEventPump:
                 conversation_status=ConversationStatus.WAITING,
                 output_data=outcome.output_data,
                 usage_data=outcome.usage_data,
+                tool_calls_seen=outcome.tool_calls_seen,
                 run=run,
             )
             return True
@@ -244,6 +272,16 @@ class RunEventPump:
             return True
 
         return False
+
+    async def _carry_the_rest(self, run: RunIdentity) -> None:
+        """What the run wrote after its last step -- the answer it closed on,
+        the returns its ending made up -- is carried by that step."""
+        if self._last_step is None or not self._since_last_step:
+            return
+        rest, self._since_last_step = self._since_last_step, []
+        await self.message_writer.carry(
+            conversation_id=run.conversation_id, row_ids=rest, step=self._last_step
+        )
 
     async def _finish_ended(
         self, *, stopped: bool, run: RunIdentity, outcome: RunOutcome
@@ -263,6 +301,7 @@ class RunEventPump:
             error=outcome.final_error,
             output_data=outcome.output_data,
             usage_data=outcome.usage_data,
+            tool_calls_seen=outcome.tool_calls_seen,
             run=run,
             answer=answer,
         )
@@ -326,7 +365,10 @@ class RunEventPump:
             should_stop = False
             for split in _split_message_event(raw_event):
                 event = self._addressed_as_stored(split)
-                await notify_event(observer, event, conversation, ctx, run.agent_run_id)
+                if event.type is not AgentEventType.RUN_STEP:
+                    await notify_event(
+                        observer, event, conversation, ctx, run.agent_run_id
+                    )
                 if event.type == AgentEventType.USAGE:
                     outcome.usage_data = _usage_from_event(event) or outcome.usage_data
                     continue
@@ -336,7 +378,7 @@ class RunEventPump:
                 if should_stop:
                     break
                 if (
-                    boundary.observe(event)
+                    boundary.observe(self._call_as_stored(event))
                     and yield_requested is not None
                     and yield_requested()
                 ):
@@ -368,6 +410,7 @@ class RunEventPump:
             error="The agent stopped without producing a result. Please try again.",
             output_data=outcome.output_data,
             usage_data=outcome.usage_data,
+            tool_calls_seen=outcome.tool_calls_seen,
         )
 
     async def _persist_message(self, event: AgentEvent, run: RunIdentity) -> None:
@@ -376,16 +419,57 @@ class RunEventPump:
             agent_run_id=run.agent_run_id,
             data=event.data,
         )
+        self._since_last_step.append(saved_message.id)
         sent_as = getattr(event.data, "tool_call_id", None)
-        if sent_as and saved_message.tool_call_id not in (None, sent_as):
+        if sent_as and saved_message.kind is MessageKind.TOOL_CALL:
+            # Every call, renamed or not: a provider that reuses an id means
+            # the newest call under it is the one the next return answers.
+            if saved_message.tool_call_id in (None, sent_as):
+                self._stored_ids.pop(sent_as, None)
+            else:
+                self._stored_ids[sent_as] = saved_message.tool_call_id
+        elif sent_as and saved_message.tool_call_id not in (None, sent_as):
             self._stored_ids[sent_as] = saved_message.tool_call_id
         await publish_conversation_event(
             run.conversation_id,
             message_payload(run.agent_run_id, message_to_payload(saved_message)),
         )
 
+    def _call_as_stored(self, event: AgentEvent) -> AgentEvent:
+        """A call event under the id it was just stored under, which is the id
+        its return (translated by ``_addressed_as_stored``) will carry."""
+        draft = event.data
+        if (
+            event.type is not AgentEventType.MESSAGE
+            or not isinstance(draft, MessageDraft)
+            or draft.kind is not MessageKind.TOOL_CALL
+            or draft.tool_call_id not in self._stored_ids
+        ):
+            return event
+        stored_id = self._stored_ids[draft.tool_call_id]
+        return event.model_copy(
+            update={"data": draft.model_copy(update={"tool_call_id": stored_id})}
+        )
+
     def _addressed_as_stored(self, event: AgentEvent) -> AgentEvent:
-        """A WAITING event naming its pause by the id the pause is stored under."""
+        """An event naming its call by the id the call is stored under.
+
+        A WAITING event names its pause, and a return names its call, by the
+        provider's id; ``RunMessageWriter`` stored the call under another when
+        the provider reused one. A return arrives after its call is stored and
+        before any later call can reuse the id, so the newest renaming is its.
+        """
+        draft = event.data
+        if (
+            event.type is AgentEventType.MESSAGE
+            and isinstance(draft, MessageDraft)
+            and draft.kind is MessageKind.TOOL_RETURN
+            and draft.tool_call_id in self._stored_ids
+        ):
+            stored_id = self._stored_ids[draft.tool_call_id]
+            return event.model_copy(
+                update={"data": draft.model_copy(update={"tool_call_id": stored_id})}
+            )
         if event.type is not AgentEventType.WAITING or not isinstance(event.data, dict):
             return event
         stored = self._stored_ids.get(str(event.data.get("tool_call_id")))
@@ -421,10 +505,10 @@ class RunEventPump:
             return [(kind, text)]
         if kind != "text":
             return [(kind, text)]
-        return list(self._token_splitter.feed(text))
+        return _as_token_lanes(self._token_splitter.feed(text))
 
     async def _drain_tokens(self, run: RunIdentity) -> None:
-        for kind, chunk in self._token_splitter.flush():
+        for kind, chunk in _as_token_lanes(self._token_splitter.flush()):
             await publish_conversation_event(
                 run.conversation_id,
                 token_payload(run.agent_run_id, chunk, kind=kind),
@@ -438,6 +522,9 @@ class RunEventPump:
         event has already been persisted, and only overwrites what the event
         actually carried.
         """
+        draft = event.data
+        if isinstance(draft, MessageDraft) and draft.kind is MessageKind.TOOL_CALL:
+            outcome.tool_calls_seen += 1
         saved_output = self.message_writer.output_data_from_event(event)
         if saved_output is not None:
             outcome.output_data = saved_output
@@ -480,29 +567,3 @@ async def drive_harness(
         if aclose is not None:
             await aclose()
         raise
-
-
-def _split_message_event(event: AgentEvent) -> list[AgentEvent]:
-    """One message event, split into the messages it should actually become.
-
-    Identity for everything that is not an assistant message carrying reasoning
-    in its text, which is all but a handful of events -- the list is returned
-    unchanged rather than rebuilt so the common path allocates nothing.
-    """
-    if event.type is not AgentEventType.MESSAGE or not isinstance(
-        event.data, MessageDraft
-    ):
-        return [event]
-    drafts = split_reasoning_drafts(event.data)
-    if len(drafts) == 1 and drafts[0] is event.data:
-        return [event]
-    return [event.model_copy(update={"data": draft}) for draft in drafts]
-
-
-def _usage_from_event(event: AgentEvent) -> AgentRunUsage | None:
-    """The usage an event carries, however the harness chose to shape it."""
-    if isinstance(event.data, AgentRunUsage):
-        return event.data
-    if isinstance(event.data, dict):
-        return AgentRunUsage.model_validate(event.data)
-    return None

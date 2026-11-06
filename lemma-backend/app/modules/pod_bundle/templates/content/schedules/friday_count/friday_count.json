@@ -1,0 +1,10 @@
+{
+  "name": "friday_count",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 16 * * 5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Write this week's count to a page named after the week: the posts that went out, where, and how they did."
+}

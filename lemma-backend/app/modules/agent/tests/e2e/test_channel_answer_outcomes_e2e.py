@@ -25,7 +25,7 @@ from functools import partial
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
@@ -42,21 +42,28 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageDraft,
     MessageRole,
+    QueueState,
 )
 from app.modules.agent.events.channel_answer_work import register_channel_answer_work
 from app.modules.agent.events.channel_question_work import (
     register_channel_question_work,
 )
-from app.modules.agent.events.run_followup_work import register_run_followup_work
+from app.modules.agent.events.run_followup_work import (
+    register_run_followup_work,
+    start_queued_followup_for,
+)
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
     ConversationModel,
+    MessageModel,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.history_reads import HistoryReads
+from app.modules.agent.domain.runtime_history import MAX_HISTORY_AGENT_RUNS
 from app.modules.agent.services.channel_answers import (
     COULD_NOT_ANSWER,
     STOPPED_BEFORE_ANSWERING,
@@ -66,21 +73,21 @@ from app.modules.agent.services.channel_background import (
     with_channel_background,
 )
 from app.modules.agent.services.contact_run_failures import RUN_FAILED_REASON
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services import channel_answers
 from app.modules.agent.services.message_reply_service import REPLY_SOURCE
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     STOPPED_BY_MEMBER,
     assemble_runtime_history,
 )
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
-    conversation_service,
     messages,
     owner_uow,
     running_run,
     runs,
     seeded_conversation,
+    stop_conversation,
 )
 from app.modules.channels.contracts import (
     AgentAnswers,
@@ -120,6 +127,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 #: The channels tests' pod: an owner, an editor, a user and a viewer.
 pod = channel_pod.pod
+channel_world = channel_pod.channel_world
 
 
 # ------------------------------------------------------------------- harness
@@ -197,7 +205,7 @@ async def _end(
             select(AgentRunModel.conversation_id).where(AgentRunModel.id == run_id)
         )
         assert conversation_id is not None
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=status,
             conversation_status=ConversationStatus(status.value),
@@ -218,6 +226,21 @@ async def _end(
         )
         await uow.commit()
     await _drain(WorkClass.EVENTS)
+
+
+async def _turn_of(conversation_id: UUID, line_id: UUID) -> MessageModel:
+    """The conversation's message a line was sent to it as."""
+    async with async_session_maker() as session:
+        return (
+            await session.scalars(
+                select(MessageModel).where(
+                    MessageModel.conversation_id == conversation_id,
+                    MessageModel.role == "user",
+                    MessageModel.message_metadata["channel_message_id"].astext
+                    == str(line_id),
+                )
+            )
+        ).one()
 
 
 async def _said_by_run(run_id: UUID) -> list[ChannelMessageModel]:
@@ -311,11 +334,14 @@ async def test_an_answer_the_agent_asked_for_comes_back_to_the_member(pod: Pod):
 
 
 async def test_two_lines_in_a_group_are_answered_each_by_its_own_answer(pod: Pod):
-    """With the agent answering every line, "say OK1" and then "say OK2"
-    while it works on the first: the second is not steered into the first's
-    run -- whose one answer would answer OK1 alone -- but waits, and its own
-    run answers it. A group made in Lemma reads as a chat: each answer is in
-    the main timeline, pointing at the line it answers."""
+    """With the agent answering every line, "say OK1" and then "say OK2" a
+    moment later while it works on the first: the second is another thread,
+    another place, so it is not steered into the first's run -- whose one
+    answer would answer OK1 alone. Its turn is taken at once and queued
+    behind that run, as a platform's message said elsewhere is -- no polling
+    -- and the follow-up turn after it answers OK2. Each line is answered
+    once, by its own answer; neither is lost. A group made in Lemma reads as
+    a chat: each answer is in the main timeline, pointing at its line."""
     pod_id, owner = UUID(pod.id), UUID(pod.owner["id"])
     made = await group(pod, title="launch")
     channel_id = UUID(made["id"])
@@ -329,10 +355,15 @@ async def test_two_lines_in_a_group_are_answered_each_by_its_own_answer(pod: Pod
 
     one = await _says(channel_id, owner, "say OK1")
     await _drain(WorkClass.INTERACTIVE)
-    _, first = await _run_answering(one.id)
+    conversation_id, first = await _run_answering(one.id)
     two = await _says(channel_id, owner, "say OK2")
     await _drain(WorkClass.INTERACTIVE)
-    assert await _answering(two.id) is None, "OK2 joined the run answering OK1"
+    waiting = await _answering(two.id)
+    assert waiting is not None and waiting.agent_run_id is None, (
+        "OK2 joined the run answering OK1"
+    )
+    queued = await _turn_of(conversation_id, two.id)
+    assert (queued.agent_run_id, queued.queue_state) == (first, QueueState.QUEUED)
 
     await _end(first, pod_id=pod_id, user_id=owner, answer="OK1")
     [answer_one] = await _said_by_run(first)
@@ -341,10 +372,21 @@ async def test_two_lines_in_a_group_are_answered_each_by_its_own_answer(pod: Pod
         None,
         one.id,
     )
+    # As the runner does once the first run is done: the turn owed for what
+    # waited behind it, which answers OK2 in its own thread.
+    second = await start_queued_followup_for(
+        conversation_id, first, uow_factory=_uows()
+    )
+    assert second is not None and second != first
+    assert (await _turn_of(conversation_id, two.id)).steered_into_run_id == second
+    async with async_session_maker() as session:
+        follow_up = await session.get(AgentRunModel, second)
+    assert follow_up is not None
+    assert follow_up.run_metadata == {
+        "asked_in_thread": str(two.id),
+        "asked_in_place": f"lemma:{two.id}",
+    }
 
-    await _drain(WorkClass.INTERACTIVE)
-    _, second = await _run_answering(two.id)
-    assert second != first
     await _end(second, pod_id=pod_id, user_id=owner, answer="OK2")
     [answer_two] = await _said_by_run(second)
     assert (answer_two.body, answer_two.thread_root_id, answer_two.reply_to_id) == (
@@ -352,6 +394,15 @@ async def test_two_lines_in_a_group_are_answered_each_by_its_own_answer(pod: Pod
         None,
         two.id,
     )
+    for line, run, said in ((one, first, answer_one), (two, second, answer_two)):
+        answered = await _answering(line.id)
+        assert answered is not None
+        assert (answered.state, answered.agent_run_id, answered.answer_message_id) == (
+            "ANSWERED",
+            run,
+            said.id,
+        )
+        assert [reply.id for reply in await _replies_to(line.id)] == [said.id]
 
 
 async def test_a_reply_in_the_same_thread_still_joins_the_run(pod: Pod):
@@ -414,15 +465,52 @@ async def test_a_run_that_did_not_answer_says_so_where_it_was_asked(
     assert (await _answering(asked.id)).state == "ENDED"  # type: ignore[union-attr]
 
 
+async def test_a_line_whose_run_is_gone_ends_unanswered_rather_than_waiting(
+    pod: Pod,
+):
+    """The run answering a line is gone by the time its end is heard -- its
+    row deleted with what it read. Nothing will answer the line, so it ends
+    unanswered, as a failure's notice ends it, instead of showing as being
+    answered forever."""
+    pod_id, owner = UUID(pod.id), UUID(pod.owner["id"])
+    direct = await _direct(pod_id, owner)
+    asked = await _says(direct, owner, "Where did the run go?")
+    await _drain(WorkClass.INTERACTIVE)
+    conversation_id, run_id = await _run_answering(asked.id)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await uow.session.execute(
+            delete(AgentRunModel).where(AgentRunModel.id == run_id)
+        )
+        await facts.emit(
+            uow,
+            AgentRunFinished(
+                run_id=run_id,
+                conversation_id=conversation_id,
+                pod_id=pod_id,
+                user_id=owner,
+                status=AgentRunStatus.COMPLETED.value,
+                conversation_status=AgentRunStatus.COMPLETED.value,
+                origin="chat",
+            ),
+        )
+        await uow.commit()
+    await _drain(WorkClass.EVENTS)
+
+    answered = await _answering(asked.id)
+    assert answered is not None
+    assert (answered.state, answered.answer_message_id) == ("ENDED", None)
+    assert await _replies_to(asked.id) == []
+
+
 async def test_a_line_refused_before_its_run_starts_says_why(
     pod: Pod, monkeypatch: pytest.MonkeyPatch
 ):
-    async def refuse(self, **_):
+    async def refuse(_agent_repository, **_):
         raise DomainError(
             "You don't have access to this agent.", code="FORBIDDEN", status_code=403
         )
 
-    monkeypatch.setattr(ConversationService, "authorize_opening", refuse)
+    monkeypatch.setattr(channel_answers, "authorize_opening", refuse)
     pod_id, owner = UUID(pod.id), UUID(pod.owner["id"])
     direct = await _direct(pod_id, owner)
     asked = await _says(direct, owner, "What is on today?")
@@ -513,10 +601,10 @@ async def test_the_model_reads_a_members_line_as_it_says_now(pod: Pod):
 
     # As the runner builds the run's history (``AgentRunnerService``).
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
+        history_reads = HistoryReads(uow)
         read = await assemble_runtime_history(
-            repo,
-            await repo.load_runtime_history_digests_by_run_id(
+            history_reads,
+            await history_reads.load_runtime_history_digests_by_run_id(
                 third, limit=MAX_HISTORY_AGENT_RUNS
             ),
             conversation_id=conversation_id,
@@ -557,10 +645,10 @@ async def _model_reads(conversation_id: UUID, run_id: UUID):
     """The history and prompt ``run_id``'s model is sent, built as the runner
     builds them."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
+        history_reads = HistoryReads(uow)
         read = await assemble_runtime_history(
-            repo,
-            await repo.load_runtime_history_digests_by_run_id(
+            history_reads,
+            await history_reads.load_runtime_history_digests_by_run_id(
                 run_id, limit=MAX_HISTORY_AGENT_RUNS
             ),
             conversation_id=conversation_id,
@@ -595,7 +683,7 @@ async def test_a_line_after_a_stopped_request_is_answered_for_itself(pod: Pod):
 
     # Half way: the file write is in flight when the member presses Stop.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).append_message(
+        await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=essay_run,
             draft=MessageDraft.of_tool_call(
@@ -619,7 +707,7 @@ async def test_a_line_after_a_stopped_request_is_answered_for_itself(pod: Pod):
         conversation_id=conversation_id,
     )
     async with owner_uow(stopper) as uow:
-        await conversation_service(uow).stop_conversation(
+        await stop_conversation(uow).stop(
             conversation_id=conversation_id, user_id=owner, pod_id=pod_id
         )
     await _drain(WorkClass.EVENTS)

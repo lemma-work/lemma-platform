@@ -10,25 +10,28 @@ asks for, and which question it is answering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.capabilities import open_questions
-from app.modules.agent.capabilities.open_questions import (
-    OpenQuestionsCapability,
+from app.modules.agent.services.context_brief import open_questions
+from app.modules.agent.services.context_brief.open_questions import (
     Waiting,
     render_form_fields,
     render_open_questions,
     shown_to_the_agent,
 )
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.messaging.answer import answer_question
-from app.modules.agent.tools.messaging.models import AnswerQuestionRequest
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.messaging.answer import (
+    SPECS as ANSWER_SPECS,
+    answer_question,
+)
+from app.modules.agent.services.tool_runtime import WITHHELD_MESSAGE, ToolRuntime
+from app.modules.agent.infrastructure.tools.messaging.models import (
+    AnswerQuestionRequest,
+)
 from app.modules.channels.contracts import (
     ChannelMessage,
     Principal,
@@ -229,13 +232,11 @@ def test_only_what_an_agent_may_answer_is_put_in_front_of_it(kind, ref, shown):
 
 
 def _ctx(*, audience: Audience | None = None):
-    return SimpleNamespace(
-        deps=BaseAgentContext(
-            user_id=MEMBER,
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            audience=audience or Audience.member(),
-        )
+    return ToolContext(
+        user_id=MEMBER,
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        audience=audience or Audience.member(),
     )
 
 
@@ -287,37 +288,42 @@ async def test_a_refused_answer_comes_back_with_the_reason(monkeypatch):
 
 async def test_a_strangers_run_answers_nothing(monkeypatch):
     """A question put to a member is answered under the member's authority;
-    a contact's run has none to lend."""
+    a contact's run has none to lend, so the tool is not in its toolset and
+    is held however it is asked for."""
 
     async def _answer(uow_factory, **kwargs):  # pragma: no cover - not reached
         raise AssertionError("answered as a member from a stranger's run")
 
     monkeypatch.setattr("app.modules.channels.contracts.questions.answer", _answer)
 
-    result = await answer_question(
+    result = await ToolRuntime(ANSWER_SPECS).call(
+        "answer_question",
+        {"question_id": str(uuid4()), "answer": {"text": "yes"}},
         _ctx(audience=Audience.contact(uuid4())),
-        AnswerQuestionRequest(question_id=uuid4(), answer={"text": "yes"}),
     )
 
-    assert result.success is False
+    assert result == {"success": False, "error": WITHHELD_MESSAGE}
 
 
 async def test_a_refusal_reaches_the_model_instead_of_ending_the_run():
-    """The capability hands its toolset over directly, so nothing else wraps it.
+    """Whatever the answer tool raises reaches the model as a result it can
+    read, through the one runtime every tool call goes through -- rather than
+    an exception that ends the conversation."""
+    from app.modules.agent.domain.tools import ToolGroup, ToolSpec
+    from app.modules.agent.services.tool_runtime import ToolRuntime
 
-    Every other tool surface is wrapped by the assembler. This one is built
-    here, so the wrapper is what turns anything the tool raises into a result
-    the model can read -- rather than an exception that ends the conversation.
-    """
-    toolset = OpenQuestionsCapability().get_toolset()
+    async def refuse(ctx: object, request: object) -> object:
+        raise ValueError("this question did not ask for an answer")
 
-    @dataclass
-    class _Boom:
-        async def call_tool(self, name, tool_args, ctx, tool):
-            raise ValueError("this question did not ask for an answer")
-
-    toolset.wrapped = _Boom()
-    result = await toolset.call_tool("answer_question", {}, None, None)
+    spec = ToolSpec(
+        name="answer_question",
+        description="",
+        parameters=None,
+        json_schema={"type": "object"},
+        toolset=ToolGroup.QUESTIONS,
+        run=refuse,
+    )
+    result = await ToolRuntime([spec]).call("answer_question", {}, _ctx())
 
     assert isinstance(result, dict), result
     assert result.get("success") is False

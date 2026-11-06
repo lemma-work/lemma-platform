@@ -2,7 +2,6 @@ import { MicIcon, MicOffIcon, EndCallIcon, ExpandIcon } from "@/ui/icons";
 import { CallMark } from "./call-mark";
 import { statusLine } from "./call-status";
 import type { CallStatus } from "./use-call";
-import type { PlanStepState } from "@/thread/turns";
 
 /** The call, minimized.
  *
@@ -18,9 +17,9 @@ export function CallBar({
     teammate,
     status,
     error,
+    notice,
     muted,
     thinking,
-    plan,
     level,
     onMute,
     onEnd,
@@ -29,13 +28,11 @@ export function CallBar({
     teammate: string;
     status: CallStatus;
     error: string | null;
+    /** Something to know, said once (a request the team cannot take). */
+    notice?: string | null;
     muted: boolean;
-    /** Still reasoning after it stopped talking — Gemini 3.8 Live Extended
-     *  Thinking's own signal, not a guess made from the audio going quiet. */
+    /** Someone in the call is working: the server's word, from the runs. */
     thinking?: boolean;
-    /** The teammate's own plan, so the bar says the same thing the screen
-     *  does rather than keeping a second opinion. */
-    plan?: PlanStepState[];
     level: number;
     onMute: () => void;
     onEnd: () => void;
@@ -51,7 +48,7 @@ export function CallBar({
                         {status === "connecting" ? "Connecting to " + teammate + "…" : "On a call with " + teammate}
                     </span>
                     <span className="callbar__hint">
-                        {statusLine({ error, muted, plan, thinking, teammate })}
+                        {statusLine({ error: error ?? notice, muted, thinking, teammate })}
                     </span>
                 </button>
 

@@ -27,15 +27,13 @@ from pydantic import ValidationError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
+from app.modules.agent.contracts.tools import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,
 )
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channels import PendingInteraction
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
@@ -74,10 +72,10 @@ from app.modules.agent_surfaces.services.one_reply_attachments import (
     held_files_for_run,
     release_held_files,
 )
-from app.modules.agent_surfaces.services.pending_envelope import RunFiles
+from app.modules.agent_surfaces.services.pending_envelope import RunFiles, run_of
 from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
-from app.modules.agent.contracts.interaction_replies import ask_user_request_dict
+from app.modules.agent.contracts.channel_words import ask_user_request_dict
 from app.modules.agent_surfaces.services.surface_sign_in import (
     sign_in_prompt_envelope,
 )
@@ -105,6 +103,9 @@ class SurfaceEgress:
     async def agent_name_for_surface(self, surface: AgentSurfaceEntity) -> str | None:
         """Part of :class:`SurfaceNotificationEgressPort`; see `agent_naming`."""
         return await self.delivery.agent_name_for_surface(surface)
+
+    async def _target(self, conversation_id: UUID, run_id: UUID | None):
+        return await self.delivery.resolve_egress_target(conversation_id, run_id=run_id)
 
     async def open_cold_email_thread(
         self,
@@ -380,7 +381,7 @@ class SurfaceEgress:
         is routed back via ``handle_interaction`` (native submit) or the
         typed-reply path in ``start_agent_chat``.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self._target(conversation_id, run_of(attach_files_of))
         request = await self._pending_ask_user(conversation_id)
         if target is None or request is None:
             logger.debug(
@@ -419,6 +420,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         kind: str,
         tool_call_id: str | None = None,
+        run_id: UUID | None = None,
     ) -> bool:
         """Ask a paused run's question or approval as a plain message.
 
@@ -427,7 +429,7 @@ class SurfaceEgress:
         say why the reply is typed, and the typed reply is then treated as the
         answer -- the same record a tapped "Other" leaves.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self._target(conversation_id, run_id)
         if target is None:
             return False
         if kind == "ask_user":
@@ -494,13 +496,14 @@ class SurfaceEgress:
         conversation_id: UUID,
         tool_call_id: str | None = None,
         narration: str | None = None,
+        run_id: UUID | None = None,
     ) -> bool:
         """A link to the site their agent is stuck at. See `surface_sign_in`.
 
         False when this conversation has no surface: a web-only one has the
         browser pane beside it, so there is nothing to deliver.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self._target(conversation_id, run_id)
         envelope = (
             None
             if target is None
@@ -541,7 +544,7 @@ class SurfaceEgress:
         ``start_agent_chat`` via ``maybe_resume_pending_interaction``). Never
         swallowed.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self._target(conversation_id, run_of(attach_files_of))
         # The approval pause specifically, not "whatever this conversation is
         # waiting on". `get_pending_user_interaction` answers the second, across
         # every pausing tool, and the check below then threw away anything that

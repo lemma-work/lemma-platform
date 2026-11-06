@@ -21,7 +21,6 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent.tools.messaging.people import CALLED_IN_GROUP
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -39,6 +38,12 @@ from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import _create_surface
+from app.modules.contacts.contracts import (
+    IdentityKind,
+    IdentityStrength,
+    find_contact,
+    open_contact,
+)
 from app.modules.channels.infrastructure.models import (
     ChannelMemberModel,
     ChannelModel,
@@ -332,13 +337,18 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     assert asked[0] == "CONTACT" and "order 1182 by Friday" in asked[1]
     assert answered == ("AGENT", "I've asked the team, and will answer here.")
 
-    # The keeper is told in their own channel, pointed at the group, not Contacts.
-    mine = await authenticated_client.get(f"/pods/{pod_id}/channels/me")
+    # The keeper is told in their own channel, pointed at the group, not
+    # Contacts -- which group, and that nothing was done; never the guest's
+    # words, which would outlive them here if they were forgotten.
+    mine = await authenticated_client.post(f"/pods/{pod_id}/channels/me")
     assert mine.status_code == 200, mine.text
     notes = await authenticated_client.get(
         f"/pods/{pod_id}/channels/{mine.json()['id']}/messages"
     )
-    assert [line["text"] for line in notes.json()["items"]][-1:] == [CALLED_IN_GROUP]
+    note = notes.json()["items"][-1]["text"]
+    assert "nothing was done for them" in note
+    # Named by the group ("Acme order 1182"), never by what Tiago asked.
+    assert "by Friday" not in note
 
 
 async def _file(
@@ -689,3 +699,113 @@ async def test_a_pod_admin_finds_a_private_group_and_joins_it_on_request(
     assert joined.json()["joined"] is True
     [group] = await _groups(authenticated_client, pod_id)
     assert group["id"] == str(channel_id) and group["joined"] is True
+
+
+# -- people joining before they speak ---------------------------------------------
+
+
+def _participants(kind: str, key: str, number: str) -> SurfacePlatformWebhookIngress:
+    return _whatsapp(
+        "group_participants_update",
+        {
+            "messaging_product": "whatsapp",
+            "metadata": _metadata(),
+            "groups": [
+                {
+                    "timestamp": "1744344600",
+                    "group_id": GROUP,
+                    "type": kind,
+                    key: [{"wa_id": number}],
+                }
+            ],
+        },
+    )
+
+
+async def _people(client: AsyncClient, pod_id: str, channel_id: str) -> list[dict]:
+    shown = await client.get(f"/pods/{pod_id}/channels/{channel_id}")
+    assert shown.status_code == 200, shown.text
+    return [item["person"] for item in shown.json()["members"]]
+
+
+async def test_somebody_who_joins_a_group_is_in_it_before_they_speak(
+    authenticated_client: AsyncClient,
+    test_pod,
+    fake_whatsapp,
+    message_store,
+    monkeypatch,
+):
+    """WhatsApp says a person the pod knows joined: they are in the group's
+    channel before they say a word -- so a member's run there knows they read
+    its answers -- and out of it when WhatsApp says they left. A stranger's
+    join makes nobody: anybody with the link can join, and Contacts does not
+    fill with whoever did. A number is never a name."""
+    _wire_whatsapp(monkeypatch, fake_whatsapp)
+    pod_id = test_pod["id"]
+    surface = await _create_surface(
+        authenticated_client, pod_id, config={"type": "WHATSAPP"}
+    )
+    started = await _start_group(
+        authenticated_client,
+        pod_id,
+        surface_name=surface["name"],
+        message_store=message_store,
+    )
+    factory = SessionUnitOfWorkFactory(async_session_maker)
+    adapters = SurfacePlatformAdapterRegistry()
+    stranger = "16505559876"
+
+    async with factory() as uow:
+        await apply_group_updates(
+            uow,
+            _participants("group_participants_add", "added_participants", stranger),
+            adapters=adapters,
+        )
+        assert (
+            await find_contact(
+                uow, pod_id=UUID(pod_id), kind=IdentityKind.PHONE, value=f"+{stranger}"
+            )
+            is None
+        )
+    people = await _people(authenticated_client, pod_id, started["channel_id"])
+    assert [person for person in people if person["kind"] == "CONTACT"] == []
+
+    async with factory() as uow:
+        known = await open_contact(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.PHONE,
+            value=f"+{CLIENT}",
+            strength=IdentityStrength.CHANNEL,
+            display_name="Tiago",
+        )
+        await uow.commit()
+        await apply_group_updates(
+            uow,
+            _participants("group_participants_add", "added_participants", CLIENT),
+            adapters=adapters,
+        )
+
+    people = await _people(authenticated_client, pod_id, started["channel_id"])
+    [joined] = [person for person in people if person["kind"] == "CONTACT"]
+    assert joined["id"] == str(known.id)
+    assert CLIENT not in str(joined.get("name") or "")
+    async with factory() as uow:
+        seat = await uow.session.scalar(
+            select(ChannelMemberModel).where(
+                ChannelMemberModel.channel_id == UUID(started["channel_id"]),
+                ChannelMemberModel.contact_id == known.id,
+            )
+        )
+    assert seat is not None
+    assert (seat.seated_by, seat.last_spoke_at) == ("PLATFORM", None)
+
+    async with factory() as uow:
+        await apply_group_updates(
+            uow,
+            _participants("group_participants_remove", "removed_participants", CLIENT),
+            adapters=adapters,
+        )
+
+    people = await _people(authenticated_client, pod_id, started["channel_id"])
+    assert [person for person in people if person["kind"] == "CONTACT"] == []

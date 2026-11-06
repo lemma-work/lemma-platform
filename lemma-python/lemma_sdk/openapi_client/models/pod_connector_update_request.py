@@ -5,7 +5,6 @@ from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
 
 from ..models.pod_connector_mode import PodConnectorMode
 from ..models.pod_connector_visibility import PodConnectorVisibility
@@ -17,13 +16,15 @@ T = TypeVar("T", bound="PodConnectorUpdateRequest")
 @_attrs_define
 class PodConnectorUpdateRequest:
     """Fields left out are unchanged; `shared_pod_account_id: null` clears it.
+    Its slug and installation are fixed: a different one is a different
+    connector, which apps, agents and bundles already address.
 
-    Attributes:
-        mode (None | PodConnectorMode | Unset):
-        purpose (None | str | Unset):
-        required (bool | None | Unset):
-        shared_pod_account_id (None | Unset | UUID):
-        visibility (None | PodConnectorVisibility | Unset):
+        Attributes:
+            mode (None | PodConnectorMode | Unset):
+            purpose (None | str | Unset):
+            required (bool | None | Unset):
+            shared_pod_account_id (None | Unset | UUID):
+            visibility (None | PodConnectorVisibility | Unset):
     """
 
     mode: None | PodConnectorMode | Unset = UNSET
@@ -31,7 +32,6 @@ class PodConnectorUpdateRequest:
     required: bool | None | Unset = UNSET
     shared_pod_account_id: None | Unset | UUID = UNSET
     visibility: None | PodConnectorVisibility | Unset = UNSET
-    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         mode: None | str | Unset
@@ -71,7 +71,7 @@ class PodConnectorUpdateRequest:
             visibility = self.visibility
 
         field_dict: dict[str, Any] = {}
-        field_dict.update(self.additional_properties)
+
         field_dict.update({})
         if mode is not UNSET:
             field_dict["mode"] = mode
@@ -169,21 +169,4 @@ class PodConnectorUpdateRequest:
             visibility=visibility,
         )
 
-        pod_connector_update_request.additional_properties = d
         return pod_connector_update_request
-
-    @property
-    def additional_keys(self) -> list[str]:
-        return list(self.additional_properties.keys())
-
-    def __getitem__(self, key: str) -> Any:
-        return self.additional_properties[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.additional_properties[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self.additional_properties[key]
-
-    def __contains__(self, key: str) -> bool:
-        return key in self.additional_properties

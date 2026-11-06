@@ -56,6 +56,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | `agent.surface.slack_app_creation.forget` | Forget Slack Configuration Token |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
+| DELETE | `/surfaces/me/telegram-accounts/{account_id}` | `agent.surface.unlink_my_telegram_account` | Unlink My Telegram Account |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
 | GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.get` | Get Source |
 | GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.list` | List Slack App Workspaces |
@@ -66,6 +67,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | `agent.surface.channels` | List Surface Channels |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
+| GET | `/pods/{pod_id}/telegram-identity-links/{code}` | `telegram_identity_link.get` | Get Identity Link |
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
 | GET | `/public/web/{public_key}/challenge` | `public.web.challenge.read` | Web Challenge |
 | GET | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
@@ -75,6 +77,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surface-setup/slack/install` | `agent.surface.slack_install.availability` | Slack Install Availability |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
+| GET | `/surfaces/me/telegram-accounts` | `agent.surface.list_my_telegram_accounts` | List My Telegram Accounts |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
 | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
@@ -90,6 +93,9 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
+| POST | `/pods/{pod_id}/telegram-identity-links` | `telegram_identity_link.create` | Create Identity Link |
+| POST | `/pods/{pod_id}/telegram-identity-links/{code}/confirm` | `telegram_identity_link.confirm` | Confirm Identity Link |
+| POST | `/pods/{pod_id}/telegram-identity-links/{code}/decline` | `telegram_identity_link.decline` | Decline Identity Link |
 | POST | `/pods/{pod_id}/web-widgets` | `agent.web_widget.create` | Create Widget |
 | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | `agent.web_widget.reissue` | Reissue Widget |
 | POST | `/public/web/{public_key}/code` | `public.web.code.send` | Web Send Code |
@@ -140,15 +146,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.leave` | Leave Channel |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.remove` | Remove Member |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.remove` | Remove Table Grant |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
-| GET | `/pods/{pod_id}/channels/me` | `channel.me.get` | Get My Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
-| GET | `/pods/{pod_id}/channels/{channel_id}/cases` | `channel.case.list` | List Cases |
-| GET | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.list` | List Members |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | `channel.message.file` | Line File |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | `channel.message.thread` | List Thread |
+| GET | `/pods/{pod_id}/channels/{channel_id}/table-grants` | `channel.table_grant.list` | List Table Grants |
 | GET | `/pods/{pod_id}/inbox` | `channel.inbox.get` | Get Inbox |
 | GET | `/pods/{pod_id}/search` | `channel.search` | Search |
 | PATCH | `/pods/{pod_id}/channels/{channel_id}` | `channel.update` | Update Channel |
@@ -164,6 +169,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | `channel.delivery.retry` | Retry Delivery |
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share` | `channel.message.share` | Share Message |
 | POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.read` | Mark Read |
+| PUT | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.set` | Set Table Grant |
 
 ## connectors
 
@@ -250,6 +256,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.get` | Who Outside May Add Rows |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records` | `record.list` | List Records |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.get` | Get Record |
+| GET | `/pods/{pod_id}/outcome/history` | `outcome.history` | Where the pod has stood, week by week |
+| GET | `/pods/{pod_id}/outcome/standing` | `outcome.standing` | Where the pod stands |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.update` | Update Table |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.update` | Update Record |
@@ -306,6 +314,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/organizations/invitations/{invitation_id}` | `org.invitation.revoke` | Revoke Invitation |
 | DELETE | `/organizations/{organization_id}/members/{member_id}` | `org.member.remove` | Remove Member |
+| DELETE | `/users/me` | `user.current.delete` | Delete Current User |
 | GET | `/auth/verify-token` | `auth.verify_token` | Verify access token |
 | GET | `/organizations` | `org.list` | List My Organizations |
 | GET | `/organizations/invitations` | `org.invitation.list_mine` | List My Invitations |
@@ -352,6 +361,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}` | `pod.delete` | Delete Pod |
 | DELETE | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.remove` | Remove Pod Member |
+| DELETE | `/pods/{pod_id}/outcome` | `outcome.clear` | Clear what the pod owns |
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
 | GET | `/organizations/{organization_id}/pods` | `pod.list` | List Pods by Organization |
@@ -377,6 +387,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
 | PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
+| PUT | `/pods/{pod_id}/outcome` | `outcome.set` | Set what the pod owns |
 | PUT | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.replace` | Replace Resource Access Grant |
 | PUT | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.replace` | Replace Pod Role Permissions |
 
@@ -386,11 +397,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.cancel` | Cancel Pod Import |
 | GET | `/pods/bundle/download` | `pod.bundle.download` | Download A Bundle Archive |
+| GET | `/pods/bundle/templates` | `pod.bundle.templates` | Templates to start a Lemma from |
 | GET | `/pods/{pod_id}/bundle/exports/{export_id}` | `pod.bundle.export.get` | Get Pod Export Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.get` | Get Pod Import Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}/events` | `pod.bundle.import.events` | Stream Pod Import Progress |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}` | `pod.bundle.publish.get` | Get Pod Publish Status |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}/events` | `pod.bundle.publish.events` | Stream Pod Publish Progress |
+| POST | `/pods/start` | `pod.start` | Start a Lemma |
 | POST | `/pods/{pod_id}/bundle/exports` | `pod.bundle.export.start` | Start Pod Export |
 | POST | `/pods/{pod_id}/bundle/imports` | `pod.bundle.import.start` | Start Pod Import |
 | POST | `/pods/{pod_id}/bundle/imports/{import_id}/apply` | `pod.bundle.import.apply` | Apply Pod Import |

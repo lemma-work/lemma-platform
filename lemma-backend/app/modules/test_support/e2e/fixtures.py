@@ -25,6 +25,12 @@ e2e_process_clients = e2e_base.e2e_process_clients
 fixed_test_user = e2e_base.fixed_test_user
 authenticated_client = e2e_base.authenticated_client
 fixed_test_org = e2e_base.fixed_test_org
+#: A new user and organization for every test. The module conftests bind
+#: `fixed_test_user`/`fixed_test_org` to the shared module identity; a test
+#: module that counts users or members, or changes the signed-in user's own
+#: credentials or sessions, rebinds them to these.
+fresh_test_user = e2e_base.fixed_test_user
+fresh_test_org = e2e_base.fixed_test_org
 module_identity = e2e_base.module_identity
 module_test_user = e2e_base.module_test_user
 module_test_user_own_session = e2e_base.module_test_user_own_session
@@ -40,6 +46,8 @@ __all__ = [
     "e2e_settings",
     "fixed_test_org",
     "fixed_test_user",
+    "fresh_test_org",
+    "fresh_test_user",
     "module_identity",
     "module_test_org",
     "module_test_user",

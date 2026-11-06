@@ -29,7 +29,10 @@ from app.modules.identity.infrastructure.models.organization_models import (
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.core.infrastructure.db.session import async_session_maker
-from app.modules.identity.domain.events import UserSignedUpEvent
+from app.modules.identity.domain.events import (
+    OrganizationCreatedEvent,
+    UserSignedUpEvent,
+)
 from app.modules.identity.events.identity_work import IDENTITY_EMAIL
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import run_until_idle
@@ -1078,6 +1081,31 @@ async def test_organization_slug_is_globally_unique(
     )
     assert chosen.status_code == 409, chosen.text
     assert "slug" in chosen.json()["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_an_organization_is_created_by_the_person_who_made_it(
+    async_client: AsyncClient, signup_user, committed_events
+):
+    """Its created event names them, so product analytics can follow a sign-up
+    into the organization it made instead of crediting the platform."""
+    owner = await signup_user()
+
+    created = await async_client.post(
+        "/organizations",
+        headers=_auth_headers(owner["token"]),
+        json={"name": "Attributed Org"},
+    )
+    assert created.status_code == 201, created.text
+
+    (event,) = [
+        payload
+        for payload in committed_events.of_type(
+            OrganizationCreatedEvent.get_event_type()
+        )
+        if payload["organization_id"] == created.json()["id"]
+    ]
+    assert event["created_by_user_id"] == owner["id"]
 
 
 @pytest.mark.asyncio

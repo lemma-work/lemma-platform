@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from uuid import UUID, uuid4
 
 import pytest
@@ -19,6 +20,9 @@ from app.modules.test_support.e2e.scripted_model import (
 )
 from app.modules.test_support.e2e.waiters import eventually
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.modules.agent.infrastructure.models import ConversationModel
+from app.core.infrastructure.db.session import async_session_maker
+from sqlalchemy import update
 
 pytestmark = pytest.mark.e2e
 
@@ -393,7 +397,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     monkeypatch,
 ):
     """Provider profiles discover models and reject unsafe or unusable config."""
-    from app.modules.agent.services.runtime_provider_discovery import (
+    from app.modules.agent.infrastructure.providers.discovery import (
         DiscoveredModel,
         _validate_public_base_url,
     )
@@ -408,12 +412,12 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_anthropic_compatible_models",
         discover_anthropic_models,
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_openai_models,
     )
@@ -1281,7 +1285,11 @@ async def test_the_shell_and_python_share_the_conversations_one_directory(
         grouped: dict[str, list[dict]] = {}
         for item in messages.json()["items"]:
             if item["kind"] == "TOOL_RETURN":
-                grouped.setdefault(item["tool_call_id"], []).append(item["tool_result"])
+                # The second turn replays the script's ids, which the first
+                # turn already used; the writer stores them as `<id>-<run>`,
+                # so group by the id the script gave.
+                script_id = re.sub(r"-[0-9a-f]{12}$", "", item["tool_call_id"])
+                grouped.setdefault(script_id, []).append(item["tool_result"])
         return grouped
 
     returns = await _returns_by_id()
@@ -1389,18 +1397,27 @@ async def test_a_project_conversation_is_checked_out_before_python_runs(
         json={
             "agent_name": agent_name,
             "title": "On a project",
-            "metadata": {
-                "mock_llm_script": script,
-                "repo": {"owner": owner, "repo": repo},
-            },
+            "metadata": {"mock_llm_script": script},
         },
     )
     assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
     conversation_id = conversation.json()["id"]
+    # A project is the server's to open a conversation on (a schedule's
+    # webhook names one): the repo is a column no request reaches.
+    async with async_session_maker() as session:
+        await session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == UUID(conversation_id))
+            .values(repo={"owner": owner, "repo": repo}, cwd=None)
+        )
+        await session.commit()
+    read = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}"
+    )
     # The repo derives the directory: one source of truth, not two to keep in
     # step.
-    recorded_cwd = conversation.json()["metadata"]["cwd"]
-    assert recorded_cwd == f"{WORKSPACE_ROOT}/repos/{owner}/{repo}", conversation.json()
+    recorded_cwd = read.json()["workspace_cwd"]
+    assert recorded_cwd == f"{WORKSPACE_ROOT}/repos/{owner}/{repo}", read.json()
 
     events = await _send_message(
         authenticated_client,
@@ -1892,7 +1909,7 @@ async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_one
     rather than failing the whole catalog, and a skill's nested resource files
     must be discoverable through the real recursive listing.
     """
-    from app.modules.agent.tools.skills.skill_loader import (
+    from app.modules.agent.infrastructure.tools.skills.skill_loader import (
         list_workspace_skill_resources,
         list_workspace_skills,
         read_workspace_skill,
@@ -2283,13 +2300,13 @@ async def test_public_runtime_profile_edit_archive_and_restore(
     sends only `name`, and the stored API key must survive it. Anything that
     made `api_key` required would silently blank the credential on every save.
     """
-    from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+    from app.modules.agent.infrastructure.providers.discovery import DiscoveredModel
 
     async def discover_openai_models(**_kwargs):
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_openai_models,
     )
@@ -2389,7 +2406,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
     credentials on an OPENAI_COMPATIBLE profile but is rejected outright on an
     ANTHROPIC_COMPATIBLE one, which always requires a key.
     """
-    from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+    from app.modules.agent.infrastructure.providers.discovery import DiscoveredModel
 
     discovery_calls: list[str] = []
 
@@ -2398,7 +2415,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         return [DiscoveredModel("mock-safe-model", supports_vision=False)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_initial,
     )
@@ -2426,7 +2443,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         return [DiscoveredModel("moved-model", supports_vision=False)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_after_move,
     )
@@ -2469,7 +2486,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_anthropic_compatible_models",
         discover_anthropic,
     )
@@ -3019,7 +3036,7 @@ async def test_scripted_connector_tools_reach_a_real_agent_run(
     (`connectors/tests/e2e/test_agent_connector_toolset_e2e.py`) -- no
     conversation, no `AgentRun`, no toolset assembly. So the half that could
     break silently was the half nobody exercised: that `CONNECTORS` survives
-    `RunToolAssembler`, becomes a capability, and arrives at the tool with deps
+    the tool catalog, becomes a toolset, and arrives at the tool with a context
     carrying the run's organization.
 
     That is what this covers, and only that. `run_connector_operation` needs a

@@ -6,9 +6,9 @@ dependencies = [
     "httpx>=0.28.1",
     "lemma-sdk",
     "opentelemetry-api>=1.42.0",
-    "pydantic>=2.13.5",
-    "starlette>=1.6.0",
-    "uvicorn>=0.52.4",
+    "pydantic>=2.14.1",
+    "starlette>=1.9.0",
+    "uvicorn>=0.54.0",
 ]
 
 [tool.uv]

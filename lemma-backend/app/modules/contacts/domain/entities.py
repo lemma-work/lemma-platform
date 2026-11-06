@@ -58,7 +58,6 @@ class ContactHandle(BaseModel):
     value: str
     strength: IdentityStrength
     verified_at: datetime
-    last_inbound_at: datetime | None = None
     #: Who named the handle, where several could: the product a host identity
     #: is a user of. ``None`` for every other kind.
     issuer: str | None = None
@@ -90,6 +89,8 @@ class Contact(BaseModel):
     created_at: datetime
     identities: tuple[ContactHandle, ...] = ()
     merged_into_id: UUID | None = None
+    #: The member this contact proved to be, once they did.
+    merged_into_user_id: UUID | None = None
     answered_at: datetime | None = None
 
     @property

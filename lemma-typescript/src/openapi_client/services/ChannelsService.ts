@@ -3,13 +3,11 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ChannelAnswerRequest } from '../models/ChannelAnswerRequest.js';
-import type { ChannelCasesResponse } from '../models/ChannelCasesResponse.js';
 import type { ChannelCreateRequest } from '../models/ChannelCreateRequest.js';
 import type { ChannelDetailResponse } from '../models/ChannelDetailResponse.js';
 import type { ChannelEditRequest } from '../models/ChannelEditRequest.js';
 import type { ChannelKind } from '../models/ChannelKind.js';
 import type { ChannelListResponse } from '../models/ChannelListResponse.js';
-import type { ChannelMemberListResponse } from '../models/ChannelMemberListResponse.js';
 import type { ChannelMessageResponse } from '../models/ChannelMessageResponse.js';
 import type { ChannelMessagesResponse } from '../models/ChannelMessagesResponse.js';
 import type { ChannelPostRequest } from '../models/ChannelPostRequest.js';
@@ -25,8 +23,10 @@ import type { ReadRequest } from '../models/ReadRequest.js';
 import type { ReadResponse } from '../models/ReadResponse.js';
 import type { SearchResponse } from '../models/SearchResponse.js';
 import type { SenderKind } from '../models/SenderKind.js';
+import type { TableGrantRequest } from '../models/TableGrantRequest.js';
+import type { TableGrantResponse } from '../models/TableGrantResponse.js';
+import type { TableGrantsResponse } from '../models/TableGrantsResponse.js';
 import type { ThreadResponse } from '../models/ThreadResponse.js';
-import type { Visibility } from '../models/Visibility.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -37,8 +37,6 @@ export class ChannelsService {
      * what is new in it for them and its last line.
      * @param podId
      * @param kind
-     * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
-     * @param q Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.
      * @param archived
      * @param contactId Only this contact's channel.
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
@@ -55,8 +53,6 @@ export class ChannelsService {
     public static channelList(
         podId: string,
         kind?: (ChannelKind | null),
-        visibility?: (Visibility | null),
-        q?: (string | null),
         archived: boolean = false,
         contactId?: (string | null),
         assignee?: (string | null),
@@ -76,8 +72,6 @@ export class ChannelsService {
             },
             query: {
                 'kind': kind,
-                'visibility': visibility,
-                'q': q,
                 'archived': archived,
                 'contact_id': contactId,
                 'assignee': assignee,
@@ -126,31 +120,6 @@ export class ChannelsService {
             },
             body: requestBody,
             mediaType: 'application/json',
-            errors: {
-                400: `A cursor this API did not give.`,
-                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
-            },
-        });
-    }
-    /**
-     * Get My Channel
-     * The reader's own channel with the pod; 404 until it is made.
-     * @param podId
-     * @returns ChannelDetailResponse Successful Response
-     * @throws ApiError
-     */
-    public static channelMeGet(
-        podId: string,
-    ): CancelablePromise<ChannelDetailResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/channels/me',
-            path: {
-                'pod_id': podId,
-            },
             errors: {
                 400: `A cursor this API did not give.`,
                 403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
@@ -273,81 +242,6 @@ export class ChannelsService {
             },
             body: requestBody,
             mediaType: 'application/json',
-            errors: {
-                400: `A cursor this API did not give.`,
-                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
-            },
-        });
-    }
-    /**
-     * List Cases
-     * A contact's channel's cases, the most recently opened first, each with
-     * what happened in it: time to first response, reopens and time to close
-     * are read from here. Only a contact's channel has cases.
-     * @param podId
-     * @param channelId
-     * @param cursor
-     * @param limit
-     * @returns ChannelCasesResponse Successful Response
-     * @throws ApiError
-     */
-    public static channelCaseList(
-        podId: string,
-        channelId: string,
-        cursor?: (string | null),
-        limit: number = 20,
-    ): CancelablePromise<ChannelCasesResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/channels/{channel_id}/cases',
-            path: {
-                'pod_id': podId,
-                'channel_id': channelId,
-            },
-            query: {
-                'cursor': cursor,
-                'limit': limit,
-            },
-            errors: {
-                400: `A cursor this API did not give.`,
-                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
-            },
-        });
-    }
-    /**
-     * List Members
-     * Who is in a channel -- members, contacts and agents -- in the order
-     * they joined, a page at a time.
-     * @param podId
-     * @param channelId
-     * @param cursor
-     * @param limit
-     * @returns ChannelMemberListResponse Successful Response
-     * @throws ApiError
-     */
-    public static channelMemberList(
-        podId: string,
-        channelId: string,
-        cursor?: (string | null),
-        limit: number = 100,
-    ): CancelablePromise<ChannelMemberListResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/channels/{channel_id}/members',
-            path: {
-                'pod_id': podId,
-                'channel_id': channelId,
-            },
-            query: {
-                'cursor': cursor,
-                'limit': limit,
-            },
             errors: {
                 400: `A cursor this API did not give.`,
                 403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
@@ -957,6 +851,107 @@ export class ChannelsService {
             path: {
                 'pod_id': podId,
                 'channel_id': channelId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * List Table Grants
+     * The tables the group's people outside the pod may read or add to --
+     * those the caller may read themselves.
+     * @param podId
+     * @param channelId
+     * @returns TableGrantsResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelTableGrantList(
+        podId: string,
+        channelId: string,
+    ): CancelablePromise<TableGrantsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/table-grants',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Remove Table Grant
+     * The group no longer reads or adds to the table. Whoever may manage the
+     * group may take it back, whether or not they can read the table.
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    public static channelTableGrantRemove(
+        podId: string,
+        channelId: string,
+        tableName: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'table_name': tableName,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Set Table Grant
+     * Give the group these columns of the table to read, and those to fill.
+     *
+     * Everybody in the group reads what is granted -- the people outside the
+     * pod included -- through the granting member's own access. A person's act:
+     * an agent or a function, which may be reading what strangers wrote in the
+     * group, is refused (403).
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @param requestBody
+     * @returns TableGrantResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelTableGrantSet(
+        podId: string,
+        channelId: string,
+        tableName: string,
+        requestBody: TableGrantRequest,
+    ): CancelablePromise<TableGrantResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'table_name': tableName,
             },
             body: requestBody,
             mediaType: 'application/json',

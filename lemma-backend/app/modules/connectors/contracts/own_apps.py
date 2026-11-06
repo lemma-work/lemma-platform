@@ -24,8 +24,8 @@ from app.modules.connectors.domain.auth_config import (
     APP_MADE_BY_LEMMA,
     AuthConfigSource,
 )
+from app.modules.connectors.services.install_on_connect import install_lemma_app
 from app.modules.connectors.domain.errors import (
-    ConnectorConflictError,
     ConnectorNotFoundError,
 )
 
@@ -181,34 +181,12 @@ async def ensure_system_install(
     the web's Connect beside one) both miss and one create is refused; that
     one reads the install the other made instead of failing.
     """
-    service = get_connector_service(uow)
-    repository = service.auth_config_repository
-
-    async def held() -> UUID | None:
-        found = await repository.get_active_by_org_app_and_source(
-            organization_id, connector_id, AuthConfigSource.SYSTEM_DEFAULT.value
-        )
-        return found.id if found is not None else None
-
-    if (existing := await held()) is not None:
-        return existing
-    name_taken = (
-        await repository.get_active_by_org_and_name(organization_id, connector_id)
-        is not None
+    made = await install_lemma_app(
+        get_connector_service(uow),
+        user_id=user_id,
+        organization_id=organization_id,
+        connector_id=connector_id,
     )
-    try:
-        made = await service.create_auth_config(
-            user_id=user_id,
-            organization_id=organization_id,
-            connector_id=connector_id,
-            config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
-            # Taken by an install the organization brought: Lemma's beside it.
-            name=f"{connector_id}-lemma" if name_taken else None,
-        )
-    except ConnectorConflictError:
-        if (raced := await held()) is not None:
-            return raced
-        raise
     return made.id
 
 

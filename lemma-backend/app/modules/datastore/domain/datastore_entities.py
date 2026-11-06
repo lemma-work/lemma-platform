@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from enum import Enum
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.authorization.context import ResourceType
+from app.modules.datastore.domain.data_types import ColumnDataType, DatastoreDataType
 from app.core.domain.aggregate import AggregateRoot
 from app.core.helpers.slug import normalize_resource_name
 from app.modules.datastore.domain.errors import (
@@ -124,24 +124,6 @@ def validate_computed_expression(
         )
 
 
-class DatastoreDataType(str, Enum):
-    """Supported data types for datastore columns."""
-
-    TEXT = "TEXT"
-    FILE_PATH = "FILE_PATH"
-    INTEGER = "INTEGER"
-    FLOAT = "FLOAT"
-    BOOLEAN = "BOOLEAN"
-    JSON = "JSON"
-    DATE = "DATE"
-    DATETIME = "DATETIME"
-    UUID = "UUID"
-    USER = "USER"
-    VECTOR = "VECTOR"
-    SERIAL = "SERIAL"
-    ENUM = "ENUM"
-
-
 class ForeignKeySpec(BaseModel):
     """Specification for a foreign key constraint."""
 
@@ -152,7 +134,7 @@ class ColumnSchema(BaseModel):
     """Schema for a datastore table column."""
 
     name: str = Field(..., description="Column name")
-    type: DatastoreDataType = Field(..., description="Column data type")
+    type: ColumnDataType = Field(..., description="Column data type")
     description: Optional[str] = Field(None, description="Column description")
     required: bool = Field(
         False, description="Whether the column is required (NOT NULL)"

@@ -20,6 +20,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily |
 | Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item |
 | Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly, `admin`); see [Record change log](#record-change-log) |
+| Outcome work | `datastore.outcome_week` (`admin`) reads one pod's measure into its week, written by the `PodOutcomeChanged` fact and by the `datastore.outcome_weeks` periodic every `DATASTORE_OUTCOME_READ_INTERVAL_MINUTES`; see [What a pod owns](#what-a-pod-owns) |
 
 ## Storage model
 
@@ -27,10 +28,12 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | --- | --- |
 | `datastore_tables` | Registry and JSON column schema for each logical table |
 | `datastore_public_rows` | Tables open to people outside the pod: one grant per table saying who may add rows (`contacts` or `anyone`), which columns, and the member who opened it. Rows are added as that member, through `RecordService`. A form is any page that adds such a row; see `domain/public_rows.py` and `PUT /pods/{pod_id}/datastore/tables/{table}/public-rows` |
+| `datastore_channel_grants` | Tables a group in channels was given: one grant per (table, group) naming the columns everybody in the group may read and the columns they may fill in a new row, and the member who granted it. A guest's run reads and adds as that member, their access rebuilt on every call, so a grant goes inert when they lose the table or leave the pod. Granting asks the table's settings and its rows (and writing them, to give adding) of a person, never an agent. Per-user (RLS) tables are refused, and closed if made per-user later; on a contact-owned table a guest reads and adds only their own rows, and reads only the columns contacts are shown. No unique or foreign-key column is one a guest fills, and a value for a column not granted refuses the row. Reads are rows, never SQL, filtered by equality on the read columns only, and say how many matched. See `services/channel_grants.py` and `PUT /pods/{pod_id}/channels/{channel_id}/table-grants/{table}` |
 | Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies. Born readable by the ad-hoc query role (schema `USAGE` plus a per-schema default privilege for its tables); a schema from before that heals on its first query |
 | `datastore_files` | Hierarchical metadata, ownership, processing status, Markdown/index metadata |
 | Object storage/local store | Original bytes, derived Markdown, images, and page renders. Keyed by path (`storage_layout = path`) or, once `DATASTORE_OBJECT_STORAGE_LAYOUT` is on, by `objects/{file_id}/{sha256}/content` and `…/{sha256}/derived/` (`object`), so a rename moves no bytes; `datastore.storage_copy` moves existing files across and reads look in both layouts |
 | `datastore_signed_links` | Durable `/public/s/{code}` capability grants: object key, expiry, hit ceiling, and revocation. Redis still serves every fetch and keeps the spend counter; the row is what makes a link's lifetime a promise rather than a function of how the operator deployed Redis |
+| `pod_outcome_weeks` | One row per pod and week: the last reading of the pod's measure that week, its target then, why it could not be read, and the measure's digest |
 | Search tables/indexes | Per pod schema: `search_files` (one row per indexed file: path, sha256, chunk count) and `reserved_chunks` (stored `tsv`, `UNIQUE(file_id, chunk_index)`, HNSW). Versioned by `public.lemma_pod_schema_versions`; see `pod_schema_migrations.py`. Search reads either version and never runs DDL |
 
 ## API groups
@@ -40,6 +43,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | `/pods/{pod_id}/datastore/tables` | Create/list/get/update/delete tables and add/remove columns |
 | `/.../tables/{table}/records` | CRUD, filter/sort/page, and bulk create/update/delete records |
 | `/pods/{pod_id}/datastore/query` | Restricted ad-hoc datastore query under the RLS subject role |
+| `/pods/{pod_id}/outcome/standing`, `/history` | What the pod owns, its measure read now, and its last weeks |
 | `/pods/{pod_id}/datastore/files` | Upload, folders, metadata/content update, Markdown attachment, tree, search, preview/download |
 | `/public/datastore/files`, `/public/s/{code}` | Signed file delivery paths (`/s/{code}` is a legacy alias until 2026-10-17) |
 | `/pods/{pod_id}/live` | The pod's live socket ([live.md](live.md)); this module provides its `records` topic (see below) |
@@ -193,6 +197,36 @@ Whichever budget runs out, the file is `FAILED_PERMANENT` with the reason in
 Note that in practice **embedding, not extraction, dominates ingestion cost**
 (measured at roughly 2.6x extraction on a 100-paper arXiv corpus), so worker CPU
 sizing should be driven by the embedding backend.
+
+## What a pod owns
+
+A pod's outcome lives on its config (see the [pod module](pod.md)); its measure
+is one read-only query over the pod's tables, and this module reads it
+(`services/outcome_measure.py`). It runs through the same read-only path as an
+ad-hoc query -- read-only transaction, statement timeout, plan cost guard, the
+row-security query role -- with every row in view (`RowPrincipal.every_row`):
+every member sees the same number, and the weekly reading has nobody to read as.
+
+So the reader is checked when the measure is set, not when it is read:
+`OutcomeMeasureService.check` requires `DATASTORE_TABLE_READ` on every table it
+names and administration of every table with row security, and that it answers
+one row of one number (or null). It answers the ids of the tables with row
+security it covered, which the pod keeps as the outcome's
+`row_security_checked`. Row security can be turned on for a table after that,
+so every read is held to it: a counted table with row security outside it is
+refused unread (`DATASTORE_MEASURE_UNCHECKED`), before the standing cache is
+asked, until someone who administers that table sets the measure again. A
+stored outcome without the field covered nothing. Reading it later never raises
+for the measure's sake: a dropped table, row security turned on since, a query
+now too costly, or an answer that is no longer a number comes back as a
+`problem` in words for the pod.
+
+A reading is kept as its week's (`pod_outcome_weeks`, keyed by pod and the UTC Monday);
+a later one replaces it, and one that fails keeps the week's number and records
+why. `measure_digest` names the measure that answered, so the history read
+(`OutcomeStandingService.history`) shows only the weeks of the pod's current
+measure. `datastore.outcome_week` reads in a short unit of work and keeps the
+reading in its fenced completion.
 
 ## Authorization
 

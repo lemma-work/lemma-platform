@@ -18,10 +18,8 @@ from websockets.exceptions import ConnectionClosed
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.live.config import live_settings
 from app.core.server_limits import WS_MAX_BYTES
-from app.modules.agent.services.realtime import (
-    publish_conversation_event,
-    token_payload,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import token_payload
 from app.modules.channels.contracts import (
     NewLine,
     NewQuestion,
@@ -267,7 +265,11 @@ async def test_inbox_counts_move_on_a_line_and_on_a_read(
         await editor.event(
             "i", "inbox.updated", channel_id=channel["id"], unread__lines=0
         )
-        heard = await other_tab.event("c", "read.updated", channel_id=channel["id"])
+        # This read's own event. The tab subscribed just after the editor was
+        # put in the group, and that can reach it as a `read.updated` at 0.
+        heard = await other_tab.event(
+            "c", "read.updated", channel_id=channel["id"], read_seq=line["seq"]
+        )
         assert heard["read_seq"] == line["seq"]
 
     # The call is the REST read: the same position, the same rule.

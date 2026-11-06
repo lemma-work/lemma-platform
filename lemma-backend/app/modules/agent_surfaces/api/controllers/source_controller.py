@@ -56,7 +56,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppApiError
 from app.modules.agent_surfaces.services import group_start_keys
@@ -122,7 +122,7 @@ async def _on_bot(ctx, *, pod_id: UUID, state: SourceState, action: str) -> None
     )
 
 
-async def _bot_username(
+async def bot_username_of(
     surface: AgentSurfaceEntity, *, service: AgentSurfaceService, uow: UoWDep
 ) -> str | None:
     """The bot's Telegram username, asked of Telegram if nobody has asked yet.
@@ -255,7 +255,7 @@ async def _open(
     surface: AgentSurfaceEntity,
     user_id: UUID,
     request: WhatsAppGroupRequest,
-) -> SurfaceGroup:
+) -> Source:
     """Ask Meta for the group; its refusals as the API says them."""
     try:
         group, _ = await WhatsAppGroupOpener(uow_factory, wait_seconds=0).request_group(
@@ -324,7 +324,7 @@ async def telegram_link(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Add-to-group links are for Telegram.",
         )
-    bot_username = await _bot_username(surface, service=service, uow=uow)
+    bot_username = await bot_username_of(surface, service=service, uow=uow)
     try:
         async with connection_released(uow.session):
             url, expires_at = await mint_group_link(

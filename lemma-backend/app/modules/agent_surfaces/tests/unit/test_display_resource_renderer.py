@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import settings
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     DisplayResourceRequest,
     DisplayResourceResponse,
 )
@@ -52,13 +52,13 @@ def test_a_file_link_spells_the_pod_path_as_route_segments(monkeypatch):
         conversation_id=uuid4(),
         tool_call_id="tool-file-1",
         request=DisplayResourceRequest.model_validate(
-            {"type": "FILE", "path": "/LEDFLEX_SKILLS/product catalog #2.md"}
+            {"type": "FILE", "path": "/ACMEWORKS_SKILLS/product catalog #2.md"}
         ),
     )
 
     assert plan.primary_action is not None
     assert plan.primary_action.url == (
-        f"https://app.example.test/t/{pod_id}/file/LEDFLEX_SKILLS/"
+        f"https://app.example.test/t/{pod_id}/file/ACMEWORKS_SKILLS/"
         "product%20catalog%20%232.md"
     )
 

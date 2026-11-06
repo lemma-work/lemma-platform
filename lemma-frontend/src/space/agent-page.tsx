@@ -352,7 +352,7 @@ function Connectors({ pod, detail }: { pod: Pod; detail: AgentDetail }) {
                     </select>
                     <button className="btn" type="submit" disabled={!adding || save.isPending}>{save.isPending ? "Saving…" : "Add"}</button>
                 </form>
-            ) : list.length === 0 ? <p className="agentpage__quiet">{pod.name} has no connectors yet. Add them under About → Connections.</p> : null)}
+            ) : list.length === 0 ? <p className="agentpage__quiet">{pod.name} has no connectors yet. Add them under About {pod.name} → Connections.</p> : null)}
             {connectors.isError && <p className="agentpage__quiet" role="alert">Couldn’t read {pod.name}’s connectors.</p>}
             {save.isError && <ProblemLine className="agentpage__quiet" error={save.error} fallback="That could not be saved." />}
         </Rail>
@@ -410,9 +410,9 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
                     </ul>
                 )}
             {selected && (
-                <Modal title={"Channels for " + detail.label} onClose={() => setSelected(null)}>
-                    {pod.isPending && <p role="status">Loading channel settings…</p>}
-                    {(pod.isError || (pod.isSuccess && !pod.data)) && <p role="alert">Could not load the channel settings. <button className="btn" onClick={() => void pod.refetch()}>Retry</button></p>}
+                <Modal title={"Where " + detail.label + " answers"} onClose={() => setSelected(null)}>
+                    {pod.isPending && <p role="status">Loading…</p>}
+                    {(pod.isError || (pod.isSuccess && !pod.data)) && <p role="alert">Could not load these settings. <button className="btn" onClick={() => void pod.refetch()}>Retry</button></p>}
                     {pod.data && <SurfaceManage pod={pod.data} surface={selected} onBack={() => setSelected(null)} onSaved={saved} onLeave={() => setSelected(null)} />}
                 </Modal>
             )}

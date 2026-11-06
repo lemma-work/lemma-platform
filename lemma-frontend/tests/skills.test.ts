@@ -289,9 +289,10 @@ test("the folder keeps its own spelling, because a path is built from it", () =>
     // somebody to a file that is not there.
     const card = cardFor(
         { folder: "lemma-app-design", dir: "/skills/lemma-app-design", file: "/skills/lemma-app-design/SKILL.md", updated: "" },
-        { text: "---\nname: lemma-app-design\ndescription: Designs things.\n---\nBody here.", failure: null },
+        { text: "---\nname: lemma-app-design\ndescription: Designs things.\n---\nBody here." },
     );
 
+    assert.equal(card.read, true, "read, not failed: only a read file has a frontmatter name to mistake for the folder");
     assert.equal(card.title, "Lemma app design");
     assert.equal(card.folder, "lemma-app-design");
     assert.equal(card.file, "/skills/lemma-app-design/SKILL.md");

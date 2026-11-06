@@ -10,6 +10,7 @@ import type { ScheduleType } from './ScheduleType.js';
  */
 export type ScheduleDetailResponse = {
     /**
+     * Deprecated and always null; see `pod_connector`.
      * @deprecated
      */
     account_id?: (string | null);
@@ -36,6 +37,14 @@ export type ScheduleDetailResponse = {
      */
     listening?: (ListeningResponse | null);
     name: (string | null);
+    /**
+     * TIME schedules: the next instant it fires, in UTC. Absent while paused, after a one-time schedule has fired, and for other types.
+     */
+    next_fire_at?: (string | null);
+    /**
+     * `next_fire_at` read in the schedule's `config.timezone` (UTC when it sets none), as an ISO 8601 time with its offset.
+     */
+    next_fire_at_local?: (string | null);
     /**
      * True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.
      */

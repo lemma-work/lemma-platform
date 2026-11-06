@@ -1,7 +1,7 @@
 """The webhook sources this deployment accepts, as `schedule` mounts them.
 
 One factory, and it is the same exception to "operations, not classes" that
-`agent/contracts/workflow_control.py` is: `WebhookSourcePlugin` is a port with
+`agent/contracts/automation.py` is: `WebhookSourcePlugin` is a port with
 four members that `POST /webhooks/{source}` holds for the length of a delivery,
 so publishing the plugins' methods as free functions would only make the caller
 reassemble them.

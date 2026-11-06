@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from uuid import UUID
 
 from pydantic import EmailStr, field_validator
 
@@ -39,7 +40,7 @@ class UserEntity(AggregateRoot):
     def normalize_email(cls, value: object) -> str:
         return normalize_identity_email(str(value))
 
-    def mark_signed_up(self) -> None:
+    def mark_signed_up(self, *, method: str | None = None) -> None:
         """Emit signed-up event for welcome email processing."""
         from app.modules.identity.domain.events import UserSignedUpEvent
 
@@ -48,6 +49,7 @@ class UserEntity(AggregateRoot):
                 user_id=self.id,
                 email=str(self.email),
                 first_name=self.first_name,
+                method=method,
             )
         )
 
@@ -80,16 +82,56 @@ class UserEntity(AggregateRoot):
                         value = f"+{digits}"
                 setattr(self, field, value)
 
-    def mark_email_verified(self) -> bool:
+    def mark_email_verified(self, *, signup_method: str | None = None) -> bool:
         """Mark the first verified transition and emit the one-time welcome event."""
         first_transition = not self.is_verified
         self.is_verified = True
         self.email_verified_at = self.email_verified_at or datetime.now(timezone.utc)
         if first_transition:
-            self.mark_signed_up()
+            self.mark_signed_up(method=signup_method)
         return first_transition
 
     def deactivate(self, reason: str) -> None:
         self.is_active = False
         self.deactivated_at = self.deactivated_at or datetime.now(timezone.utc)
         self.deactivation_reason = reason
+
+    def erase(self) -> None:
+        """Turn the account into a tombstone that holds nothing about the person.
+
+        The row stays, keyed by the same id, because everything the person
+        wrote with others -- messages, records, files, pods -- names it, and
+        a foreign key to a missing row cascades. What is left on it is what
+        every author line already reads: a name, and that name is "Deleted
+        user". The address is replaced by one under ``.example``, which no
+        mail system delivers to, so the real one is free to sign up again.
+        """
+        from app.modules.identity.domain.events import UserDeletedEvent
+
+        # No `UserMobileChangedEvent` for the number this clears: what was
+        # bound to it is let go by the surfaces' `AccountDeleted` subscriber,
+        # which revokes every identity the person proved, phone-bound or not.
+        self.email = deleted_user_email(self.id)
+        self.first_name = DELETED_USER_FIRST_NAME
+        self.last_name = DELETED_USER_LAST_NAME
+        self.mobile_number = None
+        self.mobile_verified_at = None
+        self.country = None
+        self.timezone = None
+        self.date_of_birth = None
+        self.preferences = None
+        self.deactivate(DELETED_ACCOUNT_REASON)
+        self.is_deleted = True
+        self.add_event(UserDeletedEvent(user_id=self.id))
+
+
+#: What a deleted account is called wherever its work is shown.
+DELETED_USER_FIRST_NAME = "Deleted"
+DELETED_USER_LAST_NAME = "user"
+DELETED_USER_NAME = f"{DELETED_USER_FIRST_NAME} {DELETED_USER_LAST_NAME}"
+DELETED_ACCOUNT_REASON = "ACCOUNT_DELETED"
+
+
+def deleted_user_email(user_id: UUID) -> str:
+    """The address a deleted account keeps: unique per account, never deliverable."""
+    return f"deleted-{user_id}@deleted.example"

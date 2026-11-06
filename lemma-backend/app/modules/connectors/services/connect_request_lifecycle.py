@@ -41,6 +41,18 @@ _PURPOSE_KEY = "purpose"
 _PURPOSE_MAX = 64
 
 
+#: How long a started sign-in is handed back again rather than made anew.
+#: Well inside ``CONNECT_REQUEST_TTL``, so a link handed back still has most of
+#: its life left, and inside the lifetime of a provider-side authorization
+#: (Composio's connection link) that the request carries.
+CONNECT_REQUEST_REUSE_WINDOW = timedelta(minutes=10)
+
+
+def reusable_connect_request_cutoff() -> datetime:
+    """The earliest `created_at` a repeated connect may be handed back."""
+    return datetime.now(timezone.utc) - CONNECT_REQUEST_REUSE_WINDOW
+
+
 def oldest_claimable_connect_request() -> datetime:
     """The earliest `created_at` a callback may still spend.
 

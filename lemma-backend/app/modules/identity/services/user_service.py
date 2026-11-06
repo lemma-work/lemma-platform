@@ -28,7 +28,11 @@ class UserService:
         self.user_cache = user_cache
 
     async def create_user(
-        self, entity: UserEntity, *, send_welcome: bool = True
+        self,
+        entity: UserEntity,
+        *,
+        send_welcome: bool = True,
+        signup_method: str | None = None,
     ) -> UserEntity:
         entity.email = normalize_identity_email(entity.email)
         existing = await self.user_repository.get_by_email(entity.email)
@@ -36,7 +40,7 @@ class UserService:
             raise UserConflictError("User with this email already exists")
 
         if send_welcome:
-            entity.mark_signed_up()
+            entity.mark_signed_up(method=signup_method)
         user = await self.user_repository.create(entity)
         await self._cache_after_commit(user)
         return user

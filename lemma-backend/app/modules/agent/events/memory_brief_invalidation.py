@@ -20,7 +20,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.analytics.domain_events import projection
-from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
+from app.modules.agent.services.context_brief.memory import invalidate_memory_brief
 from app.modules.datastore.contracts import (
     DatastoreFileCreatedEvent,
     DatastoreFileDeletedEvent,

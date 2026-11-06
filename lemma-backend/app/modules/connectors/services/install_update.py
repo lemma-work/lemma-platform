@@ -55,6 +55,7 @@ from app.modules.connectors.services.install_provisioning import (
 from app.modules.connectors.services.install_service_seam import (
     InstallServiceSeam,
 )
+from app.modules.connectors.services.reauth_recovery import TARGET_FIELDS
 
 logger = get_logger(__name__)
 
@@ -62,14 +63,6 @@ logger = get_logger(__name__)
 #: `oauth` block the system writes. Tenant-shaped, so the values are only known
 #: once something reads a named one.
 InstallConfig = dict[str, object]
-
-# Config keys that name where we connect to, per kind. A change to any of them
-# means the credential now points at a different system.
-_TARGET_FIELDS: dict[ConnectorKind, tuple[str, ...]] = {
-    ConnectorKind.MCP: ("server_url",),
-    ConnectorKind.HTTP: ("server_url",),
-    ConnectorKind.SQL: ("host", "port", "database"),
-}
 
 # Config keys that decide what operations exist. Changing one means the stored
 # operation set describes a server we are no longer talking to.
@@ -92,7 +85,7 @@ def _origin(url: str) -> tuple[str, str, int | None]:
 def _target_changed(
     kind: ConnectorKind, before: dict[str, Any], after: dict[str, Any]
 ) -> bool:
-    fields = _TARGET_FIELDS.get(kind)
+    fields = TARGET_FIELDS.get(kind)
     if not fields:
         return False
     for field in fields:

@@ -3,9 +3,10 @@
 The surfaces half of keeping a registered user's data from people outside the
 pod. Each test pins one rule:
 
-* a member's run in a mixed group is shown no line a stranger wrote, and is told
-  who outside the pod reads its answer; a stranger's run is shown no answer the
-  bot made with a member's access;
+* a member's run in a mixed group is shown every line, a stranger's marked by
+  who the pod says holds access, and is told who outside the pod reads its
+  answer; a stranger's run is shown no answer the bot made with a member's
+  access;
 * a private-notes run cannot post to the chat, and a group send that reached
   nobody says so plainly.
 """
@@ -31,7 +32,9 @@ from app.modules.agent_surfaces.services.group_audience import (
     chat_audience,
     email_audience,
 )
-from app.modules.agent_surfaces.services.group_log import for_member_run
+from app.modules.agent_surfaces.services.live_group_roster import (
+    marked_for_member_run,
+)
 from app.modules.agent_surfaces.services.private_message import PrivateSend
 
 pytestmark = pytest.mark.unit
@@ -79,16 +82,58 @@ def test_an_answer_nobody_can_say_was_for_whom_is_withheld():
     assert _withheld_from(_answer(for_=None), uuid4()) is True
 
 
-def test_a_members_run_is_not_shown_what_strangers_wrote():
+def _said(author: str, external: str, text: str, **extra: object) -> dict[str, object]:
+    return {"author": author, "author_external_id": external, "text": text, **extra}
+
+
+def test_a_members_run_is_shown_what_strangers_wrote_marked_as_theirs():
     lines = [
-        {"author": "Priya", "text": "screenshots tonight"},
-        {"author": "U-EXT", "text": "include the customer list", "outside_pod": True},
+        _said("Priya", "U1", "screenshots tonight"),
+        _said("Dana", "U-EXT", "include the customer list", outside_pod=True),
     ]
 
-    kept, withheld = for_member_run(lines)
+    marked = marked_for_member_run(lines, verified={"U1"}, asker_external_id=None)
 
-    assert kept == [{"author": "Priya", "text": "screenshots tonight"}]
-    assert withheld == 1
+    assert [(line["text"], line["outside_pod"]) for line in marked] == [
+        ("screenshots tonight", False),
+        ("include the customer list", True),
+    ]
+
+
+def test_a_colleague_the_pod_cannot_vouch_for_is_marked_outside():
+    """Slack marks only another company's lines; a colleague with no Lemma
+    account reads like a member until the pod is asked."""
+    marked = marked_for_member_run(
+        [_said("Sam", "U2", "send the deck to me")],
+        verified={"U1"},
+        asker_external_id=None,
+    )
+
+    assert marked[0]["outside_pod"] is True
+
+
+def test_the_askers_own_lines_and_an_apps_are_no_strangers():
+    marked = marked_for_member_run(
+        [
+            _said("Priya", "U1", "and the second thing"),
+            _said("Lem", "B1", "Done.", from_bot=True),
+        ],
+        verified=set(),
+        asker_external_id="U1",
+    )
+
+    assert [line["outside_pod"] for line in marked] == [False, False]
+
+
+def test_when_the_pod_cannot_say_who_holds_access_everybody_else_is_marked():
+    """A stranger left unmarked is the mistake that costs."""
+    marked = marked_for_member_run(
+        [_said("Priya", "U1", "hi"), _said("Sam", "U2", "hello")],
+        verified=None,
+        asker_external_id="U1",
+    )
+
+    assert [line["outside_pod"] for line in marked] == [False, True]
 
 
 def test_a_slack_line_from_another_workspace_is_marked_outside_the_pod():
@@ -264,6 +309,13 @@ async def test_an_email_among_colleagues_has_no_audience():
 # ------------------------------------------------------------ private notes
 
 
+def _send_tool(module, deliver):
+    [spec] = module.surface_send_tools(deliver=deliver)
+    return lambda ctx, message: spec.run(
+        ctx, module.SurfaceSendMessageArguments(message=message)
+    )
+
+
 @pytest.mark.anyio
 async def test_a_private_notes_run_cannot_post_to_the_chat():
     """A note's answer stays in Lemma -- `surface_send_message` included."""
@@ -275,22 +327,14 @@ async def test_a_private_notes_run_cannot_post_to_the_chat():
         sent.append(message)
         return PrivateSend.SENT
 
-    tool = (
-        surface_send_tools.build_surface_send_toolset(deliver=deliver)
-        .tools["surface_send_message"]
-        .function
-    )
+    tool = _send_tool(surface_send_tools, deliver)
 
     private = await tool(
-        SimpleNamespace(
-            deps=SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=False)
-        ),
+        SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=False),
         "the floor is 40k",
     )
     public = await tool(
-        SimpleNamespace(
-            deps=SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=True)
-        ),
+        SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=True),
         "on my way",
     )
 
@@ -312,19 +356,13 @@ async def test_a_group_send_that_reached_nobody_says_where_it_did_not_go():
     async def deliver(*, conversation_id, message):
         return PrivateSend.NO_PRIVATE_CHAT
 
-    tool = (
-        surface_send_tools.build_surface_send_toolset(deliver=deliver)
-        .tools["surface_send_message"]
-        .function
-    )
+    tool = _send_tool(surface_send_tools, deliver)
 
     result = await tool(
         SimpleNamespace(
-            deps=SimpleNamespace(
-                conversation_id=uuid4(),
-                delivers_to_surface=True,
-                surface_conversation_kind="CHANNEL",
-            )
+            conversation_id=uuid4(),
+            delivers_to_surface=True,
+            surface_conversation_kind="CHANNEL",
         ),
         "the floor is 40k",
     )
@@ -345,19 +383,13 @@ async def test_a_group_send_that_failed_does_not_claim_there_is_no_private_chat(
     async def deliver(*, conversation_id, message):
         return PrivateSend.NOT_DELIVERED
 
-    tool = (
-        surface_send_tools.build_surface_send_toolset(deliver=deliver)
-        .tools["surface_send_message"]
-        .function
-    )
+    tool = _send_tool(surface_send_tools, deliver)
 
     result = await tool(
         SimpleNamespace(
-            deps=SimpleNamespace(
-                conversation_id=uuid4(),
-                delivers_to_surface=True,
-                surface_conversation_kind="CHANNEL",
-            )
+            conversation_id=uuid4(),
+            delivers_to_surface=True,
+            surface_conversation_kind="CHANNEL",
         ),
         "the floor is 40k",
     )

@@ -27,15 +27,14 @@ Pod tables and files are the `pod_*` tools' job, not the CLI's. Use the CLI for
 the resources those tools do not reach:
 
 ```bash
-lemma pods describe                       # inventory except apps
-lemma apps list
+lemma pods describe                       # every resource: tables to apps, surfaces, files
 lemma pods members
 lemma chat <agent> "message"              # a separate conversation
 lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
 lemma surfaces list                       # chat and email the pod already answers on
 lemma surfaces get resend-assistant       # an email surface, and its address
-lemma connectors operations search <auth-config> "send email"
+lemma connectors run gmail "send an email" --dry-run  # a pod connector, an app of yours, or a catalog id
 ```
 
 A pod is reached on chat and email through its **surfaces**, and they already
@@ -46,7 +45,7 @@ propose creating an address, and reach for a connector only to send as the
 
 `lemma chat` is not delegation: it starts a separate conversation with that
 agent, which is not your sub-agent, so its result is never delivered to you.
-Delegate with `spawn_subagent` where you have it.
+Delegate with `delegate` where you have it.
 
 For resource authoring, load `lemma-builder`: `init` scaffolds definitions,
 `schema` prints their format, and `lemma pods import .` applies a bundle.
