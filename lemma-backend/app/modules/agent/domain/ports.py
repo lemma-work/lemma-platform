@@ -14,6 +14,7 @@ from app.modules.agent.domain.entities import (
     Message,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.project_repo import ProjectRepo, RepositoryChoices
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -113,3 +114,21 @@ class AgentRepository(Protocol):
         cursor: UUID | None = None,
         limit: int = 100,
     ) -> tuple[list[Agent], UUID | None]: ...
+
+
+class ProjectRepositories(Protocol):
+    """Which GitHub repositories a person may open a conversation in.
+
+    Answered for the person, through the pod's ``github`` connector -- the same
+    account, and the same installation, the sandbox's clone uses afterwards.
+    """
+
+    async def checked(
+        self, repo: ProjectRepo, *, pod_id: UUID, user_id: UUID
+    ) -> ProjectRepo:
+        """``repo`` as GitHub names it, or raise the refusal that says why not."""
+        ...
+
+    async def reachable(self, *, pod_id: UUID, user_id: UUID) -> RepositoryChoices:
+        """Repositories ``checked`` would accept, as many as a picker shows."""
+        ...

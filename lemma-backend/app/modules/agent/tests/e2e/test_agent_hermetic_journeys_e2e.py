@@ -20,6 +20,7 @@ from app.modules.test_support.e2e.scripted_model import (
 )
 from app.modules.test_support.e2e.waiters import eventually
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.modules.agent.domain.project_repo import ProjectRepo
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.core.infrastructure.db.session import async_session_maker
 from sqlalchemy import update
@@ -1415,9 +1416,12 @@ async def test_a_project_conversation_is_checked_out_before_python_runs(
         f"/pods/{pod_id}/conversations/{conversation_id}"
     )
     # The repo derives the directory: one source of truth, not two to keep in
-    # step.
+    # step. Nothing stamped one, so it is the worktree keyed by the
+    # conversation's own id.
     recorded_cwd = read.json()["workspace_cwd"]
-    assert recorded_cwd == f"{WORKSPACE_ROOT}/repos/{owner}/{repo}", read.json()
+    assert recorded_cwd == ProjectRepo(owner=owner, repo=repo).worktree_dir(
+        UUID(conversation_id).hex[:8]
+    ), read.json()
 
     events = await _send_message(
         authenticated_client,

@@ -8,9 +8,10 @@ location is the conversation's own columns:
   of ``/workspace/c/{date}/{slug}``. Stamped at creation
   (``StartConversation._apply_inherited_cwd``) and read back thereafter.
 - ``repo`` — a GitHub repository this conversation works in, as
-  ``{owner, repo, ref?}``. It *derives* the cwd
-  (``/workspace/repos/{owner}/{repo}``), so picking a project is the same act as
-  picking a directory and there is no second source of truth to keep in step.
+  ``{owner, repo, ref?}``. It *derives* the cwd: a worktree of the repository
+  of the conversation's own (``/workspace/worktrees/{owner}/{repo}/{slug}``), so
+  picking a project is the same act as picking a directory and there is no
+  second source of truth to keep in step.
 - ``workspace_id`` / ``workspace_name`` — selects the workspace; defaults to the
   single per-user workspace today.
 
@@ -18,11 +19,11 @@ None of them is a client's to set: a conversation's directory is where its
 agent's shell starts and its files land, so a client that could write it could
 point a run at another conversation's files.
 
-A repo path is deliberately *not* conversation-scoped. One sandbox per user
-means two conversations on the same project share one checkout, the same way two
-terminals opened on one folder do — that is the point of picking a project
-rather than a scratchpad, and the working directories stay separate because each
-conversation already gets its own session and cwd inside that shared sandbox.
+A repository's clone is shared and its worktrees are not. One sandbox per
+person holds one clone per repository (``ProjectRepo.clone_dir``), and every
+conversation in it gets a worktree on a branch of its own, so two conversations
+on one project never write into each other's tree. Conversations from before
+worktrees recorded the clone itself as their cwd, and keep working there.
 
 The pod filesystem's working directory (``/me/{suffix}``) is derived from the
 workspace cwd by swapping the ``/workspace`` prefix for ``/me`` — so an agent's
@@ -99,10 +100,20 @@ def resolve_workspace_location(conversation: Conversation) -> WorkspaceLocation:
         or conversation.workspace_name
         or "default",
         cwd=conversation.cwd
-        or (repo.cwd if repo else None)
+        or (default_worktree_cwd(conversation, repo) if repo else None)
         or default_workspace_cwd(conversation),
         repo=repo,
     )
+
+
+def default_worktree_cwd(conversation: Conversation, repo: ProjectRepo) -> str:
+    """A repository conversation's worktree when nothing stamped one.
+
+    A run a webhook started is created without passing through
+    ``apply_location``. Deterministic like ``default_workspace_cwd``, so every
+    read agrees until its first run writes it down.
+    """
+    return repo.worktree_dir(conversation.id.hex[:_SLUG_LENGTH])
 
 
 async def apply_location(
@@ -118,9 +129,10 @@ async def apply_location(
     conversation gets its own ``/workspace/c/{date}/{slug}``. A cwd its opener
     set always wins over both.
 
-    A conversation opened against a ``repo`` gets that repository's directory:
-    picking a project *is* picking a directory, so there is only ever one thing
-    to keep in step.
+    A conversation opened against a ``repo`` gets a worktree of that repository
+    of its own: picking a project *is* picking a directory, so there is only
+    ever one thing to keep in step. A child inherits its parent's worktree, so a
+    sub-agent works on the parent's branch rather than beside it.
 
     The cwd is the single source of truth for both filesystems — the pod working
     directory (``/me/{suffix}``) is derived from it at read time — so nothing
@@ -129,7 +141,7 @@ async def apply_location(
     if conversation.cwd:
         return
     if conversation.repo is not None:
-        conversation.cwd = conversation.repo.cwd
+        conversation.cwd = conversation.repo.worktree_dir(generate_cwd_slug())
         return
 
     parent = await fetch_parent()

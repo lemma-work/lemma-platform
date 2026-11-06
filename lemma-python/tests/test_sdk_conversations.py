@@ -80,6 +80,24 @@ def test_create_for_agent_omits_parent_id_when_not_a_subagent():
     assert "parent_id" not in transport.calls[0]["body"]
 
 
+def test_create_for_agent_names_the_repository_to_work_in():
+    pod, transport = _pod()
+
+    pod.conversations.create_for_agent(title="fix it", repository="acme/web")
+
+    assert transport.calls[0]["body"]["repository"] == "acme/web"
+
+
+def test_repositories_asks_the_pod_what_a_conversation_can_open_in():
+    pod, transport = _pod()
+
+    pod.conversations.repositories()
+
+    (call,) = transport.calls
+    assert call["endpoint"].endswith(".agent_conversation_repository_list")
+    assert call["path_args"] == (UUID("22222222-2222-4222-8222-222222222222"),)
+
+
 def test_pending_interactions_asks_the_pod_and_pages_by_token():
     pod, transport = _pod()
 
