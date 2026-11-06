@@ -382,8 +382,10 @@ are shown with a retry action rather than an indefinite loading message.
 - The system shall let a signed-in person delete their own account from their
   account settings, on the web and on the phone, and from a public page that
   works without the app once they sign in.
-- Before deleting, the system shall say plainly what goes and what stays, and
-  shall ask the person to type their account's email address to confirm.
+- When a person asks to delete their account, the system shall say plainly
+  what deleting it removes and what it keeps.
+- When a person asks to delete their account, the system shall ask them to
+  type the account's email address to confirm.
 - If the typed address is not the account's, then the system shall delete
   nothing.
 - When the account is deleted, the system shall end every session the person
@@ -407,9 +409,15 @@ are shown with a retry action rather than an indefinite loading message.
   belongs to, shown as by "Deleted user".
 - When a person deletes their account, the system shall delete every
   organization nobody else is in, with its pods.
-- If a deletion fails partway, then the system shall either finish it or leave
-  the account, its memberships and its data exactly as they were — never a
-  person half-removed.
+- If a deletion fails before the account is deleted, then the system shall
+  leave the account, its memberships and its data exactly as they were.
+- When an account has been deleted, the system shall retry what follows from
+  the deletion — ending sessions, disconnecting accounts, letting go of paired
+  computers and proved chat accounts — until it is done.
+- If what follows a deletion still cannot be finished, then the system shall
+  keep it visible to the operator.
+- If what follows a deletion still cannot be finished, then the system shall
+  let the operator run it again.
 
 **Contracts:** `user.current.delete`
 

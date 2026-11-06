@@ -22,13 +22,24 @@ import {
  *  wherever they found it. On success the session is already over on the
  *  server; signing out here only clears what this browser remembers, and
  *  lands on the public page saying the account is gone. */
-export function DeleteAccountForm({ email, onCancel }: { email: string; onCancel?: () => void }) {
+export function DeleteAccountForm({ email, onCancel, onBusyChange }: {
+    email: string;
+    onCancel?: () => void;
+    /** Told when a deletion starts and when a refusal ends it, so whatever
+     *  holds the form can stay open until the answer has somewhere to land. */
+    onBusyChange?: (busy: boolean) => void;
+}) {
     const session = useSession();
     const inputId = useId();
     const [typed, setTyped] = useState("");
-    const [busy, setBusy] = useState(false);
+    const [busy, setBusyHere] = useState(false);
     const [refusal, setRefusal] = useState<DeletionRefusal | null>(null);
     const confirmed = confirmsAccount(typed, email);
+
+    function setBusy(value: boolean) {
+        setBusyHere(value);
+        onBusyChange?.(value);
+    }
 
     async function remove() {
         setBusy(true);
@@ -36,17 +47,14 @@ export function DeleteAccountForm({ email, onCancel }: { email: string; onCancel
         try {
             await lemma().users.deleteAccount({ confirm_email: typed.trim() });
         } catch (problem) {
-            const refused = deletionRefusal(problem);
-            if (!refused.alreadyDeleted) {
-                setRefusal(refused);
-                setBusy(false);
-                return;
-            }
+            setRefusal(deletionRefusal(problem));
+            setBusy(false);
+            return;
         }
         /* The account is gone: write that down for the page this lands on,
            then forget the person in this browser whatever the server says
            about a session it has already ended. */
-        noteDeletionConfirmed(window.sessionStorage);
+        noteDeletionConfirmed(() => window.sessionStorage);
         await session.leave(DELETED_PATH);
     }
 
@@ -95,6 +103,10 @@ export function DeleteAccountForm({ email, onCancel }: { email: string; onCancel
  *  and should have the screen to itself. */
 export function DeleteAccountEntry({ email }: { email: string }) {
     const [open, setOpen] = useState(false);
+    /* Sticky while the request is out: closing the dialog then would unmount
+       the form, and a refusal — another owner needed, a plan to cancel —
+       would have nowhere to be read. */
+    const [busy, setBusy] = useState(false);
     return (
         <div className="settings-delete">
             <div>
@@ -103,8 +115,8 @@ export function DeleteAccountEntry({ email }: { email: string }) {
             </div>
             <button type="button" className="btn" onClick={() => setOpen(true)}>Delete account…</button>
             {open && (
-                <Modal title="Delete your account" subtitle="This cannot be undone." narrow onClose={() => setOpen(false)}>
-                    <DeleteAccountForm email={email} onCancel={() => setOpen(false)} />
+                <Modal title="Delete your account" subtitle="This cannot be undone." narrow sticky={busy} onClose={() => setOpen(false)}>
+                    <DeleteAccountForm email={email} onCancel={() => setOpen(false)} onBusyChange={setBusy} />
                 </Modal>
             )}
         </div>

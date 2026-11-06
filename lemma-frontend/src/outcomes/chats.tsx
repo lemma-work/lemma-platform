@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION, type ConversationRef, type Pod } from "@/data";
+import { lemma } from "@/session/client";
+import { applyArchived, applyTitle, patchConversationLists, refreshConversationLists, titleToSend } from "@/thread/conversation-list";
 import { LiveConversation } from "@/thread/live-conversation";
 import { ConversationPane } from "@/thread/conversation";
 import { ChannelPage } from "@/channels/channel-page";
@@ -13,20 +15,38 @@ import { mayStartChannel } from "@/channels/abilities";
 import { useAbilities } from "@/channels/use-abilities";
 import { allChannels, useChannelList } from "@/channels/queries";
 import { filterFor, needsPerson } from "@/channels/views";
+import { useInboxLive } from "@/channels/waiting-panel";
 import type { Channel } from "@/channels/model";
-import { channelHref } from "@/shell/place-link";
 import { ChannelIcon } from "@/shell/channels";
 import { useSurfaces } from "@/shell/surfaces";
 import { useMaySeeContacts } from "@/space/contact-queries";
-import { TeammateFace } from "@/space/teammate-face";
-import { NEW_CHAT, chatView, outcomeView, type ChatOpen, type Fill, type Go, type Handoff } from "./model";
-import { classic, readPlan } from "./data";
-import { AskBox } from "./ask";
+import { NEW_CHAT, chatView, outcomeView, type ChatOpen, type Fill, type Go, type Handoff, type OpenChat, type View } from "./model";
+import { closeMenu } from "./lemma-bar";
+import { pinKey, retitlePin, togglePin, unpin, usePins } from "./pins";
+import type { Calls } from "./calls";
+import { useVoiceConfigured } from "@/call/voice-config";
+import { ConnectBanner } from "@/connect/pod-connect";
 import { Empty, Icon, to } from "./parts";
-import { WhatItRuns } from "./runs";
 import type { FrameActions } from "./actions";
+import { BesidePane, type Beside } from "./beside";
+import { PaneDivider } from "@/shell/pane-divider";
+import { clampPaneWidth } from "@/shell/split-tabs";
+import { key as storageKey } from "@/session/storage";
 
 const NOOP = () => undefined;
+
+/** How much of a chat's width the conversation keeps when something is open
+ *  beside it, as a percentage: the reader's, on this browser. */
+const BESIDE_WIDTH_KEY = storageKey("outcomes-beside-width");
+
+function storedBesideWidth(): number {
+    try {
+        const raw = localStorage.getItem(BESIDE_WIDTH_KEY);
+        return clampPaneWidth(raw ? JSON.parse(raw) : 52);
+    } catch {
+        return 52;
+    }
+}
 
 /* ── lists read for every Lemma ───────────────────────────────────────── */
 
@@ -49,7 +69,11 @@ function useByPod<T>(): [ReadonlyMap<string, readonly T[]>, Keep<T>] {
     return [lists, keep];
 }
 
-function ChannelFeed({ podId, onList }: { podId: string; onList: Keep<Channel> }) {
+/** One Lemma's chats on a channel. `live`, it holds the Lemma's `inbox`
+ *  topic too, so new messages and waiting questions move its rows as they
+ *  happen, as the workspace's do under its bell. */
+function ChannelFeed({ podId, live, onList }: { podId: string; live: boolean; onList: Keep<Channel> }) {
+    useInboxLive(podId, live);
     const list = useChannelList(podId, { archived: false });
     const data = list.data;
     useEffect(() => { onList(podId, data ? allChannels(data) : null); }, [podId, data, onList]);
@@ -57,10 +81,12 @@ function ChannelFeed({ podId, onList }: { podId: string; onList: Keep<Channel> }
     return null;
 }
 
-/** Every Lemma's shared chats, by Lemma. Render the feeds it returns. */
-export function useChannelsByPod(pods: readonly Pod[]): [ReadonlyMap<string, readonly Channel[]>, ReactNode] {
+/** Every Lemma's shared chats, by Lemma. Render the feeds it returns. One
+ *  caller holds them `live`, the sidebar, which is always there; any other
+ *  reads the same lists from the cache. */
+export function useChannelsByPod(pods: readonly Pod[], { live = false }: { live?: boolean } = {}): [ReadonlyMap<string, readonly Channel[]>, ReactNode] {
     const [channels, keep] = useByPod<Channel>();
-    return [channels, pods.map((pod) => <ChannelFeed key={pod.id} podId={pod.id} onList={keep} />)];
+    return [channels, pods.map((pod) => <ChannelFeed key={pod.id} podId={pod.id} live={live} onList={keep} />)];
 }
 
 function WaitingFeed({ podId, onList }: { podId: string; onList: Keep<Channel> }) {
@@ -88,26 +114,24 @@ export function useContactsWaiting(pods: readonly Pod[]): [ReadonlyMap<string, r
 /** Whatever the sidebar opened, filling the main area: a chat with a Lemma
  *  on the workspace's own thread and composer, a shared chat on its own
  *  page, or a contact's chat. Nothing here leaves the frame. */
-export function ChatPane({ pods, open, activity, go, onAsk, actions, handoff, onHandoffSent, fill, onFilled }: {
+export function ChatPane({ pods, open, activity, go, actions, calls, handoff, onHandoffSent, fill, onFilled }: {
     pods: readonly Pod[];
     open: ChatOpen;
     activity: Map<string, ConversationRef[]>;
     go: Go;
-    /** Start a new chat with these words, here. */
-    onAsk: (podId: string, text: string) => void;
     actions: FrameActions;
+    calls: Calls;
     handoff: Handoff | null;
     onHandoffSent: () => void;
     fill: Fill | null;
     onFilled: () => void;
 }) {
     if (open.kind === "none") {
-        const first = pods[0];
         return (
             <div className="ox-chats__home">
                 <p className="ox-chats__home-t">Pick a chat, or start one</p>
                 <p className="ox-vs">Your chats and the ones you share with people are on the left, under the Lemma each is with.</p>
-                {first && <a className="ox-btn ox-btn--primary" {...to(chatView({ kind: "chat", podId: first.id, id: NEW_CHAT }), go)}>New chat</a>}
+                <a className="ox-btn ox-btn--primary" {...to({ name: "today" }, go)}>New chat</a>
             </div>
         );
     }
@@ -115,7 +139,7 @@ export function ChatPane({ pods, open, activity, go, onAsk, actions, handoff, on
     if (!pod) return <div className="ox-thread__none"><Empty title="This chat is with a Lemma you can’t open."><p>It may have been removed, or you were never added to it.</p></Empty></div>;
     if (open.kind === "chat") {
         const title = activity.get(pod.id)?.find((one) => one.id === open.id)?.title ?? null;
-        return <ChatThread pod={pod} id={open.id} title={title} pods={pods} go={go} onAsk={onAsk} actions={actions} handoff={handoff} onHandoffSent={onHandoffSent} fill={fill} onFilled={onFilled} />;
+        return <ChatThread pod={pod} id={open.id} title={title} go={go} actions={actions} calls={calls} handoff={handoff} onHandoffSent={onHandoffSent} fill={fill} onFilled={onFilled} />;
     }
     if (open.kind === "shared") return <SharedThread key={open.id} pod={pod} id={open.id} go={go} />;
     return <ContactThread key={open.id} pod={pod} id={open.id} go={go} />;
@@ -138,14 +162,13 @@ function usePaneKey(podId: string, id: string, adopted: RefObject<string | null>
  *  they do there. A chat not started yet opens on who it is with -- its
  *  apps, and ways to start one with people instead -- and the box at the
  *  bottom, which is where the Lemma is picked. */
-function ChatThread({ pod, id, title, pods, go, onAsk, actions, handoff, onHandoffSent, fill, onFilled }: {
+function ChatThread({ pod, id, title, go, actions, calls, handoff, onHandoffSent, fill, onFilled }: {
     pod: Pod;
     id: string;
     title: string | null;
-    pods: readonly Pod[];
     go: Go;
-    onAsk: (podId: string, text: string) => void;
     actions: FrameActions;
+    calls: Calls;
     handoff: Handoff | null;
     onHandoffSent: () => void;
     fill: Fill | null;
@@ -161,83 +184,159 @@ function ChatThread({ pod, id, title, pods, go, onAsk, actions, handoff, onHando
     const [started, setStarted] = useState<string | null>(null);
     if (pending && started !== key) setStarted(key);
     const threaded = !fresh || pending || started === key;
+    /* A new chat starts on the Lemma's own page, which is a box to ask it
+       something. Arriving at one with no words on the way -- an old link, a
+       bookmark -- is arriving there. */
+    useEffect(() => {
+        if (!threaded) go(outcomeView(pod.id), { replace: true });
+    }, [threaded, go, pod.id]);
+    /* Offered only once the server says it can place a call: a voice engine
+       is a server setting. The sample pod has no server to ask. */
+    const voiceReady = useVoiceConfigured(source.label === "sample" ? null : pod.id) === true;
+    /* What the chat opened, beside it, for as long as this conversation is
+       the one in the pane: another chat opens on its own. */
+    const [held, setHeld] = useState<{ key: string; beside: Beside } | null>(null);
+    const beside = held?.key === key ? held.beside : null;
+    const open = useCallback((next: Beside) => setHeld({ key, beside: next }), [key]);
+    const [width, setWidth] = useState(storedBesideWidth);
+    useEffect(() => {
+        try { localStorage.setItem(BESIDE_WIDTH_KEY, JSON.stringify(width)); } catch { /* kept for this visit only */ }
+    }, [width]);
     const opens = {
-        onOpenApp: (name: string) => go({ name: "app", podId: pod.id, app: name }),
-        onOpenFile: (path: string) => go({ name: "file", podId: pod.id, path }),
-        onOpenTable: (name: string) => go({ name: "table", podId: pod.id, table: name }),
+        onOpenApp: (name: string) => open({ kind: "app", name }),
+        onOpenFile: (path: string) => open({ kind: "file", path }),
+        onOpenTable: (name: string) => open({ kind: "table", name }),
     };
+    /* With something open beside it, the chat -- its header, the banner over
+       it and the thread -- keeps a column of its own, and the pane runs the
+       full height beside it under a bar of its own: one header to each, side
+       by side, not one stacked over the other. */
     return (
-        <div className="ox-thread">
-            <header className="ox-thread__head">
-                <p className="ox-thread__t">{fresh ? "New chat" : title ?? "Chat"}</p>
-                <a className="ox-tag ox-tag--link" {...to(outcomeView(pod.id), go)}>{pod.name}</a>
-                {!fresh && <a className="ox-thread__out" href={classic.conversation(pod.id, id)}>Open in the workspace</a>}
-            </header>
-            {!threaded ? <NewChat pod={pod} pods={pods} go={go} onAsk={onAsk} actions={actions} /> : (
-                <div className="ox-thread__body">
-                    <div className="split">
-                        <div className="convo-host">
-                            {source.label === "live" ? (
-                                <LiveConversation
-                                    key={key}
-                                    pod={pod}
-                                    conversationId={fresh ? NEW_CONVERSATION : id}
-                                    fill={filled}
-                                    onFilled={onFilled}
-                                    autoSend={fresh && handoff && handoff.podId === pod.id && !handoff.sent ? handoff : null}
-                                    createWith={fresh && handoff && handoff.podId === pod.id ? handoff.createWith : undefined}
-                                    onAutoSent={onHandoffSent}
-                                    onCreated={(made) => {
-                                        created.current = made;
-                                        go(chatView({ kind: "chat", podId: pod.id, id: made }), { replace: true });
-                                    }}
-                                    {...opens}
-                                />
-                            ) : (
-                                <ConversationPane key={pod.id + ":" + id} pod={pod} conversationId={fresh ? NEW_CONVERSATION : id} fill={filled} onFilled={onFilled} {...opens} />
-                            )}
+        <div className={"ox-thread" + (beside ? " ox-thread--beside" : "")} style={beside ? { ["--split-position" as string]: width + "%" } : undefined}>
+            <div className="ox-thread__main">
+                <header className="ox-thread__head">
+                    {fresh ? <p className="ox-thread__t">New chat</p> : <ChatHead pod={pod} open={{ kind: "chat", podId: pod.id, id }} title={title} go={go} onComputer={() => open({ kind: "computer" })} />}
+                </header>
+                <ConnectBanner key={pod.id} pod={pod} />
+                {!threaded ? <p className="ox-loading">Opening {pod.name}…</p> : (
+                    <div className="ox-thread__body">
+                        <div className="split">
+                            <div className="convo-host">
+                                {source.label === "live" ? (
+                                    <LiveConversation
+                                        key={key}
+                                        pod={pod}
+                                        conversationId={fresh ? NEW_CONVERSATION : id}
+                                        fill={filled}
+                                        onFilled={onFilled}
+                                        autoSend={fresh && handoff && handoff.podId === pod.id && !handoff.sent ? handoff : null}
+                                        createWith={fresh && handoff && handoff.podId === pod.id ? handoff.createWith : undefined}
+                                        folderChosen={fresh && handoff && handoff.podId === pod.id ? handoff.folder : undefined}
+                                        onAutoSent={onHandoffSent}
+                                        onCreated={(made) => {
+                                            created.current = made;
+                                            go(chatView({ kind: "chat", podId: pod.id, id: made }), { replace: true });
+                                        }}
+                                        onVoice={voiceReady ? () => calls.start(pod, fresh ? null : id) : undefined}
+                                        callError={calls.error}
+                                        callRefresh={fresh ? "" : calls.refreshFor(id)}
+                                        {...opens}
+                                    />
+                                ) : (
+                                    <ConversationPane key={pod.id + ":" + id} pod={pod} conversationId={fresh ? NEW_CONVERSATION : id} fill={filled} onFilled={onFilled} {...opens} />
+                                )}
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
+            </div>
+            {beside && <PaneDivider value={width} onChange={setWidth} />}
+            {beside && <BesidePane pod={pod} conversationId={fresh ? null : id} beside={beside} onOpen={open} onClose={() => setHeld(null)} go={go} actions={actions} />}
         </div>
     );
 }
 
-/** A chat not started yet: who it is with and what it owns; what it runs
- *  -- its apps, tables and automations -- each a click away, with a way to
- *  ask for a new one; ways to start a chat with people instead; and the box,
- *  with which Lemma at its foot. */
-function NewChat({ pod, pods, go, onAsk, actions }: { pod: Pod; pods: readonly Pod[]; go: Go; onAsk: (podId: string, text: string) => void; actions: FrameActions }) {
-    const plan = useQuery({ queryKey: ["outcome-plan", pod.id], queryFn: () => readPlan(pod.id), staleTime: 5 * 60_000 });
-    const owns = plan.data?.outcome || "";
-    const [seed, setSeed] = useState<{ text: string; id: number } | null>(null);
-    const ask = (text: string) => setSeed((was) => ({ text, id: (was?.id ?? 0) + 1 }));
+/** A chat's name, and in a menu under it what can be done with the chat,
+ *  the way a session's title carries its own: rename it, pin it to the top
+ *  of the sidebar, open the Lemma it is with or the machine it works on, or
+ *  put it away. */
+function ChatHead({ pod, open, title, go, onComputer }: {
+    pod: Pod;
+    open: OpenChat;
+    title: string | null;
+    go: Go;
+    /** The machine it works on, opened beside the chat. */
+    onComputer: () => void;
+}) {
+    const cache = useQueryClient();
+    const pinned = usePins().some((pin) => pin.key === pinKey(open));
+    const [draft, setDraft] = useState<string | null>(null);
+    const shown = title ?? "Chat";
+    const sample = source.label === "sample";
+    /* The frame's own list of the Lemma's chats, beside the workspace's. */
+    const patch = (change: (list: ConversationRef[] | undefined) => ConversationRef[] | undefined) => {
+        patchConversationLists(cache, pod.id, change);
+        cache.setQueryData<ConversationRef[]>(["conversations", pod.id, "outcome-activity"], change);
+    };
+    const rename = async () => {
+        const next = titleToSend(draft ?? "");
+        setDraft(null);
+        if (!next || next === title) return;
+        patch((list) => applyTitle(list, open.id, next));
+        retitlePin(open, next);
+        try {
+            if (!sample) await lemma(pod.id).conversations.update(open.id, { title: next }, { pod_id: pod.id });
+        } catch {
+            void refreshConversationLists(cache, pod.id);
+        }
+    };
+    const archive = async () => {
+        patch((list) => applyArchived(list, open.id));
+        unpin(open);
+        go({ name: "today" });
+        try {
+            if (!sample) await lemma(pod.id).conversations.update(open.id, { is_archived: true }, { pod_id: pod.id });
+        } catch {
+            void refreshConversationLists(cache, pod.id);
+        }
+    };
+    const item = (view: View) => {
+        const link = to(view, go);
+        return { href: link.href, onClick: (event: MouseEvent<HTMLAnchorElement>) => { closeMenu(event); link.onClick(event); } };
+    };
+    if (draft !== null) {
+        return (
+            <input
+                className="ox-chathead__rename"
+                aria-label="Chat name"
+                value={draft}
+                maxLength={200}
+                autoFocus
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={() => void rename()}
+                onKeyDown={(event) => {
+                    if (event.key === "Enter") { event.preventDefault(); void rename(); }
+                    if (event.key === "Escape") { event.preventDefault(); setDraft(null); }
+                }}
+            />
+        );
+    }
     return (
-        <div className="ox-newchat">
-            <div className="ox-newchat__body">
-                <div className="ox-newchat__who">
-                    <TeammateFace pod={pod} size={44} />
-                    <div className="ox-newchat__id">
-                        <p className="ox-newchat__name">{pod.name}</p>
-                        <p className="ox-newchat__owns">{owns ? `Owns: ${owns}` : pod.description || "Nothing it owns yet."}</p>
-                    </div>
-                </div>
-                <WhatItRuns pod={pod} go={go} onNew={ask} />
+        <details className="ox-more ox-chathead">
+            <summary aria-label={`${shown}, with ${pod.name}`}>
+                <span className="ox-chathead__t">{shown}</span>
+                <Icon name="chevron" size={13} />
+            </summary>
+            <div className="ox-more__menu" role="menu">
+                <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); setDraft(title ?? ""); }}>Rename</button>
+                <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); togglePin(open, shown); }}>{pinned ? "Unpin" : "Pin to the top"}</button>
+                <a role="menuitem" {...item(outcomeView(pod.id))}>Open {pod.name}</a>
+                {/* The machine this chat works on, from its working folder. */}
+                {source.label === "live" && <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); onComputer(); }}>Its computer</button>}
+                <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); void archive(); }}>Archive</button>
             </div>
-            <div className="ox-newchat__foot">
-                <StartWith pod={pod} go={go} onConnect={() => actions.connect(pod.id)} />
-                <AskBox
-                    pods={pods}
-                    podId={pod.id}
-                    onPod={(next) => go(chatView({ kind: "chat", podId: next, id: NEW_CHAT }), { replace: true })}
-                    onAsk={onAsk}
-                    autoFocus
-                    seed={seed}
-                    placeholder={`Ask ${pod.name} anything, or say what to do`}
-                />
-            </div>
-        </div>
+        </details>
     );
 }
 
@@ -245,7 +344,7 @@ function NewChat({ pod, pods, go, onAsk, actions }: { pod: Pod; pods: readonly P
  *  Lemma brought into a group on a platform it is connected to. Platforms
  *  it is not connected to are one link to connect them, not a row of dead
  *  options. */
-function StartWith({ pod, go, onConnect }: { pod: Pod; go: Go; onConnect: () => void }) {
+export function StartWith({ pod, go, onConnect }: { pod: Pod; go: Go; onConnect: () => void }) {
     const mayShare = mayStartChannel(useAbilities(pod.id));
     const surfaces = useSurfaces(pod.id);
     const starters = useMemo(() => groupStarters(surfaces.data ?? []), [surfaces.data]);
@@ -286,21 +385,29 @@ function StartWith({ pod, go, onConnect }: { pod: Pod; go: Go; onConnect: () => 
 }
 
 /** A chat shared with people, or someone's private line: the workspace's
- *  own channel page -- the timeline, threads, who is in it, its composer. */
+ *  own channel page -- the timeline, threads, who is in it, its composer.
+ *  Its header is the chat's one header, with the pin at its end. */
 function SharedThread({ pod, id, go }: { pod: Pod; id: string; go: Go }) {
     const leave = useCallback(() => go(outcomeView(pod.id)), [go, pod.id]);
+    const [title, setTitle] = useState<string | null>(null);
     return (
         <div className="ox-thread">
-            <header className="ox-thread__head ox-thread__head--slim">
-                <a className="ox-tag ox-tag--link" {...to(outcomeView(pod.id), go)}>{pod.name}</a>
-                <a className="ox-thread__out" href={channelHref(pod.id, id)}>Open in the workspace</a>
-            </header>
             <div className="ox-thread__body">
                 <div className="pane channel-pane">
-                    <ChannelPage pod={pod} channelId={id} visible onNamed={NOOP} onLeft={leave} />
+                    <ChannelPage pod={pod} channelId={id} visible onNamed={setTitle} onLeft={leave} actions={title && <PinButton open={{ kind: "shared", podId: pod.id, id }} title={title} />} />
                 </div>
             </div>
         </div>
+    );
+}
+
+/** Pin a shared chat to the top of the sidebar, or unpin it. */
+function PinButton({ open, title }: { open: OpenChat; title: string }) {
+    const pinned = usePins().some((pin) => pin.key === pinKey(open));
+    return (
+        <button type="button" className="ox-pinbtn" aria-pressed={pinned} aria-label={pinned ? "Unpin" : "Pin to the top"} title={pinned ? "Unpin" : "Pin to the top"} onClick={() => togglePin(open, title)}>
+            <Icon name="pin" size={16} />
+        </button>
     );
 }
 
@@ -314,7 +421,6 @@ function ContactThread({ pod, id, go }: { pod: Pod; id: string; go: Go }) {
         <div className="ox-thread">
             <header className="ox-thread__head ox-thread__head--slim">
                 <a className="ox-thread__crumb" {...to(queue, go)}><Icon name="back" size={14} />{pod.name} contacts</a>
-                <a className="ox-thread__out" href={channelHref(pod.id, id)}>Open in the workspace</a>
             </header>
             <div className="ox-thread__body">
                 <div className="pane channel-pane">

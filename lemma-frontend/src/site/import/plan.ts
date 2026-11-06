@@ -21,7 +21,7 @@ const KINDS: Record<string, { one: string; many: string; order: number }> = {
     TABLE: { one: "Table", many: "Tables", order: 4 },
     TABLE_DATA: { one: "Sample rows", many: "Sample rows", order: 5 },
     FUNCTION: { one: "Function", many: "Functions", order: 6 },
-    SURFACE: { one: "Channel", many: "Channels", order: 7 },
+    SURFACE: { one: "Messaging app", many: "Messaging apps", order: 7 },
     FILE: { one: "File", many: "Files", order: 8 },
     CONNECTOR: { one: "Connection", many: "Connections", order: 9 },
 };
@@ -127,9 +127,9 @@ export function installedApp(steps: PlanStep[]): string | null {
  *  the teammate instead puts the thing that was just installed behind a second
  *  click, which reads as an install that produced nothing. */
 export function landingPath(podId: string, steps: PlanStep[]): string {
-    const base = "/t/" + encodeURIComponent(podId);
+    const base = "/l/" + encodeURIComponent(podId);
     const app = installedApp(steps);
-    return app ? base + "/app/" + encodeURIComponent(app) : base;
+    return app ? base + "/apps/" + encodeURIComponent(app) : base;
 }
 
 /** A repository slug as a teammate's name: `smart-inbox` → "Smart Inbox". */

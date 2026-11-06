@@ -19,8 +19,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.services.realtime import (
-    conversation_channel,
+from app.modules.agent.infrastructure.live import conversation_channel
+from app.modules.agent.domain.live_events import (
     message_payload,
     status_payload,
     token_payload,
@@ -81,7 +81,7 @@ class TestAChannelOutageIsVisible:
 
     @pytest.mark.asyncio
     async def test_repeated_publish_failures_are_reported_once(self, caplog) -> None:
-        from app.modules.agent.services import realtime
+        from app.modules.agent.infrastructure import live as realtime
 
         class _DeadChannel:
             async def publish(self, _channel, _payload) -> None:

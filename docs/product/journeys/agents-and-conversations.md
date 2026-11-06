@@ -237,8 +237,10 @@ whether copying succeeded.
 - If an agent attempts something destructive — dropping a table, deleting
   records, sending a message outside the pod — then the system shall
   pause the run and ask a person before doing it.
-- While a run is paused for approval, the system shall keep it paused
-  indefinitely rather than timing out and proceeding.
+- While a run is paused for approval, the system shall never proceed without a
+  decision: if nobody decides within 7 days (72 hours for a question the agent
+  asked), the system shall treat the request as denied, resume the run without
+  performing the action, and tell the agent that nobody answered in time.
 - When a person approves, the system shall resume the run and perform exactly
   the action that was described to them.
 - When a person denies, the system shall resume the run without performing the

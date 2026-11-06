@@ -35,7 +35,7 @@ from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 pytestmark = pytest.mark.unit
 
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 _CONVERSATION = uuid4()
 _LAST_INBOUND = datetime(2026, 10, 2, 11, 30, tzinfo=timezone.utc)
 
@@ -55,10 +55,15 @@ def _group_message() -> ParsedInboundSurfaceEvent:
 
 @pytest.fixture(autouse=True)
 def conversation(monkeypatch):
-    """The conversation's owner, doubled on `agent`'s contract: it reads a row."""
+    """The conversation's owner, doubled on `agent`'s contract: it reads a row.
+    Its latest run was asked at no place of its own."""
     monkeypatch.setattr(
         f"{_CONVERSATIONS}.surface_conversation",
         AsyncMock(return_value=surface_conversation()),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.channel_replies.latest_run_asked_at",
+        AsyncMock(return_value=None),
     )
 
 

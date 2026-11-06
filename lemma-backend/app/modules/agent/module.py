@@ -55,7 +55,7 @@ async def _drain_agent_host_links(_context: object) -> AsyncIterator[None]:
     uvicorn, and why it is still the only place ``reconnect`` can come from.
     """
     yield
-    from app.modules.agent.services.agent_host_link_registry import link_registry
+    from app.modules.agent.agent_host.api import link_registry
 
     await link_registry.drain()
 
@@ -97,18 +97,7 @@ def _dispatches_turns() -> bool:
 
 def _routers():
     from app.modules.agent.api.controllers.agent_controller import router as agent
-    from app.modules.agent.api.controllers.agent_host_controller import (
-        router as agent_host,
-    )
-    from app.modules.agent.api.controllers.agent_host_link_controller import (
-        router as agent_host_link,
-    )
-    from app.modules.agent.api.controllers.agent_host_legacy_controller import (
-        router as agent_host_legacy,
-    )
-    from app.modules.agent.api.controllers.agent_host_transfer_controller import (
-        router as agent_host_transfer,
-    )
+    from app.modules.agent.agent_host.api import routers as agent_host_routers
     from app.modules.agent.api.controllers.runtime_config_controller import (
         router as runtime_config,
     )
@@ -125,6 +114,9 @@ def _routers():
     from app.modules.agent.api.controllers.conversation_pending_controller import (
         router as conversation_pending,
     )
+    from app.modules.agent.api.controllers.conversation_open_controller import (
+        router as conversation_open,
+    )
     from app.modules.agent.api.controllers.askable_pods_controller import (
         router as askable_pods,
     )
@@ -140,15 +132,13 @@ def _routers():
 
     return [
         agent,
-        agent_host,
-        agent_host_link,
-        agent_host_transfer,
-        agent_host_legacy,
+        *agent_host_routers(),
         runtime_config,
         runtime_default,
         tool,
-        # Ahead of `conversation`, whose `/{conversation_id}` would claim it.
+        # Ahead of `conversation`, whose `/{conversation_id}` would claim them.
         conversation_pending,
+        conversation_open,
         conversation,
         conversation_queue,
         askable_pods,

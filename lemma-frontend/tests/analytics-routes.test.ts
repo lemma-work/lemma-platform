@@ -40,37 +40,63 @@ test("the route list is every page in app/, so a new route cannot leak its segme
 test("a workspace address names the kind of place, never which one", () => {
     const at = (address: Partial<Address>) =>
         toRouteTemplate(writeAddress({ podId: "pod-1", tabId: null, conversationId: null, agentName: null, ...address }));
-    assert.equal(toRouteTemplate("/t"), "/t");
+    /* Written under `/l` now, where a word the app also uses is the app's
+       place, and the workspace's own words keep their own templates. */
+    assert.equal(at({}), "/l/[lemma]");
+    assert.equal(at({ tabId: "conversation" }), "/l/[pod]/conversation");
+    assert.equal(at({ tabId: "conversation", conversationId: "c-9" }), "/l/[pod]/conversation/[id]");
+    assert.equal(at({ tabId: "space:pages" }), "/l/[pod]/pages");
+    assert.equal(at({ tabId: "space:about", section: "people" }), "/l/[pod]/about/people");
+    assert.equal(at({ tabId: "table:payroll" }), "/l/[pod]/table/[name]");
+    assert.equal(at({ tabId: "app:crm" }), "/l/[pod]/app/[name]");
+    assert.equal(at({ tabId: "run:r-1" }), "/l/[pod]/run/[id]");
+    assert.equal(at({ tabId: "record:payroll:row-7" }), "/l/[pod]/record/[table]/[id]");
+    assert.equal(at({ tabId: "file:/private/q3 layoffs.md" }), "/l/[pod]/file/[...path]");
+    assert.equal(at({ tabId: "profile", agentName: "scout" }), "/l/[pod]/profile/[agent]");
+    /* Older links still say `/t`, and are read the same way. */
+    assert.equal(toRouteTemplate("/t"), "/home");
     assert.equal(toRouteTemplate("/t/teammates"), "/t/teammates");
-    assert.equal(at({}), "/t/[pod]");
-    assert.equal(at({ tabId: "conversation" }), "/t/[pod]/conversation");
-    assert.equal(at({ tabId: "conversation", conversationId: "c-9" }), "/t/[pod]/conversation/[id]");
-    assert.equal(at({ tabId: "space:pages" }), "/t/[pod]/pages");
-    assert.equal(at({ tabId: "space:about", section: "people" }), "/t/[pod]/about/people");
-    assert.equal(at({ tabId: "table:payroll" }), "/t/[pod]/table/[name]");
-    assert.equal(at({ tabId: "app:crm" }), "/t/[pod]/app/[name]");
-    assert.equal(at({ tabId: "run:r-1" }), "/t/[pod]/run/[id]");
-    assert.equal(at({ tabId: "record:payroll:row-7" }), "/t/[pod]/record/[table]/[id]");
-    assert.equal(at({ tabId: "file:/private/q3 layoffs.md" }), "/t/[pod]/file/[...path]");
-    assert.equal(at({ tabId: "profile", agentName: "scout" }), "/t/[pod]/profile/[agent]");
+    assert.equal(toRouteTemplate("/t/pod-1/table/payroll"), "/t/[pod]/table/[name]");
     /* Unreadable is not a reason to echo it: a bad escape reads as nowhere. */
     assert.equal(toRouteTemplate("/t/pod-1/%E0%A4%A"), "/t");
+    assert.equal(toRouteTemplate("/l"), "/l");
+    assert.equal(toRouteTemplate("/l/teammates"), "/l");
+    assert.equal(toRouteTemplate("/l/pod-1/file/private/q3.md"), "/l/[pod]/file/[...path]");
 });
 
-test("an outcome-frame address names the kind of view, never which one", () => {
+test("an app address names the kind of view, never which one", () => {
     const at = (view: View) => toRouteTemplate(writeView(view));
-    assert.equal(at({ name: "today" }), "/o");
-    assert.equal(at({ name: "needs" }), "/o/needs-you");
-    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "new" } }), "/o/chats/[pod]/c/new");
-    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "c-9" } }), "/o/chats/[pod]/c/[id]");
-    assert.equal(at({ name: "chats", open: { kind: "contact", podId: "pod-1", id: "k-1" } }), "/o/chats/[pod]/contacts/[id]");
-    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "home" }), "/o/outcome/[pod]");
-    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "settings", section: "people" }), "/o/outcome/[pod]/settings/[section]");
-    assert.equal(at({ name: "table", podId: "pod-1", table: "payroll" }), "/o/outcome/[pod]/table/[name]");
-    assert.equal(at({ name: "file", podId: "pod-1", path: "/private/q3.md" }), "/o/outcome/[pod]/file/[...path]");
-    assert.equal(at({ name: "record", podId: "pod-1", table: "payroll", recordId: "r" }), "/o/outcome/[pod]/record/[table]/[id]");
-    /* The template is read with the frame's own grammar, so it agrees with it. */
-    assert.equal(readView("/o/outcome/pod-1/table/payroll").name, "table");
+    assert.equal(at({ name: "today" }), "/home");
+    assert.equal(at({ name: "needs" }), "/needs");
+    assert.equal(at({ name: "apps" }), "/apps");
+    assert.equal(at({ name: "connectors" }), "/connectors");
+    assert.equal(at({ name: "outcomes" }), "/l");
+    assert.equal(at({ name: "hire" }), "/l/new");
+    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "new" } }), "/l/[lemma]/chats/new");
+    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "c-9" } }), "/l/[lemma]/chats/[id]");
+    assert.equal(at({ name: "chats", open: { kind: "shared", podId: "pod-1", id: "g-1" } }), "/l/[lemma]/groups/[id]");
+    assert.equal(at({ name: "chats", open: { kind: "contact", podId: "pod-1", id: "k-1" } }), "/l/[lemma]/contacts/[id]");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "home" }), "/l/[lemma]");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "made" }), "/l/[lemma]/files");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "settings", section: "people" }), "/l/[lemma]/settings/[section]");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "automations", section: "schedules" }), "/l/[lemma]/automations/schedules", "one of a fixed few views");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "chats", section: "channels" }), "/l/[lemma]/groups");
+    assert.equal(at({ name: "table", podId: "pod-1", table: "payroll" }), "/l/[lemma]/tables/[name]");
+    assert.equal(at({ name: "file", podId: "pod-1", path: "/private/q3.md" }), "/l/[lemma]/files/[...path]");
+    assert.equal(at({ name: "record", podId: "pod-1", table: "payroll", recordId: "r" }), "/l/[lemma]/tables/[table]/[id]");
+    assert.equal(at({ name: "computer", podId: "pod-1", conversationId: "c-9" }), "/l/[lemma]/computer/[id]");
+    /* The template is read with the app's own grammar, so it agrees with it. */
+    assert.equal(readView("/l/pod-1/tables/payroll")?.name, "table");
+    /* The frame's first addresses, under `/t` and `/o`, template as the place
+       they name; a workspace address under them as the workspace's. */
+    assert.equal(toRouteTemplate("/t/outcome/pod-1/table/payroll"), "/l/[lemma]/tables/[name]");
+    assert.equal(toRouteTemplate("/o/outcome/pod-1/table/payroll"), "/l/[lemma]/tables/[name]");
+    assert.equal(toRouteTemplate("/o/pod-1/table/payroll"), "/t/[pod]/table/[name]");
+    /* A word every object answers to is as unknown as any other word, not a
+       template of `undefined`. */
+    for (const word of ["/constructor", "/__proto__", "/toString"]) {
+        assert.equal(toRouteTemplate(word), toRouteTemplate("/not-a-place"), word);
+    }
 });
 
 test("other routes still template by the route list, and nothing unknown is echoed", () => {
@@ -82,18 +108,23 @@ test("other routes still template by the route list, and nothing unknown is echo
 });
 
 test("only a move to a new place is a new pageview", () => {
-    assert.equal(isNewView(null, "/t"), true);
-    assert.equal(isNewView("/t", "/t"), false);
-    /* The workspace settling on where it opened, and a new chat being named. */
-    assert.equal(isNewView("/t", "/t/pod-1/home"), false);
-    assert.equal(isNewView("/t/pod-1", "/t/pod-1/home"), false);
-    assert.equal(isNewView("/t/pod-1/conversation", "/t/pod-1/conversation/c-9"), false);
-    assert.equal(isNewView("/o/chats/pod-1/c/new", "/o/chats/pod-1/c/c-9"), false);
+    assert.equal(isNewView(null, "/home"), true);
+    assert.equal(isNewView("/home", "/home"), false);
+    /* An old link written again as the app's own address for the same
+       place, and a new chat being named. */
+    assert.equal(isNewView("/l/pod-1/conversation/c-9", "/l/pod-1/chats/c-9"), false);
+    assert.equal(isNewView("/l/pod-1/about/connections", "/l/pod-1/settings/connections"), false);
+    assert.equal(isNewView("/t/outcome/pod-1/table/payroll", "/l/pod-1/tables/payroll"), false);
+    assert.equal(isNewView("/l/pod-1/chats/new", "/l/pod-1/chats/c-9"), false);
+    /* The workspace's own addresses, between themselves. */
+    assert.equal(isNewView("/l/pod-1/conversation", "/l/pod-1/conversation/c-9"), false);
+    assert.equal(isNewView("/l/pod-1/home", "/l/pod-1/pages"), true);
+    assert.equal(isNewView("/l/pod-1/conversation/c-1", "/l/pod-1/conversation/c-2"), true);
     /* Real moves. */
-    assert.equal(isNewView("/t/pod-1/home", "/t/pod-1/pages"), true);
-    assert.equal(isNewView("/t/pod-1/conversation/c-1", "/t/pod-1/conversation/c-2"), true);
-    assert.equal(isNewView("/t/pod-1/home", "/t/pod-2/home"), true);
-    assert.equal(isNewView("/o", "/o/needs-you"), true);
-    assert.equal(isNewView("/o/chats/pod-1/c/c-1", "/o/chats/pod-1/c/c-2"), true);
-    assert.equal(isNewView("/", "/t"), true);
+    assert.equal(isNewView("/home", "/needs"), true);
+    assert.equal(isNewView("/l/pod-1", "/l/pod-2"), true);
+    assert.equal(isNewView("/l/pod-1/chats/c-1", "/l/pod-1/chats/c-2"), true);
+    assert.equal(isNewView("/l/pod-1", "/l/pod-1/table/payroll"), true, "a workspace link followed from inside the app");
+    assert.equal(isNewView("/", "/home"), true);
 });
+

@@ -22,20 +22,29 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.tests.e2e.group_timeline import timeline, say
-from app.modules.channels.contracts import Principal, Sender, SenderKind
+from app.modules.channels.contracts import (
+    AgentAnswers,
+    Principal,
+    Sender,
+    SenderKind,
+    channel_by_id,
+)
+from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.contacts.infrastructure.models import ContactIdentityModel
-from app.modules.agent_surfaces.composition import build_app_event_handler
+from app.modules.agent_surfaces.composition import (
+    build_app_event_handler,
+    build_surface_ingress,
+)
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.channels.contracts.places import place_heard_on
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
     _messages_for_conversation,
@@ -123,8 +132,10 @@ async def _adopt_group(db_session: AsyncSession, surface_id: UUID):
     )
     await db_session.commit()
     assert handled is True
-    return await SurfaceGroupRepository(db_session).get(
-        surface_id=surface_id, external_channel_id=str(GROUP_CHAT)
+    return await place_heard_on(
+        SqlAlchemyUnitOfWork(db_session),
+        surface_id=surface_id,
+        external_channel_id=str(GROUP_CHAT),
     )
 
 
@@ -316,3 +327,89 @@ async def test_a_reply_in_a_logged_group_still_says_what_it_replies_to(
     )
     asked = [message for message in messages if message.get("role") == "user"][-1]
     assert asked["metadata"]["quoted_message"]["text"] == "Proofs are due Friday."
+
+
+# ------------------------------------------- the bot answering every line
+
+
+def _unmentioned(*, text: str, message_id: int, sender_id: int) -> dict:
+    """A group message nobody put to the bot."""
+    payload = _group_message(text=text, message_id=message_id, sender_id=sender_id)
+    del payload["message"]["entities"]
+    return payload
+
+
+async def _bot_answers_every_line(db_session: AsyncSession, group, pod_id: str):
+    channel = await channel_by_id(SqlAlchemyUnitOfWork(db_session), group.channel_id)
+    assert channel is not None
+    await MemberRepository(db_session).add_agent(
+        channel,
+        effective_agent_id(None, pod_id=UUID(pod_id)),
+        answers=AgentAnswers.EVERY_LINE,
+    )
+    await db_session.commit()
+
+
+async def _prepared(db_session: AsyncSession, payload: dict):
+    request = SurfacePlatformWebhookIngress(
+        source="telegram", payload=payload, headers={}
+    )
+    ingress = build_surface_ingress(SqlAlchemyUnitOfWork(db_session))
+    return await ingress.prepare_ingress(request)
+
+
+async def test_a_bot_answering_every_line_answers_a_member_nobody_put_it_to(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    """The same line typed in Lemma would start the pod's agent answering
+    every line there; said in the group, its bot answers it -- a member's,
+    and only a member's: the stranger beside them is not answered, nor told
+    why (PS-SURF-025)."""
+    _wire_native_telegram(monkeypatch, fake_telegram)
+    pod_id = test_pod["id"]
+    surface = await _create_surface(
+        authenticated_client, pod_id, config={"type": "TELEGRAM"}
+    )
+    await _seed_external_user(
+        db_session,
+        platform="TELEGRAM",
+        external_user_id=str(MEMBER_TELEGRAM_ID),
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
+    group = await _adopt_group(db_session, UUID(surface["id"]))
+    assert group is not None
+
+    # Asked of nobody, where the bot only answers when put to it: logged only.
+    lunch = _unmentioned(text="Lunch?", message_id=90, sender_id=MEMBER_TELEGRAM_ID)
+    assert await _prepared(db_session, lunch) is None
+
+    await _bot_answers_every_line(db_session, group, pod_id)
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="telegram",
+            payload=_unmentioned(
+                text="Is the launch still Thursday?",
+                message_id=91,
+                sender_id=MEMBER_TELEGRAM_ID,
+            ),
+            headers={},
+        ),
+        script=[script_text("Yes, Thursday.")],
+    )
+    assert isinstance(context, SurfaceChatContext)
+    assert not context.audience.is_contact
+    sent = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
+    assert sent[-1]["chat_id"] == str(GROUP_CHAT)
+    assert "Thursday" in sent[-1]["text"]
+
+    tickets = _unmentioned(
+        text="Anyone selling tickets?", message_id=92, sender_id=STRANGER_TELEGRAM_ID
+    )
+    assert await _prepared(db_session, tickets) is None

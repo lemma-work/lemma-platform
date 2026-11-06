@@ -1,0 +1,46 @@
+{
+  "name": "partners",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {
+    "description": "Every company you are talking to: where it stands, the next step, and whether it signed."
+  },
+  "columns": [
+    {
+      "name": "id",
+      "type": "UUID",
+      "required": true,
+      "auto": true
+    },
+    {
+      "name": "company",
+      "type": "TEXT",
+      "required": true
+    },
+    {
+      "name": "owner",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "stage",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "next_step",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "next_step_due",
+      "type": "DATE",
+      "required": false
+    },
+    {
+      "name": "signed",
+      "type": "BOOLEAN",
+      "required": false
+    }
+  ]
+}

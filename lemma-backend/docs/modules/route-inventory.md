@@ -23,6 +23,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/askable-pods` | `agent.askable_pod.list` | List Pods This Pod Can Ask |
 | GET | `/pods/{pod_id}/conversations` | `agent.conversation.list` | List Pod Agent Conversations |
 | GET | `/pods/{pod_id}/conversations/pending-interactions` | `agent.conversation.pending_interaction.list` | List Interactions Waiting On You |
+| GET | `/pods/{pod_id}/conversations/repositories` | `agent.conversation.repository.list` | List Repositories A Conversation Can Open In |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.get` | Get Pod Conversation |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
@@ -148,10 +149,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.remove` | Remove Table Grant |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
-| GET | `/pods/{pod_id}/channels/me` | `channel.me.get` | Get My Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
-| GET | `/pods/{pod_id}/channels/{channel_id}/cases` | `channel.case.list` | List Cases |
-| GET | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.list` | List Members |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | `channel.message.file` | Line File |
@@ -259,6 +257,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.get` | Who Outside May Add Rows |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records` | `record.list` | List Records |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.get` | Get Record |
+| GET | `/pods/{pod_id}/outcome/history` | `outcome.history` | Where the pod has stood, week by week |
+| GET | `/pods/{pod_id}/outcome/standing` | `outcome.standing` | Where the pod stands |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.update` | Update Table |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.update` | Update Record |
@@ -324,10 +324,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/slug-availability` | `org.slug_availability` | Check Organization Slug Availability |
 | GET | `/organizations/suggested` | `org.suggested` | Get Suggested Organizations |
 | GET | `/organizations/{organization_id}` | `org.get` | Get Organization |
+| GET | `/organizations/{organization_id}/apps` | `org.apps.list` | List Apps Across The Organization |
 | GET | `/organizations/{organization_id}/home` | `org.home` | Get Organization Home |
+| GET | `/organizations/{organization_id}/home/seen` | `org.home.seen.get` | Get When You Last Looked At Home |
 | GET | `/organizations/{organization_id}/invitations` | `org.invitation.list` | List Organization Invitations |
 | GET | `/organizations/{organization_id}/members` | `org.member.list` | List Organization Members |
+| GET | `/organizations/{organization_id}/needs-you` | `org.needs_you.list` | List What Waits On You Across The Organization |
 | GET | `/organizations/{organization_id}/permissions/me` | `org.permissions.me` | My Permissions In An Organization |
+| GET | `/organizations/{organization_id}/recents` | `org.recents.get` | Get What Moved Lately In Each Pod |
 | GET | `/users/me` | `user.current.get` | Get Current User |
 | GET | `/users/me/email-delivery` | `user.email_delivery.get` | Get Email Delivery Status |
 | GET | `/users/me/profile` | `user.profile.get` | Get User Profile |
@@ -340,6 +344,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/users/me/email-delivery/test` | `user.email_delivery.test` | Send A Test Email |
 | POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
+| PUT | `/organizations/{organization_id}/home/seen` | `org.home.seen.set` | Mark Home Seen |
 
 ## mcp_access
 
@@ -357,6 +362,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}` | `pod.delete` | Delete Pod |
 | DELETE | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.remove` | Remove Pod Member |
+| DELETE | `/pods/{pod_id}/outcome` | `outcome.clear` | Clear what the pod owns |
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
 | GET | `/organizations/{organization_id}/pods` | `pod.list` | List Pods by Organization |
@@ -382,6 +388,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
 | PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
+| PUT | `/pods/{pod_id}/outcome` | `outcome.set` | Set what the pod owns |
 | PUT | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.replace` | Replace Resource Access Grant |
 | PUT | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.replace` | Replace Pod Role Permissions |
 
@@ -391,11 +398,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.cancel` | Cancel Pod Import |
 | GET | `/pods/bundle/download` | `pod.bundle.download` | Download A Bundle Archive |
+| GET | `/pods/bundle/templates` | `pod.bundle.templates` | Templates to start a Lemma from |
 | GET | `/pods/{pod_id}/bundle/exports/{export_id}` | `pod.bundle.export.get` | Get Pod Export Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.get` | Get Pod Import Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}/events` | `pod.bundle.import.events` | Stream Pod Import Progress |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}` | `pod.bundle.publish.get` | Get Pod Publish Status |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}/events` | `pod.bundle.publish.events` | Stream Pod Publish Progress |
+| POST | `/pods/start` | `pod.start` | Start a Lemma |
 | POST | `/pods/{pod_id}/bundle/exports` | `pod.bundle.export.start` | Start Pod Export |
 | POST | `/pods/{pod_id}/bundle/imports` | `pod.bundle.import.start` | Start Pod Import |
 | POST | `/pods/{pod_id}/bundle/imports/{import_id}/apply` | `pod.bundle.import.apply` | Apply Pod Import |

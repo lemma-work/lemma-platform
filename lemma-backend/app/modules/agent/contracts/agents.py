@@ -17,81 +17,53 @@ the caller is about to do with the agent.
 from __future__ import annotations
 
 from collections.abc import Iterable
-
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from uuid import UUID
 
-from sqlalchemy import select
-
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.errors import AgentNotFoundError
-from app.modules.agent.infrastructure.models import AgentModel
+from app.modules.agent.infrastructure.repositories import AgentRepository
 
 
-async def agent_id_for_name(session, *, pod_id: UUID, name: str) -> UUID:
+async def agent_id_for_name(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, name: str
+) -> UUID:
     """The id of the agent called ``name`` in this pod.
 
     Raises ``AgentNotFoundError`` when there is none, because every caller is
     resolving a name a person typed and needs it to come back as a 404 rather
     than as a surface silently bound to nothing.
     """
-    agent_id = (
-        await session.execute(
-            select(AgentModel.id).where(
-                AgentModel.pod_id == pod_id, AgentModel.name == name
-            )
-        )
-    ).scalar_one_or_none()
+    agent_id = await AgentRepository(uow).id_for_name(pod_id=pod_id, name=name)
     if agent_id is None:
         raise AgentNotFoundError(name)
     return agent_id
 
 
-async def agent_name_for_id(session, agent_id: UUID) -> str | None:
-    """This agent's display name, or ``None`` when there is no such agent.
-
-    ``None`` rather than a raise: the caller is labelling a row in a listing,
-    and a listing that 500s because one agent was deleted is worse than a
-    listing with one unlabelled row.
-    """
-    return (
-        await session.execute(select(AgentModel.name).where(AgentModel.id == agent_id))
-    ).scalar_one_or_none()
+async def agent_name_for_id(uow: SqlAlchemyUnitOfWork, agent_id: UUID) -> str | None:
+    """This agent's display name, or ``None`` when there is no such agent --
+    a listing with one unlabelled row rather than one that 500s."""
+    return await AgentRepository(uow).name_for_id(agent_id)
 
 
-async def agent_name_in_pod(session, *, pod_id: UUID, agent_id: UUID) -> str:
+async def agent_name_in_pod(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_id: UUID
+) -> str:
     """The stored name of this pod's agent, or ``AgentNotFoundError`` when the
-    pod has no agent with that id -- a caller acting on an agent another pod
-    owns is asking about nothing it may touch."""
-    name = (
-        await session.execute(
-            select(AgentModel.name).where(
-                AgentModel.id == agent_id, AgentModel.pod_id == pod_id
-            )
-        )
-    ).scalar_one_or_none()
+    pod has no agent with that id."""
+    name = await AgentRepository(uow).name_for_id(agent_id, pod_id=pod_id)
     if name is None:
         raise AgentNotFoundError(str(agent_id))
     return name
 
 
 async def agent_names_for_ids(
-    session: AsyncSession, agent_ids: Iterable[UUID | None]
+    uow: SqlAlchemyUnitOfWork, agent_ids: Iterable[UUID | None]
 ) -> dict[UUID, str]:
-    """Display names for many agents at once, keyed by id.
-
-    A listing labels every row with its agent's name, and asking per row is one
-    statement per row for a column that is almost always the same handful of
-    agents. Ids with no agent are simply absent from the mapping, the same
-    "unlabelled row rather than a 500" the singular above chose.
-    """
-    ids = {agent_id for agent_id in agent_ids if agent_id is not None}
-    if not ids:
-        return {}
-    rows = await session.execute(
-        select(AgentModel.id, AgentModel.name).where(AgentModel.id.in_(ids))
+    """Display names for many agents at once, keyed by id; ids with no agent
+    are absent, as above."""
+    return await AgentRepository(uow).names_for_ids(
+        agent_id for agent_id in agent_ids if agent_id is not None
     )
-    return dict(rows.all())
 
 
 __all__ = [

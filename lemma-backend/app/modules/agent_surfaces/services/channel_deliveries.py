@@ -51,7 +51,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.product_metrics import record_surface_delivery
-from app.modules.agent.contracts.contact_conversations import append_follow_up
+from app.modules.agent.contracts.channels import append_follow_up
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.deliveries import SEND_TIMEOUT
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
@@ -335,6 +335,7 @@ class ChannelDeliveries:
                 platform=platform,
                 text=ready.text,
                 metadata=ready.metadata,
+                source=source,
             )
         try:
             await self._count_today(ready)
@@ -520,7 +521,6 @@ class ChannelDeliveries:
     async def _record(self, delivery: Delivery, outcome: Outcome) -> None:
         reason = outcome.reason or "Not sent."
         code = outcome.code or Code.TRANSIENT
-        status = outcome.provider_status
         async with self.uow_factory() as uow:
             match outcome.result:
                 case Result.SENT:
@@ -529,7 +529,6 @@ class ChannelDeliveries:
                         delivery.id,
                         platform=outcome.platform or "LEMMA",
                         external_message_id=outcome.external_message_id,
-                        provider_status=status,
                         reason=outcome.reason,
                     )
                 case Result.SKIPPED if outcome.hold_for is not None:
@@ -543,7 +542,6 @@ class ChannelDeliveries:
                         code=code,
                         reason=reason,
                         platform=outcome.platform,
-                        provider_status=status,
                     )
                 case Result.DEAD:
                     await delivery_dead(
@@ -552,7 +550,6 @@ class ChannelDeliveries:
                         code=code,
                         reason=reason,
                         platform=outcome.platform,
-                        provider_status=status,
                     )
                 case Result.FAILED:
                     await delivery_failed(
@@ -562,7 +559,6 @@ class ChannelDeliveries:
                         reason=reason,
                         platform=outcome.platform,
                         retry_after=outcome.retry_after,
-                        provider_status=status,
                     )
             # The next line to this target was waiting on this one.
             await announce_next_for_target(uow, delivery)

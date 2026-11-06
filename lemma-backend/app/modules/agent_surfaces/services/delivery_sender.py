@@ -6,9 +6,11 @@ raises for a platform failure: it says whether the message arrived and, when
 not, whether the platform called the refusal transient and how long it asked
 to be left alone.
 
-What goes this way is what has no line of its own: a held WhatsApp message, a
-reply to somebody outside any run, a "please send that again". A run's answer
-is a channel line and goes out as its delivery (``channel_deliveries``).
+What goes this way is said to somebody no channel holds: a reply to a
+stranger, a "please send that again". Every channel line -- a run's answer, a
+message held for a closed WhatsApp window -- goes out as its delivery
+(``channel_deliveries``). A held message staged here before it became a line
+is still sent to its conversation (``ConversationTarget``) until those drain.
 """
 
 from __future__ import annotations

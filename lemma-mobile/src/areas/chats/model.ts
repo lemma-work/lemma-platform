@@ -3,7 +3,7 @@ import { routes } from "../../data/routes";
 import type { ConversationRef } from "../../data/types";
 import { chatsRoutes } from "./routes";
 import { answersHint, placeName, sharedWith } from "@web/channels/chat-copy";
-import { chatRows, listedAsChat } from "@web/channels/chat-list";
+import { chatRows, chatTitle, listedAsChat } from "@web/channels/chat-list";
 import {
     channelTitle,
     clockTime,
@@ -111,12 +111,17 @@ export function chatEntries(input: {
     const chats = kinds ? input.chats.filter((chat) => kinds.includes(chat.origin.kind)) : input.chats;
     const needle = input.search.trim().toLowerCase();
     const channels = input.filter === "all" || input.filter === "shared"
-        ? input.channels.filter(listedAsChat).filter((channel) => !needle || channelTitle(channel, input.lemmaName).toLowerCase().includes(needle))
+        ? input.channels.filter(listedAsChat).filter((channel) => !needle || chatTitle(channel, input.lemmaName).toLowerCase().includes(needle))
         : [];
-    return chatRows(chats, channels, input.lemmaName).map((row): ChatEntry => {
+    /* The web's rows carry its own `ConversationRef`, which also has a
+       display time the phone does not keep: each chat goes in with its
+       activity time as that, and comes back out as the phone's own. */
+    const mine = new Map(chats.map((chat) => [chat.id, chat]));
+    const asWeb = chats.map((chat) => ({ ...chat, at: chat.activityAt ?? "" }));
+    return chatRows(asWeb, channels, input.lemmaName).flatMap((row): ChatEntry[] => {
         if (row.kind === "channel") {
             const channel = row.channel;
-            return {
+            return [{
                 key: row.id,
                 title: row.title,
                 said: lastSaid(channel, input.me),
@@ -127,10 +132,11 @@ export function chatEntries(input: {
                 unread: channel.unread.lines,
                 running: false,
                 channel,
-            };
+            }];
         }
-        const chat = row.chat;
-        return {
+        const chat = mine.get(row.chat.id);
+        if (!chat) return [];
+        return [{
             key: "chat:" + chat.id,
             title: chat.title,
             said: chat.origin.kind === "chat" ? null : chat.origin.label,
@@ -141,7 +147,7 @@ export function chatEntries(input: {
             unread: 0,
             running: (chat.status ?? "").toUpperCase() === "RUNNING",
             channel: null,
-        };
+        }];
     });
 }
 

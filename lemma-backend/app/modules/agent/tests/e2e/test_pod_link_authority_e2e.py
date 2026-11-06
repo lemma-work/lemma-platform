@@ -11,7 +11,6 @@ a grant on somebody's own table, a grant made in a third pod.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -32,13 +31,13 @@ from app.modules.agent.tests.e2e.pod_link_helpers import (
     table_share,
 )
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.pod.models import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.pod.models import (
     PodGetRecordsRequest,
     PodTablesRequest,
     QueryRequest,
 )
-from app.modules.agent.tools.pod.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.pod.tools import (
     pod_get_records,
     pod_query,
     pod_tables,
@@ -111,14 +110,12 @@ async def _decision(*, answering: str, asking: str, permission: str, ref: Resour
 
 def _link_run(*, user_id: str, org_id: str, answering: str, asking: str):
     """The tool context of a run in ``answering`` answering ``asking``."""
-    return SimpleNamespace(
-        deps=BaseAgentContext(
-            user_id=UUID(user_id),
-            org_id=UUID(org_id),
-            pod_id=UUID(answering),
-            conversation_id=uuid4(),
-            audience=Audience.pod(UUID(asking)),
-        )
+    return ToolContext(
+        user_id=UUID(user_id),
+        org_id=UUID(org_id),
+        pod_id=UUID(answering),
+        conversation_id=uuid4(),
+        audience=Audience.pod(UUID(asking)),
     )
 
 

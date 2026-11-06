@@ -16,7 +16,7 @@ import { request as __request } from '../core/request.js';
 export class UsersService {
     /**
      * Delete Current User
-     * Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by "Deleted user". Every session ends, the caller's included: its cookies or tokens are cleared on this response. If the sign-in service cannot be reached just then, the deletion still stands and the sessions end as soon as it can be. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.
+     * Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by "Deleted user". From the answer on, no token the person holds opens anything, this request's included; their sessions and login are removed within moments, after which the address can sign up again. A client should discard its tokens on success. A request for an account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.
      * @param requestBody
      * @returns AccountDeletionResponse Successful Response
      * @throws ApiError
@@ -30,7 +30,11 @@ export class UsersService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                400: `ACCOUNT_DELETION_CONFIRMATION_MISMATCH: the typed address is not this account's. Nothing changed.`,
+                403: `ACCOUNT_INACTIVE: the account was already deleted, or switched off.`,
+                409: `ACCOUNT_DELETION_SOLE_OWNER (details.organizations names them), or the billing provider's code. Nothing changed.`,
                 422: `Validation Error`,
+                503: `ACCOUNT_DELETION_UNAVAILABLE: this deployment bills and has no billing guard. Nothing changed.`,
             },
         });
     }

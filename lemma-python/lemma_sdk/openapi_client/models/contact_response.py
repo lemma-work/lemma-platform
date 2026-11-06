@@ -28,6 +28,8 @@ class ContactResponse:
             that they are a web visitor.
         answered_at (datetime.datetime | None | Unset): When an agent first answered them; what the contact limit
             counts.
+        channel_id (None | Unset | UUID): Their own chat with the pod, to open it without looking it up; absent until
+            they first write.
         display_name (None | str | Unset):
         identities (list[ContactIdentityResponse] | Unset):
         is_anonymous (bool | Unset): Known only by the browser they wrote from: a web visitor nobody has vouched for
@@ -38,6 +40,7 @@ class ContactResponse:
     id: UUID
     label: str
     answered_at: datetime.datetime | None | Unset = UNSET
+    channel_id: None | Unset | UUID = UNSET
     display_name: None | str | Unset = UNSET
     identities: list[ContactIdentityResponse] | Unset = UNSET
     is_anonymous: bool | Unset = False
@@ -57,6 +60,14 @@ class ContactResponse:
             answered_at = self.answered_at.isoformat()
         else:
             answered_at = self.answered_at
+
+        channel_id: None | str | Unset
+        if isinstance(self.channel_id, Unset):
+            channel_id = UNSET
+        elif isinstance(self.channel_id, UUID):
+            channel_id = str(self.channel_id)
+        else:
+            channel_id = self.channel_id
 
         display_name: None | str | Unset
         if isinstance(self.display_name, Unset):
@@ -84,6 +95,8 @@ class ContactResponse:
         )
         if answered_at is not UNSET:
             field_dict["answered_at"] = answered_at
+        if channel_id is not UNSET:
+            field_dict["channel_id"] = channel_id
         if display_name is not UNSET:
             field_dict["display_name"] = display_name
         if identities is not UNSET:
@@ -121,6 +134,23 @@ class ContactResponse:
 
         answered_at = _parse_answered_at(d.pop("answered_at", UNSET))
 
+        def _parse_channel_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                channel_id_type_0 = UUID(data)
+
+                return channel_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        channel_id = _parse_channel_id(d.pop("channel_id", UNSET))
+
         def _parse_display_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -148,6 +178,7 @@ class ContactResponse:
             id=id,
             label=label,
             answered_at=answered_at,
+            channel_id=channel_id,
             display_name=display_name,
             identities=identities,
             is_anonymous=is_anonymous,

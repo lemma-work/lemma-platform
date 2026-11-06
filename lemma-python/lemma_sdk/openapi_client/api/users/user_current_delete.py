@@ -38,10 +38,30 @@ def _parse_response(
 
         return response_200
 
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
+
+    if response.status_code == 403:
+        response_403 = ErrorResponse.from_dict(response.json())
+
+        return response_403
+
+    if response.status_code == 409:
+        response_409 = ErrorResponse.from_dict(response.json())
+
+        return response_409
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
         return response_422
+
+    if response.status_code == 503:
+        response_503 = ErrorResponse.from_dict(response.json())
+
+        return response_503
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
@@ -69,9 +89,10 @@ def sync_detailed(
 
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
-    others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
-    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    others stays, shown as by \"Deleted user\". From the answer on, no token the person holds opens
+    anything, this request's included; their sessions and login are removed within moments, after which
+    the address can sign up again. A client should discard its tokens on success. A request for an
+    account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409
     ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
     in, and with 409 and the billing provider's code while something they pay for stands in the way.
 
@@ -107,9 +128,10 @@ def sync(
 
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
-    others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
-    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    others stays, shown as by \"Deleted user\". From the answer on, no token the person holds opens
+    anything, this request's included; their sessions and login are removed within moments, after which
+    the address can sign up again. A client should discard its tokens on success. A request for an
+    account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409
     ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
     in, and with 409 and the billing provider's code while something they pay for stands in the way.
 
@@ -140,9 +162,10 @@ async def asyncio_detailed(
 
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
-    others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
-    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    others stays, shown as by \"Deleted user\". From the answer on, no token the person holds opens
+    anything, this request's included; their sessions and login are removed within moments, after which
+    the address can sign up again. A client should discard its tokens on success. A request for an
+    account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409
     ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
     in, and with 409 and the billing provider's code while something they pay for stands in the way.
 
@@ -176,9 +199,10 @@ async def asyncio(
 
      Delete the signed-in person's account, for good. Their profile is erased, they leave every
     organization, and organizations nobody else is in are deleted with their pods. Work shared with
-    others stays, shown as by \"Deleted user\". Every session ends, the caller's included: its cookies
-    or tokens are cleared on this response. If the sign-in service cannot be reached just then, the
-    deletion still stands and the sessions end as soon as it can be. Refused with 409
+    others stays, shown as by \"Deleted user\". From the answer on, no token the person holds opens
+    anything, this request's included; their sessions and login are removed within moments, after which
+    the address can sign up again. A client should discard its tokens on success. A request for an
+    account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409
     ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still
     in, and with 409 and the billing provider's code while something they pay for stands in the way.
 

@@ -8,12 +8,13 @@ Through the real API, SuperTokens and the work runtime:
   "Deleted user";
 - the only owner of a team, a mistyped confirmation, and a billing provider
   that says no are each refused with nothing changed;
-- a browser's cookie session deletes as a phone's bearer session does, and has
-  its cookies cleared on the answer.
+- a browser's cookie session deletes as a phone's bearer session does, and the
+  cookie it still holds opens nothing afterwards.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator, Sequence
 from uuid import UUID, uuid4
 
@@ -122,12 +123,42 @@ async def test_someone_alone_in_their_workspace_takes_it_with_their_account(
     assert me.status_code == 403, me.text
     assert me.json()["code"] == "ACCOUNT_INACTIVE"
 
-    # The address is free: signing up with it is somebody new.
+    # The address is free once the deletion's work has run: signing up with
+    # it is somebody new.
+    await run_until_idle(async_session_maker, classes=[WorkClass.DELIVERY])
     again = await signup_user(email=person["email"])
     assert again["id"] != person["id"]
     fresh = await async_client.get("/users/me", headers=auth_headers(again))
     assert fresh.status_code == 200, fresh.text
     assert fresh.json()["email"] == person["email"]
+
+
+async def test_two_deletions_of_one_account_at_once_delete_it_once(
+    async_client: AsyncClient, signup_user, db_session: AsyncSession
+):
+    """A double tap, or two devices: the second waits for the first, then finds
+    the account gone -- never a half-deletion or a 500."""
+    person = await signup_user()
+    org_id, pod_id = await _workspace_of(async_client, person)
+
+    first, second = await asyncio.gather(
+        _delete(async_client, person["email"], auth_headers(person)),
+        _delete(async_client, person["email"], auth_headers(person)),
+    )
+
+    # Either the second was let in before the first answered, waited for the
+    # account's lock and found a tombstone (200), or it arrived after and was
+    # refused as deleted (403). Exactly one of them did the deleting.
+    statuses = sorted([first.status_code, second.status_code])
+    assert statuses in ([200, 200], [200, 403]), (first.text, second.text)
+    assert [
+        r.json()["organizations_deleted"]
+        for r in (first, second)
+        if r.status_code == 200
+    ].count(1) == 1
+    assert (await _row(db_session, User, person["id"])).is_deleted is True
+    assert (await _row(db_session, Pod, pod_id)).is_deleted is True
+    assert await _member_ids(db_session, org_id) == set()
 
 
 async def test_a_member_who_deletes_their_account_leaves_their_words_with_the_team(
@@ -242,32 +273,25 @@ async def test_a_mistyped_confirmation_deletes_nothing(
     assert (await _row(db_session, User, person["id"])).is_deleted is False
 
 
-async def test_a_browser_session_deletes_and_has_its_cookies_cleared(
+async def test_a_browser_session_deletes_and_its_cookie_opens_nothing_after(
     test_app, signup_user, db_session: AsyncSession
 ):
     person = await signup_user()
     # A client of its own: `async_client` may carry a bearer header, which
     # SuperTokens prefers over any cookie. `rid` is what the web SDK sends, and
     # what satisfies the anti-CSRF check for a cookie session.
+    browser_cookie = {"Cookie": f"sAccessToken={person['token']}", "rid": "session"}
     async with AsyncClient(
         transport=ASGITransport(app=test_app), base_url="http://testserver"
     ) as browser:
-        deleted = await _delete(
-            browser,
-            person["email"],
-            {"Cookie": f"sAccessToken={person['token']}", "rid": "session"},
-        )
+        deleted = await _delete(browser, person["email"], browser_cookie)
+        after = await browser.get("/users/me", headers=browser_cookie)
 
     assert deleted.status_code == 200, deleted.text
-    cleared = [
-        cookie
-        for cookie in deleted.headers.get_list("set-cookie")
-        if cookie.startswith("sAccessToken=")
-    ]
-    assert cleared and all(
-        "sAccessToken=;" in c or 'sAccessToken="";' in c for c in cleared
-    )
     assert (await _row(db_session, User, person["id"])).is_deleted is True
+    # The cookie the browser still holds is refused from the answer on.
+    assert after.status_code == 403, after.text
+    assert after.json()["code"] == "ACCOUNT_INACTIVE"
 
 
 class _Refusing:

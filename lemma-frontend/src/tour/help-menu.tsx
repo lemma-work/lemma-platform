@@ -20,7 +20,8 @@ const NUDGE_MS = 7000;
  *  `nudge` is the one line shown next to it when a tour ends, so the person
  *  learns where it lives without having to go looking. */
 export function HelpMenu({ onTour, guide, onGuide, nudge, onNudged }: {
-    onTour: () => void;
+    /** The tour of where everything is, where there is one to give. */
+    onTour?: () => void;
     /** The guide to the place on screen, by its title, if it has one. */
     guide?: string | null;
     onGuide?: () => void;
@@ -103,10 +104,12 @@ export function HelpMenu({ onTour, guide, onGuide, nudge, onNudged }: {
                             <span>{guide}<small>What you can do here</small></span>
                         </button>
                     )}
-                    <button role="menuitem" onClick={() => { setOpen(false); onTour(); }}>
-                        <TourIcon size={17} />
-                        <span>Show me around<small>A minute on where everything is</small></span>
-                    </button>
+                    {onTour && (
+                        <button role="menuitem" onClick={() => { setOpen(false); onTour(); }}>
+                            <TourIcon size={17} />
+                            <span>Show me around<small>A minute on where everything is</small></span>
+                        </button>
+                    )}
                     <button role="menuitem" onClick={() => visit("/docs")}>
                         <DocsIcon size={17} />
                         <span>Documentation</span>

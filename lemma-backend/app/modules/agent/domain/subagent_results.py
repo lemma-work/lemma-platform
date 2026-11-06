@@ -21,23 +21,14 @@ from uuid import UUID
 
 from app.modules.agent.domain.value_objects import AgentRunStatus, JsonValue
 
-#: On a child conversation's metadata: its runs' results are owed to the
-#: parent. Set at spawn, so children spawned before delivery existed -- whose
-#: results nobody is waiting for any more -- are never delivered late.
-REPORTS_TO_PARENT_KEY = "reports_to_parent"
-#: On a child conversation's metadata, set at spawn and on every ``send``: the
-#: parent run that last gave it work, and so the one that may collect it.
-PARENT_RUN_KEY = "parent_run_id"
-#: On a parent conversation's metadata: it has children whose results may be
-#: owed to it, so its own finished runs look for them.
-SUBAGENTS_OUT_KEY = "subagents_out"
-#: On a child run's metadata: its result has reached the parent. The value
-#: says how (``COLLECTED_BY_*``).
-COLLECTED_KEY = "collected_by_parent"
-COLLECTED_BY_DELIVERY = "delivery"
-COLLECTED_BY_AWAIT = "await"
-COLLECTED_BY_STATUS = "status"
-COLLECTED_BY_WAIT = "wait"
+# The child conversation's `reports_to_parent` says its runs' results are owed
+# to the parent: set at spawn, so children spawned before delivery existed --
+# whose results nobody is waiting for any more -- are never delivered late. Its
+# `parent_run_id`, set at spawn and on every ``send``, is the parent run that
+# last gave it work, and so the one that may collect it. The parent's
+# `delegations_out` says it has children whose results may be owed to it, so
+# its own finished runs look for them. A child run's `delivered_to_parent_at`
+# says its result has reached the parent, by whichever collector came first.
 
 #: ``source`` on the message that carries a result into the parent.
 RESULT_SOURCE = "subagent_result"
@@ -50,15 +41,6 @@ DELIVERED_STATUSES = frozenset({AgentRunStatus.COMPLETED, AgentRunStatus.FAILED}
 #: turn of the parent, so a large output is cut and the rest left to
 #: ``query_subagents``.
 MAX_RESULT_CHARS = 20_000
-
-
-def reports_to_parent(metadata: Mapping[str, object] | None) -> bool:
-    return (metadata or {}).get(REPORTS_TO_PARENT_KEY) is True
-
-
-def collector_run_id(metadata: Mapping[str, object] | None) -> str | None:
-    value = (metadata or {}).get(PARENT_RUN_KEY)
-    return value if isinstance(value, str) else None
 
 
 def result_text(output: JsonValue) -> str:
@@ -95,6 +77,32 @@ def result_message(
             + "\n\n[Cut here. Read the rest with query_subagents.]"
         )
     return f"{who} finished. Its result:\n\n{text}"
+
+
+def combined_results(messages: list[str]) -> str:
+    """Several results as the one message that delivers them, cut to fit:
+    the message is replayed on every later turn of the parent."""
+    if len(messages) == 1:
+        return messages[0]
+    share = max(2_000, MAX_RESULT_CHARS // len(messages))
+    parts = [
+        message
+        if len(message) <= share
+        else message[:share] + "\n\n[Cut here. Read the rest with query_subagents.]"
+        for message in messages
+    ]
+    return f"{len(messages)} sub-agents finished.\n\n" + "\n\n---\n\n".join(parts)
+
+
+def combined_metadata(metadata: list[dict[str, object]]) -> dict[str, object]:
+    """The first result's metadata, naming every child the message carries."""
+    first = dict(metadata[0])
+    if len(metadata) > 1:
+        first["subagent_run_ids"] = [item["subagent_run_id"] for item in metadata]
+        first["subagent_conversation_ids"] = [
+            item["subagent_conversation_id"] for item in metadata
+        ]
+    return first
 
 
 def result_metadata(

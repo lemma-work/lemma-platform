@@ -138,7 +138,7 @@ async def test_a_resumed_call_reads_back_its_whole_tree_and_what_it_missed(
                 update(ConversationModel)
                 .where(ConversationModel.id == UUID(conversation_id))
                 .values(
-                    conversation_metadata={"call": worker},
+                    call=worker,
                     parent_id=UUID(child if conversation_id == grandchild else call_id),
                 )
             )

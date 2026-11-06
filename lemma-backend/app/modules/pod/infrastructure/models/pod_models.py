@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -24,8 +25,18 @@ from app.modules.pod.domain.pod_entities import (
 )
 
 
+#: The live pods whose outcome has a measure. One string for the partial
+#: index and the query that walks it, so the planner can always prove the index
+#: covers the query: SQLAlchemy writes `config['outcome']` as a subscript, a
+#: different expression from the `->` the index is built on.
+MEASURED_POD = "(config -> 'outcome' ->> 'measure') IS NOT NULL AND NOT is_deleted"
+
+
 class Pod(UUIDAuditBase):
     __tablename__ = "pods"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "id"
 
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -74,6 +85,14 @@ class Pod(UUIDAuditBase):
             unique=True,
             postgresql_where=is_deleted.is_(False),
         ),
+        # The pods whose outcome has a measure, for the sweep that reads each
+        # into its week: it walks these by id, so it costs what the pods that
+        # own something cost, not what every pod does.
+        Index(
+            "ix_pods_with_measure",
+            "id",
+            postgresql_where=text(MEASURED_POD),
+        ),
     )
 
     def to_entity(self) -> PodEntity:
@@ -85,6 +104,9 @@ class Pod(UUIDAuditBase):
 
 class PodMember(UUIDAuditBase):
     __tablename__ = "pod_members"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "pod_id"
 
     pod_id: Mapped[UUID] = mapped_column(
         ForeignKey("pods.id", ondelete="CASCADE"),

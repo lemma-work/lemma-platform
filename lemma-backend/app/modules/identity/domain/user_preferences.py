@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -13,9 +14,16 @@ class UserPreferences(BaseModel):
     the surface id the user prefers when the same external identity resolves to
     several pods — e.g. a person reachable via the shared system bot/number who
     belongs to pods in more than one organization. Absent platform → no default.
+
+    ``home_seen`` maps an organization id to when the user last marked its Home
+    seen, so Home can say what moved since on any browser or device. Written
+    only by ``infrastructure/organization_home_seen``, one key at a time; it is
+    declared here so every other writer of preferences, which round-trips this
+    model, keeps it.
     """
 
     default_surfaces: dict[str, UUID] = Field(default_factory=dict)
+    home_seen: dict[UUID, datetime] = Field(default_factory=dict)
 
     def default_surface_for(self, platform: str) -> UUID | None:
         return self.default_surfaces.get(str(platform).upper())

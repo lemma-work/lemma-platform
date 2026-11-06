@@ -13,28 +13,72 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
-from app.modules.agent.services.agent_service import AgentService
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.agent.services.service_factories import (
-    build_agent_service,
-    build_conversation_service,
+from app.modules.agent.application.conversations.read import ConversationReads
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.conversations.update import UpdateConversation
+from app.modules.agent.application.pauses.decide import DecidePause
+from app.modules.agent.application.turns.stop import StopConversation
+from app.modules.agent.application.turns.withdraw import WithdrawQueuedMessage
+from app.modules.agent.domain.ports import ProjectRepositories
+from app.modules.agent.infrastructure.github_project_repositories import (
+    GithubProjectRepositories,
 )
-
-
-def get_conversation_service(
-    uow: UoWDep,
-) -> ConversationService:
-    return build_conversation_service(uow)
+from app.modules.agent.services.agent_service import AgentService
 
 
 def get_agent_service(uow: UoWDep) -> AgentService:
-    return build_agent_service(uow)
+    return AgentService.build(uow)
 
 
-ConversationServiceDep = Annotated[
-    ConversationService,
-    Depends(get_conversation_service),
+# The conversation use cases a request-scoped route runs, each on the request's
+# unit of work. Routes that open their own short unit of work (a send, a retry,
+# a stream) build theirs from it with the use case's ``build``.
+
+
+def get_project_repositories() -> ProjectRepositories:
+    """GitHub, through the pod's connector. A dependency so a test answers instead."""
+    return GithubProjectRepositories()
+
+
+ProjectRepositoriesDep = Annotated[
+    ProjectRepositories, Depends(get_project_repositories)
 ]
+
+
+def get_start_conversation(
+    uow: UoWDep, project_repositories: ProjectRepositoriesDep
+) -> StartConversation:
+    return StartConversation.build(uow, project_repositories=project_repositories)
+
+
+def get_update_conversation(uow: UoWDep) -> UpdateConversation:
+    return UpdateConversation.build(uow)
+
+
+def get_conversation_reads(uow: UoWDep) -> ConversationReads:
+    return ConversationReads.build(uow)
+
+
+def get_stop_conversation(uow: UoWDep) -> StopConversation:
+    return StopConversation.build(uow)
+
+
+def get_withdraw_queued_message(uow: UoWDep) -> WithdrawQueuedMessage:
+    return WithdrawQueuedMessage.build(uow)
+
+
+def get_decide_pause(uow: UoWDep) -> DecidePause:
+    return DecidePause.build(uow)
+
+
+StartConversationDep = Annotated[StartConversation, Depends(get_start_conversation)]
+UpdateConversationDep = Annotated[UpdateConversation, Depends(get_update_conversation)]
+ConversationReadsDep = Annotated[ConversationReads, Depends(get_conversation_reads)]
+StopConversationDep = Annotated[StopConversation, Depends(get_stop_conversation)]
+WithdrawQueuedMessageDep = Annotated[
+    WithdrawQueuedMessage, Depends(get_withdraw_queued_message)
+]
+DecidePauseDep = Annotated[DecidePause, Depends(get_decide_pause)]
 
 AgentServiceDep = Annotated[
     AgentService,

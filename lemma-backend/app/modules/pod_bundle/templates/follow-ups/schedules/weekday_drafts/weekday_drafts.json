@@ -1,0 +1,10 @@
+{
+  "name": "weekday_drafts",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "30 8 * * 1-5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Read the leads table. For every lead with no followed_up_at that came in more than 36 hours ago, draft a follow-up and ask its owner to approve it. Send nothing yourself."
+}

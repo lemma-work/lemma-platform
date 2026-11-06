@@ -17,7 +17,7 @@ browser's session (``open_anonymous_contact``), until they prove a handle
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -56,6 +56,7 @@ __all__ = [
     "answered_contacts_in_organization",
     "contact_by_id",
     "contact_names",
+    "contact_names_across",
     "contact_handles",
     "find_contact",
     "find_contact_by_user",
@@ -64,7 +65,6 @@ __all__ = [
     "lock_answered_contacts_count",
     "normalize_handle",
     "note_answered",
-    "note_inbound",
     "note_never_answered",
     "open_anonymous_contact",
     "open_contact",
@@ -247,6 +247,15 @@ async def contact_names(
     )
 
 
+async def contact_names_across(
+    uow: SqlAlchemyUnitOfWork, *, contact_ids_by_pod: Mapping[UUID, Sequence[UUID]]
+) -> dict[UUID, str | None]:
+    """What to call contacts in several pods, each asked for under its pod."""
+    return await ContactRepository(uow.session).names_across(
+        contact_ids_by_pod=contact_ids_by_pod
+    )
+
+
 async def note_answered(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
 ) -> bool:
@@ -263,15 +272,6 @@ async def note_never_answered(
     them: they no longer take a place in the count. Whether they had one."""
     return await ContactRepository(uow.session).note_never_answered(
         pod_id=pod_id, contact_id=contact_id
-    )
-
-
-async def note_inbound(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, kind: IdentityKind, value: str
-) -> None:
-    """Record that a contact just wrote from this handle."""
-    await ContactRepository(uow.session).note_inbound(
-        pod_id=pod_id, kind=kind, value=value
     )
 
 

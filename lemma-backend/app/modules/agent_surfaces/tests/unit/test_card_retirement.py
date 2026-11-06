@@ -16,9 +16,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.core.config import settings
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.decision_card import (
     CardRetirement,
     DecisionCardHandle,
@@ -48,6 +46,7 @@ def _context():
         user_id=uuid4(),
         pod_id=uuid4(),
         agent_name=None,
+        source_id=None,
     )
 
 

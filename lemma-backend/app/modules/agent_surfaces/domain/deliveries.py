@@ -63,7 +63,13 @@ class _Target(BaseModel):
 
 
 class ConversationTarget(_Target):
-    """The surface thread a conversation is bound to, as it is when sent."""
+    """The surface thread a conversation is bound to, as it is when sent.
+
+    Only read now: a message held for a closed WhatsApp window was staged
+    with it, and is posted as a channel line instead (``held_replies``). Rows
+    staged before that drain through the pump; the target, ``DeliveryContent``'s
+    ``plain`` and ``attach_files_of_run``, and the sender's conversation path go
+    with the next release (``surface_deliveries``)."""
 
     kind: Literal["conversation"] = "conversation"
     conversation_id: UUID

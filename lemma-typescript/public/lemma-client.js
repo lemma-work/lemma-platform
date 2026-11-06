@@ -15272,6 +15272,25 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Apps Across The Organization
+     * Every app the current user may open in every pod they may open in the organization, most recently updated first. Each app is filtered by its own visibility against the user's permissions in its pod.
+     * @param organizationId
+     * @returns OrganizationAppListResponse Successful Response
+     * @throws ApiError
+     */
+    static orgAppsList(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/apps",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Organization Home
      * One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.
      * @param organizationId
@@ -15285,6 +15304,47 @@ var LemmaClient = (() => {
         path: {
           "organization_id": organizationId
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get When You Last Looked At Home
+     * When the current user last marked the organization's Home seen, so it can say what moved since. Per user and per organization.
+     * @param organizationId
+     * @returns HomeSeenResponse Successful Response
+     * @throws ApiError
+     */
+    static orgHomeSeenGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/home/seen",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Mark Home Seen
+     * Mark the organization's Home seen by the current user, as of `seen_at` (now when omitted; a future moment is read as now). The mark only moves forward, so an older tab cannot undo a newer one. Returns the mark and what it was before.
+     * @param organizationId
+     * @param requestBody
+     * @returns HomeSeenResponse Successful Response
+     * @throws ApiError
+     */
+    static orgHomeSeenSet(organizationId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/organizations/{organization_id}/home/seen",
+        path: {
+          "organization_id": organizationId
+        },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -15429,6 +15489,29 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List What Waits On You Across The Organization
+     * Everything waiting on the current user in every pod they may open in the organization, as one list, oldest first: questions, approvals and Agent Host permission requests in their own conversations (one item per conversation); workflow forms and decisions assigned to them; and contacts waiting on a person, in pods where they hold `channel.read` and `contact.read`. Each item names its pod and what to open: a conversation, a workflow run or a channel.
+     * @param organizationId
+     * @param limit
+     * @returns NeedsYouResponse Successful Response
+     * @throws ApiError
+     */
+    static orgNeedsYouList(organizationId, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/needs-you",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * My Permissions In An Organization
      * The organization-level permission ids the caller holds here, such as `org.installation.manage`. Pod permissions are `/pods/{pod_id}/permissions/me`.
      * @param organizationId
@@ -15447,6 +15530,33 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Get What Moved Lately In Each Pod
+     * For every pod the current user may open in the organization, quiet ones included: their latest chats (conversations of no channel that they talk in, or that wait on them), the workflows and schedules that ran in the window -- one each, with the newest run and a count -- and a count per day of their conversations by the day each was last active, split into started by an agent (a schedule, a workflow, a notification, a task or another pod's ask) and by a person. Days are calendar days in `timezone`, the window ending today.
+     * @param organizationId
+     * @param days
+     * @param chats Chats listed per pod.
+     * @param timezone IANA time zone the days are counted in, e.g. Europe/Berlin.
+     * @returns OrganizationRecentsResponse Successful Response
+     * @throws ApiError
+     */
+    static orgRecentsGet(organizationId, days = 14, chats = 10, timezone = "UTC") {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/recents",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "days": days,
+          "chats": chats,
+          "timezone": timezone
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/organizations.ts
@@ -15454,6 +15564,17 @@ var LemmaClient = (() => {
     constructor(client, http) {
       __publicField(this, "client", client);
       __publicField(this, "http", http);
+      /** When you last looked at an organization's Home, kept for you by the server. */
+      __publicField(this, "homeSeen", {
+        get: (orgId) => this.client.request(() => OrganizationsService.orgHomeSeenGet(orgId)),
+        /**
+         * Mark Home seen as of `seenAt` (an ISO time with its offset -- typically
+         * when the page loaded), or now. The mark never moves back.
+         */
+        mark: (orgId, seenAt) => this.client.request(
+          () => OrganizationsService.orgHomeSeenSet(orgId, seenAt ? { seen_at: seenAt } : null)
+        )
+      });
       __publicField(this, "members", {
         list: (orgId, options = {}) => this.client.request(
           () => {
@@ -15555,6 +15676,44 @@ var LemmaClient = (() => {
     /** One organization's pods, with their apps, agents and your roles. */
     home(orgId) {
       return this.client.request(() => OrganizationsService.orgHome(orgId));
+    }
+    /**
+     * Everything waiting on you in every pod you may open in one organization,
+     * oldest first: questions, approvals and permission requests in your
+     * conversations, workflow forms and decisions assigned to you, and contacts
+     * waiting on a person where you look after contacts. One request instead of
+     * one per pod per kind.
+     */
+    needsYou(orgId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return OrganizationsService.orgNeedsYouList(orgId, (_a = options.limit) != null ? _a : 100);
+        }
+      );
+    }
+    /**
+     * What moved lately in each pod you may open in one organization: your
+     * latest chats, the workflows and schedules that ran, and your conversations
+     * per day, split by whether an agent or a person started them. Pass your
+     * IANA `timezone` so the days are your days.
+     */
+    recents(orgId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b, _c;
+          return OrganizationsService.orgRecentsGet(
+            orgId,
+            (_a = options.days) != null ? _a : 14,
+            (_b = options.chats) != null ? _b : 10,
+            (_c = options.timezone) != null ? _c : "UTC"
+          );
+        }
+      );
+    }
+    /** Every app you may open across one organization's pods, newest first. */
+    apps(orgId) {
+      return this.client.request(() => OrganizationsService.orgAppsList(orgId));
     }
     create(payload) {
       return this.client.request(() => OrganizationsService.orgCreate(payload));
@@ -16067,6 +16226,47 @@ var LemmaClient = (() => {
         path: {
           "pod_id": podId
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Clear what the pod owns
+     * Let the pod's outcome go. Nothing else about the pod changes, and the weeks its measure was read in are kept: setting the same measure again brings back every week no other measure has been read in since.
+     * @param podId
+     * @returns void
+     * @throws ApiError
+     */
+    static outcomeClear(podId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/outcome",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Set what the pod owns
+     * Set what the pod owns, replacing what it had: a bar held every week (kind=week) or a finish line by a date (kind=date), with the target and unit it is held to and the measure that counts it. A measure is one read-only SQL query over the pod's tables that answers a single number, read for every member alike; a new or changed one is read once before it is kept, and refused when the caller cannot read every row it counts (403), names a table that is not there (404), or does not answer one number (422).
+     * @param podId
+     * @param requestBody
+     * @returns OutcomeSetResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeSet(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/outcome",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -17362,8 +17562,6 @@ var LemmaClient = (() => {
      * what is new in it for them and its last line.
      * @param podId
      * @param kind
-     * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
-     * @param q Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.
      * @param archived
      * @param contactId Only this contact's channel.
      * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
@@ -17377,7 +17575,7 @@ var LemmaClient = (() => {
      * @returns ChannelListResponse Successful Response
      * @throws ApiError
      */
-    static channelList(podId, kind, visibility, q, archived = false, contactId, assignee, unassigned = false, status, needsPerson = false, joined = false, sourceSurface, cursor, limit = 50) {
+    static channelList(podId, kind, archived = false, contactId, assignee, unassigned = false, status, needsPerson = false, joined = false, sourceSurface, cursor, limit = 50) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/channels",
@@ -17386,8 +17584,6 @@ var LemmaClient = (() => {
         },
         query: {
           "kind": kind,
-          "visibility": visibility,
-          "q": q,
           "archived": archived,
           "contact_id": contactId,
           "assignee": assignee,
@@ -17432,29 +17628,6 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          400: `A cursor this API did not give.`,
-          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
-        }
-      });
-    }
-    /**
-     * Get My Channel
-     * The reader's own channel with the pod; 404 until it is made.
-     * @param podId
-     * @returns ChannelDetailResponse Successful Response
-     * @throws ApiError
-     */
-    static channelMeGet(podId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/channels/me",
-        path: {
-          "pod_id": podId
-        },
         errors: {
           400: `A cursor this API did not give.`,
           403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
@@ -17565,71 +17738,6 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          400: `A cursor this API did not give.`,
-          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
-        }
-      });
-    }
-    /**
-     * List Cases
-     * A contact's channel's cases, the most recently opened first, each with
-     * what happened in it: time to first response, reopens and time to close
-     * are read from here. Only a contact's channel has cases.
-     * @param podId
-     * @param channelId
-     * @param cursor
-     * @param limit
-     * @returns ChannelCasesResponse Successful Response
-     * @throws ApiError
-     */
-    static channelCaseList(podId, channelId, cursor, limit = 20) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/channels/{channel_id}/cases",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId
-        },
-        query: {
-          "cursor": cursor,
-          "limit": limit
-        },
-        errors: {
-          400: `A cursor this API did not give.`,
-          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
-          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
-          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
-          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
-        }
-      });
-    }
-    /**
-     * List Members
-     * Who is in a channel -- members, contacts and agents -- in the order
-     * they joined, a page at a time.
-     * @param podId
-     * @param channelId
-     * @param cursor
-     * @param limit
-     * @returns ChannelMemberListResponse Successful Response
-     * @throws ApiError
-     */
-    static channelMemberList(podId, channelId, cursor, limit = 100) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/channels/{channel_id}/members",
-        path: {
-          "pod_id": podId,
-          "channel_id": channelId
-        },
-        query: {
-          "cursor": cursor,
-          "limit": limit
-        },
         errors: {
           400: `A cursor this API did not give.`,
           403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
@@ -18469,10 +18577,6 @@ var LemmaClient = (() => {
             podId,
             void 0,
             // kind
-            void 0,
-            // visibility
-            void 0,
-            // q
             false,
             void 0,
             void 0,
@@ -18594,8 +18698,6 @@ var LemmaClient = (() => {
           return ChannelsService.channelList(
             podId,
             options.kind,
-            options.visibility,
-            options.q,
             (_a = options.archived) != null ? _a : false,
             options.contactId,
             options.assignee,
@@ -18634,10 +18736,6 @@ var LemmaClient = (() => {
      *  how the caller hears of it. */
     get(podId, channelId) {
       return this.client.request(() => ChannelsService.channelGet(podId, channelId));
-    }
-    /** The caller's own channel with the pod; not found until it is made. */
-    mine(podId) {
-      return this.client.request(() => ChannelsService.channelMeGet(podId));
     }
     /** The caller's own channel with the pod, made if it is not there yet. */
     openMine(podId) {
@@ -18834,37 +18932,6 @@ var LemmaClient = (() => {
             (_c = options.archived) != null ? _c : false,
             options.cursor,
             (_d = options.limit) != null ? _d : 30
-          );
-        }
-      );
-    }
-    /** A contact's channel's cases, the most recently opened first, each with
-     *  what happened in it: who answered and when, reopens, how it ended. Page
-     *  with `next_cursor`. */
-    cases(podId, channelId, options = {}) {
-      return this.client.request(
-        () => {
-          var _a;
-          return ChannelsService.channelCaseList(
-            podId,
-            channelId,
-            options.cursor,
-            (_a = options.limit) != null ? _a : 20
-          );
-        }
-      );
-    }
-    /** Who is in a channel -- members, contacts and agents -- in the order they
-     *  joined. Page with `next_cursor`. */
-    members(podId, channelId, options = {}) {
-      return this.client.request(
-        () => {
-          var _a;
-          return ChannelsService.channelMemberList(
-            podId,
-            channelId,
-            options.cursor,
-            (_a = options.limit) != null ? _a : 100
           );
         }
       );
@@ -20841,7 +20908,7 @@ var LemmaClient = (() => {
   var UsersService = class {
     /**
      * Delete Current User
-     * Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by "Deleted user". Every session ends, the caller's included: its cookies or tokens are cleared on this response. If the sign-in service cannot be reached just then, the deletion still stands and the sessions end as soon as it can be. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.
+     * Delete the signed-in person's account, for good. Their profile is erased, they leave every organization, and organizations nobody else is in are deleted with their pods. Work shared with others stays, shown as by "Deleted user". From the answer on, no token the person holds opens anything, this request's included; their sessions and login are removed within moments, after which the address can sign up again. A client should discard its tokens on success. A request for an account already deleted is refused 403 ACCOUNT_INACTIVE before it reaches here. Refused with 409 ACCOUNT_DELETION_SOLE_OWNER while the person is the only owner of an organization others are still in, and with 409 and the billing provider's code while something they pay for stands in the way.
      * @param requestBody
      * @returns AccountDeletionResponse Successful Response
      * @throws ApiError
@@ -20853,7 +20920,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          400: `ACCOUNT_DELETION_CONFIRMATION_MISMATCH: the typed address is not this account's. Nothing changed.`,
+          403: `ACCOUNT_INACTIVE: the account was already deleted, or switched off.`,
+          409: `ACCOUNT_DELETION_SOLE_OWNER (details.organizations names them), or the billing provider's code. Nothing changed.`,
+          422: `Validation Error`,
+          503: `ACCOUNT_DELETION_UNAVAILABLE: this deployment bills and has no billing guard. Nothing changed.`
         }
       });
     }
@@ -21741,6 +21812,48 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Where the pod has stood, week by week
+     * The last `weeks` weeks of the pod's measure, each on its last reading. The measure is read on a schedule and when it is set; a week it was never read in has a null value.
+     * @param podId
+     * @param weeks
+     * @returns OutcomeHistoryResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeHistory(podId, weeks = 8) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/outcome/history",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "weeks": weeks
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Where the pod stands
+     * What the pod owns and what its measure answers now. The measure is read over every row of the tables it names, so every member sees the same number, including members who cannot open some of those rows; only someone who can read all of them may set it. A measure that cannot be read comes back as a `problem` rather than an error.
+     * @param podId
+     * @returns OutcomeStandingResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeStanding(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/outcome/standing",
+        path: {
+          "pod_id": podId
+        },
         errors: {
           422: `Validation Error`
         }

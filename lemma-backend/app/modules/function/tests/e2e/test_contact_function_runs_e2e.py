@@ -36,9 +36,9 @@ from app.core.authorization.function_run import (
     mint_function_run_token,
 )
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.tools.contact_tools import (
+from app.modules.agent.infrastructure.tools.contact import (
     ContactFunctionRequest,
-    build_contact_toolset,
+    contact_specs,
 )
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.contacts.domain.kinds import IdentityKind, IdentityStrength
@@ -164,19 +164,20 @@ async def test_a_contacts_call_runs_for_nobody_and_is_told_its_contact(
         db_manager, pod_id=pod_id, owner_id=fixed_test_user["id"]
     )
     contact_id = await _seed_contact(db_manager, pod_id=pod_id)
-    tools = build_contact_toolset(
-        uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory)
-    )
+    tools = {
+        spec.name: spec
+        for spec in contact_specs(
+            uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory)
+        )
+    }
     ctx = SimpleNamespace(
-        deps=SimpleNamespace(
-            audience=Audience.contact(contact_id),
-            pod_id=UUID(pod_id),
-            conversation_id=uuid4(),
-        ),
+        audience=Audience.contact(contact_id),
+        pod_id=UUID(pod_id),
+        conversation_id=uuid4(),
         tool_call_id="call-1",
     )
 
-    result = await tools.tools["contact_function"].function(
+    result = await tools["contact_function"].run(
         ctx,
         ContactFunctionRequest(
             name=function.name,

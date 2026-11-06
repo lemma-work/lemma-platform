@@ -678,7 +678,10 @@ test("work stays behind the fold, however well this app can read it", () => {
         message({ sequence: 8, role: "assistant", text: "Green." }),
     ]);
 
-    assert.deepEqual(turn.items.map((item) => item.kind), ["text"]);
+    /* One fold for the five calls, where they happened, and no card. */
+    assert.deepEqual(turn.items.map((item) => item.kind), ["steps", "text"]);
+    const [fold] = turn.items;
+    assert.ok(fold.kind === "steps" && fold.count === 5);
     assert.deepEqual(
         turn.notes.map((note) => note.label),
         ["Exec command", "Pod list files", "Browser open", "Browser screenshot", "View image"],
@@ -908,6 +911,23 @@ test("task says what the sub-agent was sent to do and what it said", () => {
     assert.equal(card.agentType, "explore");
     assert.equal(card.output, "It is test_x.");
     assert.equal(host("task", {}), null);
+});
+
+test("delegate shows the tasks, then each child's report", () => {
+    const args = { tasks: [{ brief: "Vendor A pricing" }, { brief: "Vendor B pricing" }] };
+    const waiting = parseToolCard({ toolName: "delegate", args, answered: false });
+    assert.equal(waiting?.kind, "task");
+    if (waiting?.kind !== "task") return;
+    assert.equal(waiting.description, "Delegated 2 tasks");
+    assert.equal(waiting.pending, true);
+    const woke = parseToolCard({
+        toolName: "delegate",
+        args,
+        answered: true,
+        result: { results: [{ agent: "researcher", status: "COMPLETED", report: "A: $10" }, { agent: "researcher", status: "FAILED", error: "blocked" }] },
+    });
+    assert.equal(woke?.kind === "task" && woke.output, "researcher (COMPLETED): A: $10\n\nresearcher (FAILED): blocked");
+    assert.equal(parseToolCard({ toolName: "delegate", args: {}, answered: false }), null);
 });
 
 test("a local agent's web_search reads its canonical output", () => {

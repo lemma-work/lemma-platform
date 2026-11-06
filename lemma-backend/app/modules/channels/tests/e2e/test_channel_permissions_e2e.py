@@ -295,17 +295,21 @@ async def test_joining_the_pod_makes_the_members_own_channel(pod: Pod):
     newcomer = await pod.scenario.create_user("chv2-newcomer")
     await pod.scenario.add_user_to_pod(user=newcomer, role="POD_USER")
     client = pod.client(newcomer)
-    assert (await client.get(f"{pod.base}/me")).status_code == 404
+
+    async def own() -> list[dict]:
+        listed = await client.get(pod.base, params={"kind": "DIRECT"})
+        assert listed.status_code == 200, listed.text
+        return listed.json()["items"]
+
+    assert await own() == []
 
     await _members_joined()
 
-    mine = await client.get(f"{pod.base}/me")
-    assert mine.status_code == 200, mine.text
-    assert mine.json()["kind"] == "DIRECT"
-    assert mine.json()["person"]["id"] == newcomer["id"]
-    assert mine.json()["me"]["joined"] is True
+    [mine] = await own()
+    assert mine["person"]["id"] == newcomer["id"]
+    assert mine["joined"] is True
     again = await client.post(f"{pod.base}/me")
-    assert again.status_code == 200 and again.json()["id"] == mine.json()["id"]
+    assert again.status_code == 200 and again.json()["id"] == mine["id"]
 
 
 async def test_coming_back_to_the_pod_brings_the_channel_back(pod: Pod):
@@ -330,7 +334,7 @@ async def test_coming_back_to_the_pod_brings_the_channel_back(pod: Pod):
 
     seat = await joins()
     client = pod.client(person)
-    mine = (await client.get(f"{pod.base}/me")).json()
+    mine = (await client.post(f"{pod.base}/me")).json()
     left = await scenario.owner_client.delete(
         f"/pods/{pod.id}/members/{seat['pod_member_id']}"
     )
@@ -339,7 +343,7 @@ async def test_coming_back_to_the_pod_brings_the_channel_back(pod: Pod):
 
     await joins()
 
-    back = await client.get(f"{pod.base}/me")
+    back = await client.post(f"{pod.base}/me")
     assert back.status_code == 200, back.text
     assert back.json()["id"] == mine["id"] and back.json()["archived"] is False
 
@@ -354,7 +358,6 @@ async def test_reading_writes_nothing(pod: Pod, db_session: AsyncSession):
         for path, params in (
             (pod.base, {}),
             (pod.base, {"kind": "DIRECT"}),
-            (f"{pod.base}/me", {}),
             (f"{pod.base}/{town['id']}", {}),
             (f"{pod.base}/{town['id']}/messages", {}),
             (f"/pods/{pod.id}/inbox", {}),
@@ -426,7 +429,7 @@ async def test_the_group_routes_win_over_a_channel_id(pod: Pod):
         assert "channel" not in unknown.text.lower()
     nowhere = await owner.get(f"{pod.base}/{uuid4()}/sources/{uuid4()}")
     assert nowhere.status_code == 404, nowhere.text
-    assert (await owner.get(f"{pod.base}/me")).status_code in (200, 404)
+    assert (await owner.post(f"{pod.base}/me")).status_code in (200, 201)
     gone = await owner.get(f"/pods/{pod.id}/sources", params={"surface_name": "x"})
     assert gone.status_code == 404, gone.text
 

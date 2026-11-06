@@ -226,7 +226,7 @@ function About({ pod, channel, may, onLeft, onSettings }: { pod: Pod; channel: C
     if (channel.kind === "DIRECT") {
         return (
             <Card>
-                <Row label="What it is">Your private line with {teammate}. {answersHint(channel, teammate)} Nobody else reads it.</Row>
+                <Row label="What it is">Your private chat with {teammate}. {answersHint(channel, teammate)} Nobody else reads it.</Row>
                 {channel.places.length > 0 && <Row label="Reached on">{channel.places.map((place) => platformName(place.platform)).join(", ")}</Row>}
             </Card>
         );
@@ -493,7 +493,7 @@ function Connected({ pod, channel }: { pod: Pod; channel: ChannelDetail }) {
         <>
             <p className="cdet__lead">
                 {channel.kind === "GROUP"
-                    ? "Messages in these places show up here, and what you send here goes back to the place it answers."
+                    ? "Messages sent in these show up here, and a reply goes back where the message it answers was sent."
                     : "Where messages in this chat come from, and go back to."}
             </p>
             <Card>

@@ -9,7 +9,7 @@ they were told instead of an answer (``contact_conversations.hold_outside_turn``
 A run reads its history by run, so a message in none never reaches the model
 unless it is carried on purpose. Uncarried, the agent answering them once the
 hold ends reads their newest message with nothing they said while they waited,
-and answers as if there were no earlier thread. ``HELD_FOR_A_PERSON`` is what
+and answers as if there were no earlier thread. ``held_for_a_person`` is what
 carries it (``runtime_history``). The server sets it where a held message is
 written; it is never taken from what a caller passes.
 """
@@ -18,20 +18,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.modules.agent.domain.private_notes import (
-    NOTE_IN_DM_KEY,
-    PRIVATE_NOTE_KEY,
-    WRITTEN_IN_LEMMA_KEY,
-)
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.queued_messages import SERVER_OWNED_KEYS
 from app.modules.agent.domain.value_objects import MessageDraft, MessageRole
 
 #: On both messages of a held turn: the outsider's own, and the line they were
-#: told in place of an answer.
-HELD_FOR_A_PERSON = "held_for_a_person"
-
-#: What would label a message as a member's in the history (``lemma_label``),
-#: or drop it as a member's note (``without_private_runs``).
-_A_MEMBERS_MARKS = frozenset({PRIVATE_NOTE_KEY, NOTE_IN_DM_KEY, WRITTEN_IN_LEMMA_KEY})
+#: told in place of an answer. Nothing that would label a message as a
+#: member's in the history (``lemma_label``), or drop it as a member's note
+#: (``without_private_runs``): a held message's state is this and only this.
+_HELD = MessageState(held_for_a_person=True)
 
 
 def held_messages(
@@ -47,17 +42,13 @@ def held_messages(
     theirs = {
         key: value
         for key, value in (metadata or {}).items()
-        if key not in _A_MEMBERS_MARKS
+        if key not in SERVER_OWNED_KEYS
     }
     drafts = [
-        MessageDraft.of_text(
-            text, role=MessageRole.USER, metadata={**theirs, HELD_FOR_A_PERSON: True}
-        )
+        MessageDraft.of_text(text, role=MessageRole.USER, metadata=theirs, state=_HELD)
     ]
     if reply:
         drafts.append(
-            MessageDraft.of_text(
-                reply, metadata={"handed_off": True, HELD_FOR_A_PERSON: True}
-            )
+            MessageDraft.of_text(reply, metadata={"handed_off": True}, state=_HELD)
         )
     return drafts

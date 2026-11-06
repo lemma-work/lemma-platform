@@ -5,6 +5,7 @@ import { source, type Pod } from "@/data";
 import {
     EMPTY_WIDGET_DRAFT,
     widgetAnswerChoices,
+    contactChannelId,
     contactName,
     handleText,
     outreachProblem,
@@ -20,8 +21,8 @@ import {
     type WebWidget,
     type WidgetDraft,
 } from "@/data/contacts";
-import { channelApi } from "@/channels/api";
 import { SearchIcon } from "@/ui/icons";
+import { channelApi } from "@/channels/api";
 import { ContactQueue } from "@/channels/contact-queue";
 import { ContactBots } from "./contact-bots";
 import { isForbidden } from "@/session/auth-state";
@@ -254,14 +255,14 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
                             {waitsOnTheSite(handles[handleAt] ?? handles[0])
                                 ? "It waits in their chat on your website, and they read it when they come back."
                                 : "Email any time; WhatsApp only within a day of their last message there."}
-                            {" "}It goes in their channel, where you can see whether it went.
+                            {" "}It goes in their chat, where you can see whether it went.
                         </small>
                         <div className="csheet__actions">
                             <button type="submit" className="pill-button" disabled={followUp.isPending || !message.trim()}>
                                 {followUp.isPending ? "Sending…" : "Send"}
                             </button>
                             {said && <p role="status">{said}</p>}
-                            {sentTo && <button type="button" className="linkish" onClick={() => { onClose(); goTo(channelHref(pod.id, sentTo)); }}>Open their channel</button>}
+                            {sentTo && <button type="button" className="linkish" onClick={() => { onClose(); goTo(channelHref(pod.id, sentTo)); }}>Open their chat</button>}
                         </div>
                     </form>
                 ) : (
@@ -292,19 +293,21 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
 }
 
 /** A contact's channel: everything they and the space's agents said, where
- *  an editor can step in. Found when asked for, since a contact who has
- *  never written has none. */
+ *  an editor can step in. The contact says which it is, so it opens at once;
+ *  one who has never written has none. A backend too old to say is asked. */
 function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; onLeave: () => void }) {
     const [state, setState] = useState<"idle" | "finding" | "none" | "failed">("idle");
     const open = async () => {
         setState("finding");
         try {
-            const found = await channelApi(pod.id).list({ kind: "CONTACT", archived: false, contactId: contact.id, limit: 1 });
-            const channel = found.items[0];
-            if (!channel) { setState("none"); return; }
+            const id = await contactChannelId(contact, async (contactId) => {
+                const found = await channelApi(pod.id).list({ kind: "CONTACT", archived: false, contactId, limit: 1 });
+                return found.items[0]?.id ?? null;
+            });
+            if (!id) { setState("none"); return; }
             setState("idle");
             onLeave();
-            goTo(channelHref(pod.id, channel.id));
+            goTo(channelHref(pod.id, id));
         } catch {
             setState("failed");
         }
@@ -312,10 +315,10 @@ function OpenChannel({ pod, contact, onLeave }: { pod: Pod; contact: Contact; on
     return (
         <div className="csheet__actions">
             <button type="button" className="ghost-pill" disabled={state === "finding"} onClick={() => void open()}>
-                {state === "finding" ? "Finding it…" : "Open their channel"}
+                {state === "finding" ? "Finding it…" : "Open their chat"}
             </button>
-            {state === "none" && <p role="status">They have no channel yet: it starts when they first write.</p>}
-            {state === "failed" && <p role="alert">Couldn’t find their channel. Try again.</p>}
+            {state === "none" && <p role="status">They have no chat yet: it starts when they first write.</p>}
+            {state === "failed" && <p role="alert">Couldn’t find their chat. Try again.</p>}
         </div>
     );
 }

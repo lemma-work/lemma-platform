@@ -74,6 +74,11 @@ class RunFiles:
     agent_run_id: UUID | None
 
 
+def run_of(files: RunFiles | None) -> UUID | None:
+    """The run a send is for, from the held files it may carry."""
+    return files.agent_run_id if files is not None else None
+
+
 def _slot(conversation_id: UUID, run: RunFiles) -> str:
     return f"{conversation_id}:{run.agent_run_id or 'no-run'}"
 

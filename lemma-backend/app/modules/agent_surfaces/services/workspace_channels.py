@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -22,13 +23,11 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     is_group_dm,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
 from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.domain.place_privacy import PlacePrivacy, said_privacy
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats, is_private
 from app.modules.channels.contracts import GroupHome, Place, SourceKind
+from app.modules.channels.contracts.places import change_place, place_became_private
 
 
 #: Platforms whose channels are routed one by one, and whose group DMs need none.
@@ -36,7 +35,7 @@ WORKSPACE_PLATFORMS = frozenset({SurfacePlatform.SLACK, SurfacePlatform.TEAMS})
 
 
 async def note_workspace_channel(
-    groups: SurfaceGroupRepository,
+    uow: SqlAlchemyUnitOfWork,
     seats: ChannelSeats,
     surfaces: Sequence[AgentSurfaceEntity],
     parsed: ParsedInboundSurfaceEvent,
@@ -67,7 +66,7 @@ async def note_workspace_channel(
             if not group.is_private and _now_private(parsed):
                 # Converted since it was made (Slack names the new type on
                 # every message): its mirror follows, one way only.
-                wrote = await groups.became_private(group.id) or wrote
+                wrote = await place_became_private(uow, group.id) or wrote
         else:
             title = workspace_channel_title(route, parsed)
             try:
@@ -90,7 +89,7 @@ async def note_workspace_channel(
                 continue
             wrote = True
         if shared and not group.shared_externally:
-            await groups.set_shared_externally(group.id, shared=True)
+            await change_place(uow, group.id, {"shared_externally": True})
             wrote = True
     return wrote
 

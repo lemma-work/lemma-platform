@@ -6,15 +6,17 @@
 
 import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
-import { listedAsChat } from "@/channels/chat-list";
-import { channelTitle, directPlaces, platformsOf, previewOf, type Channel } from "@/channels/model";
-import type { OriginKind } from "@/thread/conversation-origin";
+import type { ChatItem, ChatKind } from "@/channels/chat-list";
+import type { Channel } from "@/channels/model";
 import { readableName } from "@/library/reading";
 import type { AskedRow } from "@/thread/waiting-on-you";
 import type { WaitingRow } from "@/workflow/waiting-inbox";
 
 export * from "./address";
-import { chatView, outcomeView, writeView, type ChatOpen, type OpenChat, type View } from "./address";
+/* Which paths are the frame's own, rather than workspace addresses that
+   `readAddress` and `viewOfAddress` read, is in `./paths`. */
+export { isFramePath } from "./paths";
+import { chatView, outcomeView, writeView, type ChatOpen, type View } from "./address";
 
 /** Where something waiting on you opens, inside the frame: its conversation,
  *  or the workflow run whose form it is. */
@@ -30,18 +32,24 @@ export function viewOfItem(item: Pick<QueueItem, "podId" | "conversationId" | "r
  *  the rest, which the workspace opens. The thread and the shared-chat page
  *  write their links for the workspace, and this is how following one stays
  *  here. */
-export function viewOfAddress(address: { podId: string | null; tabId: string | null; conversationId: string | null; section?: string | null; agentName?: string | null }): View | null {
+export function viewOfAddress(address: { podId: string | null; tabId: string | null; conversationId: string | null; section?: string | null; agentName?: string | null; team?: boolean }): View | null {
     const { podId, tabId } = address;
+    /* The workspace's every-teammate page is the list of Lemmas here. */
+    if (address.team) return { name: "outcomes" };
     if (!podId) return null;
     switch (tabId) {
         case null:
         case "space:home":
-        case "space:chats":
-        case "space:channels":
-        case "history":
             return outcomeView(podId);
+        case "space:chats":
+        case "history":
+            return outcomeView(podId, "chats");
+        case "space:channels":
+            return outcomeView(podId, "chats", "channels");
         case "space:about":
-            return outcomeView(podId, "settings", address.section ?? null);
+            /* Schedules are a part of About in the workspace and a view of
+               Automations here. */
+            return address.section === "schedules" ? outcomeView(podId, "automations", "schedules") : outcomeView(podId, "settings", address.section ?? null);
         case "profile":
             return address.agentName ? { name: "agent", podId, agent: address.agentName } : outcomeView(podId, "settings");
         case "conversation":
@@ -51,13 +59,16 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "space:apps":
         case "apps":
             return outcomeView(podId, "apps");
+        case "space:all":
         case "space:files":
         case "space:pages":
         case "space:tables":
         case "library":
             return outcomeView(podId, "made");
         case "space:workflows":
-            return outcomeView(podId, "xray");
+            return outcomeView(podId, "automations");
+        case "computer":
+            return { name: "computer", podId, conversationId: null };
     }
     const colon = tabId.indexOf(":");
     const kind = colon < 0 ? tabId : tabId.slice(0, colon);
@@ -90,6 +101,12 @@ export interface Handoff {
     /** What the new conversation is made with: the agent it is with, when
      *  it is not the Lemma's own. */
     createWith?: Record<string, unknown>;
+    /** Files that go with the first message, as the box they were attached
+     *  in would have sent them. */
+    files?: File[];
+    /** A folder on this computer chosen in that box, by the id it was
+     *  parked under (desktop app only), for the new chat to work in. */
+    folder?: string;
 }
 
 /** Words put in a chat's box -- what an app or a widget asked for, or ⌘K
@@ -98,6 +115,8 @@ export interface Fill {
     text: string;
     id: number;
     podId: string;
+    /** Files attached with the words, held in the box with them. */
+    files?: File[];
 }
 
 export interface GoOptions {
@@ -109,6 +128,19 @@ export interface GoOptions {
 }
 
 export type Go = (view: View, options?: GoOptions) => void;
+
+/** What goes with words asked of a Lemma: files from the box they were
+ *  typed in, and what the new chat is made with -- the model picked there,
+ *  or the agent it is with. */
+export interface AskWith {
+    files?: File[];
+    createWith?: Record<string, unknown>;
+    /** The id a folder chosen in the box was parked under. */
+    folder?: string;
+}
+
+/** Start a chat with a Lemma with these words, sent, and open it. */
+export type Ask = (podId: string, text: string, extra?: AskWith) => void;
 
 /* ── activity ─────────────────────────────────────────────────────────── */
 
@@ -514,6 +546,28 @@ export interface QueueItem {
     runId: string | null;
     /** A contact's chat, waiting on a person. */
     contactId: string | null;
+    /** The workflow wait itself, when the row is one: it carries its form. */
+    wait: WaitingRow["wait"] | null;
+}
+
+/** Where a row is answered: in place, from its own card ("ask") or its
+ *  form ("form"), or only where it came from (null). A question or an
+ *  approval is answered with the card the chat would dock, and a form wait
+ *  with the form the run would show. A contact wants a written reply, and
+ *  a workflow decision has no form to submit, so both open where they are. */
+export function answersHere(item: Pick<QueueItem, "contactId" | "wait" | "conversationId" | "runId">): "ask" | "form" | null {
+    if (item.contactId) return null;
+    if (item.wait) return item.wait.type === "HUMAN" ? "form" : null;
+    if (item.runId) return null;
+    return item.conversationId ? "ask" : null;
+}
+
+/** The row's button: what doing it is called. */
+export function verbOf(item: Pick<QueueItem, "kind" | "contactId" | "wait" | "conversationId" | "runId">): string {
+    const here = answersHere(item);
+    if (here === "form") return "Fill in";
+    if (here === "ask") return item.kind === "decide" ? "Decide" : "Answer";
+    return item.contactId ? "Reply" : "Open";
 }
 
 /** Someone outside a Lemma who wrote in and is waiting on a person: its
@@ -544,6 +598,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.conversationId,
             runId: null,
             contactId: null,
+            wait: null,
         });
     }
     for (const row of waits) {
@@ -559,6 +614,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.wait.externalRef,
             runId: row.run.id,
             contactId: null,
+            wait: row.wait,
         });
     }
     for (const row of contacts) {
@@ -573,6 +629,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: null,
             runId: null,
             contactId: row.channelId,
+            wait: null,
         });
     }
     return items.sort((a, b) => a.sinceMs - b.sinceMs);
@@ -589,134 +646,28 @@ export function ageOf(sinceMs: number, now: number): string {
 
 /* ── chats ────────────────────────────────────────────────────────────── */
 
-/** A chat with Lemma, someone's private line with it (WhatsApp, Telegram,
- *  what it sends them), or a chat shared with people. */
-export type ChatKind = "chat" | "line" | "shared";
-
-export interface ChatItem {
-    key: string;
-    open: OpenChat;
-    podId: string;
-    podName: string;
-    kind: ChatKind;
-    title: string;
-    /** The last thing said, for a shared chat; where it came from, for a
-     *  chat that started on a platform. Shown after the name, quieter. */
-    said: string | null;
-    /** Last active, epoch ms, or null when the server gave no time. */
-    at: number | null;
-    needsYou: boolean;
-    /** New lines in a shared chat since the reader last read it. */
-    unread: number;
-    /** Lemma is working in it right now. */
-    running: boolean;
-    /** The platforms feeding it, for its mark. */
-    platforms: string[];
-    channel: Channel | null;
-    conversation: ConversationRef | null;
-}
-
-/** Where a conversation came from, when it counts as a chat. A run that a
- *  schedule, a workflow, a notice or another outcome started is Lemma's own
- *  work, read as activity on its outcome; one about a doc lives on the doc.
- *  Any of them still waiting on you is listed, because that is where it is
- *  answered. */
-const CHAT_ORIGINS: ReadonlySet<OriginKind> = new Set<OriginKind>(["chat", "channel"]);
-
-export function isChat(conversation: Pick<ConversationRef, "origin" | "waitingOnYou" | "boundTo">): boolean {
-    if (conversation.waitingOnYou) return true;
-    if (conversation.boundTo) return false;
-    return CHAT_ORIGINS.has(conversation.origin?.kind ?? "chat");
-}
-
-/** Someone's private line with a Lemma, named for what it is: theirs, on
- *  the platforms it comes through -- or the notices the Lemma sends them.
- *  Called just "Email" beside chats with names, it read as an inbox. */
-export function lineTitle(platforms: string): string {
-    return platforms === "Notices" ? "Notices" : `Your line on ${platforms}`;
-}
+/* What a chat is, its name, its order and its two groups are the one chat
+   list model every surface draws (`@/channels/chat-list`); the frame adds
+   only how a row sits in its sidebar, below. */
+export { chatItems, isChat, type ChatItem, type ChatKind } from "@/channels/chat-list";
 
 function timeOf(iso: string | null | undefined): number | null {
     const at = iso ? Date.parse(iso) : Number.NaN;
     return Number.isNaN(at) ? null : at;
 }
 
-function newestFirst(a: ChatItem, b: ChatItem): number {
-    if (a.at !== null && b.at !== null) return b.at - a.at || a.title.localeCompare(b.title);
-    if (a.at !== b.at) return a.at === null ? 1 : -1;
-    return a.title.localeCompare(b.title);
-}
-
-/** Every chat in the outcomes given, as one list in two groups: what is
- *  waiting on the reader, then everything else, newest first in each.
- *  `search` keeps the ones whose name or outcome contains it. */
-export function chatItems(input: {
-    pods: readonly { id: string; name: string }[];
-    conversations: ReadonlyMap<string, readonly ConversationRef[]>;
-    channels: ReadonlyMap<string, readonly Channel[]>;
-    me: string | null;
-    search?: string;
-}): { needs: ChatItem[]; rest: ChatItem[] } {
-    const items: ChatItem[] = [];
-    for (const pod of input.pods) {
-        for (const channel of input.channels.get(pod.id) ?? []) {
-            if (!listedAsChat(channel)) continue;
-            items.push({
-                key: `g:${pod.id}:${channel.id}`,
-                open: { kind: "shared", podId: pod.id, id: channel.id },
-                podId: pod.id,
-                podName: pod.name,
-                kind: channel.kind === "DIRECT" ? "line" : "shared",
-                title: channel.kind === "DIRECT" ? lineTitle(directPlaces(channel)) : channelTitle(channel, pod.name),
-                said: channel.lastLine || channel.topic ? previewOf(channel, input.me) : null,
-                at: timeOf(channel.lastMessageAt ?? channel.createdAt),
-                needsYou: channel.unread.waiting > 0,
-                unread: channel.unread.lines,
-                running: false,
-                platforms: platformsOf(channel),
-                channel,
-                conversation: null,
-            });
-        }
-        for (const conversation of input.conversations.get(pod.id) ?? []) {
-            if (!isChat(conversation)) continue;
-            const origin = conversation.origin;
-            items.push({
-                key: `c:${pod.id}:${conversation.id}`,
-                open: { kind: "chat", podId: pod.id, id: conversation.id },
-                podId: pod.id,
-                podName: pod.name,
-                kind: "chat",
-                title: conversation.title,
-                said: origin && origin.kind !== "chat" ? origin.label : null,
-                at: timeOf(conversation.activityAt),
-                needsYou: conversation.waitingOnYou === true,
-                unread: 0,
-                running: isRunning(conversation),
-                platforms: origin?.platform ? [origin.platform.toUpperCase()] : [],
-                channel: null,
-                conversation,
-            });
-        }
-    }
-    const needle = input.search?.trim().toLowerCase() ?? "";
-    const kept = needle
-        ? items.filter((item) => item.title.toLowerCase().includes(needle) || item.podName.toLowerCase().includes(needle) || (item.said ?? "").toLowerCase().includes(needle))
-        : items;
-    kept.sort(newestFirst);
-    return { needs: kept.filter((item) => item.needsYou), rest: kept.filter((item) => !item.needsYou) };
-}
-
 /* ── a Lemma's recent things, in the sidebar ─────────────────────────── */
 
 /** A line in a Lemma's sidebar section: a chat, or something of its own
  *  work -- an automation that ran, a table that changed -- each opening
- *  where it is read. */
-export type RowKind = ChatKind | "automation" | "table";
+ *  where it is read; or an app the reader pinned. */
+export type RowKind = ChatKind | "automation" | "table" | "app";
 
 export interface SideRow {
     key: string;
     kind: RowKind;
+    /** The Lemma it is in, for a list that mixes them. */
+    podId: string;
     title: string;
     /** More about it, for its tooltip: the last thing said, where it came from. */
     said: string | null;
@@ -735,6 +686,7 @@ export function rowOfChat(item: ChatItem): SideRow {
     return {
         key: item.key,
         kind: item.kind,
+        podId: item.podId,
         title: item.title,
         said: item.said,
         at: item.at,
@@ -785,8 +737,11 @@ export function workRows(input: {
         const run = origin.runId ?? conversation.id;
         const at = timeOf(conversation.activityAt);
         const row: SideRow = {
-            key: "auto:" + automation.key,
+            /* Its Lemma in its key: a list that mixes Lemmas can hold two
+               automations of one name. */
+            key: "auto:" + input.podId + ":" + automation.key,
             kind: "automation",
+            podId: input.podId,
             title: automation.name,
             said: origin.kind === "schedule" ? "Runs on a schedule" : "A workflow",
             at,
@@ -812,8 +767,9 @@ export function workRows(input: {
         const at = timeOf(table.updated);
         if (at === null || input.now - at > QUIET_AFTER_MS) return [];
         return [{
-            key: "table:" + table.name,
+            key: "table:" + input.podId + ":" + table.name,
             kind: "table",
+            podId: input.podId,
             title: table.title,
             said: "A table",
             at,
@@ -856,8 +812,33 @@ export function inSidebar(item: { kind: string; unread: number; needsYou: boolea
     return item.kind !== "line" || item.unread > 0 || item.needsYou;
 }
 
-/** How long an outcome can go without a chat moving before its section
- *  folds itself away. */
+/** What the sidebar lists under each Lemma, as the reader asked: its chats;
+ *  with its automations' latest runs; or with the tables changed lately as
+ *  well. */
+export type SideShowing = "chats" | "automations" | "everything";
+
+/** How the sidebar lists them: under each Lemma, or all together, newest
+ *  first. */
+export type SideGrouping = "lemma" | "together";
+
+export interface SideSettings {
+    showing: SideShowing;
+    grouping: SideGrouping;
+}
+
+export const SIDE_DEFAULTS: SideSettings = { showing: "chats", grouping: "lemma" };
+
+/** What a browser kept of the reader's choice, read safely: anything it
+ *  does not recognise is the default. */
+export function readSideSettings(raw: unknown): SideSettings {
+    const kept = raw && typeof raw === "object" ? raw as Partial<SideSettings> : {};
+    return {
+        showing: kept.showing === "automations" || kept.showing === "everything" ? kept.showing : "chats",
+        grouping: kept.grouping === "together" ? "together" : "lemma",
+    };
+}
+
+/** How long a table can go unchanged before it stops counting as recent. */
 export const QUIET_AFTER_MS = 7 * 86_400_000;
 
 export interface SidebarSection<T, R> {
@@ -870,13 +851,14 @@ export interface SidebarSection<T, R> {
     open: boolean;
 }
 
-/** The sidebar's outcomes: the one that moved most recently first, the ones
- *  that never moved last, by name. Each is open unless it has been quiet for
- *  a week -- and always when it is where the reader is, or has something
- *  waiting on them. What the reader folded or opened themselves wins. */
+/** The sidebar's Lemmas: the one that moved most recently first, the ones
+ *  that never moved last, by name. Each is folded to its name -- a list of
+ *  Lemmas, the way a list of projects reads -- and a dot on a folded one says
+ *  something in it waits on the reader. One opens while the reader is in it,
+ *  and stays open once they open it themselves; what they folded or opened
+ *  wins. */
 export function sidebarSections<T extends { id: string; name: string }, R extends { at: number | null; needsYou: boolean }>(
     sections: readonly { pod: T; items: readonly R[] }[],
-    now: number,
     chosen: ReadonlyMap<string, boolean>,
     here: string | null,
 ): SidebarSection<T, R>[] {
@@ -885,8 +867,7 @@ export function sidebarSections<T extends { id: string; name: string }, R extend
             const times = items.map((item) => item.at).filter((at): at is number => at !== null);
             const latest = times.length > 0 ? Math.max(...times) : null;
             const waiting = items.filter((item) => item.needsYou).length;
-            const lively = waiting > 0 || pod.id === here || (latest !== null && now - latest < QUIET_AFTER_MS);
-            return { pod, items: [...items], latest, waiting, open: chosen.get(pod.id) ?? lively };
+            return { pod, items: [...items], latest, waiting, open: chosen.get(pod.id) ?? pod.id === here };
         })
         .sort((a, b) => {
             if (a.latest !== null && b.latest !== null && a.latest !== b.latest) return b.latest - a.latest;
@@ -913,4 +894,40 @@ export function sameOpen(a: ChatOpen, b: ChatOpen): boolean {
     if (a.kind !== b.kind) return false;
     if (a.kind === "none" || b.kind === "none") return true;
     return a.podId === b.podId && (a as { id: string | null }).id === (b as { id: string | null }).id;
+}
+
+/** An agent row's page, or none for a row that arrived without a name: its
+ *  address would end at `agent/` and land on the Lemma's settings, while the
+ *  row itself says there is nothing to open. */
+export function agentView(podId: string, agent: { name: string; broken: boolean }): View | null {
+    return agent.broken ? null : { name: "agent", podId, agent: agent.name };
+}
+
+/** A key for an agent row. Two nameless rows share an empty id, so the
+ *  position keys them apart. */
+export function agentKey(agent: { id: string }, at: number): string {
+    return agent.id || `unnamed-${at}`;
+}
+
+/** An app kept mounted this visit, with the organization it was opened in
+ *  and its Lemma as last read. */
+export type KeptApp<P extends { id: string }> = { podId: string; app: string; orgId: string | null; pod: P | null };
+
+/** The kept apps against a Lemma list just read for `orgId`. Each takes its
+ *  Lemma as now listed. One whose own organization's list no longer has its
+ *  Lemma goes. One from another organization stays as it was, so switching
+ *  organization never unmounts it. The same array when nothing changed. */
+export function refreshKept<P extends { id: string }>(kept: readonly KeptApp<P>[], pods: readonly P[], orgId: string | null): readonly KeptApp<P>[] {
+    let changed = false;
+    const next = kept.flatMap((one) => {
+        const now = pods.find((candidate) => candidate.id === one.podId);
+        if (now) {
+            if (now !== one.pod) changed = true;
+            return [{ ...one, pod: now }];
+        }
+        if (one.orgId !== orgId) return [one];
+        changed = true;
+        return [];
+    });
+    return changed ? next : kept;
 }

@@ -251,6 +251,13 @@ class UserRepository(UserRepositoryPort):
         await self._collect_events(entity)
         return instance.to_entity()
 
+    async def get_for_update(self, id: UUID) -> Optional[UserEntity]:
+        result = await self.session.execute(
+            select(User).where(User.id == id).with_for_update()
+        )
+        instance = result.scalars().first()
+        return instance.to_entity() if instance else None
+
     async def save_erased(
         self, entity: UserEntity, *, previous_email: str
     ) -> UserEntity:

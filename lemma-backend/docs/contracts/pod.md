@@ -10,6 +10,8 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `outcome.clear` | DELETE | `/pods/{pod_id}/outcome` | Clear what the pod owns |
+| `outcome.set` | PUT | `/pods/{pod_id}/outcome` | Set what the pod owns |
 | `pod.create` | POST | `/pods` | Create Pod |
 | `pod.delete` | DELETE | `/pods/{pod_id}` | Delete Pod |
 | `pod.get` | GET | `/pods/{pod_id}` | Get Pod |

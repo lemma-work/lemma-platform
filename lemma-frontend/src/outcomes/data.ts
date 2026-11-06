@@ -9,7 +9,6 @@ import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query
 import { source, NEW_CONVERSATION, type ConversationRef, type Pod, type PodDetail } from "@/data";
 import { isMissing } from "@/session/auth-state";
 import { configuredApiUrl } from "@/session/origins";
-import { NOWHERE, writeAddress } from "@/shell/address";
 import { PLAN_PATH, parsePlan, readMeasure, serializePlan, type Plan } from "./model";
 
 /** Each outcome's recent conversations, every agent's, as the viewer can see
@@ -118,21 +117,6 @@ export function useMeasure(podId: string, plan: Plan | null | undefined) {
         retry: false,
     });
 }
-
-/** Where a person goes when the frame hands them to the workspace: the
- *  workspace's own grammar, so links stay valid as it changes. */
-export const classic = {
-    pod: (podId: string) => writeAddress({ ...NOWHERE, podId }),
-    conversation: (podId: string, conversationId: string) => writeAddress({ ...NOWHERE, podId, tabId: "conversation", conversationId }),
-    run: (podId: string, runId: string) => writeAddress({ ...NOWHERE, podId, tabId: "run:" + runId }),
-    table: (podId: string, name: string) => writeAddress({ ...NOWHERE, podId, tabId: "table:" + name }),
-    record: (podId: string, table: string, id: string) => writeAddress({ ...NOWHERE, podId, tabId: "record:" + table + ":" + id }),
-    app: (podId: string, id: string) => writeAddress({ ...NOWHERE, podId, tabId: "app:" + id }),
-    file: (podId: string, path: string) => writeAddress({ ...NOWHERE, podId, tabId: "file:" + path }),
-    agent: (podId: string, name: string) => writeAddress({ ...NOWHERE, podId, tabId: "bot:" + name }),
-    schedules: (podId: string) => writeAddress({ ...NOWHERE, podId, tabId: "space:about", section: "schedules" }),
-    workflow: (podId: string, name: string) => writeAddress({ ...NOWHERE, podId, tabId: "workflow:" + name }),
-};
 
 /** The address Claude, ChatGPT or any MCP client connects to for one pod. */
 export function mcpUrl(podId: string): string | null {

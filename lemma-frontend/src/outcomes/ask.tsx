@@ -1,45 +1,54 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { source, type Pod, type Tab } from "@/data";
 import { AppCover } from "@/stage/app-cover";
 import { key } from "@/session/storage";
-import type { Go } from "./model";
+import type { Choice } from "@/data/runtimes";
+import { PlusIcon } from "@/ui/icons";
+import { canSend, namePasted, offered, toAttachments, type Attachment } from "@/thread/attachments";
+import { AttachedFiles } from "@/thread/attached";
+import { ModelPicker } from "@/thread/model-picker";
+import { useConversationFolder } from "@/desktop/folders";
+import { FolderChip } from "@/desktop/folder-chip";
+import { TeammateFace } from "@/space/teammate-face";
+import type { Ask, Go } from "./model";
 import { Icon, to } from "./parts";
 
 /** The Lemma the reader last asked from Home, to ask again. */
 const ASK_IN_KEY = key("outcomes-ask-in");
 
-/** A box to ask a Lemma something, with which Lemma at its foot. Home lets
- *  the reader pick and remembers the pick; a new chat names its Lemma in
- *  the address, and picking another moves the chat there. */
-export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placeholder = "Ask anything, or say what to do", seed = null, fixed = false }: {
+/** The model a new chat runs on, as the conversation is made with it. */
+function runtimeOf(model: Choice | null): Record<string, unknown> | undefined {
+    return model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined;
+}
+
+/** The one box to ask a Lemma something, with which Lemma at its foot.
+ *  Home lets the reader pick and remembers the pick; a new chat names its
+ *  Lemma in the address, and picking another moves the chat there. Files go
+ *  with the words -- attached, pasted or dropped -- and the model picked
+ *  under it is the one the chat it starts runs on, as in the workspace's own
+ *  box. */
+export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placeholder = "Ask anything, or say what to do" }: {
     pods: readonly Pod[];
     /** The Lemma asked, when where the box sits decides it. */
     podId?: string;
     onPod?: (podId: string) => void;
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
     autoFocus?: boolean;
     placeholder?: string;
-    /** The start of a request put in the box -- "Make a table to track" --
-     *  for the reader to finish. A new `id` puts it there again. */
-    seed?: { text: string; id: number } | null;
-    /** On a Lemma's own page the box asks that Lemma, and says nothing of
-     *  which. */
-    fixed?: boolean;
 }) {
     const [text, setText] = useState("");
-    const field = useRef<HTMLTextAreaElement>(null);
-    useEffect(() => {
-        if (!seed) return;
-        setText(seed.text);
-        const box = field.current;
-        if (box) {
-            box.focus();
-            requestAnimationFrame(() => box.setSelectionRange(seed.text.length, seed.text.length));
-        }
-    }, [seed]);
+    const [held, setHeld] = useState<Attachment[]>([]);
+    const [refused, setRefused] = useState<string | null>(null);
+    const [over, setOver] = useState(false);
+    const [model, setModel] = useState<Choice | null>(null);
+    const picker = useRef<HTMLInputElement>(null);
+    /* A folder on this computer for the chat to work in: the desktop app's,
+       on a local install, and nothing anywhere else. Parked until the chat
+       exists, then adopted by it. */
+    const folder = useConversationFolder(null);
     const [chosen, setChosen] = useState<string | null>(() => {
         try {
             return localStorage.getItem(ASK_IN_KEY);
@@ -49,26 +58,65 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
     });
     const target = pods.find((pod) => pod.id === (podId ?? chosen)) ?? pods[0] ?? null;
     const pick = (id: string) => {
+        /* A model is one of a Lemma's own; another Lemma starts on its own
+           default. */
+        setModel(null);
         if (onPod) onPod(id);
         else setChosen(id);
     };
+    /** Refuse what the server would refuse, before an upload is spent on
+     *  finding out -- the composer's rule, in its words. */
+    const offer = (files: File[]) => {
+        if (files.length === 0) return;
+        const { take, refused: why } = offered(files);
+        setRefused(why);
+        if (take.length > 0) setHeld((was) => [...was, ...toAttachments(take)]);
+    };
     const send = () => {
         const said = text.trim();
-        if (!said || !target) return;
+        if (!canSend(said, held) || !target) return;
         try { localStorage.setItem(ASK_IN_KEY, target.id); } catch { /* asked here this once */ }
-        onAsk(target.id, said);
+        const files = held.map((one) => one.file);
+        setText("");
+        setHeld([]);
+        setRefused(null);
+        onAsk(target.id, said, { files, createWith: runtimeOf(model), folder: folder.folder ? folder.pendingId : undefined });
+        setModel(null);
     };
     return (
-        <form className="ox-askbox" onSubmit={(event) => { event.preventDefault(); send(); }}>
+        <form
+            className={"ox-askbox" + (over ? " ox-askbox--over" : "")}
+            onSubmit={(event) => { event.preventDefault(); send(); }}
+            onDragOver={(event) => {
+                /* A file being dragged, not selected text. */
+                if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+                event.preventDefault();
+                setOver(true);
+            }}
+            onDragLeave={() => setOver(false)}
+            onDrop={(event) => {
+                event.preventDefault();
+                setOver(false);
+                offer(Array.from(event.dataTransfer.files));
+            }}
+        >
+            <AttachedFiles className="ox-askbox__files" files={held} onRemove={(gone) => setHeld((was) => was.filter((kept) => kept.key !== gone))} />
             <label className="ox-sr" htmlFor="ask-text">Ask {target?.name ?? "a Lemma"}</label>
             <textarea
-                ref={field}
                 id="ask-text"
                 rows={2}
                 value={text}
                 placeholder={placeholder}
                 autoFocus={autoFocus}
                 onChange={(event) => setText(event.target.value)}
+                onPaste={(event) => {
+                    /* A screenshot on the clipboard is a file; ordinary text
+                       is left to paste as text. */
+                    const files = Array.from(event.clipboardData.files);
+                    if (files.length === 0) return;
+                    event.preventDefault();
+                    offer(namePasted(files));
+                }}
                 onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                         event.preventDefault();
@@ -77,15 +125,41 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
                 }}
             />
             <div className="ox-askbox__bar">
-                {target && !fixed && (
-                    <label className="ox-askbox__in">
-                        <span>To</span>
+                <input
+                    ref={picker}
+                    className="ox-sr"
+                    type="file"
+                    multiple
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    onChange={(event) => {
+                        offer(Array.from(event.target.files ?? []));
+                        /* Cleared, so the same file chosen twice still counts. */
+                        event.target.value = "";
+                    }}
+                />
+                <button type="button" className="ox-askbox__attach" title="Attach a file" aria-label="Attach a file" onClick={() => picker.current?.click()}>
+                    <PlusIcon size={18} />
+                </button>
+                {/* Who is asked, as a face and a name rather than a form
+                    field: the native list underneath, for the keyboard. */}
+                {/* Not on a Lemma's own page, which is the one asked. */}
+                {target && pods.length > 1 && (
+                    <label className="ox-askbox__in" title="Who to ask">
+                        <span className="ox-sr">To</span>
+                        <TeammateFace pod={target} size={18} />
                         <select value={target.id} onChange={(event) => pick(event.target.value)}>
                             {pods.map((pod) => <option key={pod.id} value={pod.id}>{pod.name}</option>)}
                         </select>
+                        <Icon name="chevron" size={12} />
                     </label>
                 )}
-                <button type="submit" className="ox-askbox__send" disabled={!text.trim() || !target} aria-label={`Ask ${target?.name ?? ""}`.trim()}><Icon name="send" size={16} /></button>
+                <FolderChip folder={folder} />
+                {refused && <span className="ox-askbox__note">{refused}</span>}
+                <span className="ox-askbox__model">
+                    {target && source.label === "live" && <ModelPicker key={target.id} podId={target.id} orgId={target.orgId} conversationId={null} picked={model} onPicked={setModel} />}
+                </span>
+                <button type="submit" className="ox-askbox__send" disabled={!canSend(text.trim(), held) || !target} aria-label={`Ask ${target?.name ?? ""}`.trim()}><Icon name="send" size={16} /></button>
             </div>
         </form>
     );

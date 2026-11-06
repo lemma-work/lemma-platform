@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 
+from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
@@ -36,20 +37,13 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     is_group_dm,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup
-from app.modules.agent_surfaces.domain.models import (
-    SurfaceContextMessage,
-    SurfaceGroupParticipant,
-)
+from app.modules.agent_surfaces.domain.models import SurfaceGroupParticipant
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
     ExternalSurfaceUserRepository,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
@@ -81,12 +75,14 @@ from app.modules.channels.contracts import (
     SenderKind,
     Source,
     background,
-    may_read,
+    is_outside,
+    not_held,
     post,
-    source_by_id,
     speakers_in,
 )
 from app.modules.channels.contracts.lines import thread_root_at
+from app.modules.channels.contracts.placement import THREADED
+from app.modules.channels.contracts.places import places_hearing
 from app.modules.contacts.contracts import (
     IdentityStrength,
     find_contact,
@@ -127,18 +123,12 @@ def background_from_log(parsed: ParsedInboundSurfaceEvent) -> bool:
     )
 
 
-async def group_source(uow: SqlAlchemyUnitOfWork, group: SurfaceGroup) -> Source | None:
-    """The group's place, as channels keep it: the group is its source."""
-    return await source_by_id(uow, group.id)
-
-
 class GroupLog:
     def __init__(
         self, uow: SqlAlchemyUnitOfWork, *, seats: ChannelSeats | None = None
     ) -> None:
         self.uow = uow
         self.seats = seats or ChannelSeatsInDatabase(uow)
-        self.groups = SurfaceGroupRepository(uow.session)
         self.membership: SurfacePodMembershipPort = (
             SqlAlchemySurfaceRoutingResolutionAdapter(uow)
         )
@@ -161,16 +151,15 @@ class GroupLog:
         wrote = False
         if parsed.platform in WORKSPACE_PLATFORMS:
             # Routed one by one: its source is made as the bot first hears it.
-            wrote = await note_workspace_channel(
-                self.groups, self.seats, surfaces, parsed
-            )
+            wrote = await note_workspace_channel(self.uow, self.seats, surfaces, parsed)
         if not parsed.message_text.strip():
             return wrote
-        known = await self.groups.list_for_channel(
+        known = await places_hearing(
+            self.uow,
             external_channel_id=parsed.external_channel_id,
             surface_ids=[surface.id for surface in surfaces],
         )
-        threaded = parsed.platform in WORKSPACE_PLATFORMS
+        threaded = parsed.platform in THREADED
         for group in known:
             # A Slack or Teams thread is a thread here too.
             root = (
@@ -206,11 +195,14 @@ class GroupLog:
                 ),
                 mentions=said.mentions,
                 mentioned_agents=said.agents,
+                # The bot that heard it answers it itself, if it does: put to
+                # it, or answering every line there (``route_resolver``).
+                door_agent_id=_door_agent(surfaces, group),
             )
         return wrote or bool(known)
 
     async def _speaker(
-        self, group: SurfaceGroup, parsed: ParsedInboundSurfaceEvent
+        self, group: Source, parsed: ParsedInboundSurfaceEvent
     ) -> Sender:
         """Who said it: the member the pod resolved them to, else a contact."""
         name = parsed.sender_display_name
@@ -271,7 +263,7 @@ class GroupLog:
         return resolved.internal_user_id if resolved is not None else None
 
     async def _known_colleague(
-        self, group: SurfaceGroup, parsed: ParsedInboundSurfaceEvent, name: str | None
+        self, group: Source, parsed: ParsedInboundSurfaceEvent, name: str | None
     ) -> Sender:
         """A Slack colleague the pod already answers as a contact, else nobody named.
 
@@ -295,11 +287,12 @@ class GroupLog:
 
 @dataclass(frozen=True, slots=True)
 class GroupBackground:
-    """What a run is shown of a group, and how much it was not shown."""
+    """The lines a run keeps of a group, and who is in it.
 
-    lines: list[SurfaceContextMessage]
-    #: Lines left out because this run may not read them.
-    withheld: int = 0
+    Which of them the run may read is decided once, as the run reads them back
+    (``channels.contracts.backgrounds``), never here as well.
+    """
+
     #: Who, among the lines' authors, is outside the pod -- for a member run's
     #: notice of who else will read its answer.
     outside_authors: tuple[str, ...] = ()
@@ -315,10 +308,8 @@ class GroupBackground:
 async def group_background(
     uow: SqlAlchemyUnitOfWork,
     *,
-    group: SurfaceGroup,
-    source: Source,
+    group: Source,
     membership: SurfacePodMembershipPort,
-    agent_display_name: str | None,
     reader: Reader | None,
     asker: Principal | None = None,
     limit: int = GROUP_CONTEXT_LINES,
@@ -339,58 +330,32 @@ async def group_background(
       (``core.authorization.outside_text``). Not a note the pod's members left
       one another: the answer goes to the whole group.
 
+    Which lines that is, is the channel's rule, applied once as the run reads
+    its background back (``channels.contracts.backgrounds``): here the lines
+    are read as the pod reads them and kept by reference.
+
     ``reader`` is ``None`` for a run that is neither -- another pod asking --
     which is shown nothing.
     """
     if reader is None:
-        return GroupBackground(lines=[])
-    # Read as the pod reads it, then held to what this reader may see, so what
-    # is left out is counted rather than silently missing.
+        return GroupBackground()
     lines = await background(
-        uow, channel_id=source.channel_id, reader=Reader.member(), limit=limit
+        uow, channel_id=group.channel_id, reader=Reader.member(), limit=limit
     )
     members = await membership.pod_members_among(
         group.pod_id, {line.sender.user_id for line in lines if line.sender.user_id}
     )
-    kept: list[SurfaceContextMessage] = []
     outside_authors: list[str] = []
-    withheld = 0
     for line in lines:
-        from_agent = line.sender.kind is SenderKind.AGENT
-        outside = not from_agent and line.sender.user_id not in members
-        author = (
-            agent_display_name or "the bot" if from_agent else line.sender.display_name
-        )
-        if outside and author:
+        author = line.sender.display_name
+        if is_outside(line.sender, held=members) and author:
             outside_authors.append(author)
-        if reader.is_member:
-            # Not a members' note: the answer is posted where everybody in the
-            # group reads it. The same rule the background is read back by
-            # (``channels.contracts.backgrounds``, MEMBER_IN_GROUP).
-            shown = not line.members_only
-        else:
-            shown = may_read(reader, line)
-        if not shown:
-            withheld += 1
-            continue
-        kept.append(
-            SurfaceContextMessage(
-                author=author,
-                text=line.text,
-                ts=line.created_at.isoformat(),
-                outside_pod=outside,
-            )
-        )
     participants = (
-        await _participants(
-            uow, group=group, source=source, membership=membership, asker=asker
-        )
+        await _participants(uow, group=group, membership=membership, asker=asker)
         if reader.is_member
         else ()
     )
     return GroupBackground(
-        lines=kept,
-        withheld=withheld,
         outside_authors=tuple(outside_authors),
         participants=participants,
         heard=tuple(lines),
@@ -400,8 +365,7 @@ async def group_background(
 async def _participants(
     uow: SqlAlchemyUnitOfWork,
     *,
-    group: SurfaceGroup,
-    source: Source,
+    group: Source,
     membership: SurfacePodMembershipPort,
     asker: Principal | None,
 ) -> tuple[SurfaceGroupParticipant, ...]:
@@ -419,7 +383,7 @@ async def _participants(
     stays on it unnamed, never under their platform id -- on WhatsApp that is
     their phone number, and the answer is posted where everybody reads it.
     """
-    speakers = await speakers_in(uow, [source.channel_id], limit=_MAX_PARTICIPANTS + 1)
+    speakers = await speakers_in(uow, [group.channel_id], limit=_MAX_PARTICIPANTS + 1)
     recent = [speaker for speaker in speakers if speaker.principal != asker][
         :_MAX_PARTICIPANTS
     ]
@@ -430,7 +394,15 @@ async def _participants(
     return tuple(
         SurfaceGroupParticipant(
             name=" ".join(str(speaker.name or "").split()),
-            in_pod=speaker.principal.user_id in members,
+            in_pod=not not_held(speaker.principal.user_id, held=members),
         )
         for speaker in recent
     )
+
+
+def _door_agent(surfaces: Sequence[AgentSurfaceEntity], group: Source) -> UUID | None:
+    """The agent of the bot this group's line came through."""
+    for surface in surfaces:
+        if surface.id == group.surface_id:
+            return effective_agent_id(surface.agent_id, pod_id=surface.pod_id)
+    return None

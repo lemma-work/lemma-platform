@@ -1,9 +1,10 @@
 """What a contact's merge or forgetting does to the channels.
 
-**A merge** folds the merged contact's channel into the survivor's: both
-channels' lines are numbered again together, in the order they were said
-(``fold_lines``), and what hangs from a line follows it by its foreign keys;
-each member's read position is carried, so what they had read stays read. Both channel rows are locked first, in id order
+**A merge** folds the merged contact's channel into the survivor's: the
+merged channel's lines go after the survivor's, in their own order
+(``fold_append``), and what hangs from a line follows it by its foreign keys;
+each member's read position is carried, so what they had read stays read and
+what they had not stays unread. Both channel rows are locked first, in id order
 -- the order every writer that takes two channel locks takes them in -- so a
 line written to either while the fold runs either lands before it and is moved,
 or waits and finds its channel gone. The merged channel is dropped only after
@@ -45,12 +46,12 @@ from app.modules.channels.infrastructure.models import (
     ChannelSourceModel,
 )
 from app.modules.channels.infrastructure.repository import ChannelRepository
-from app.modules.channels.infrastructure.fold_lines import (
+from app.modules.channels.infrastructure.fold_append import (
+    append_lines,
     carry_read_state,
-    recount_read_replies,
     defer_place_checks,
-    merge_lines,
-    renumber_deliveries,
+    recount_read_replies,
+    shift_deliveries,
 )
 from app.modules.channels.infrastructure.mentions import drop_mentions
 from app.modules.channels.infrastructure.revisions import log_lines, next_rev
@@ -117,7 +118,7 @@ class ContactChannels:
         # The survivor's subscribers are sent the lines and fields it gained;
         # the merged channel's find it gone when it is dropped.
         await next_rev(self.session, head.id, channel_changed=True)
-        moved = await self._move_lines(pod_id, merged.id, head.id)
+        moved = await self._move_lines(pod_id, merged.id, head.id, base=base)
         await self._move_places(merged.id, head.id)
         await self._move_seats(merged.id, head.id)
         await CaseRepository(self.session).fold(merged, head)
@@ -155,7 +156,8 @@ class ContactChannels:
 
     async def _last_seq(self, head: ChannelModel) -> int:
         """The survivor's newest number, from its lines as well as its head:
-        the moved lines go after whichever is higher."""
+        the moved lines go after whichever is higher, so none meets one of
+        the survivor's."""
         highest = await self.session.scalar(
             select(func.max(ChannelMessageModel.seq)).where(
                 ChannelMessageModel.channel_id == head.id
@@ -188,11 +190,11 @@ class ContactChannels:
         )
 
     async def _move_lines(
-        self, pod_id: UUID, merged_id: UUID, survivor_id: UUID
+        self, pod_id: UUID, merged_id: UUID, survivor_id: UUID, *, base: int
     ) -> int:
-        """Both channels' lines, numbered together in the survivor; how many
-        came from the merged one. Read positions and deliveries' numbers are
-        carried first, from the numbers as they were."""
+        """The merged channel's lines, after the survivor's ``base``; how
+        many moved. Read positions and deliveries' numbers are carried first,
+        from the numbers and seats as they were."""
         line = ChannelMessageModel
         incoming = int(
             await self.session.scalar(
@@ -202,15 +204,18 @@ class ContactChannels:
         )
         await defer_place_checks(self.session)
         await carry_read_state(
-            self.session, pod_id=pod_id, merged_id=merged_id, survivor_id=survivor_id
+            self.session,
+            pod_id=pod_id,
+            merged_id=merged_id,
+            survivor_id=survivor_id,
+            base=base,
+            moved=incoming,
         )
-        await renumber_deliveries(
-            self.session, merged_id=merged_id, survivor_id=survivor_id
+        await shift_deliveries(self.session, merged_id=merged_id, base=base)
+        moved = await append_lines(
+            self.session, merged_id=merged_id, survivor_id=survivor_id, base=base
         )
-        changed = await merge_lines(
-            self.session, merged_id=merged_id, survivor_id=survivor_id
-        )
-        await _log_changed(self.session, survivor_id, changed)
+        await _log_changed(self.session, survivor_id, moved)
         return incoming
 
     async def _move_places(self, merged_id: UUID, survivor_id: UUID) -> None:
@@ -336,7 +341,8 @@ class ContactChannels:
     ) -> None:
         """In one channel, what was asked of and said about the contact is
         the member's: their questions, and their mentions -- one per line, so a
-        line that already names the member drops the contact's."""
+        line that already names the member drops the contact's. Nothing asks
+        a contact or names one any more; these are the rows from before."""
         question, mention = ChannelQuestionModel, ChannelMentionModel
         for column, becomes in (
             (
@@ -376,6 +382,30 @@ class ContactChannels:
             )
             .execution_options(synchronize_session=False)
         )
+
+    # -- a contact's own channel -------------------------------------------------
+
+    async def own_channel_ids(
+        self, *, pod_id: UUID, contact_ids: Collection[UUID]
+    ) -> dict[UUID, UUID]:
+        """Each contact's own channel, by contact, for those who have one: a
+        contact who never wrote has none. One read for a page of them.
+
+        A contact has at most one (``uq_channels_contact``), so there is no
+        choosing between rows. It is theirs archived or not: archiving is a
+        group's (``place_stopped``, the group update), and a chat found under
+        Archived still opens."""
+        ids = sorted(set(contact_ids))
+        if not ids:
+            return {}
+        rows = await self.session.execute(
+            select(ChannelModel.contact_id, ChannelModel.id).where(
+                ChannelModel.pod_id == pod_id,
+                ChannelModel.kind == ChannelKind.CONTACT.value,
+                ChannelModel.contact_id.in_(ids),
+            )
+        )
+        return dict(rows.tuples().all())
 
     # -- a contact forgotten -----------------------------------------------------
 

@@ -62,8 +62,8 @@ const PARTS: readonly Part[] = [
         blurb: "What it works through" },
     { id: "schedules", label: "Standing work", icon: ClockIcon,
         note: () => "What it does without being asked, on a time or an event.", blurb: "What it does unasked" },
-    { id: "channels", label: "Channels", icon: ReachIcon, title: (name) => "Where to reach " + name,
-        note: (name) => "Pick a channel and " + name + " answers there, under its own name.", blurb: "Where it answers" },
+    { id: "channels", label: "Where it answers", icon: ReachIcon, title: (name) => "Where " + name + " answers",
+        note: (name) => "Pick one and " + name + " answers there, under its own name.", blurb: "WhatsApp, Slack, email and more" },
     { id: "ai-tools", label: "MCP", icon: PlugIcon, title: () => "Connect ChatGPT, Claude and others",
         note: (name) => "Add " + name + " to any AI app that speaks MCP, and use it from there.", blurb: "Use it from other AI apps" },
     { id: "people", label: "People", icon: PeopleIcon,
@@ -74,8 +74,27 @@ const PARTS: readonly Part[] = [
 ];
 
 /** A part's heading on its own page. */
-function titleOf(part: Part, name: string): string {
+/** In the app (`/t`) a pod is a Lemma, and the pods it works with are other
+ *  Lemmas; in the classic workspace they are still teammates. */
+function labelOf(part: Part, framed: boolean): string {
+    return framed && part.id === "works-with" ? "Other Lemmas" : part.label;
+}
+
+function titleOf(part: Part, name: string, framed = false): string {
+    if (framed && part.id === "works-with") return "Other Lemmas " + name + " works with";
     return part.title ? part.title(name) : part.label;
+}
+
+/** What one of the other pods is called, in a part's words. */
+function mateOf(framed: boolean): string {
+    return framed ? "Lemma" : "teammate";
+}
+
+function noteOf(part: Part, name: string, framed = false): string {
+    if (framed && part.id === "works-with") {
+        return "As you: " + name + " asks with your access there, and checks with you first. Allowed: that Lemma lets " + name + " ask it with nobody present, reading only what it shared.";
+    }
+    return part.note(name);
 }
 
 /** A part's short name, for the breadcrumb above its page. */
@@ -94,8 +113,12 @@ export function aboutLabel(section: AboutSection): string {
  *  steps out of it and a link can name it. Each part is still the same
  *  working component it always was; nothing here is a second copy of how a
  *  schedule or a channel works. */
-export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSettings, onAsk, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, onDeleted }: {
+export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSettings, onAsk, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, onDeleted, framed = false }: {
     pod: Pod;
+    /** Drawn inside the Lemma frame (`/o`), on a page that already says who
+     *  the Lemma is and how to talk to it: the face and name are a small row
+     *  with no "Ask", and a part says "Settings" on its way back. */
+    framed?: boolean;
     orgId: string | null;
     orgName: string;
     /** The part that is open, or null for the overview. */
@@ -132,6 +155,7 @@ export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSetti
                         orgId={orgId}
                         orgName={orgName}
                         onBack={() => onSection(null)}
+                        framed={framed}
                         onOpenAgent={onOpenAgent}
                         onOpenTeammate={onOpenTeammate}
                         onAskFor={onAskFor}
@@ -140,8 +164,8 @@ export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSetti
                         onFile={onFile}
                     />
                 ) : <>
-                    <Hero pod={pod} orgId={orgId} onAsk={onAsk} />
-                    <Parts pod={pod} onOpen={onSection} />
+                    <Hero pod={pod} orgId={orgId} onAsk={framed ? null : onAsk} />
+                    <Parts pod={pod} onOpen={onSection} framed={framed} />
                     {/* What the organization shares is in Settings, once, for
                         every teammate. Said here because it used to be here,
                         and somebody will come looking. */}
@@ -161,7 +185,7 @@ export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSetti
 }
 
 /** The overview's grid: a tile a part, its mark, its name and one live line. */
-function Parts({ pod, onOpen }: { pod: Pod; onOpen: (section: AboutSection) => void }) {
+function Parts({ pod, onOpen, framed = false }: { pod: Pod; onOpen: (section: AboutSection) => void; framed?: boolean }) {
     const lines = useAboutLines(pod);
     return (
         <nav className="aboutparts" aria-label={"About " + pod.name}>
@@ -170,7 +194,7 @@ function Parts({ pod, onOpen }: { pod: Pod; onOpen: (section: AboutSection) => v
                 return (
                     <button key={part.id} className="aboutparts__tile" onClick={() => onOpen(part.id)}>
                         <span className="aboutparts__mark"><part.icon size={20} /></span>
-                        <span className="aboutparts__label">{part.label}</span>
+                        <span className="aboutparts__label">{labelOf(part, framed)}</span>
                         <span className="aboutparts__line">
                             {line.needs && <span className="aboutparts__dot" role="img" aria-label="Needs you" />}
                             <span>{line.text ?? part.blurb}</span>
@@ -185,8 +209,9 @@ function Parts({ pod, onOpen }: { pod: Pod; onOpen: (section: AboutSection) => v
 
 /** One part on its own page: the way back, its heading and note, and the
  *  same component the part has always been drawn with. */
-function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile }: {
+function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, framed = false }: {
     pod: Pod;
+    framed?: boolean;
     part: Part;
     orgId: string | null;
     orgName: string;
@@ -224,11 +249,11 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
         case "works-with":
             action = manageLinks ? (
                 <button className="aboutpage__action aboutpage__action--long" onClick={() => setConnecting({})}>
-                    <PlusIcon size={14} /> Let another teammate ask {pod.name}
+                    <PlusIcon size={14} /> Let another {mateOf(framed)} ask {pod.name}
                 </button>
             ) : null;
             body = <>
-                <WorksWith pod={pod} onOpen={onOpenTeammate} />
+                <WorksWith pod={pod} framed={framed} onOpen={onOpenTeammate} />
                 <AskedBy pod={pod} onOpen={onOpenTeammate} onEdit={(asker) => setConnecting({ asker })} />
                 {connecting && <ConnectTeammate pod={pod} asker={connecting.asker} onClose={() => setConnecting(null)} />}
             </>;
@@ -270,18 +295,20 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
     }
 
     return (
-        <section className="aboutpart" aria-label={titleOf(part, pod.name)}>
+        <section className="aboutpart" aria-label={titleOf(part, pod.name, framed)}>
             <button className="aboutpart__back" onClick={onBack}>
                 <ChevronLeftIcon size={15} />
-                <TeammateFace pod={pod} size={20} />
-                <span>{pod.name}</span>
+                {framed ? <span>Settings</span> : <>
+                    <TeammateFace pod={pod} size={20} />
+                    <span>{pod.name}</span>
+                </>}
             </button>
             <header className="aboutpart__head">
                 <div className="aboutpage__heading">
-                    <h1>{titleOf(part, pod.name)}</h1>
+                    <h1>{titleOf(part, pod.name, framed)}</h1>
                     {action}
                 </div>
-                <p>{part.note(pod.name)}</p>
+                <p>{noteOf(part, pod.name, framed)}</p>
             </header>
             <div className="aboutpage__content">{body}</div>
         </section>
@@ -289,7 +316,7 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
 }
 
 /** The face, the name and the job — and the one place to change the last two. */
-function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: () => void }) {
+function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: (() => void) | null }) {
     const cache = useQueryClient();
     const [editing, setEditing] = useState(false);
     const [name, setName] = useState(pod.name);
@@ -314,7 +341,7 @@ function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: ()
 
     return (
         <header className="aboutpage__hero">
-            <TeammateFace pod={pod} size={132} live className="aboutpage__face" />
+            <TeammateFace pod={pod} size={onAsk ? 132 : 56} live={Boolean(onAsk)} className="aboutpage__face" />
             {editing ? (
                 <form className="aboutpage__edit" onSubmit={(event) => { event.preventDefault(); if (name.trim()) save.mutate(); }}>
                     <label>
@@ -343,7 +370,7 @@ function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: ()
                         : <p className="aboutpage__job aboutpage__job--none">No job written down yet.</p>}
                     {hired && <p className="aboutpage__hired">{hired}</p>}
                     <div className="aboutpage__acts">
-                        <button className="pill-button" onClick={onAsk}>Ask {pod.name}</button>
+                        {onAsk && <button className="pill-button" onClick={onAsk}>Ask {pod.name}</button>}
                         <button className="ghost-pill" onClick={() => setEditing(true)}><EditIcon size={14} /> Edit</button>
                     </div>
                 </div>
@@ -403,7 +430,7 @@ function AgentList({ pod, onOpen }: { pod: Pod; onOpen: (name: string) => void }
  *  Partly yours: through you means you are in both, so someone else opening
  *  this page sees their own. The same list the teammate reads before it asks,
  *  so nothing here is something it would be refused. */
-function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void }) {
+function WorksWith({ pod, framed = false, onOpen }: { pod: Pod; framed?: boolean; onOpen: (podId: string) => void }) {
     const askable = useQuery({
         queryKey: ["askable-pods", pod.id],
         queryFn: () => source.askablePods(pod.id),
@@ -419,7 +446,7 @@ function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void 
         );
     }
     if (askable.data.length === 0) {
-        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other teammate you’re in, or one that lets it.</p>;
+        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other {mateOf(framed)} you’re in, or one that lets it.</p>;
     }
     return (
         <ul className="agentlist">

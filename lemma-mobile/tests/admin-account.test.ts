@@ -131,13 +131,13 @@ describe("deleting the account", () => {
         const refusal = { statusCode: 409, code: "ACCOUNT_DELETION_SOLE_OWNER", message: "Make someone else an owner of Acme first.", details: { organizations: [{ id: "o1", name: "Acme" }] } };
         const client = { users: { deleteAccount: async () => { throw refusal; } } };
         const failed = await accountLive({ client: () => client } as unknown as LiveContext).deleteAccount("ada@acme.example").catch((problem: unknown) => problem);
-        expect(deletionRefusal(failed)).toEqual({ message: "Make someone else an owner of Acme first.", organizations: ["Acme"], alreadyDeleted: false });
+        expect(deletionRefusal(failed)).toEqual({ message: "Make someone else an owner of Acme first.", organizations: ["Acme"] });
     });
 
     it("is refused in sample data, in words the screen shows", async () => {
         vi.useFakeTimers();
         const asked = accountSample().deleteAccount("ada@acme.example").catch((problem: unknown) => problem);
         await vi.runAllTimersAsync();
-        expect(deletionRefusal(await asked)).toMatchObject({ message: "Sample data has no account to delete. Sign in to delete yours.", alreadyDeleted: false });
+        expect(deletionRefusal(await asked)).toMatchObject({ message: "Sample data has no account to delete. Sign in to delete yours." });
     });
 });

@@ -13,13 +13,20 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.value_objects import (
+    AgentRunApprovalDecision,
+    MessageKind,
+    MessageRole,
+)
 from app.modules.agent.services.pause_questions import (
-    PauseDecision,
     ask_response,
     effective_answer,
     parse_tool_ref,
     tool_ref,
 )
+from app.modules.agent.tests.unit.repository_fakes import pause_for_call
 from app.modules.channels.contracts.questions import AnswerRefused
 
 pytestmark = pytest.mark.unit
@@ -70,19 +77,17 @@ def test_a_choice_is_matched_whatever_its_case():
 
 def test_an_approval_line_shows_the_action_and_masks_its_secrets():
     from app.modules.agent.services.approval_action import MAX_ACTION_CHARS
-    from app.modules.agent.services.pause_questions import Pause, shown
+    from app.modules.agent.services.pause_questions import shown
 
     def approval(args: dict) -> Pause:
-        return Pause(
-            tool_call_id="call",
-            kind="request_approval",
-            tool_args={
+        return _pause(
+            "request_approval",
+            {
                 "title": "Create the table?",
                 "reason": "You asked for it.",
                 "tool_name": "exec_command",
                 "args": args,
             },
-            agent_run_id=None,
         )
 
     text, question = shown(approval({"cmd": "lemma tables create orders"}))
@@ -139,12 +144,12 @@ def test_a_question_left_blank_is_named():
 
 def test_what_took_effect_is_what_the_line_shows():
     """A concurrent answer that won: the line records its decision."""
-    asked = PauseDecision(
-        decision="APPROVE_ONCE",
-        response={"answers": {"size": "M"}},
-        resolved_by_user_id=None,
+    asked = _pause("ask_user", {})
+    asked.resolve(
+        AgentRunApprovalDecision.APPROVE_ONCE, {"answers": {"size": "M"}}, by=uuid4()
     )
-    denied = PauseDecision(decision="DENY", response={}, resolved_by_user_id=None)
+    denied = _pause("ask_user", {})
+    denied.resolve(AgentRunApprovalDecision.DENY, by=uuid4())
 
     assert effective_answer("ask_user", asked) == {"answers": {"size": "M"}}
     assert effective_answer("ask_user", denied) == {"decision": "DENY"}
@@ -173,3 +178,17 @@ def test_a_client_id_always_fits_a_line_and_is_stable():
     assert len(line_client_id(long)) <= MAX_CLIENT_ID
     assert line_client_id(long) == line_client_id(long)
     assert line_client_id(long) != line_client_id(long + "y")
+
+
+def _pause(tool_name: str, args: dict) -> Pause:
+    call = Message.create(
+        conversation_id=uuid4(),
+        sequence=1,
+        agent_run_id=uuid4(),
+        role=MessageRole.ASSISTANT,
+        kind=MessageKind.TOOL_CALL,
+        tool_name=tool_name,
+        tool_call_id="call",
+        tool_args=args,
+    )
+    return pause_for_call(call)

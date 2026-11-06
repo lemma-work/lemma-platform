@@ -205,7 +205,7 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                 pod_role: role,
                 /* Relative, so it resolves against whichever address they open
                    the invitation on; the accept page only honours a safe one. */
-                redirect_uri: "/t/" + encodeURIComponent(pod.id),
+                redirect_uri: "/l/" + encodeURIComponent(pod.id),
             })) as PodInvite;
             setQuery("");
             setInvited(email);
@@ -341,19 +341,6 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                 </>
             )}
         </div>
-    );
-}
-
-/** The way into the dialog from anywhere but the header — the profile's
- *  roster. Nothing at all for somebody the server will not let add, for the
- *  reason the dialog hides its field. */
-export function AddPeopleButton({ podId, onOpen }: { podId: string; onOpen: () => void }) {
-    const { allowed } = useCanManageMembers(podId);
-    if (!allowed) return null;
-    return (
-        <button type="button" className="btn btn--small" onClick={onOpen}>
-            Add people
-        </button>
     );
 }
 

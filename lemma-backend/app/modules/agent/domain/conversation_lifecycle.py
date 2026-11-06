@@ -1,8 +1,8 @@
 """Which conversation statuses count as still going, and which as finished.
 
-A separate module from ``value_objects`` for the reason ``conversation_run_queries``
-is separate from the repository: that file is at the architecture ratchet's size
-limit, and these belong with each other more than with anything already in it.
+A separate module from ``value_objects``: that file is at the architecture
+ratchet's size limit, and these belong with each other more than with anything
+already in it.
 
 ``WAITING`` is deliberately in neither set. A run that ends by asking a question
 leaves its conversation waiting, and that is a resting state — neither active nor

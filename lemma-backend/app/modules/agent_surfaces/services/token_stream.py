@@ -19,7 +19,6 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
 from app.modules.agent_surfaces.services.live_display import record_live_display
-from app.modules.agent_surfaces.services.progress_events import _surface_platform
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -44,6 +43,7 @@ class TokenStreamMixin:
     egress_factory: Callable[[SqlAlchemyUnitOfWork], SurfaceEgress]
     _run_files: RunFiles
     _think_filter: ThinkingStreamFilter
+    _platform: str | None
 
     async def _open_stream(self, conversation: Conversation) -> None:
         """Open the live stream before any text exists."""
@@ -54,6 +54,7 @@ class TokenStreamMixin:
                 service = self.egress_factory(uow)
                 result = await service.progress.append_streamed_text(
                     conversation_id=conversation.id,
+                    run_id=self._run_files.agent_run_id,
                     progress_handle=None,
                     text="",
                 )
@@ -92,7 +93,7 @@ class TokenStreamMixin:
         never reach a surface — the same rule ``sanitize_user_visible_text``
         enforces on every other path.
         """
-        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
+        capabilities = PLATFORM_CAPABILITIES.get(self._platform or "")
         if capabilities is None or not capabilities.finishes_stream_with_answer:
             return
         payload = event.data if isinstance(event.data, dict) else {}
@@ -127,6 +128,7 @@ class TokenStreamMixin:
                 service = self.egress_factory(uow)
                 result = await service.progress.append_streamed_text(
                     conversation_id=conversation.id,
+                    run_id=self._run_files.agent_run_id,
                     progress_handle=self._progress_handle,
                     text=pending,
                 )

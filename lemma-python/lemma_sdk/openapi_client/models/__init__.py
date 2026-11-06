@@ -111,6 +111,8 @@ _NAME_TO_MODULE = {
     'AuthConfigUpdateSchema': 'auth_config_update_schema',
     'AuthConfigUpdateSchemaConfigType0': 'auth_config_update_schema_config_type_0',
     'AuthScheme': 'auth_scheme',
+    'AutomationKind': 'automation_kind',
+    'AutomationResponse': 'automation_response',
     'AvailableSurface': 'available_surface',
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
@@ -126,18 +128,13 @@ _NAME_TO_MODULE = {
     'CallConfigResponseEnginesItem': 'call_config_response_engines_item',
     'CallResponse': 'call_response',
     'CallResponseEnginesItem': 'call_response_engines_item',
-    'CaseEventResponse': 'case_event_response',
-    'CaseEventResponseValue': 'case_event_response_value',
-    'CaseResponse': 'case_response',
     'ChannelAnswerRequest': 'channel_answer_request',
     'ChannelAnswerRequestAnswer': 'channel_answer_request_answer',
-    'ChannelCasesResponse': 'channel_cases_response',
     'ChannelCreateRequest': 'channel_create_request',
     'ChannelDetailResponse': 'channel_detail_response',
     'ChannelEditRequest': 'channel_edit_request',
     'ChannelKind': 'channel_kind',
     'ChannelListResponse': 'channel_list_response',
-    'ChannelMemberListResponse': 'channel_member_list_response',
     'ChannelMemberResponse': 'channel_member_response',
     'ChannelMessageResponse': 'channel_message_response',
     'ChannelMessageResponseVisibility': 'channel_message_response_visibility',
@@ -186,6 +183,8 @@ _NAME_TO_MODULE = {
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
     'ConversationListResponse': 'conversation_list_response',
+    'ConversationRepositoryListResponse': 'conversation_repository_list_response',
+    'ConversationRepositoryResponse': 'conversation_repository_response',
     'ConversationResponse': 'conversation_response',
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
@@ -227,6 +226,7 @@ _NAME_TO_MODULE = {
     'DatastoreQueryRequest': 'datastore_query_request',
     'DatastoreQueryResponse': 'datastore_query_response',
     'DatastoreQueryResponseItemsItem': 'datastore_query_response_items_item',
+    'DayCountResponse': 'day_count_response',
     'DecisionAnswerResponse': 'decision_answer_response',
     'DecisionExampleBody': 'decision_example_body',
     'DecisionExampleBodyAnswers': 'decision_example_body_answers',
@@ -345,6 +345,8 @@ _NAME_TO_MODULE = {
     'HomeAgentResponse': 'home_agent_response',
     'HomeAppResponse': 'home_app_response',
     'HomePodResponse': 'home_pod_response',
+    'HomeSeenRequest': 'home_seen_request',
+    'HomeSeenResponse': 'home_seen_response',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'IdentityKind': 'identity_kind',
@@ -375,6 +377,7 @@ _NAME_TO_MODULE = {
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
     'LinkState': 'link_state',
+    'ListedOrigin': 'listed_origin',
     'ListeningResponse': 'listening_response',
     'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
@@ -410,6 +413,9 @@ _NAME_TO_MODULE = {
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
+    'NeedsYouItemResponse': 'needs_you_item_response',
+    'NeedsYouKind': 'needs_you_kind',
+    'NeedsYouResponse': 'needs_you_response',
     'NoticeRequest': 'notice_request',
     'NoticeResponse': 'notice_response',
     'NotifyLevel': 'notify_level',
@@ -431,6 +437,8 @@ _NAME_TO_MODULE = {
     'OperationExecutionRequestPayload': 'operation_execution_request_payload',
     'OperationExecutionResponse': 'operation_execution_response',
     'OperationSummary': 'operation_summary',
+    'OrganizationAppListResponse': 'organization_app_list_response',
+    'OrganizationAppResponse': 'organization_app_response',
     'OrganizationCreateRequest': 'organization_create_request',
     'OrganizationEffectivePermissionsResponse': 'organization_effective_permissions_response',
     'OrganizationHomeResponse': 'organization_home_response',
@@ -443,10 +451,18 @@ _NAME_TO_MODULE = {
     'OrganizationMemberListResponse': 'organization_member_list_response',
     'OrganizationMemberResponse': 'organization_member_response',
     'OrganizationMessageResponse': 'organization_message_response',
+    'OrganizationRecentsResponse': 'organization_recents_response',
     'OrganizationResponse': 'organization_response',
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
+    'OutcomeHistoryResponse': 'outcome_history_response',
+    'OutcomeInput': 'outcome_input',
+    'OutcomeKind': 'outcome_kind',
+    'OutcomeSetResponse': 'outcome_set_response',
+    'OutcomeStandingResponse': 'outcome_standing_response',
+    'OutcomeTemplateCard': 'outcome_template_card',
+    'OutcomeWeekResponse': 'outcome_week_response',
     'OutreachDelivery': 'outreach_delivery',
     'OutreachLine': 'outreach_line',
     'OutreachRequest': 'outreach_request',
@@ -492,8 +508,10 @@ _NAME_TO_MODULE = {
     'PodMemberListResponse': 'pod_member_list_response',
     'PodMemberResponse': 'pod_member_response',
     'PodMemberUpdateRoleRequest': 'pod_member_update_role_request',
+    'PodOutcome': 'pod_outcome',
     'PodPermissionCatalogResponse': 'pod_permission_catalog_response',
     'PodPermissionResponse': 'pod_permission_response',
+    'PodRecentsResponse': 'pod_recents_response',
     'PodRecipe': 'pod_recipe',
     'PodResponse': 'pod_response',
     'PodRole': 'pod_role',
@@ -526,6 +544,7 @@ _NAME_TO_MODULE = {
     'ReadRequest': 'read_request',
     'ReadResponse': 'read_response',
     'ReasoningEffort': 'reasoning_effort',
+    'RecentChatResponse': 'recent_chat_response',
     'RecordAccessMode': 'record_access_mode',
     'RecordCreateResponseRecordCreate': 'record_create_response_record_create',
     'RecordGetResponseRecordGet': 'record_get_response_record_get',
@@ -608,6 +627,9 @@ _NAME_TO_MODULE = {
     'SourceSettingsResponse': 'source_settings_response',
     'SourceSummary': 'source_summary',
     'SourceUpdateRequest': 'source_update_request',
+    'StartLemmaRequest': 'start_lemma_request',
+    'StartLemmaResponse': 'start_lemma_response',
+    'StartedPodResponse': 'started_pod_response',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -666,6 +688,8 @@ _NAME_TO_MODULE = {
     'TelegramLinkResponse': 'telegram_link_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
+    'TemplateOutcome': 'template_outcome',
+    'TemplatePlan': 'template_plan',
     'ThreadResponse': 'thread_response',
     'TriggerSkipListResponse': 'trigger_skip_list_response',
     'TriggerSkipReason': 'trigger_skip_reason',
@@ -873,6 +897,8 @@ if TYPE_CHECKING:
     from .auth_config_update_schema import AuthConfigUpdateSchema
     from .auth_config_update_schema_config_type_0 import AuthConfigUpdateSchemaConfigType0
     from .auth_scheme import AuthScheme
+    from .automation_kind import AutomationKind
+    from .automation_response import AutomationResponse
     from .available_surface import AvailableSurface
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
@@ -888,18 +914,13 @@ if TYPE_CHECKING:
     from .call_config_response_engines_item import CallConfigResponseEnginesItem
     from .call_response import CallResponse
     from .call_response_engines_item import CallResponseEnginesItem
-    from .case_event_response import CaseEventResponse
-    from .case_event_response_value import CaseEventResponseValue
-    from .case_response import CaseResponse
     from .channel_answer_request import ChannelAnswerRequest
     from .channel_answer_request_answer import ChannelAnswerRequestAnswer
-    from .channel_cases_response import ChannelCasesResponse
     from .channel_create_request import ChannelCreateRequest
     from .channel_detail_response import ChannelDetailResponse
     from .channel_edit_request import ChannelEditRequest
     from .channel_kind import ChannelKind
     from .channel_list_response import ChannelListResponse
-    from .channel_member_list_response import ChannelMemberListResponse
     from .channel_member_response import ChannelMemberResponse
     from .channel_message_response import ChannelMessageResponse
     from .channel_message_response_visibility import ChannelMessageResponseVisibility
@@ -948,6 +969,8 @@ if TYPE_CHECKING:
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
     from .conversation_list_response import ConversationListResponse
+    from .conversation_repository_list_response import ConversationRepositoryListResponse
+    from .conversation_repository_response import ConversationRepositoryResponse
     from .conversation_response import ConversationResponse
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
@@ -989,6 +1012,7 @@ if TYPE_CHECKING:
     from .datastore_query_request import DatastoreQueryRequest
     from .datastore_query_response import DatastoreQueryResponse
     from .datastore_query_response_items_item import DatastoreQueryResponseItemsItem
+    from .day_count_response import DayCountResponse
     from .decision_answer_response import DecisionAnswerResponse
     from .decision_example_body import DecisionExampleBody
     from .decision_example_body_answers import DecisionExampleBodyAnswers
@@ -1107,6 +1131,8 @@ if TYPE_CHECKING:
     from .home_agent_response import HomeAgentResponse
     from .home_app_response import HomeAppResponse
     from .home_pod_response import HomePodResponse
+    from .home_seen_request import HomeSeenRequest
+    from .home_seen_response import HomeSeenResponse
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .identity_kind import IdentityKind
@@ -1137,6 +1163,7 @@ if TYPE_CHECKING:
     from .line_preview import LinePreview
     from .link_part import LinkPart
     from .link_state import LinkState
+    from .listed_origin import ListedOrigin
     from .listening_response import ListeningResponse
     from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
@@ -1172,6 +1199,9 @@ if TYPE_CHECKING:
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
+    from .needs_you_item_response import NeedsYouItemResponse
+    from .needs_you_kind import NeedsYouKind
+    from .needs_you_response import NeedsYouResponse
     from .notice_request import NoticeRequest
     from .notice_response import NoticeResponse
     from .notify_level import NotifyLevel
@@ -1193,6 +1223,8 @@ if TYPE_CHECKING:
     from .operation_execution_request_payload import OperationExecutionRequestPayload
     from .operation_execution_response import OperationExecutionResponse
     from .operation_summary import OperationSummary
+    from .organization_app_list_response import OrganizationAppListResponse
+    from .organization_app_response import OrganizationAppResponse
     from .organization_create_request import OrganizationCreateRequest
     from .organization_effective_permissions_response import OrganizationEffectivePermissionsResponse
     from .organization_home_response import OrganizationHomeResponse
@@ -1205,10 +1237,18 @@ if TYPE_CHECKING:
     from .organization_member_list_response import OrganizationMemberListResponse
     from .organization_member_response import OrganizationMemberResponse
     from .organization_message_response import OrganizationMessageResponse
+    from .organization_recents_response import OrganizationRecentsResponse
     from .organization_response import OrganizationResponse
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
+    from .outcome_history_response import OutcomeHistoryResponse
+    from .outcome_input import OutcomeInput
+    from .outcome_kind import OutcomeKind
+    from .outcome_set_response import OutcomeSetResponse
+    from .outcome_standing_response import OutcomeStandingResponse
+    from .outcome_template_card import OutcomeTemplateCard
+    from .outcome_week_response import OutcomeWeekResponse
     from .outreach_delivery import OutreachDelivery
     from .outreach_line import OutreachLine
     from .outreach_request import OutreachRequest
@@ -1254,8 +1294,10 @@ if TYPE_CHECKING:
     from .pod_member_list_response import PodMemberListResponse
     from .pod_member_response import PodMemberResponse
     from .pod_member_update_role_request import PodMemberUpdateRoleRequest
+    from .pod_outcome import PodOutcome
     from .pod_permission_catalog_response import PodPermissionCatalogResponse
     from .pod_permission_response import PodPermissionResponse
+    from .pod_recents_response import PodRecentsResponse
     from .pod_recipe import PodRecipe
     from .pod_response import PodResponse
     from .pod_role import PodRole
@@ -1288,6 +1330,7 @@ if TYPE_CHECKING:
     from .read_request import ReadRequest
     from .read_response import ReadResponse
     from .reasoning_effort import ReasoningEffort
+    from .recent_chat_response import RecentChatResponse
     from .record_access_mode import RecordAccessMode
     from .record_create_response_record_create import RecordCreateResponseRecordCreate
     from .record_get_response_record_get import RecordGetResponseRecordGet
@@ -1370,6 +1413,9 @@ if TYPE_CHECKING:
     from .source_settings_response import SourceSettingsResponse
     from .source_summary import SourceSummary
     from .source_update_request import SourceUpdateRequest
+    from .start_lemma_request import StartLemmaRequest
+    from .start_lemma_response import StartLemmaResponse
+    from .started_pod_response import StartedPodResponse
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1428,6 +1474,8 @@ if TYPE_CHECKING:
     from .telegram_link_response import TelegramLinkResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
+    from .template_outcome import TemplateOutcome
+    from .template_plan import TemplatePlan
     from .thread_response import ThreadResponse
     from .trigger_skip_list_response import TriggerSkipListResponse
     from .trigger_skip_reason import TriggerSkipReason
@@ -1648,6 +1696,8 @@ __all__ = [
     'AuthConfigUpdateSchema',
     'AuthConfigUpdateSchemaConfigType0',
     'AuthScheme',
+    'AutomationKind',
+    'AutomationResponse',
     'AvailableSurface',
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
@@ -1663,18 +1713,13 @@ __all__ = [
     'CallConfigResponseEnginesItem',
     'CallResponse',
     'CallResponseEnginesItem',
-    'CaseEventResponse',
-    'CaseEventResponseValue',
-    'CaseResponse',
     'ChannelAnswerRequest',
     'ChannelAnswerRequestAnswer',
-    'ChannelCasesResponse',
     'ChannelCreateRequest',
     'ChannelDetailResponse',
     'ChannelEditRequest',
     'ChannelKind',
     'ChannelListResponse',
-    'ChannelMemberListResponse',
     'ChannelMemberResponse',
     'ChannelMessageResponse',
     'ChannelMessageResponseVisibility',
@@ -1723,6 +1768,8 @@ __all__ = [
     'ContactsCapResponse',
     'ContactsCapUpdate',
     'ConversationListResponse',
+    'ConversationRepositoryListResponse',
+    'ConversationRepositoryResponse',
     'ConversationResponse',
     'ConversationResponseMetadataType0',
     'ConversationStatus',
@@ -1764,6 +1811,7 @@ __all__ = [
     'DatastoreQueryRequest',
     'DatastoreQueryResponse',
     'DatastoreQueryResponseItemsItem',
+    'DayCountResponse',
     'DecisionAnswerResponse',
     'DecisionExampleBody',
     'DecisionExampleBodyAnswers',
@@ -1882,6 +1930,8 @@ __all__ = [
     'HomeAgentResponse',
     'HomeAppResponse',
     'HomePodResponse',
+    'HomeSeenRequest',
+    'HomeSeenResponse',
     'IconUploadRequest',
     'IconUploadResponse',
     'IdentityKind',
@@ -1912,6 +1962,7 @@ __all__ = [
     'LinePreview',
     'LinkPart',
     'LinkState',
+    'ListedOrigin',
     'ListeningResponse',
     'ListeningResponseState',
     'LiteralInputBinding',
@@ -1947,6 +1998,9 @@ __all__ = [
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
+    'NeedsYouItemResponse',
+    'NeedsYouKind',
+    'NeedsYouResponse',
     'NoticeRequest',
     'NoticeResponse',
     'NotifyLevel',
@@ -1968,6 +2022,8 @@ __all__ = [
     'OperationExecutionRequestPayload',
     'OperationExecutionResponse',
     'OperationSummary',
+    'OrganizationAppListResponse',
+    'OrganizationAppResponse',
     'OrganizationCreateRequest',
     'OrganizationEffectivePermissionsResponse',
     'OrganizationHomeResponse',
@@ -1980,10 +2036,18 @@ __all__ = [
     'OrganizationMemberListResponse',
     'OrganizationMemberResponse',
     'OrganizationMessageResponse',
+    'OrganizationRecentsResponse',
     'OrganizationResponse',
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
+    'OutcomeHistoryResponse',
+    'OutcomeInput',
+    'OutcomeKind',
+    'OutcomeSetResponse',
+    'OutcomeStandingResponse',
+    'OutcomeTemplateCard',
+    'OutcomeWeekResponse',
     'OutreachDelivery',
     'OutreachLine',
     'OutreachRequest',
@@ -2029,8 +2093,10 @@ __all__ = [
     'PodMemberListResponse',
     'PodMemberResponse',
     'PodMemberUpdateRoleRequest',
+    'PodOutcome',
     'PodPermissionCatalogResponse',
     'PodPermissionResponse',
+    'PodRecentsResponse',
     'PodRecipe',
     'PodResponse',
     'PodRole',
@@ -2063,6 +2129,7 @@ __all__ = [
     'ReadRequest',
     'ReadResponse',
     'ReasoningEffort',
+    'RecentChatResponse',
     'RecordAccessMode',
     'RecordCreateResponseRecordCreate',
     'RecordGetResponseRecordGet',
@@ -2145,6 +2212,9 @@ __all__ = [
     'SourceSettingsResponse',
     'SourceSummary',
     'SourceUpdateRequest',
+    'StartLemmaRequest',
+    'StartLemmaResponse',
+    'StartedPodResponse',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',
@@ -2203,6 +2273,8 @@ __all__ = [
     'TelegramLinkResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
+    'TemplateOutcome',
+    'TemplatePlan',
     'ThreadResponse',
     'TriggerSkipListResponse',
     'TriggerSkipReason',

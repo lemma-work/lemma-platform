@@ -41,10 +41,10 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.events.turn_payloads import MemoryPassWork
-from app.modules.agent.infrastructure.harnesses.mock_model import build_mock_model
+from app.modules.agent.infrastructure.harness.lemma.mock_model import build_mock_model
 from app.modules.agent.infrastructure.repositories import AgentRepository
-from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
-from app.modules.agent.services.memory_pass import (
+from app.modules.agent.services.context_brief.memory import AgentMemoryBriefBuilder
+from app.modules.agent.application.background.memory_pass import (
     MemoryPass,
     MemoryPassOutcome,
     MemoryPassUnfinished,
@@ -301,7 +301,8 @@ async def test_a_configured_pass_model_runs_the_pass_without_the_runs_settings(
 ):
     """`AGENT_MEMORY_PASS_MODEL` moves the pass off the run's own model. The
     run's generation settings are for the run's model, so the configured one
-    is sent none; the run's model is not asked at all."""
+    is sent none -- only the replica affinity every background request carries;
+    the run's model is not asked at all."""
     seeded = await seeded_conversation(scenario, toolsets=["MEMORY", "POD"])
     run = await running_run(seeded)
     await append(seeded, run, MessageDraft.of_text(ASKED, role=MessageRole.USER))
@@ -326,7 +327,7 @@ async def test_a_configured_pass_model_runs_the_pass_without_the_runs_settings(
     ).keep(conversation_id=seeded.conversation_id, run_id=run, user_id=seeded.user_id)
 
     assert outcome is MemoryPassOutcome.NOTHING
-    assert settings_sent == [None]
+    assert settings_sent == [{"openai_user": f"{seeded.pod_id}:memory_pass"}]
 
 
 @pytest.mark.asyncio

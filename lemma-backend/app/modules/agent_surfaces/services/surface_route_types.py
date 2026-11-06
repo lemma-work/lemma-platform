@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from uuid import UUID
 
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts.channels import Audience
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,

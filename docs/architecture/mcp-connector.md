@@ -144,15 +144,34 @@ subscriber then ends the pod's grants.
 
 **The toolset is the pod toolset, annotated.** Every tool carries a title and
 `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`
-(`app/modules/agent/services/pod_mcp_tool_policy.py`). A test fails if a pod
-tool has no row there, because a missing row would default a new tool to the
-cautious "write" policy silently. For outside clients the `needs_approval`
+(the `ToolPolicy` on each spec in
+`app/modules/agent/infrastructure/tools/pod/tools.py`). A test fails if a pod
+tool has no title, because an undeclared policy defaults a new tool to the
+cautious "write" access silently. For outside clients the `needs_approval`
 hand-off is removed from denied results: it points a Lemma agent at
 `request_approval`, a tool outside clients do not have, and for someone acting
 as themselves a denial is the answer. One call needs more than its tool's
 scope: `pod_get_file_url` with `url_type: public` mints a link anyone can open
 for up to a week, which outlives the connection, so it needs `pod:write`, and
 the tool is marked open-world.
+
+Beside the pod toolset, a connection allowed to change things gets:
+
+- a tool per pod app;
+- two tools that hand a request to one of the pod's agents;
+- a tool per function the person may run (`lemma_run_<function>`), with
+  `lemma_pod_function_run` to read a run later.
+
+A connection allowed to read gets two workflow reads:
+
+- `lemma_pod_workflow_run`, wherever the person can see one of the pod's
+  workflows;
+- `lemma_pod_waiting_on_me`, wherever they can see a workflow, or a form waits
+  on them.
+
+A connection allowed to change things gets `lemma_pod_start_workflow` and
+`lemma_pod_submit_workflow_form` for the workflows the person may start. These tools are covered in
+[mcp-plugin.md](mcp-plugin.md) §b, §e and §f.
 
 **An outside client's token is honoured only where it was checked.** The public
 mount verifies the token, applies the rate limit and the Origin check, and

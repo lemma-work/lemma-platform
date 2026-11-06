@@ -34,7 +34,10 @@ export function FolderChip({ folder }: { folder: ConversationFolder }) {
 
     return (
         <div className="folder-chip">
+            {/* Buttons, not submits: it sits inside the ask box's form, and
+                choosing a folder must not send what is typed without it. */}
             <button
+                type="button"
                 className="folder-chip__pick"
                 title={folder.folder ?? "Work in a folder on this computer"}
                 onClick={() => void choose()}
@@ -44,6 +47,7 @@ export function FolderChip({ folder }: { folder: ConversationFolder }) {
             </button>
             {folder.folder && (
                 <button
+                    type="button"
                     className="folder-chip__clear icon-button"
                     aria-label="Stop using this folder"
                     title="Stop using this folder"

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Row, Select, cast, func, or_, select, update
+from sqlalchemy import ColumnElement, Row, Select, and_, cast, func, or_, select, update
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.dialects.postgresql import insert
@@ -51,7 +51,6 @@ from app.modules.channels.infrastructure.revisions import HeldHead, hold, next_r
 from app.modules.channels.infrastructure.rows import (
     MAX_LINES,
     message_entity,
-    nameless,
     now,
     sender_values,
 )
@@ -140,6 +139,46 @@ def _external_is(
         == cast(func.md5(value), PG_UUID(as_uuid=True)),
         column == value,
     )
+
+
+async def heard_row(
+    session: AsyncSession,
+    source_id: UUID,
+    external_message_id: str,
+    *,
+    locked: bool = False,
+) -> ChannelMessageModel | None:
+    """The line a platform message is at this place, if it was heard there.
+    ``locked``: under its row's lock, read as it is now rather than as this
+    session last saw it."""
+    message = ChannelMessageModel
+    statement = select(message).where(
+        message.source_id == source_id,
+        *_external_is(message.external_message_id, external_message_id),
+    )
+    if locked:
+        statement = statement.with_for_update().execution_options(
+            populate_existing=True
+        )
+    return await session.scalar(statement)
+
+
+async def heard_rows(
+    session: AsyncSession, keys: Sequence[tuple[UUID, str]]
+) -> dict[tuple[UUID | None, str | None], ChannelMessageModel]:
+    """``heard_row`` for many messages, in one read, keyed as asked."""
+    message = ChannelMessageModel
+    each = [
+        and_(
+            message.source_id == place, *_external_is(message.external_message_id, id_)
+        )
+        for place, id_ in dict.fromkeys(keys)
+    ]
+    if not each:
+        return {}
+    # One line per message at a place (``uq_channel_messages_external``).
+    rows = await session.scalars(select(message).where(or_(*each)).limit(len(each)))
+    return {(row.source_id, row.external_message_id): row for row in rows}
 
 
 class LineRepository:
@@ -253,39 +292,10 @@ class LineRepository:
                 return message_entity(row)
         if line.external_message_id is None or line.source_id is None:
             return None
-        row = await self.session.scalar(
-            select(message).where(
-                message.source_id == line.source_id,
-                *_external_is(message.external_message_id, line.external_message_id),
-            )
-        )
-        if row is None:
-            return None
-        return await self._heard_again(row, line)
-
-    async def _heard_again(
-        self, row: ChannelMessageModel, line: NewLine
-    ) -> ChannelMessage:
-        """A platform message heard twice: the second hearing may know more --
-        the conversation answering it, what answers it in place, who said it."""
-        shown_before = (row.conversation_id, row.sender_name, row.sender_kind)
-        if row.conversation_id is None and line.conversation_id is not None:
-            row.conversation_id = line.conversation_id
-        if row.reply_ref is None and line.reply_ref is not None:
-            row.reply_ref = dict(line.reply_ref)
-        sender = line.sender
-        if nameless(row) and (sender.user_id or sender.contact_id):
-            values = sender_values(sender)
-            values["sender_name"] = row.sender_name or values["sender_name"]
-            for key, value in values.items():
-                setattr(row, key, value)
-        if (row.conversation_id, row.sender_name, row.sender_kind) != shown_before:
-            # Who said it, or who answers it, is what its readers see: they
-            # are sent it again. The channel's number is taken before the line
-            # is written, the order ``revisions`` keeps.
-            await next_rev(self.session, row.channel_id, message_id=row.id)
-        await self.session.flush()
-        return message_entity(row)
+        # A platform's retry: the line already written, as it was written. A
+        # turn taking it up says what it learnt (``taken_up``).
+        row = await heard_row(self.session, line.source_id, line.external_message_id)
+        return message_entity(row) if row is not None else None
 
     async def edit(
         self, message_id: UUID, *, text: str, parts: Sequence[Part] | None = None

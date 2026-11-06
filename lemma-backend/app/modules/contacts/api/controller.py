@@ -21,7 +21,8 @@ from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.contracts.contact_conversations import ExportedConversation
+from app.modules.agent.contracts.contacts import ExportedConversation
+from app.modules.channels.contracts.contacts import contact_channel_ids
 from app.modules.contacts.domain.entities import (
     Contact,
     IdentityKind,
@@ -83,6 +84,13 @@ class ContactResponse(BaseModel):
             "When an agent first answered them; what the contact limit counts."
         ),
     )
+    channel_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Their own chat with the pod, to open it without looking it up; "
+            "absent until they first write."
+        ),
+    )
 
 
 class ContactListResponse(BaseModel):
@@ -121,19 +129,26 @@ async def _response(uow: SqlAlchemyUnitOfWork, contact: Contact) -> ContactRespo
 async def _responses(
     uow: SqlAlchemyUnitOfWork, contacts: Sequence[Contact]
 ) -> list[ContactResponse]:
-    """The contacts as shown, with which handles opted out: one read per kind
-    of handle for the page."""
+    """The contacts as shown, with which handles opted out and where each
+    one's own chat is: one read per kind of handle for the page, and one for
+    their chats."""
     if not contacts:
         return []
+    pod_id = contacts[0].pod_id
     stopped = await opted_out_handles(
         uow,
         [handle for contact in contacts for handle in contact.identities],
-        pod_id=contacts[0].pod_id,
+        pod_id=pod_id,
     )
-    return [_shown(contact, stopped) for contact in contacts]
+    chats = await contact_channel_ids(
+        uow, pod_id=pod_id, contact_ids=[contact.id for contact in contacts]
+    )
+    return [_shown(contact, stopped, chats.get(contact.id)) for contact in contacts]
 
 
-def _shown(contact: Contact, stopped: set[UUID]) -> ContactResponse:
+def _shown(
+    contact: Contact, stopped: set[UUID], channel_id: UUID | None
+) -> ContactResponse:
     return ContactResponse(
         id=contact.id,
         display_name=contact.display_name,
@@ -151,6 +166,7 @@ def _shown(contact: Contact, stopped: set[UUID]) -> ContactResponse:
         ],
         is_anonymous=contact.is_anonymous,
         answered_at=contact.answered_at,
+        channel_id=channel_id,
     )
 
 

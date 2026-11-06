@@ -8,7 +8,6 @@ from uuid import UUID
 
 from ..openapi_client.api.agent_surfaces import agent_notice_send
 from ..openapi_client.api.channels import (
-    channel_case_list,
     channel_create,
     channel_delete,
     channel_delivery_list,
@@ -17,11 +16,9 @@ from ..openapi_client.api.channels import (
     channel_inbox_get,
     channel_list,
     channel_me_create,
-    channel_me_get,
     channel_member_add,
     channel_member_join,
     channel_member_leave,
-    channel_member_list,
     channel_member_me_update,
     channel_member_remove,
     channel_member_update,
@@ -38,15 +35,11 @@ from ..openapi_client.api.channels import (
     channel_update,
 )
 from ..openapi_client.models.channel_answer_request import ChannelAnswerRequest
-from ..openapi_client.models.channel_cases_response import ChannelCasesResponse
 from ..openapi_client.models.channel_create_request import ChannelCreateRequest
 from ..openapi_client.models.channel_detail_response import ChannelDetailResponse
 from ..openapi_client.models.channel_edit_request import ChannelEditRequest
 from ..openapi_client.models.channel_kind import ChannelKind
 from ..openapi_client.models.channel_list_response import ChannelListResponse
-from ..openapi_client.models.channel_member_list_response import (
-    ChannelMemberListResponse,
-)
 from ..openapi_client.models.channel_message_response import ChannelMessageResponse
 from ..openapi_client.models.channel_messages_response import ChannelMessagesResponse
 from ..openapi_client.models.channel_post_request import ChannelPostRequest
@@ -65,7 +58,6 @@ from ..openapi_client.models.read_response import ReadResponse
 from ..openapi_client.models.search_response import SearchResponse
 from ..openapi_client.models.sender_kind import SenderKind
 from ..openapi_client.models.thread_response import ThreadResponse
-from ..openapi_client.models.visibility import Visibility
 from ..openapi_client.types import UNSET
 from .base import BoundResource, as_uuid, compact
 
@@ -159,8 +151,6 @@ class PodChannels(BoundResource):
         self,
         *,
         kind: Literal["DIRECT", "CONTACT", "GROUP"] | None = None,
-        visibility: Literal["PUBLIC", "PRIVATE"] | None = None,
-        q: str | None = None,
         archived: bool = False,
         contact_id: str | UUID | None = None,
         assignee: str | UUID | None = None,
@@ -175,9 +165,6 @@ class PodChannels(BoundResource):
         """The channels the caller may see, most recently active first, each
         with what is new in it for them and its last line.
 
-        ``visibility`` keeps only public or only private channels (a member's
-        and a contact's own are private); ``q`` keeps channels whose title
-        holds these words, in any case.
         ``assignee`` is ``"me"`` or a member's user id (contacts' channels
         assigned to them); ``needs_person`` keeps contacts' channels waiting
         on a person (open, unassigned, the agent off or asking for one);
@@ -190,8 +177,6 @@ class PodChannels(BoundResource):
             channel_list,
             self._pod_uuid(),
             kind=ChannelKind(kind) if kind is not None else UNSET,
-            visibility=Visibility(visibility) if visibility is not None else UNSET,
-            q=_unset(q),
             archived=archived,
             contact_id=as_uuid(contact_id) if contact_id else UNSET,
             assignee=str(assignee) if assignee else UNSET,
@@ -236,11 +221,6 @@ class PodChannels(BoundResource):
         """One channel, with the places it is fed from, its members and agents,
         and how the caller hears of it."""
         return self._call(channel_get, self._pod_uuid(), as_uuid(channel_id))
-
-    def mine(self) -> ChannelDetailResponse:
-        """The caller's own channel with the pod. Not found until it is made:
-        ``open_mine`` makes it."""
-        return self._call(channel_me_get, self._pod_uuid())
 
     def open_mine(self) -> ChannelDetailResponse:
         """The caller's own channel with the pod, made if it is not there yet."""
@@ -319,42 +299,7 @@ class PodChannels(BoundResource):
         admin's. A channel an outside place feeds is archived instead."""
         self._call(channel_delete, self._pod_uuid(), as_uuid(channel_id))
 
-    def cases(
-        self,
-        channel_id: str | UUID,
-        *,
-        cursor: str | None = None,
-        limit: int = 20,
-    ) -> ChannelCasesResponse:
-        """A contact's channel's cases, the most recently opened first, each
-        with what happened in it: who answered and when, reopens, how it
-        ended. Page with ``next_cursor``."""
-        return self._call(
-            channel_case_list,
-            self._pod_uuid(),
-            as_uuid(channel_id),
-            cursor=_unset(cursor),
-            limit=limit,
-        )
-
     # -- members -------------------------------------------------------------------
-
-    def members(
-        self,
-        channel_id: str | UUID,
-        *,
-        cursor: str | None = None,
-        limit: int = 100,
-    ) -> ChannelMemberListResponse:
-        """Who is in a channel -- members, contacts and agents -- in the order
-        they joined. Page with ``next_cursor``."""
-        return self._call(
-            channel_member_list,
-            self._pod_uuid(),
-            as_uuid(channel_id),
-            cursor=_unset(cursor),
-            limit=limit,
-        )
 
     def add_members(
         self,

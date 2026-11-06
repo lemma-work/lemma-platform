@@ -94,7 +94,7 @@ interprocess = "2.4"
 hex = "0.4"
 reqwest = { workspace = true }
 sha2 = { workspace = true }
-zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "=9.0.5", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2.7.3"
 uuid = { version = "1.23.3", features = ["v4"] }
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageService
@@ -56,4 +58,25 @@ async def assert_usage_preflight_allowed(
         + ", ".join(
             f"{name} limit reached" for kind, name in _LIMIT_NAMES if kind in spent
         )
+    )
+
+
+async def assert_turn_allowed(
+    usage_service: UsageService | None,
+    conversation: Conversation,
+    *,
+    user_id: UUID,
+    agent_runtime: AgentRuntimeConfig,
+) -> None:
+    """Refuse to start a run in ``conversation`` the account has no headroom for.
+
+    The check every turn-starting use case makes -- a new message, a follow-up,
+    a retry -- with the audience read off the conversation.
+    """
+    await assert_usage_preflight_allowed(
+        usage_service,
+        organization_id=conversation.organization_id,
+        user_id=user_id,
+        agent_runtime=agent_runtime,
+        outside_audience=Audience.of(conversation).answers_outsiders,
     )

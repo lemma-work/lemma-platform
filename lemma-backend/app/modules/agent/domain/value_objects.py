@@ -14,6 +14,19 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.core.domain.runtime import AgentRuntimeConfig
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.pause_opening import PauseOpening
+from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.state_kinds import (
+    AgentRunApprovalDecision as AgentRunApprovalDecision,
+    FINAL_ANSWER_KINDS as FINAL_ANSWER_KINDS,
+    UNANSWERED_QUEUE_STATES as UNANSWERED_QUEUE_STATES,
+    AnswerKind as AnswerKind,
+    ConversationOrigin as ConversationOrigin,
+    QueueState as QueueState,
+    RunTrigger as RunTrigger,
+    WrittenIn as WrittenIn,
+)
 from app.modules.usage.contracts import AgentRunUsage as AgentRunUsage
 
 JsonPrimitive = str | int | float | bool | None
@@ -130,36 +143,6 @@ class ConversationStatus(str, Enum):
     STOPPED = "STOPPED"
 
 
-class AgentRunApprovalDecision(str, Enum):
-    """User decision scope for a run approval."""
-
-    APPROVE_ONCE = "APPROVE_ONCE"
-    APPROVE_FOR_SESSION = "APPROVE_FOR_SESSION"
-    DENY = "DENY"
-
-    @classmethod
-    def _missing_(cls, value: object) -> "AgentRunApprovalDecision | None":
-        if not isinstance(value, str):
-            return None
-        normalized = value.upper()
-        aliases = {
-            "APPROVE": cls.APPROVE_ONCE,
-            "ALLOW": cls.APPROVE_ONCE,
-            "ACCEPT": cls.APPROVE_ONCE,
-            "ONCE": cls.APPROVE_ONCE,
-            "SESSION": cls.APPROVE_FOR_SESSION,
-            "APPROVE_SESSION": cls.APPROVE_FOR_SESSION,
-            "DENIED": cls.DENY,
-            "DECLINE": cls.DENY,
-        }
-        if normalized in aliases:
-            return aliases[normalized]
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
-
-
 @dataclass(slots=True)
 class AgentRunFinishResult:
     """Result of attempting to move an agent run into a terminal state."""
@@ -167,6 +150,8 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
+    #: The finished run's kind, read in the statement that moved it.
+    kind: RunKind = RunKind.CHAT
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
@@ -236,6 +221,10 @@ class MessageDraft(BaseModel):
     tool_args: JsonValue = None
     tool_result: JsonValue = None
     metadata: JsonObject | None = None
+    #: What the server records about the message beyond its body.
+    state: MessageState = MessageState()
+    #: The pause this tool call opens, written with it (``domain/pauses``).
+    pause: PauseOpening | None = None
 
     @classmethod
     def of_text(
@@ -244,8 +233,15 @@ class MessageDraft(BaseModel):
         *,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
-        return cls(role=role, kind=MessageKind.TEXT, text=text, metadata=metadata)
+        return cls(
+            role=role,
+            kind=MessageKind.TEXT,
+            text=text,
+            metadata=metadata,
+            state=state or MessageState(),
+        )
 
     @classmethod
     def of_thinking(
@@ -254,8 +250,15 @@ class MessageDraft(BaseModel):
         *,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
-        return cls(role=role, kind=MessageKind.THINKING, text=text, metadata=metadata)
+        return cls(
+            role=role,
+            kind=MessageKind.THINKING,
+            text=text,
+            metadata=metadata,
+            state=state or MessageState(),
+        )
 
     @classmethod
     def of_notification(
@@ -264,9 +267,14 @@ class MessageDraft(BaseModel):
         *,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
         return cls(
-            role=role, kind=MessageKind.NOTIFICATION, text=text, metadata=metadata
+            role=role,
+            kind=MessageKind.NOTIFICATION,
+            text=text,
+            metadata=metadata,
+            state=state or MessageState(),
         )
 
     @classmethod
@@ -278,6 +286,8 @@ class MessageDraft(BaseModel):
         tool_args: JsonValue = None,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
+        pause: PauseOpening | None = None,
     ) -> "MessageDraft":
         return cls(
             role=role,
@@ -286,6 +296,8 @@ class MessageDraft(BaseModel):
             tool_call_id=tool_call_id,
             tool_args=tool_args,
             metadata=metadata,
+            state=state or MessageState(),
+            pause=pause,
         )
 
     @classmethod
@@ -297,6 +309,7 @@ class MessageDraft(BaseModel):
         tool_result: JsonValue = None,
         role: MessageRole = MessageRole.TOOL,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
         return cls(
             role=role,
@@ -305,6 +318,7 @@ class MessageDraft(BaseModel):
             tool_call_id=tool_call_id,
             tool_result=tool_result,
             metadata=metadata,
+            state=state or MessageState(),
         )
 
 
@@ -312,7 +326,7 @@ class AgentEventType(str, Enum):
     """Event type emitted by a harness while running an agent.
 
     Internal only: the SSE wire ``type`` strings are hardcoded in
-    ``services/realtime.py``; these values are never compared raw on the wire.
+    ``domain/live_events.py``; these values are never compared raw on the wire.
     """
 
     TOKEN = "TOKEN"
@@ -330,6 +344,9 @@ class AgentEventType(str, Enum):
     # can distinguish "busy, retry" from "the provider crashed" and surface a
     # more actionable message.
     REJECTED = "REJECTED"
+    # A step for the run log (``domain/run_log``): what the model was sent
+    # and answered, serialized. Persisted, never shown.
+    RUN_STEP = "RUN_STEP"
 
     @classmethod
     def _missing_(cls, value: object) -> "AgentEventType | None":
@@ -350,7 +367,7 @@ class ConversationType(str, Enum):
     TASK = "TASK"
     # A pinned conversation that acts as a project/group: it owns a workspace cwd
     # and conversations created with parent_id pointing at it inherit that cwd
-    # (see ConversationService.create_conversation). Usually empty (no runs).
+    # (see StartConversation). Usually empty (no runs).
     PROJECT = "PROJECT"
 
 

@@ -6,7 +6,8 @@ import {
     connectionLine, connectionTrouble, contactsSupported, filtersSupported, isOwnBot, needsRebind, readConnection, rebindChoices,
     routesSupported, surfaceApp, surfaceDraft, surfacePatch, type SurfaceDraft,
 } from "@/data/surface-settings";
-import { connectionsPlace, connectorLabel } from "@/data/pod-connectors";
+import { connectorLabel } from "@/data/pod-connectors";
+import { connectionsPlace } from "@/shell/address";
 import { ProblemLine } from "@/connect/connection-problem";
 import { answerChoices, groupsNote } from "@/data/contacts";
 import { useBotGroups } from "@/channels/queries";
@@ -42,7 +43,7 @@ export function SurfaceManage({ pod, surface, onBack, onSaved, onLeave }: {
     /* Who answers here: the space, or an agent with a channel of its own. */
     const bot = surface.mine ? pod.name : surface.agentName || pod.name;
     return <div className="surface-setup smanage">
-        <button className="linkish smanage__back" onClick={onBack}><BackIcon size={14} aria-hidden="true" /> All channels</button>
+        <button className="linkish smanage__back" onClick={onBack}><BackIcon size={14} aria-hidden="true" /> Back</button>
         <div className="smanage__head">
             <ChannelIcon platform={surface.platform} size={32} />
             <div className="smanage__title">

@@ -114,10 +114,12 @@ passes the pod-membership check.
    The platform writes `contact_id` into its input, replacing whatever the
    model sent. Identity strength is not passed yet (see Step-up).
 
-Everything else is withheld by the same allowlist and harness gate outsiders use
-(`outsider_tools.py`, `outsider_gate.py`): no sandbox, no browser, no connector
-accounts, no memory, no sub-agents, no member directory. New tools are refused
-until someone classifies them.
+Everything else is withheld the way it is from every outsider: a member's run
+and an outsider's run get two toolsets, and each tool says which it is in
+(`ToolPolicy.offered_to`: members, anyone, or outsiders; read by the catalog and
+held again in `services/tool_runtime.py`): no sandbox, no browser, no connector
+accounts, no memory, no sub-agents, no member directory. A new tool is a
+member's until someone classifies it.
 
 **In a group, a contact acts as an outsider.** Everyone in a group sees its
 answers, so contact-scoped reads would leak one person's data to the rest.

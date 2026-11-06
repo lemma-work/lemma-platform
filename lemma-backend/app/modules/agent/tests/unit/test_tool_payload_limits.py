@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.tool_payload_limits import (
+from app.modules.agent.infrastructure.tools.payload_limits import (
     DEFAULT_TOOL_PAYLOAD_LIMIT,
     bounded_tool_payload,
 )

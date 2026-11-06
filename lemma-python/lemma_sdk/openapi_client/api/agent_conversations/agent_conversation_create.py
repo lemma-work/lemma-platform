@@ -75,7 +75,8 @@ def sync_detailed(
 
      Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default
     pod assistant. Workflow and sub-agent executions also use conversations as their external execution
-    handle.
+    handle. Name a repository to work in a checkout of it: it is refused unless the organization's
+    GitHub installation covers it for you.
 
     Args:
         pod_id (UUID):
@@ -111,7 +112,8 @@ def sync(
 
      Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default
     pod assistant. Workflow and sub-agent executions also use conversations as their external execution
-    handle.
+    handle. Name a repository to work in a checkout of it: it is refused unless the organization's
+    GitHub installation covers it for you.
 
     Args:
         pod_id (UUID):
@@ -142,7 +144,8 @@ async def asyncio_detailed(
 
      Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default
     pod assistant. Workflow and sub-agent executions also use conversations as their external execution
-    handle.
+    handle. Name a repository to work in a checkout of it: it is refused unless the organization's
+    GitHub installation covers it for you.
 
     Args:
         pod_id (UUID):
@@ -176,7 +179,8 @@ async def asyncio(
 
      Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default
     pod assistant. Workflow and sub-agent executions also use conversations as their external execution
-    handle.
+    handle. Name a repository to work in a checkout of it: it is refused unless the organization's
+    GitHub installation covers it for you.
 
     Args:
         pod_id (UUID):

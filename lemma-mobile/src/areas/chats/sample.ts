@@ -325,11 +325,11 @@ function history(podId: string, now: number): ConversationRef[] {
 
 function sampleContacts(now: number): Contact[] {
     return [
-        { id: "contact-maria", name: "Maria Chen", createdAt: iso(40 * DAY, now), anonymous: false, handles: [{ kind: "PHONE", value: "447700900123", strength: "CHANNEL" }, { kind: "EMAIL", value: "maria@northwind.example", strength: "CODE" }] },
-        { id: "contact-omar", name: "Omar Haddad", createdAt: iso(12 * DAY, now), anonymous: false, handles: [{ kind: "EMAIL", value: "omar@globex.example", strength: "CHANNEL" }] },
-        { id: "contact-li", name: "Li Wei", createdAt: iso(3 * DAY, now), anonymous: false, handles: [{ kind: "WEB", value: "visitor-81", strength: "SESSION" }, { kind: "EMAIL", value: "li.wei@initech.example", strength: "CODE" }] },
-        { id: "contact-june", name: "June Park", createdAt: iso(5 * DAY, now), anonymous: false, handles: [{ kind: "EMAIL", value: "june@park.example", strength: "CHANNEL" }] },
-        { id: "contact-visitor", name: null, createdAt: iso(1 * DAY, now), anonymous: true, handles: [{ kind: "WEB", value: "visitor-90", strength: "SESSION" }] },
+        { id: "contact-maria", channelId: "support-maria", name: "Maria Chen", createdAt: iso(40 * DAY, now), anonymous: false, handles: [{ kind: "PHONE", value: "447700900123", strength: "CHANNEL" }, { kind: "EMAIL", value: "maria@northwind.example", strength: "CODE" }] },
+        { id: "contact-omar", channelId: "support-omar", name: "Omar Haddad", createdAt: iso(12 * DAY, now), anonymous: false, handles: [{ kind: "EMAIL", value: "omar@globex.example", strength: "CHANNEL" }] },
+        { id: "contact-li", channelId: "support-li", name: "Li Wei", createdAt: iso(3 * DAY, now), anonymous: false, handles: [{ kind: "WEB", value: "visitor-81", strength: "SESSION" }, { kind: "EMAIL", value: "li.wei@initech.example", strength: "CODE" }] },
+        { id: "contact-june", channelId: "support-june", name: "June Park", createdAt: iso(5 * DAY, now), anonymous: false, handles: [{ kind: "EMAIL", value: "june@park.example", strength: "CHANNEL" }] },
+        { id: "contact-visitor", channelId: null, name: null, createdAt: iso(1 * DAY, now), anonymous: true, handles: [{ kind: "WEB", value: "visitor-90", strength: "SESSION" }] },
     ];
 }
 

@@ -13,18 +13,18 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.agent_host_ops import (
+from app.modules.agent.agent_host.domain.ops import (
     HOST_OFFLINE,
     HOST_OFFLINE_MESSAGE,
     LINK_LOST,
     AgentHostOpError,
 )
-from app.modules.agent.infrastructure.agent_host.channels import (
+from app.modules.agent.agent_host.control.channels import (
     OP,
     host_poke_channel,
     parse_host_notice,
 )
-from app.modules.agent.services.agent_host_ops import AgentHostOpClient
+from app.modules.agent.agent_host.control.ops import AgentHostOpClient
 from app.modules.agent.tests.unit.agent_host_link_fakes import (
     FakeChannels,
     Link,

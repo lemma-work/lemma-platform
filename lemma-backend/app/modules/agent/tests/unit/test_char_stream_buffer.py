@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.infrastructure.harnesses.streaming import CharStreamBuffer
+from app.modules.agent.infrastructure.harness.lemma.streaming import CharStreamBuffer
 
 pytestmark = pytest.mark.unit
 

@@ -58,7 +58,6 @@ class ContactHandle(BaseModel):
     value: str
     strength: IdentityStrength
     verified_at: datetime
-    last_inbound_at: datetime | None = None
     #: Who named the handle, where several could: the product a host identity
     #: is a user of. ``None`` for every other kind.
     issuer: str | None = None

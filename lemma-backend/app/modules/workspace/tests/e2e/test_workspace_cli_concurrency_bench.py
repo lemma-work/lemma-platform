@@ -1,7 +1,7 @@
 """Benchmark: do parallel agent tool calls block in the backend workspace layer?
 
 Drives the *real* tool entrypoint (`workspace_cli.exec_command_internal`) the way
-pydantic-ai does — multiple concurrent calls sharing one BaseAgentContext (hence
+pydantic-ai does — multiple concurrent calls sharing one ToolContext (hence
 one conversation-scoped shell session) — against a local Docker sandbox manager.
 Because the manager/runtime are local (no gVisor, no remote network), any
 serialization observed here is in OUR backend layer, not the sandbox runtime.
@@ -24,9 +24,11 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli import workspace_cli
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli import workspace_cli
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
 
 # Mostly measurement, with fixed sleeps: nightly, not a pull-request gate.
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.slow]
@@ -41,7 +43,7 @@ DEFAULT_YIELD_WINDOW_SECONDS = 30.0
 FAST_YIELD_COMPLETION_LIMIT_SECONDS = DEFAULT_YIELD_WINDOW_SECONDS * (2 / 3)
 
 
-async def _run(ctx: BaseAgentContext, cmd: str, *, timeout: int | None = 60):
+async def _run(ctx: ToolContext, cmd: str, *, timeout: int | None = 60):
     # timeout=None -> agent default path (yield mode, yield_time_ms=30000).
     started = time.perf_counter()
     request = (
@@ -78,7 +80,7 @@ async def test_workspace_cli_parallel_tool_calls_bench(
 
     # One shared context == one conversation == one default shell session, exactly
     # like an agent turn that emits several tool calls at once.
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),

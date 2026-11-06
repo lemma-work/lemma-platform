@@ -34,12 +34,10 @@ export function DeleteAccountScreen() {
         setRefusal(null);
         remove.mutate(typed.trim(), {
             onSuccess: leave,
-            onError: (problem) => {
-                const refused = deletionRefusal(problem);
-                /* A second tap, after the first went through. */
-                if (refused.alreadyDeleted) leave();
-                else setRefusal(refused);
-            },
+            /* Every refusal is said, the web's way. An account already gone
+               is not taken as proof of this deletion: it says it can no
+               longer be used, and signing out from there is the person's. */
+            onError: (problem) => setRefusal(deletionRefusal(problem)),
         });
     };
 

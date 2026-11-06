@@ -152,8 +152,8 @@ async def run_account_deleted(ctx: JobContext, payload: AccountDeleted) -> None:
     )
 
     del ctx
-    # The request that deleted the account already tried this once it had
-    # committed; this is the attempt that is retried until it lands.
+    # The request only dropped the cached standing; this is where the
+    # sessions end and the address is freed, retried until it lands.
     await end_deleted_account_sign_in(payload.user_id)
 
 

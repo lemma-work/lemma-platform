@@ -1073,6 +1073,94 @@
     }
   },
   {
+    "tool_name": "delegate",
+    "toolset": "SUBAGENTS",
+    "description": "Hand independent tasks to sub-agents, which run in parallel.\n\nEach child starts fresh with only its brief, in the same sandbox as you,\nand its last message is its report to you. With wait='all' (the default)\nyour turn ends here and you wake once with every report, status and error.",
+    "input_schema": {
+      "$defs": {
+        "DelegateTask": {
+          "properties": {
+            "brief": {
+              "description": "Everything the sub-agent needs, standing alone: it sees nothing of this conversation. The goal, the inputs, the constraints, the directory to work in, and what its report should look like.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "agent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "A pod agent to hand it to. Omit for another instance of you."
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Another model of your runtime to run this one on, by name -- a faster one for a simple lookup. Omit to use yours."
+            }
+          },
+          "required": [
+            "brief"
+          ],
+          "title": "DelegateTask",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "tasks": {
+          "description": "Independent tasks, run in parallel.",
+          "items": {
+            "$ref": "#/$defs/DelegateTask"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "wait": {
+          "default": "all",
+          "description": "'all': end your turn here and wake once, with every report. 'none': carry on; the reports arrive together as a message later.",
+          "enum": [
+            "all",
+            "none"
+          ],
+          "type": "string"
+        },
+        "max_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "With wait='all', wake after this long with whatever has finished. Defaults to 60 minutes."
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "title": "DelegateRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "describe_connector_operation",
     "toolset": "CONNECTORS",
     "description": "Get one operation's description and input/output schemas.\n\nCall this before running an operation you have not run before -- the input\nschema is what `run_connector_operation` validates `payload` against.",
@@ -2983,544 +3071,40 @@
     },
     "output_schema": {
       "$defs": {
-        "AudioUrl": {
-          "description": "A URL to an audio file.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "audio-url",
-              "default": "audio-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "AudioUrl",
-          "type": "object"
-        },
-        "BinaryContent": {
-          "description": "Binary content, e.g. an audio or image file.",
+        "ImagePart": {
+          "description": "Image content in a prompt; the provider turns it into its own type.",
           "properties": {
             "data": {
-              "format": "base64url",
+              "format": "binary",
               "type": "string"
             },
             "media_type": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "audio/wav",
-                    "audio/mpeg",
-                    "audio/ogg",
-                    "audio/flac",
-                    "audio/aiff",
-                    "audio/aac"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "enum": [
-                    "image/jpeg",
-                    "image/png",
-                    "image/gif",
-                    "image/webp"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "enum": [
-                    "application/pdf",
-                    "text/plain",
-                    "text/csv",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "text/html",
-                    "text/markdown",
-                    "application/msword",
-                    "application/vnd.ms-excel"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "binary",
-              "default": "binary",
-              "type": "string"
-            },
-            "identifier": {
-              "description": "Identifier for the binary content, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `BinaryContent`.\n\nThis identifier is only automatically passed to the model when the `BinaryContent` is returned by a tool.\nIf you're passing the `BinaryContent` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `BinaryContent`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
               "type": "string"
             }
           },
           "required": [
             "data",
-            "media_type",
-            "identifier"
+            "media_type"
           ],
-          "title": "BinaryContent",
+          "title": "ImagePart",
           "type": "object"
         },
-        "CachePoint": {
-          "description": "A cache point marker for prompt caching.\n\nCan be inserted into UserPromptPart.content to mark cache boundaries.\nModels that don't support caching will filter these out.\n\nSupported by:\n\n- Anthropic\n- Amazon Bedrock (Converse API)\n- OpenAI (GPT-5.6 models)\n- OpenRouter (Anthropic and Gemini models via `OpenRouterModel`, plus OpenAI GPT-5.6 models when\n  using `OpenAIChatModel` or `OpenAIResponsesModel` with `OpenRouterProvider`)",
+        "WithImages": {
+          "description": "A tool's result plus images the model sees beside it.",
           "properties": {
-            "kind": {
-              "const": "cache-point",
-              "default": "cache-point",
-              "type": "string"
-            },
-            "ttl": {
-              "default": "5m",
-              "enum": [
-                "5m",
-                "1h"
-              ],
-              "type": "string"
-            }
-          },
-          "title": "CachePoint",
-          "type": "object"
-        },
-        "DocumentUrl": {
-          "description": "The URL of the document.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "document-url",
-              "default": "document-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "DocumentUrl",
-          "type": "object"
-        },
-        "ImageUrl": {
-          "description": "A URL to an image.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "image-url",
-              "default": "image-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "ImageUrl",
-          "type": "object"
-        },
-        "TextContent": {
-          "description": "String content that is tagged with additional metadata.\n\nThis is useful for including metadata that can be accessed programmatically by the application, but is not sent to the LLM.",
-          "properties": {
-            "content": {
-              "type": "string"
-            },
-            "metadata": {
-              "default": null
-            },
-            "kind": {
-              "const": "text-content",
-              "default": "text-content",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content"
-          ],
-          "title": "TextContent",
-          "type": "object"
-        },
-        "ToolReturn": {
-          "description": "A structured tool return that separates the tool result from additional content sent to the model.\n\nCan be parameterized with a type to enable return schema generation:\n- `ToolReturn[User]` \u2014 generates a return schema for `User`\n- `ToolReturn` (bare) \u2014 no return schema generated",
-          "properties": {
-            "return_value": {
-              "$ref": "#/$defs/ToolReturnContent"
-            },
-            "content": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "items": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/$defs/TextContent"
-                      },
-                      {
-                        "discriminator": {
-                          "mapping": {
-                            "audio-url": "#/$defs/AudioUrl",
-                            "binary": "#/$defs/BinaryContent",
-                            "document-url": "#/$defs/DocumentUrl",
-                            "image-url": "#/$defs/ImageUrl",
-                            "uploaded-file": "#/$defs/UploadedFile",
-                            "video-url": "#/$defs/VideoUrl"
-                          },
-                          "propertyName": "kind"
-                        },
-                        "oneOf": [
-                          {
-                            "$ref": "#/$defs/ImageUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/AudioUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/DocumentUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/VideoUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/BinaryContent"
-                          },
-                          {
-                            "$ref": "#/$defs/UploadedFile"
-                          }
-                        ]
-                      },
-                      {
-                        "$ref": "#/$defs/CachePoint"
-                      }
-                    ]
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "metadata": {
-              "default": null
-            },
-            "tools": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "tool-return",
-              "default": "tool-return",
-              "type": "string"
-            }
-          },
-          "required": [
-            "return_value"
-          ],
-          "title": "ToolReturn",
-          "type": "object"
-        },
-        "ToolReturnContent": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "discriminator": {
-                "mapping": {
-                  "audio-url": "#/$defs/AudioUrl",
-                  "binary": "#/$defs/BinaryContent",
-                  "document-url": "#/$defs/DocumentUrl",
-                  "image-url": "#/$defs/ImageUrl",
-                  "uploaded-file": "#/$defs/UploadedFile",
-                  "video-url": "#/$defs/VideoUrl"
-                },
-                "propertyName": "kind"
-              },
-              "oneOf": [
-                {
-                  "$ref": "#/$defs/ImageUrl"
-                },
-                {
-                  "$ref": "#/$defs/AudioUrl"
-                },
-                {
-                  "$ref": "#/$defs/DocumentUrl"
-                },
-                {
-                  "$ref": "#/$defs/VideoUrl"
-                },
-                {
-                  "$ref": "#/$defs/BinaryContent"
-                },
-                {
-                  "$ref": "#/$defs/UploadedFile"
-                }
-              ]
-            },
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/ToolReturnContent"
-              },
-              "type": "object"
-            },
-            {
+            "value": {},
+            "images": {
               "items": {
-                "$ref": "#/$defs/ToolReturnContent"
+                "$ref": "#/$defs/ImagePart"
               },
               "type": "array"
-            },
-            {}
-          ]
-        },
-        "UploadedFile": {
-          "description": "A reference to a file uploaded to a provider's file storage by ID.\n\nThis allows referencing files that have been uploaded via provider-specific file APIs\nrather than providing the file content directly.\n\nSupported by:\n\n- [`AnthropicModel`][pydantic_ai.models.anthropic.AnthropicModel]\n- [`OpenAIChatModel`][pydantic_ai.models.openai.OpenAIChatModel]\n- [`OpenAIResponsesModel`][pydantic_ai.models.openai.OpenAIResponsesModel]\n- [`BedrockConverseModel`][pydantic_ai.models.bedrock.BedrockConverseModel]\n- [`GoogleModel`][pydantic_ai.models.google.GoogleModel] (Gemini API: [Files API](https://ai.google.dev/gemini-api/docs/files) URIs, Google Cloud: GCS `gs://` URIs)\n- [`XaiModel`][pydantic_ai.models.xai.XaiModel]",
-          "properties": {
-            "file_id": {
-              "type": "string"
-            },
-            "provider_name": {
-              "enum": [
-                "anthropic",
-                "openai",
-                "google",
-                "google-cloud",
-                "google-gla",
-                "google-vertex",
-                "bedrock",
-                "xai"
-              ],
-              "type": "string"
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "uploaded-file",
-              "default": "uploaded-file",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, inferred from `file_id` if not explicitly provided.\n\nNote: Inference relies on the file extension in `file_id`.\nFor opaque file IDs (e.g., `'file-abc123'`), the media type will default to `'application/octet-stream'`.\nInference relies on Python's `mimetypes` module, whose results may vary across platforms.\n\nRequired by some providers (e.g., Bedrock) for certain file types.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `UploadedFile`.\n\nThis identifier is only automatically passed to the model when the `UploadedFile` is returned by a tool.\nIf you're passing the `UploadedFile` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `UploadedFile`.",
-              "readOnly": true,
-              "type": "string"
             }
           },
           "required": [
-            "file_id",
-            "provider_name",
-            "media_type",
-            "identifier"
+            "value",
+            "images"
           ],
-          "title": "UploadedFile",
-          "type": "object"
-        },
-        "VideoUrl": {
-          "description": "A URL to a video.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "video-url",
-              "default": "video-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "VideoUrl",
+          "title": "WithImages",
           "type": "object"
         }
       },
@@ -3530,7 +3114,7 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/ToolReturn"
+          "$ref": "#/$defs/WithImages"
         }
       ]
     }
@@ -4069,9 +3653,101 @@
     }
   },
   {
+    "tool_name": "set_what_you_own",
+    "toolset": "POD",
+    "description": "Set what this pod owns, and the measure that counts it.\n\nOne sentence a person can check, as a bar held every week (kind=week) or\na finish line by a date (kind=date, with due). The measure is one\nread-only SQL query over this pod's tables that answers one number -- one\nrow, one column; with unit \"%\" it answers 0 to 100, as the target is\nwritten. It is read for everyone in the pod alike, so it may only count\nrows you can read in full, and it is read once now: the answer comes back\nas ``value``. Build the tables it counts first. Replaces what the pod\nowned; the plan for getting there stays in /plan.md.",
+    "input_schema": {
+      "$defs": {
+        "OutcomeKind": {
+          "description": "The two shapes of what a pod owns.\n\n``week`` is a bar held every week, which never finishes (\"Every customer\nhears back within a day\"). ``date`` is a finish line, reached once by its\n``due`` date (\"The launch ships by the date it is due\"). The values are the plan\nfile's own (``kind: week`` in ``/plan.md``), so a plan a person or the\npod's agent wrote reads straight across.",
+          "enum": [
+            "week",
+            "date"
+          ],
+          "title": "OutcomeKind",
+          "type": "string"
+        }
+      },
+      "description": "What the pod owns, as a person or its agent sets it.\n\nThe fields are the front matter of the plan file the workspace keeps at\n``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,\n``unit``, ``due`` and ``measure`` -- held here so there is one copy of\nthem. The plan's prose (what must be true, how the work is done, who holds\nwhat, what never happens) stays in the file.",
+      "properties": {
+        "sentence": {
+          "description": "What it owns, as one sentence a person can check.",
+          "maxLength": 200,
+          "minLength": 3,
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/OutcomeKind",
+          "description": "week: a bar held every week. date: a finish line by `due`."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The number the measure is held to: 90 with unit '%' for a share, 22 for a finish line of 22 steps. Unset while it is still being worked out."
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "maxLength": 24,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "'%' when the measure answers a share from 0 to 100; otherwise what it counts, such as 'steps' or 'posts'."
+        },
+        "due": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The finish line's date. Required for kind=date, refused for week."
+        },
+        "measure": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One read-only SQL query over the pod's tables that answers a single number: one row, one column. Counted for every member alike, so only someone who can read every row it touches may set it."
+        }
+      },
+      "required": [
+        "sentence",
+        "kind"
+      ],
+      "title": "OutcomeInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "spawn_subagent",
     "toolset": "SUBAGENTS",
-    "description": "Start a pod agent as a linked child conversation; returns a handle.\n\nOmit agent_name to spawn another instance of yourself for a targeted subtask.\nNon-blocking: returns {conversation_id, run_id, status}. To collect the\nresult, call `wait_for` with `subagent_run_id` and end your turn; you wake\nwith it. If you end your turn without waiting, it arrives later as a new\nmessage.",
+    "description": "Deprecated: use `delegate`. Start one child; returns a handle.\n\nNon-blocking: returns {conversation_id, run_id, status}. To collect the\nresult, call `wait_for` with `subagent_run_id` and end your turn; you wake\nwith its report. If you end your turn without waiting, it arrives later.",
     "input_schema": {
       "properties": {
         "agent_name": {
@@ -4158,7 +3834,7 @@
   {
     "tool_name": "wait_for",
     "toolset": "WAIT",
-    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `channel_post` ends your turn and gets you a new one when\nthe answers arrive.",
+    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` / `subagent_run_ids` \u2014 children from `delegate`. You\n  wake once, with every report.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `channel_post` ends your turn and gets you a new one when\nthe answers arrive.",
     "input_schema": {
       "properties": {
         "reason": {
@@ -4199,7 +3875,23 @@
             }
           ],
           "default": null,
-          "description": "Wait for a sub-agent run to finish, from `spawn_subagent`'s `run_id`. You wake with its result."
+          "description": "Wait for one sub-agent run to finish, a `run_id` from `delegate`. You wake with its report."
+        },
+        "subagent_run_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wait for several sub-agent runs at once. You wake once: when every one has finished, with all their reports, or as soon as one stops to ask a question."
         },
         "max_seconds": {
           "anyOf": [
@@ -4321,6 +4013,22 @@
           ],
           "default": null,
           "description": "Exit code of the process you waited on, when there was one."
+        },
+        "results": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Each sub-agent you waited on: its status, its report (its last message), its error if it failed, its question if it asked one."
         }
       },
       "title": "WaitForResponse",

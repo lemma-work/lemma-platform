@@ -74,13 +74,14 @@ class AccountDeletionRequest(BaseSchema):
 class AccountDeletionResponse(BaseSchema):
     """What deleting the account did.
 
-    Every session has ended by the time it is read -- or, if the sign-in
-    service could not be reached just then, ends as soon as it can be.
+    By the time it is read no token of the person's opens anything; their
+    sessions and login are removed by work that commits with the deletion.
     """
 
     deleted: bool = Field(
-        description="Always true: the account no longer exists, whether this "
-        "request deleted it or an earlier one had."
+        description="Always true: this request deleted the account. A request "
+        "for an account that is already deleted never gets here; it is "
+        "refused 403 ACCOUNT_INACTIVE."
     )
     organizations_left: int = Field(
         description="Organizations others are still in, which the person left; "

@@ -51,12 +51,15 @@ def test_unset_declares_nothing_and_sends_nothing():
     assert not any(entry.reasons for entry in profile.model_catalog)
 
 
-def test_an_effort_alone_covers_every_model_as_before(monkeypatch):
-    """Before, the effort reached every model; setting it still means that."""
+@pytest.fixture
+def low_effort(monkeypatch):
     monkeypatch.setattr(
         agent_settings, "lemma_openai_reasoning_effort", ReasoningEffort.LOW
     )
 
+
+def test_an_effort_alone_covers_every_model_as_before(low_effort):
+    """Before, the effort reached every model; setting it still means that."""
     for entry in _catalog().values():
         assert entry.reasons
         assert entry.default_model_settings == {"reasoning_effort": "low"}
@@ -76,12 +79,7 @@ def test_named_reasoning_models_narrow_who_gets_it(monkeypatch):
     assert catalog["talker"].default_model_settings == {}
 
 
-def test_a_customizer_that_rebuilds_entries_cannot_drop_the_declaration(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        agent_settings, "lemma_openai_reasoning_effort", ReasoningEffort.MEDIUM
-    )
+def test_a_customizer_that_rebuilds_entries_cannot_drop_the_declaration(low_effort):
     register_system_openai_catalog_customizer(
         lambda entries: [
             RuntimeModelCatalogEntry(

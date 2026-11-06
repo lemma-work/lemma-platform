@@ -20,8 +20,8 @@ from __future__ import annotations
 from app.core.authorization.delegation import WorkloadPrincipalType
 from app.core.web_search.search_client import AvailableSearchEngines
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-from app.modules.agent.tools.file_entities import FileType as AgentFileType
-from app.modules.agent.tools.speech.provider import SpeechProviderName
+from app.core.file_types import FileType as AgentFileType
+from app.modules.agent.infrastructure.tools.speech.provider import SpeechProviderName
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType as SurfaceConversationType,
 )

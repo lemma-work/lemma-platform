@@ -49,13 +49,14 @@ export function useInbox(podId: string, enabled = true) {
 /** The `inbox` topic, applied: counts are absolute, so each event is the
  *  truth for its channel and the totals; a question new to the reader is
  *  read with the inbox again, so it arrives answerable. Mounted once per
- *  pod, by the bell. */
-export function useInboxLive(podId: string): void {
+ *  pod: by the bell, or -- in the frame, which lists every Lemma's chats --
+ *  by the sidebar's feed for each, and the bell told not to. */
+export function useInboxLive(podId: string, enabled = true): void {
     const cache = useQueryClient();
     const later = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => () => { if (later.current) clearTimeout(later.current); }, []);
     const reread = () => void cache.invalidateQueries({ queryKey: inboxKey(podId) });
-    useLiveTopic(podId, "inbox", {}, {
+    useLiveTopic(enabled ? podId : null, "inbox", {}, {
         /* Subscribed first, then read: events that arrived meanwhile are
            absolute, so the read and the events agree whichever lands last. */
         onSubscribed: reread,
@@ -95,8 +96,9 @@ export function useMyChannel(podId: string): Channel | null {
 /** The bell is the inbox: the questions waiting on you, the lines naming
  *  you, and what is new in your own channel -- each opening its channel, and
  *  each question answered where it is. Holds the keyboard while open: Escape
- *  closes it and gives focus back to the bell. */
-export function WaitingBell({ podId }: { podId: string }) {
+ *  closes it and gives focus back to the bell. `live` false leaves the
+ *  `inbox` topic to whoever already holds it for this pod. */
+export function WaitingBell({ podId, live = true }: { podId: string; live?: boolean }) {
     const [open, setOpen] = useState(false);
     /* In a portal, placed from the bell: the header clips its overflow, which
        would cut the panel off at its bottom edge. */
@@ -104,7 +106,7 @@ export function WaitingBell({ podId }: { podId: string }) {
     const panel = useRef<HTMLDivElement | null>(null);
     const bell = useRef<HTMLButtonElement | null>(null);
     const inbox = useInbox(podId);
-    useInboxLive(podId);
+    useInboxLive(podId, live);
     const mine = useMyChannel(podId);
     const count = bellCount(inbox.data ?? null, mine?.unread.lines ?? 0);
 

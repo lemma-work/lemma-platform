@@ -1310,81 +1310,6 @@
         transform: scale(1);
     }
 }
-
-/* ── steps and notices ─────────────────────────────────────────────── */
-/* What a run cost is the most interesting thing in a reply — it is the
-   difference between a textbox and a teammate. So it is an object you can see
-   and press, at the head of the answer it belongs to, rather than a grey line
-   floating above the prose. */
-.steps {
-    margin: 0;
-}
-.steps__toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    border: 1px solid var(--line);
-    background: var(--canvas);
-    border-radius: 9999px;
-    padding: 4px 11px 4px 6px;
-    cursor: pointer;
-    font-size: 12.5px;
-    color: var(--ink-2);
-    max-width: 100%;
-    transition: border-color 0.14s ease, color 0.14s ease;
-}
-.steps__toggle:hover {
-    color: var(--ink);
-    border-color: var(--line-2);
-}
-/* Nothing to open yet: the row only says the run has started. */
-.steps__toggle[data-empty] {
-    cursor: default;
-}
-.steps__toggle[data-empty]:hover {
-    color: var(--ink-2);
-    border-color: var(--line);
-}
-.steps__state {
-    width: 17px;
-    height: 17px;
-    flex: none;
-    display: grid;
-    place-items: center;
-    border-radius: 9999px;
-    background: var(--accent-soft);
-    color: var(--accent);
-}
-.steps__pulse {
-    width: 6px;
-    height: 6px;
-    border-radius: 9999px;
-    background: var(--accent);
-    animation: pulse 1.4s ease-in-out infinite;
-}
-.steps__what {
-    flex: none;
-}
-.steps__chev {
-    color: var(--ink-3);
-    flex: none;
-}
-.steps__peek {
-    /* Not mono, and the same size as the label beside it. It was 11px mono
-       against 12.5px UI, two different families centred as boxes — which
-       cannot put their baselines on one line, and read as "Working" and the
-       step beside it sitting at different heights. Mono was right when this
-       held a raw tool name; it holds the agent's own sentence now, and that is
-       prose. Colour is what keeps it secondary. */
-    font-size: 12.5px;
-    color: var(--ink-3);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding-left: 8px;
-    border-left: 1px solid var(--line);
-}
 .steps__list {
     list-style: none;
     margin: 8px 0 0;
@@ -2572,76 +2497,6 @@
 
 /* ── the plan ──────────────────────────────────────────────────────── */
 
-/* Sits in the conversation at the weight of a card, not of an answer: it is
-   what the run intends, and the answer is still the thing to read. */
-.plan {
-    border: 1px solid var(--line);
-    border-radius: var(--r-lg);
-    background: var(--paper);
-    padding: 13px 15px 14px;
-    margin: 2px 0;
-}
-.plan__head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 9px;
-}
-.plan__title {
-    font-size: var(--t-meta);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-}
-.plan__count {
-    font-family: var(--mono);
-    font-size: var(--t-meta);
-    color: var(--ink-3);
-}
-.plan__steps {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-.plan__step {
-    display: grid;
-    grid-template-columns: 16px minmax(0, 1fr);
-    gap: 10px;
-    align-items: start;
-    font-size: var(--t-ui);
-    color: var(--ink-3);
-    line-height: 1.5;
-}
-/* An empty ring, a filled tick, and the one in progress carrying the accent.
-   Three states read at a glance without a legend. */
-.plan__mark {
-    width: 16px;
-    height: 16px;
-    margin-top: 2px;
-    border: 1px solid var(--line-2);
-    border-radius: 9999px;
-    display: grid;
-    place-items: center;
-    color: transparent;
-}
-.plan__step[data-status="completed"] { color: var(--ink-3); }
-.plan__step[data-status="completed"] .plan__mark {
-    background: var(--ink-3);
-    border-color: var(--ink-3);
-    color: var(--paper);
-}
-.plan__step[data-status="completed"] .plan__what { text-decoration: line-through; }
-.plan__step[data-status="in_progress"] { color: var(--ink); }
-.plan__step[data-status="in_progress"] .plan__mark {
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 3px var(--accent);
-}
-.plan__step[data-status="pending"] { color: var(--ink-2); }
-
 /* ── the call ──────────────────────────────────────────────────────── */
 
 /* The mark, at both sizes it is ever drawn. The amplitude is written from JS
@@ -3702,69 +3557,6 @@ button.filecard__open {
     align-items: center;
     gap: 11px;
 }
-/* The name, when it is also the field.
-   No box until it is being typed in: a control at display size looks like a
-   form, and this page is a page of facts with one name at the top of it. The
-   pencil is the whole affordance, and it waits for the pointer. */
-.hero__rename {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-    margin: 0;
-    padding: 0;
-    font: inherit;
-    letter-spacing: inherit;
-    color: inherit;
-    text-align: left;
-    background: none;
-    border: 0;
-    cursor: text;
-}
-.hero__rename > span {
-    min-width: 0;
-    overflow-wrap: anywhere;
-}
-.hero__rename > svg {
-    flex: none;
-    color: var(--ink-3);
-    opacity: 0;
-    transition: opacity 160ms var(--ease-out);
-}
-.hero__rename:hover > svg,
-.hero__rename:focus-visible > svg {
-    opacity: 1;
-}
-/* Open, it is the same type over a rule. Anything heavier and the name moves
-   when you click it, which is the one thing a field standing in for a
-   heading must not do. */
-.hero__field {
-    flex: 0 1 auto;
-    field-sizing: content;
-    width: auto;
-    min-width: 2ch;
-    max-width: 100%;
-    margin: 0;
-    padding: 0;
-    font: inherit;
-    font-size: inherit;
-    letter-spacing: inherit;
-    line-height: inherit;
-    color: var(--ink);
-    background: none;
-    border: 0;
-    border-bottom: 1px solid var(--line-2);
-    border-radius: 0;
-}
-.hero__field:focus {
-    outline: none;
-    border-bottom-color: var(--accent);
-}
-.hero__problem {
-    margin: 8px 0 0;
-    font-size: 12.5px;
-    color: var(--wait);
-}
 .hero__headline {
     margin: 6px 0 0;
     font-size: var(--t-body);
@@ -3779,16 +3571,6 @@ button.filecard__open {
     font-size: var(--t-micro);
     letter-spacing: 0.06em;
     color: var(--ink-3);
-}
-.hero__stats {
-    margin: 0 0 14px;
-    font-family: var(--mono);
-    font-size: var(--t-micro);
-    letter-spacing: 0.06em;
-    color: var(--ink-3);
-}
-.hero__stats b {
-    color: var(--accent);
 }
 .hero__acts {
     display: flex;
@@ -4003,45 +3785,6 @@ button.filecard__open {
     font-size: 10.5px;
     color: var(--ink-3);
     text-align: right;
-}
-
-.alsolist {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-.alsolist button {
-    display: grid;
-    grid-template-columns: 26px minmax(0, 1fr);
-    gap: 10px;
-    align-items: center;
-    width: 100%;
-    text-align: left;
-    cursor: pointer;
-    border: 0;
-    background: none;
-    padding: 7px 0;
-}
-.alsolist__body {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-}
-.alsolist__name {
-    font-size: 13px;
-}
-.alsolist__sub,
-.alsolist__name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.alsolist__sub {
-    font-size: 11px;
-    color: var(--ink-3);
-}
-.alsolist button:hover .alsolist__name {
-    color: var(--accent);
 }
 
 /* The badge ----------------------------------------------------------- */

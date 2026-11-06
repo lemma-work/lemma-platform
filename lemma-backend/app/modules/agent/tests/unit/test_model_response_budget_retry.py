@@ -18,17 +18,17 @@ import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.retry import (
     RETRY_AFTER_CAP_SECONDS,
     _retry_delay,
 )
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     ModelResponseBudgetExceeded,
 )
 from app.modules.agent.services.run_input_settings import (
@@ -78,7 +78,7 @@ async def _run(
         ),
         conversation=conversation,
         messages=[],
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=conversation.user_id,
             pod_id=pod_id,
             conversation_id=conversation.id,
