@@ -54,6 +54,13 @@ test("every place has a URL, and every URL reads back as the place", () => {
     }
 });
 
+test("the classic workspace at /l reads every address the app at /t does", () => {
+    for (const [address, url] of PLACES) {
+        assert.deepEqual(readAddress("/l" + url.slice("/t".length)), address, "reading " + url + " under /l");
+    }
+    assert.deepEqual(readAddress("/x/" + POD), NOWHERE, "any other root names nowhere");
+});
+
 test("a link to the space's old Settings page opens the teammate's page", () => {
     // The space's settings are sections of the teammate's page now. An address
     // from before that opens the page carrying them, rather than falling back

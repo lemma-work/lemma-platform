@@ -20,8 +20,10 @@ been on a platform:
   message of its own: no files, no stream to finish -- and none at all where
   the run's live stream already shows it.
 
-The answer goes where the run's conversation answers (the message it took up,
-in its thread), not where the place last spoke.
+The answer goes where its line was placed as it was posted -- the thread of
+the line it answers, pointing at it (``channels.contracts.placement``) --
+translated for the platform by ``place_aim``: never where the place, or the
+conversation, last spoke.
 """
 
 from __future__ import annotations
@@ -56,7 +58,13 @@ from app.modules.agent_surfaces.services.pending_envelope import (
     RunFiles,
     discard_display_paths,
 )
-from app.modules.channels.contracts import ChannelMessage, Delivery, SenderKind
+from app.modules.agent_surfaces.services.place_aim import aimed_at
+from app.modules.channels.contracts import (
+    ChannelMessage,
+    Delivery,
+    SenderKind,
+    Source,
+)
 from app.modules.channels.contracts.deliveries import (
     delivery_noted,
     delivery_unnoted,
@@ -117,15 +125,19 @@ class RunAnswerSends:
         platform: str,
         text: str,
         metadata: dict[str, object],
+        source: Source | None = None,
     ) -> Outcome:
+        """Send the answer ``line`` to ``source``, aimed where the line was
+        placed; without ``source``, where its conversation answers."""
         run_id, conversation_id = line.agent_run_id, line.conversation_id
         assert run_id is not None and conversation_id is not None  # is_run_answer
         send_metadata = {**metadata, IDEMPOTENCY_KEY: delivery_key(delivery)}
+        at = await aimed_at(self.uow_factory, line, source) if source else None
         if is_earlier_answer(line.client_message_id):
             if await _streamed_already(run_id, text):
                 return Outcome.delivered(platform, reason=SHOWN_IN_STREAM)
             return await self._deliver(
-                delivery, conversation_id, text, send_metadata, platform=platform
+                delivery, conversation_id, text, send_metadata, platform=platform, at=at
             )
         failed = await self._run_failed(run_id)
         if not failed:
@@ -143,6 +155,7 @@ class RunAnswerSends:
             send_metadata,
             platform=platform,
             run=None if failed else RunFiles(run_id),
+            at=at,
         )
 
     async def _deliver(
@@ -154,8 +167,10 @@ class RunAnswerSends:
         *,
         platform: str,
         run: RunFiles | None = None,
+        at: Source | None = None,
     ) -> Outcome:
-        """Send ``text`` as a new message, with ``run``'s held files."""
+        """Send ``text`` as a new message, with ``run``'s held files, at
+        ``at`` -- the place, aimed where the line goes in it."""
         receipt: DeliveryReceipt | None = None
         raised: BaseException | None = None
         with track_sends() as sends:
@@ -166,6 +181,7 @@ class RunAnswerSends:
                         message=text,
                         metadata=send_metadata,
                         attach_files_of=run,
+                        at=at,
                     )
                     if receipt is not None and receipt.external_message_id:
                         # As it answers: its status report finds the row.

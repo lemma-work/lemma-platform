@@ -13,7 +13,10 @@ from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
 
 from uuid import UUID
 
-from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
+from app.core.authorization.delegation import (
+    DEFAULT_RESPONDER_NAME,
+    effective_agent_id,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.entities import (
@@ -29,22 +32,30 @@ from app.modules.agent_surfaces.services.agent_naming import agent_name_for_agen
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
+from app.modules.channels.contracts.places import answers_every_line_at
 
 
 def _addressed(parsed: ParsedInboundSurfaceEvent) -> bool:
-    """Whether a group message is for the bot: an @mention, or a reply in its thread."""
+    """Whether a group message is for the bot: an @mention, or a reply in its
+    thread -- not one let in only because its agent answers every line."""
+    if parsed.unasked:
+        return False
     return parsed.mentioned_agent or InboundRoutingFacts.of(parsed).is_thread_reply
 
 
 def _channel_route_key(
-    surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
+    surface: AgentSurfaceEntity,
+    parsed: ParsedInboundSurfaceEvent,
+    *,
+    every_line: bool = False,
 ) -> str | None:
     """The conversation key for a Slack or Teams channel message, or None.
 
     None means the bot does not answer here: the channel is not one it is wired
     to, or nobody addressed it. The route is an allow-list entry -- it says this
-    channel is a place the bot answers -- and channels always require an @mention
-    or a reply inside a bot thread, with no per-route opt-out.
+    channel is a place the bot answers -- and a channel needs an @mention or a
+    reply inside a bot thread, unless its agent answers every line there
+    (``every_line``, a member's message only).
     """
     route = surface.channel_route_for(
         channel_id=parsed.external_channel_id,
@@ -60,7 +71,7 @@ def _channel_route_key(
     if route is None and is_group_dm(parsed) and parsed.external_channel_id:
         # A group DM needs no route: being in it is the authorization.
         route = SurfaceChannelRoute(channel_id=parsed.external_channel_id)
-    if route is None or not _addressed(parsed):
+    if route is None or not (every_line or _addressed(parsed)):
         return None
     return (
         f"channel:{parsed.external_channel_id}"
@@ -80,6 +91,7 @@ class RouteResolver:
         *,
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
+        member: bool = False,
     ) -> ResolvedSurfaceRoute | None:
         """Which agent answers this event, and under what conversation key.
 
@@ -87,6 +99,12 @@ class RouteResolver:
         a Telegram group says *where* the bot answers, never *who*. What differs
         is only the conversation kind and key, and whether the message is for us
         at all, so that is all this decides.
+
+        A group message is for us when it was put to the bot, or -- from a
+        ``member`` -- when the agent answers every line in that group's
+        channel: the one rule for which agents answer a line, wherever it was
+        typed (``channels.domain.answering``). Somebody outside the pod is
+        only ever answered when they put it to the bot.
         """
         if parsed.is_dm or surface.surface_type.is_email:
             is_email = surface.surface_type.is_email
@@ -104,7 +122,9 @@ class RouteResolver:
             # created. The sender is still resolved and pod-membership checked
             # upstream, so only pod members, or outsiders where the group
             # welcomes them, can invoke it.
-            if not _addressed(parsed):
+            if not (
+                _addressed(parsed) or await self._every_line(surface, parsed, member)
+            ):
                 return None
             return await self._route(
                 surface,
@@ -112,13 +132,39 @@ class RouteResolver:
                 route_key=f"channel:{parsed.external_channel_id}",
             )
         if capabilities.is_channel_capable:
-            route_key = _channel_route_key(surface, parsed)
+            route_key = _channel_route_key(
+                surface,
+                parsed,
+                every_line=not _addressed(parsed)
+                and await self._every_line(surface, parsed, member),
+            )
             if route_key is None:
                 return None
             return await self._route(
                 surface, conversation_kind="CHANNEL", route_key=route_key
             )
         return None
+
+    async def _every_line(
+        self,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        member: bool,
+    ) -> bool:
+        """Whether a member's message here is for the bot unasked: its agent
+        answers every line in the group's channel. Already asked at the door
+        when the event is marked ``unasked`` -- that mark is the answer, so the
+        seats are not read again."""
+        if not member or not parsed.external_channel_id:
+            return False
+        if parsed.unasked:
+            return True
+        return await answers_every_line_at(
+            self.uow,
+            external_channel_id=parsed.external_channel_id,
+            surface_id=surface.id,
+            agent_id=effective_agent_id(surface.agent_id, pod_id=surface.pod_id),
+        )
 
     async def _route(
         self,

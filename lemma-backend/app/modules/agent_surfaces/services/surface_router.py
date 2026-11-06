@@ -168,6 +168,12 @@ class SurfaceRouter:
         return SurfaceSelector.scoped_fallback_surface(request, surfaces)
 
     async def resolve_route(
-        self, *, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        member: bool = False,
     ) -> ResolvedSurfaceRoute | None:
-        return await self.routes.resolve_route(surface=surface, parsed=parsed)
+        return await self.routes.resolve_route(
+            surface=surface, parsed=parsed, member=member
+        )

@@ -49,12 +49,14 @@ async def post_answer_at_place(
     conversation_id: UUID,
     address: ReplyAddress,
     material: RunReplyMaterial,
+    answering: ChannelMessage | None = None,
 ) -> ChannelMessage | None:
     """A finished run's answer as the agent's line at a platform place, with
-    its delivery there: the agent module decides the place
-    (``services/channel_answers``), and this says it the way the place reads
-    it -- a failure as the platform's notice, a web chat's as shown at once.
-    No network: the delivery is sent by ``channel_deliveries``."""
+    its delivery there: the agent module decides the place and the line it
+    answers (``services/run_answers``), channels where in the place it goes
+    (``channels.contracts.placement``), and this says it the way the place
+    reads it -- a failure as the platform's notice, a web chat's as shown at
+    once. No network: the delivery is sent by ``channel_deliveries``."""
     from app.modules.agent_surfaces.services.run_reply_lines import post_run_reply
 
     return await post_run_reply(
@@ -63,6 +65,7 @@ async def post_answer_at_place(
         conversation_id=conversation_id,
         address=address,
         material=material,
+        answering=answering,
     )
 
 

@@ -49,12 +49,16 @@ channel: they are private workspaces, not shared places.
 
 A line can be a reply in a thread (`thread_root_id`; a Slack or Teams thread
 is one here too), be edited or deleted (it keeps its place, empty), and name
-people and agents. An agent's answer to a line in the main timeline is in the
-main timeline too, pointing at it (`reply_to_id`), and is carried to a
-group's place as a reply to that message there -- a quoted reply on WhatsApp
-or Telegram. On Slack and Teams, whose channels thread a bot's answers, it is
-a reply in the line's thread, there and here; a line already in a thread is
-answered in it (`agent/services/channel_answer_lines.where_the_answer_goes`). A heard line is edited or deleted when its platform says
+people and agents. Where any answer goes -- its thread, the line it answers,
+the place it is sent to -- is one rule, here (`domain/placement`,
+`contracts/placement`), whoever posts it. An agent's answer to a line in the
+main timeline is in the main timeline too, pointing at it (`reply_to_id`), and
+is carried to a group's place as a reply to that message there -- a quoted
+reply on WhatsApp or Telegram, an In-Reply-To in email. On Slack and Teams,
+whose channels thread a bot's answers (`THREADED`), it is a reply in the
+line's thread, there and here; a line already in a thread is answered in it.
+The platform's own terms for that are agent_surfaces' translation
+(`services/place_aim`), never a second rule. A heard line is edited or deleted when its platform says
 the message was (Slack `message_changed` / `message_deleted`, Teams
 `messageUpdate` / `messageDelete`, Telegram `edited_message`), through the same
 `revise_line` / `erase_line` a member's edit takes, and only the line heard as
@@ -283,11 +287,19 @@ minutes while they have the app open -- back into their window
 (`delivery_folded`, `FOLDED`), to go with their next push from that channel
 if still unread.
 
-Agents answer a member's line written in Lemma -- carried to a mirrored
-group's place or not -- when it names them, when they answer every line in
-the channel, or -- in a member's own channel -- the pod's agent; `agent`
-starts one turn per line and agent, and records it (`contracts/answers`,
-`channel_line_answers`). The lines a run answers are the ones whose words it
+Agents answer a member's line by one rule, wherever it was typed
+(`domain/answering`): when it names them, when they answer every line in the
+channel, or -- in a member's own channel, naming none -- the pod's agent. On a
+platform, putting the line to the bot (a DM, an @mention, a reply in its
+thread, its name) names the bot's agent, which answers at its door: the
+writer of a heard line passes it (`post(door_agent_id=)`), and
+`agent_surfaces` starts that turn itself -- also unasked, from a member,
+where that agent answers every line (`answers_every_line_at`). Every other
+agent the rule names, for a line typed or heard, `agent` starts, one turn per
+line and agent, and records it (`contracts/answers`, `channel_line_answers`);
+for a heard line its run is asked at the line's place and answers there. A
+contact's line starts nobody here: who answers somebody outside the pod is the
+door's. The lines a run answers are the ones whose words it
 read -- the line that started it and any steered into it -- so a member who
 writes a second line while the agent works on the first has the answer under
 the first, where they asked; a run carrying on a paused one answers what the

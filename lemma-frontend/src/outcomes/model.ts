@@ -14,6 +14,9 @@ import type { AskedRow } from "@/thread/waiting-on-you";
 import type { WaitingRow } from "@/workflow/waiting-inbox";
 
 export * from "./address";
+/* Which paths are the frame's own, rather than workspace addresses that
+   `readAddress` and `viewOfAddress` read, is in `./paths`. */
+export { isFramePath } from "./paths";
 import { chatView, outcomeView, writeView, type ChatOpen, type OpenChat, type View } from "./address";
 
 /** Where something waiting on you opens, inside the frame: its conversation,
@@ -30,18 +33,24 @@ export function viewOfItem(item: Pick<QueueItem, "podId" | "conversationId" | "r
  *  the rest, which the workspace opens. The thread and the shared-chat page
  *  write their links for the workspace, and this is how following one stays
  *  here. */
-export function viewOfAddress(address: { podId: string | null; tabId: string | null; conversationId: string | null; section?: string | null; agentName?: string | null }): View | null {
+export function viewOfAddress(address: { podId: string | null; tabId: string | null; conversationId: string | null; section?: string | null; agentName?: string | null; team?: boolean }): View | null {
     const { podId, tabId } = address;
+    /* The workspace's every-teammate page is the list of Lemmas here. */
+    if (address.team) return { name: "outcomes" };
     if (!podId) return null;
     switch (tabId) {
         case null:
         case "space:home":
-        case "space:chats":
-        case "space:channels":
-        case "history":
             return outcomeView(podId);
+        case "space:chats":
+        case "history":
+            return outcomeView(podId, "chats");
+        case "space:channels":
+            return outcomeView(podId, "chats", "channels");
         case "space:about":
-            return outcomeView(podId, "settings", address.section ?? null);
+            /* Schedules are a part of About in the workspace and a view of
+               Automations here. */
+            return address.section === "schedules" ? outcomeView(podId, "automations", "schedules") : outcomeView(podId, "settings", address.section ?? null);
         case "profile":
             return address.agentName ? { name: "agent", podId, agent: address.agentName } : outcomeView(podId, "settings");
         case "conversation":
@@ -51,13 +60,16 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "space:apps":
         case "apps":
             return outcomeView(podId, "apps");
+        case "space:all":
         case "space:files":
         case "space:pages":
         case "space:tables":
         case "library":
             return outcomeView(podId, "made");
         case "space:workflows":
-            return outcomeView(podId, "xray");
+            return outcomeView(podId, "automations");
+        case "computer":
+            return { name: "computer", podId, conversationId: null };
     }
     const colon = tabId.indexOf(":");
     const kind = colon < 0 ? tabId : tabId.slice(0, colon);
@@ -90,6 +102,9 @@ export interface Handoff {
     /** What the new conversation is made with: the agent it is with, when
      *  it is not the Lemma's own. */
     createWith?: Record<string, unknown>;
+    /** Files that go with the first message, as the box they were attached
+     *  in would have sent them. */
+    files?: File[];
 }
 
 /** Words put in a chat's box -- what an app or a widget asked for, or ⌘K
@@ -98,6 +113,8 @@ export interface Fill {
     text: string;
     id: number;
     podId: string;
+    /** Files attached with the words, held in the box with them. */
+    files?: File[];
 }
 
 export interface GoOptions {
@@ -109,6 +126,17 @@ export interface GoOptions {
 }
 
 export type Go = (view: View, options?: GoOptions) => void;
+
+/** What goes with words asked of a Lemma: files from the box they were
+ *  typed in, and what the new chat is made with -- the model picked there,
+ *  or the agent it is with. */
+export interface AskWith {
+    files?: File[];
+    createWith?: Record<string, unknown>;
+}
+
+/** Start a chat with a Lemma with these words, sent, and open it. */
+export type Ask = (podId: string, text: string, extra?: AskWith) => void;
 
 /* ── activity ─────────────────────────────────────────────────────────── */
 
@@ -514,6 +542,28 @@ export interface QueueItem {
     runId: string | null;
     /** A contact's chat, waiting on a person. */
     contactId: string | null;
+    /** The workflow wait itself, when the row is one: it carries its form. */
+    wait: WaitingRow["wait"] | null;
+}
+
+/** Where a row is answered: in place, from its own card ("ask") or its
+ *  form ("form"), or only where it came from (null). A question or an
+ *  approval is answered with the card the chat would dock, and a form wait
+ *  with the form the run would show. A contact wants a written reply, and
+ *  a workflow decision has no form to submit, so both open where they are. */
+export function answersHere(item: Pick<QueueItem, "contactId" | "wait" | "conversationId" | "runId">): "ask" | "form" | null {
+    if (item.contactId) return null;
+    if (item.wait) return item.wait.type === "HUMAN" ? "form" : null;
+    if (item.runId) return null;
+    return item.conversationId ? "ask" : null;
+}
+
+/** The row's button: what doing it is called. */
+export function verbOf(item: Pick<QueueItem, "kind" | "contactId" | "wait" | "conversationId" | "runId">): string {
+    const here = answersHere(item);
+    if (here === "form") return "Fill in";
+    if (here === "ask") return item.kind === "decide" ? "Decide" : "Answer";
+    return item.contactId ? "Reply" : "Open";
 }
 
 /** Someone outside a Lemma who wrote in and is waiting on a person: its
@@ -544,6 +594,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.conversationId,
             runId: null,
             contactId: null,
+            wait: null,
         });
     }
     for (const row of waits) {
@@ -559,6 +610,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.wait.externalRef,
             runId: row.run.id,
             contactId: null,
+            wait: row.wait,
         });
     }
     for (const row of contacts) {
@@ -573,6 +625,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: null,
             runId: null,
             contactId: row.channelId,
+            wait: null,
         });
     }
     return items.sort((a, b) => a.sinceMs - b.sinceMs);
@@ -629,9 +682,11 @@ export function isChat(conversation: Pick<ConversationRef, "origin" | "waitingOn
     return CHAT_ORIGINS.has(conversation.origin?.kind ?? "chat");
 }
 
-/** Someone's private line with a Lemma, named for what it is: theirs, on
- *  the platforms it comes through -- or the notices the Lemma sends them.
- *  Called just "Email" beside chats with names, it read as an inbox. */
+/** Someone's own chat with a Lemma, named for what it is: theirs, on the
+ *  platforms it comes through ("Your chat on WhatsApp"), or "Notices" when
+ *  it only sends them things. Called just "Email" beside chats with names,
+ *  it read as an inbox; and a person never reads "line" or "channel"
+ *  (`tests/outcomes-copy.test.ts`). */
 export function lineTitle(platforms: string): string {
     return platforms === "Notices" ? "Notices" : `Your chat on ${platforms}`;
 }
@@ -913,4 +968,17 @@ export function sameOpen(a: ChatOpen, b: ChatOpen): boolean {
     if (a.kind !== b.kind) return false;
     if (a.kind === "none" || b.kind === "none") return true;
     return a.podId === b.podId && (a as { id: string | null }).id === (b as { id: string | null }).id;
+}
+
+/** An agent row's page, or none for a row that arrived without a name: its
+ *  address would end at `agent/` and land on the Lemma's settings, while the
+ *  row itself says there is nothing to open. */
+export function agentView(podId: string, agent: { name: string; broken: boolean }): View | null {
+    return agent.broken ? null : { name: "agent", podId, agent: agent.name };
+}
+
+/** A key for an agent row. Two nameless rows share an empty id, so the
+ *  position keys them apart. */
+export function agentKey(agent: { id: string }, at: number): string {
+    return agent.id || `unnamed-${at}`;
 }

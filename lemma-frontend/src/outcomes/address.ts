@@ -1,9 +1,15 @@
-/** The outcome frame's address grammar: which view a `/o` path names, and the
- *  path for a view. Kept apart from `model.ts` and free of imports, so code
- *  that only needs to read an address — analytics templating one, on every
- *  page — does not carry the plan parser and the channel model with it. */
+/** The frame's address grammar: which view a `/t` path names, and the path
+ *  for a view. Kept apart from `model.ts` and free of imports, so code that
+ *  only needs to read an address — analytics templating one, on every page —
+ *  does not carry the plan parser and the channel model with it. */
 
-export type OutcomeTab = "home" | "plan" | "apps" | "made" | "contacts" | "xray" | "settings";
+export type OutcomeTab = "home" | "plan" | "chats" | "apps" | "made" | "contacts" | "automations" | "settings";
+
+/** What a Lemma runs, in one place: its workflows and their runs, its
+ *  schedules, its agents, and the X-ray of all of it. The workspace keeps
+ *  these on four pages; here they are one tab, a view each. */
+export const AUTOMATION_SECTIONS = ["workflows", "waiting", "running", "history", "schedules", "agents", "xray"] as const;
+export type AutomationSection = (typeof AUTOMATION_SECTIONS)[number];
 
 /** The id a chat not started yet goes by, in the address and in the data
  *  source (`NEW_CONVERSATION`). Repeated rather than imported so this file
@@ -31,7 +37,8 @@ export type View =
     | { name: "needs" }
     | { name: "chats"; open: ChatOpen }
     | { name: "people" }
-    /** `section` is a part of a Lemma's settings (its About), on that tab. */
+    /** `section` is a part of a Lemma's settings (its About), or one view
+     *  of its automations, on that tab. */
     | { name: "outcome"; podId: string; tab: OutcomeTab; section?: string }
     | { name: "run"; podId: string; runId: string }
     | { name: "app"; podId: string; app: string }
@@ -40,14 +47,17 @@ export type View =
     | { name: "workflow"; podId: string; workflow: string }
     | { name: "agent"; podId: string; agent: string }
     | { name: "record"; podId: string; table: string; recordId: string }
+    /** The machine a Lemma works on: its screen and its files, from one
+     *  chat's working folder, or the whole machine. */
+    | { name: "computer"; podId: string; conversationId: string | null }
     /** Starting a Lemma from scratch, the workspace's own way. */
     | { name: "hire" };
 
-export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "plan", "apps", "made", "contacts", "xray", "settings"];
+export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "plan", "chats", "apps", "made", "contacts", "automations", "settings"];
 
 /** A Lemma's page, on its home unless another tab is named. */
 export function outcomeView(podId: string, tab: OutcomeTab = "home", section: string | null = null): View {
-    return section && tab === "settings" ? { name: "outcome", podId, tab, section } : { name: "outcome", podId, tab };
+    return section && (tab === "settings" || tab === "automations" || tab === "chats") ? { name: "outcome", podId, tab, section } : { name: "outcome", podId, tab };
 }
 
 /** A chat, open in the main area beside the sidebar that lists it. */
@@ -66,6 +76,7 @@ export function podOfView(view: View): string | null {
         case "workflow":
         case "agent":
         case "record":
+        case "computer":
             return view.podId;
         case "chats":
             return view.open.kind === "none" ? null : view.open.podId;
@@ -107,11 +118,11 @@ function chatTail(open: OpenChat): string {
     }
 }
 
-/** What a `/o` path names. Anything unreadable is Home, the frame's front,
+/** What a frame path names. Anything unreadable is Home, the frame's front,
  *  rather than a 404: a link from a newer build should still land somewhere. */
 export function readView(pathname: string): View {
     const [root, head, id, tab, ...rest] = pathname.split("/").filter(Boolean);
-    if (root !== "o" || !head) return { name: "today" };
+    if ((root !== "t" && root !== "o") || !head) return { name: "today" };
     if (head === "outcomes") return { name: "outcomes" };
     if (head === "needs-you") return { name: "needs" };
     if (head === "people") return { name: "people" };
@@ -131,20 +142,26 @@ export function readView(pathname: string): View {
         if (tab === "table" && one) return { name: "table", podId, table: one };
         if (tab === "workflow" && one) return { name: "workflow", podId, workflow: one };
         if (tab === "agent" && one) return { name: "agent", podId, agent: one };
+        if (tab === "computer") return { name: "computer", podId, conversationId: one };
         if (tab === "record" && one && rest[1]) {
             const recordId = decoded(rest[1]);
             if (recordId) return { name: "record", podId, table: one, recordId };
         }
         if (tab === "settings") return outcomeView(podId, "settings", one);
+        if (tab === "automations") return outcomeView(podId, "automations", AUTOMATION_SECTIONS.find((each) => each === one) ?? null);
+        /* X-ray was a tab of its own; it is a view of Automations now. */
+        if (tab === "xray") return outcomeView(podId, "automations", "xray");
         if (tab === "file" && rest.length > 0) {
             const parts = rest.map(decoded);
             if (parts.every((part): part is string => part !== null)) return { name: "file", podId, path: "/" + parts.join("/") };
         }
-        /* An outcome had a Chats tab for a day; its chats are in the sidebar
-           now, and a link to one opens the chat. */
+        /* A Lemma's every chat, searchable; `channels` opens it on the shared
+           ones. A link with a chat named under it, from when the list was a
+           tab, opens that chat. */
         if (tab === "chats") {
+            if (one === "channels" && rest.length === 1) return outcomeView(podId, "chats", "channels");
             const open = chatOpenOf(podId, rest);
-            return open.kind === "none" ? outcomeView(podId) : chatView(open);
+            return open.kind === "none" ? outcomeView(podId, "chats") : chatView(open);
         }
         return outcomeView(podId, OUTCOME_TABS.find((each) => each === tab) ?? "home");
     }
@@ -153,25 +170,26 @@ export function readView(pathname: string): View {
 
 export function writeView(view: View): string {
     switch (view.name) {
-        case "today": return "/o";
-        case "outcomes": return "/o/outcomes";
-        case "needs": return "/o/needs-you";
-        case "people": return "/o/people";
-        case "hire": return "/o/new-lemma";
+        case "today": return "/t";
+        case "outcomes": return "/t/outcomes";
+        case "needs": return "/t/needs-you";
+        case "people": return "/t/people";
+        case "hire": return "/t/new-lemma";
         case "chats":
-            return view.open.kind === "none" ? "/o/chats" : "/o/chats/" + encodeURIComponent(view.open.podId) + chatTail(view.open);
+            return view.open.kind === "none" ? "/t/chats" : "/t/chats/" + encodeURIComponent(view.open.podId) + chatTail(view.open);
         case "outcome": {
-            const base = "/o/outcome/" + encodeURIComponent(view.podId);
+            const base = "/t/outcome/" + encodeURIComponent(view.podId);
             if (view.tab === "home") return base;
-            return base + "/" + view.tab + (view.tab === "settings" && view.section ? "/" + encodeURIComponent(view.section) : "");
+            return base + "/" + view.tab + ((view.tab === "settings" || view.tab === "automations" || view.tab === "chats") && view.section ? "/" + encodeURIComponent(view.section) : "");
         }
-        case "run": return "/o/outcome/" + encodeURIComponent(view.podId) + "/run/" + encodeURIComponent(view.runId);
-        case "app": return "/o/outcome/" + encodeURIComponent(view.podId) + "/app/" + encodeURIComponent(view.app);
-        case "table": return "/o/outcome/" + encodeURIComponent(view.podId) + "/table/" + encodeURIComponent(view.table);
-        case "workflow": return "/o/outcome/" + encodeURIComponent(view.podId) + "/workflow/" + encodeURIComponent(view.workflow);
-        case "agent": return "/o/outcome/" + encodeURIComponent(view.podId) + "/agent/" + encodeURIComponent(view.agent);
-        case "record": return "/o/outcome/" + encodeURIComponent(view.podId) + "/record/" + encodeURIComponent(view.table) + "/" + encodeURIComponent(view.recordId);
+        case "run": return "/t/outcome/" + encodeURIComponent(view.podId) + "/run/" + encodeURIComponent(view.runId);
+        case "app": return "/t/outcome/" + encodeURIComponent(view.podId) + "/app/" + encodeURIComponent(view.app);
+        case "table": return "/t/outcome/" + encodeURIComponent(view.podId) + "/table/" + encodeURIComponent(view.table);
+        case "workflow": return "/t/outcome/" + encodeURIComponent(view.podId) + "/workflow/" + encodeURIComponent(view.workflow);
+        case "agent": return "/t/outcome/" + encodeURIComponent(view.podId) + "/agent/" + encodeURIComponent(view.agent);
+        case "record": return "/t/outcome/" + encodeURIComponent(view.podId) + "/record/" + encodeURIComponent(view.table) + "/" + encodeURIComponent(view.recordId);
+        case "computer": return "/t/outcome/" + encodeURIComponent(view.podId) + "/computer" + (view.conversationId ? "/" + encodeURIComponent(view.conversationId) : "");
         case "file":
-            return "/o/outcome/" + encodeURIComponent(view.podId) + "/file/" + view.path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+            return "/t/outcome/" + encodeURIComponent(view.podId) + "/file/" + view.path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
     }
 }
