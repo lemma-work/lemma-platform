@@ -45,6 +45,7 @@ from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
     PendingInteractionCursor,
     PendingInteractionKind,
+    PodPendingInteraction,
     clipped_summary,
 )
 from app.modules.agent.domain.state_kinds import PauseKind, PauseStatus
@@ -335,6 +336,56 @@ class Pauses(UnitOfWorkRepository):
         Archiving is how a person says "not this one", so archived ones are
         left out.
         """
+        rows = await self._waiting_page(
+            user_id=user_id,
+            in_pods=ConversationModel.pod_id == pod_id,
+            after=cursor,
+            limit=limit,
+        )
+        page = [_interaction(row) for row in rows[:limit]]
+        next_cursor = (
+            PendingInteractionCursor(
+                created_at=page[-1].created_at, message_id=page[-1].message_id
+            )
+            if len(rows) > limit and page
+            else None
+        )
+        return page, next_cursor
+
+    async def waiting_on_person_in_pods(
+        self, *, user_id: UUID, pod_ids: Collection[UUID], limit: int
+    ) -> tuple[list[PodPendingInteraction], bool]:
+        """This person's pauses across these pods, longest-waiting first, and
+        whether more were waiting than ``limit``.
+
+        The pods are the caller's to choose -- ones it has already found this
+        person may open -- and the conversations are this person's own in any
+        of them, so nothing here widens what :meth:`waiting_on_person` shows.
+        """
+        if not pod_ids:
+            return [], False
+        rows = await self._waiting_page(
+            user_id=user_id,
+            in_pods=ConversationModel.pod_id.in_(list(pod_ids)),
+            after=None,
+            limit=limit,
+        )
+        return [
+            PodPendingInteraction(pod_id=row.pod_id, pending=_interaction(row))
+            for row in rows[:limit]
+        ], len(rows) > limit
+
+    async def _waiting_page(
+        self,
+        *,
+        user_id: UUID,
+        in_pods: ColumnElement[bool],
+        after: PendingInteractionCursor | None,
+        limit: int,
+    ) -> list[Row]:
+        """One statement for one pod and for many, so the two lists cannot
+        disagree about what counts. One row past ``limit``, so the caller can
+        tell a full page from the last one."""
         call = aliased(MessageModel)
         stmt = (
             select(
@@ -344,6 +395,7 @@ class Pauses(UnitOfWorkRepository):
                 _P.kind,
                 _summary_text(call).label("summary"),
                 ConversationModel.id.label("conversation_id"),
+                ConversationModel.pod_id,
                 ConversationModel.title,
                 ConversationModel.status,
                 ConversationModel.agent_id,
@@ -362,35 +414,23 @@ class Pauses(UnitOfWorkRepository):
             .outerjoin(AgentModel, AgentModel.id == ConversationModel.agent_id)
             .where(
                 ConversationModel.user_id == user_id,
-                ConversationModel.pod_id == pod_id,
+                in_pods,
                 ConversationModel.is_archived.is_(False),
                 *_waiting_on_person(),
             )
         )
-        if cursor is not None:
+        if after is not None:
             stmt = stmt.where(
                 tuple_(call.created_at, call.id)
                 > tuple_(
-                    literal(cursor.created_at, call.created_at.type),
-                    literal(cursor.message_id, call.id.type),
+                    literal(after.created_at, call.created_at.type),
+                    literal(after.message_id, call.id.type),
                 )
             )
-        rows = list(
-            (
-                await self.session.execute(
-                    stmt.order_by(call.created_at, call.id).limit(limit + 1)
-                )
-            ).all()
+        result = await self.session.execute(
+            stmt.order_by(call.created_at, call.id).limit(limit + 1)
         )
-        page = [_interaction(row) for row in rows[:limit]]
-        next_cursor = (
-            PendingInteractionCursor(
-                created_at=page[-1].created_at, message_id=page[-1].message_id
-            )
-            if len(rows) > limit and page
-            else None
-        )
-        return page, next_cursor
+        return list(result.all())
 
     async def conversations_waiting_on_person(
         self, conversation_ids: Sequence[UUID]
@@ -401,12 +441,19 @@ class Pauses(UnitOfWorkRepository):
         result = await self.session.execute(
             select(ConversationModel.id).where(
                 ConversationModel.id.in_(list(conversation_ids)),
-                exists().where(
-                    _P.conversation_id == ConversationModel.id, *_waiting_on_person()
-                ),
+                waiting_on_person_column(),
             )
         )
         return set(result.scalars())
+
+
+def waiting_on_person_column() -> ColumnElement[bool]:
+    """Whether the ``agent_conversations`` row in scope holds a pause waiting
+    on a person -- the same test as :meth:`Pauses.conversations_waiting_on_person`,
+    for a statement that lists conversations and wants it beside each one."""
+    return exists().where(
+        _P.conversation_id == ConversationModel.id, *_waiting_on_person()
+    )
 
 
 def _waiting_on_person() -> list[ColumnElement[bool]]:
@@ -474,4 +521,4 @@ def _interaction(row: Row) -> PendingInteraction:
     )
 
 
-__all__ = ["Awaiting", "Pauses"]
+__all__ = ["Awaiting", "Pauses", "waiting_on_person_column"]

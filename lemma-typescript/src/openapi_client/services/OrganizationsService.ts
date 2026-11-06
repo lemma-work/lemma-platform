@@ -2,7 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { HomeSeenRequest } from '../models/HomeSeenRequest.js';
+import type { HomeSeenResponse } from '../models/HomeSeenResponse.js';
 import type { NavigationResponse } from '../models/NavigationResponse.js';
+import type { NeedsYouResponse } from '../models/NeedsYouResponse.js';
+import type { OrganizationAppListResponse } from '../models/OrganizationAppListResponse.js';
 import type { OrganizationCreateRequest } from '../models/OrganizationCreateRequest.js';
 import type { OrganizationEffectivePermissionsResponse } from '../models/OrganizationEffectivePermissionsResponse.js';
 import type { OrganizationHomeResponse } from '../models/OrganizationHomeResponse.js';
@@ -14,6 +18,7 @@ import type { OrganizationListResponse } from '../models/OrganizationListRespons
 import type { OrganizationMemberListResponse } from '../models/OrganizationMemberListResponse.js';
 import type { OrganizationMemberResponse } from '../models/OrganizationMemberResponse.js';
 import type { OrganizationMessageResponse } from '../models/OrganizationMessageResponse.js';
+import type { OrganizationRecentsResponse } from '../models/OrganizationRecentsResponse.js';
 import type { OrganizationResponse } from '../models/OrganizationResponse.js';
 import type { OrganizationSlugAvailabilityResponse } from '../models/OrganizationSlugAvailabilityResponse.js';
 import type { OrganizationUpdateRequest } from '../models/OrganizationUpdateRequest.js';
@@ -263,6 +268,27 @@ export class OrganizationsService {
         });
     }
     /**
+     * List Apps Across The Organization
+     * Every app the current user may open in every pod they may open in the organization, most recently updated first. Each app is filtered by its own visibility against the user's permissions in its pod.
+     * @param organizationId
+     * @returns OrganizationAppListResponse Successful Response
+     * @throws ApiError
+     */
+    public static orgAppsList(
+        organizationId: string,
+    ): CancelablePromise<OrganizationAppListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/apps',
+            path: {
+                'organization_id': organizationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Get Organization Home
      * One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.
      * @param organizationId
@@ -278,6 +304,52 @@ export class OrganizationsService {
             path: {
                 'organization_id': organizationId,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get When You Last Looked At Home
+     * When the current user last marked the organization's Home seen, so it can say what moved since. Per user and per organization.
+     * @param organizationId
+     * @returns HomeSeenResponse Successful Response
+     * @throws ApiError
+     */
+    public static orgHomeSeenGet(
+        organizationId: string,
+    ): CancelablePromise<HomeSeenResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/home/seen',
+            path: {
+                'organization_id': organizationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Mark Home Seen
+     * Mark the organization's Home seen by the current user, as of `seen_at` (now when omitted; a future moment is read as now). The mark only moves forward, so an older tab cannot undo a newer one. Returns the mark and what it was before.
+     * @param organizationId
+     * @param requestBody
+     * @returns HomeSeenResponse Successful Response
+     * @throws ApiError
+     */
+    public static orgHomeSeenSet(
+        organizationId: string,
+        requestBody?: (HomeSeenRequest | null),
+    ): CancelablePromise<HomeSeenResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/organizations/{organization_id}/home/seen',
+            path: {
+                'organization_id': organizationId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },
@@ -443,6 +515,32 @@ export class OrganizationsService {
         });
     }
     /**
+     * List What Waits On You Across The Organization
+     * Everything waiting on the current user in every pod they may open in the organization, as one list, oldest first: questions, approvals and Agent Host permission requests in their own conversations (one item per conversation); workflow forms and decisions assigned to them; and contacts waiting on a person, in pods where they hold `channel.read` and `contact.read`. Each item names its pod and what to open: a conversation, a workflow run or a channel.
+     * @param organizationId
+     * @param limit
+     * @returns NeedsYouResponse Successful Response
+     * @throws ApiError
+     */
+    public static orgNeedsYouList(
+        organizationId: string,
+        limit: number = 100,
+    ): CancelablePromise<NeedsYouResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/needs-you',
+            path: {
+                'organization_id': organizationId,
+            },
+            query: {
+                'limit': limit,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * My Permissions In An Organization
      * The organization-level permission ids the caller holds here, such as `org.installation.manage`. Pod permissions are `/pods/{pod_id}/permissions/me`.
      * @param organizationId
@@ -457,6 +555,38 @@ export class OrganizationsService {
             url: '/organizations/{organization_id}/permissions/me',
             path: {
                 'organization_id': organizationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get What Moved Lately In Each Pod
+     * For every pod the current user may open in the organization, quiet ones included: their latest chats (conversations of no channel that they talk in, or that wait on them), the workflows and schedules that ran in the window -- one each, with the newest run and a count -- and a count per day of their conversations by the day each was last active, split into started by an agent (a schedule, a workflow, a notification, a task or another pod's ask) and by a person. Days are calendar days in `timezone`, the window ending today.
+     * @param organizationId
+     * @param days
+     * @param chats Chats listed per pod.
+     * @param timezone IANA time zone the days are counted in, e.g. Europe/Berlin.
+     * @returns OrganizationRecentsResponse Successful Response
+     * @throws ApiError
+     */
+    public static orgRecentsGet(
+        organizationId: string,
+        days: number = 14,
+        chats: number = 10,
+        timezone: string = 'UTC',
+    ): CancelablePromise<OrganizationRecentsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/recents',
+            path: {
+                'organization_id': organizationId,
+            },
+            query: {
+                'days': days,
+                'chats': chats,
+                'timezone': timezone,
             },
             errors: {
                 422: `Validation Error`,

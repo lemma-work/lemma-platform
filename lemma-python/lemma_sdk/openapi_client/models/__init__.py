@@ -111,6 +111,8 @@ _NAME_TO_MODULE = {
     'AuthConfigUpdateSchema': 'auth_config_update_schema',
     'AuthConfigUpdateSchemaConfigType0': 'auth_config_update_schema_config_type_0',
     'AuthScheme': 'auth_scheme',
+    'AutomationKind': 'automation_kind',
+    'AutomationResponse': 'automation_response',
     'AvailableSurface': 'available_surface',
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
@@ -233,6 +235,7 @@ _NAME_TO_MODULE = {
     'DatastoreQueryRequest': 'datastore_query_request',
     'DatastoreQueryResponse': 'datastore_query_response',
     'DatastoreQueryResponseItemsItem': 'datastore_query_response_items_item',
+    'DayCountResponse': 'day_count_response',
     'DecisionAnswerResponse': 'decision_answer_response',
     'DecisionExampleBody': 'decision_example_body',
     'DecisionExampleBodyAnswers': 'decision_example_body_answers',
@@ -352,6 +355,8 @@ _NAME_TO_MODULE = {
     'HomeAgentResponse': 'home_agent_response',
     'HomeAppResponse': 'home_app_response',
     'HomePodResponse': 'home_pod_response',
+    'HomeSeenRequest': 'home_seen_request',
+    'HomeSeenResponse': 'home_seen_response',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'IdentityKind': 'identity_kind',
@@ -382,6 +387,7 @@ _NAME_TO_MODULE = {
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
     'LinkState': 'link_state',
+    'ListedOrigin': 'listed_origin',
     'ListeningResponse': 'listening_response',
     'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
@@ -435,6 +441,9 @@ _NAME_TO_MODULE = {
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
+    'NeedsYouItemResponse': 'needs_you_item_response',
+    'NeedsYouKind': 'needs_you_kind',
+    'NeedsYouResponse': 'needs_you_response',
     'NoticeRequest': 'notice_request',
     'NoticeResponse': 'notice_response',
     'NotifyLevel': 'notify_level',
@@ -456,6 +465,8 @@ _NAME_TO_MODULE = {
     'OperationExecutionRequestPayload': 'operation_execution_request_payload',
     'OperationExecutionResponse': 'operation_execution_response',
     'OperationSummary': 'operation_summary',
+    'OrganizationAppListResponse': 'organization_app_list_response',
+    'OrganizationAppResponse': 'organization_app_response',
     'OrganizationCreateRequest': 'organization_create_request',
     'OrganizationEffectivePermissionsResponse': 'organization_effective_permissions_response',
     'OrganizationHomeResponse': 'organization_home_response',
@@ -468,6 +479,7 @@ _NAME_TO_MODULE = {
     'OrganizationMemberListResponse': 'organization_member_list_response',
     'OrganizationMemberResponse': 'organization_member_response',
     'OrganizationMessageResponse': 'organization_message_response',
+    'OrganizationRecentsResponse': 'organization_recents_response',
     'OrganizationResponse': 'organization_response',
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
@@ -529,6 +541,7 @@ _NAME_TO_MODULE = {
     'PodOutcome': 'pod_outcome',
     'PodPermissionCatalogResponse': 'pod_permission_catalog_response',
     'PodPermissionResponse': 'pod_permission_response',
+    'PodRecentsResponse': 'pod_recents_response',
     'PodRecipe': 'pod_recipe',
     'PodResponse': 'pod_response',
     'PodRole': 'pod_role',
@@ -569,6 +582,7 @@ _NAME_TO_MODULE = {
     'ReadRequest': 'read_request',
     'ReadResponse': 'read_response',
     'ReasoningEffort': 'reasoning_effort',
+    'RecentChatResponse': 'recent_chat_response',
     'RecordAccessMode': 'record_access_mode',
     'RecordCreateResponseRecordCreate': 'record_create_response_record_create',
     'RecordGetResponseRecordGet': 'record_get_response_record_get',
@@ -929,6 +943,8 @@ if TYPE_CHECKING:
     from .auth_config_update_schema import AuthConfigUpdateSchema
     from .auth_config_update_schema_config_type_0 import AuthConfigUpdateSchemaConfigType0
     from .auth_scheme import AuthScheme
+    from .automation_kind import AutomationKind
+    from .automation_response import AutomationResponse
     from .available_surface import AvailableSurface
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
@@ -1051,6 +1067,7 @@ if TYPE_CHECKING:
     from .datastore_query_request import DatastoreQueryRequest
     from .datastore_query_response import DatastoreQueryResponse
     from .datastore_query_response_items_item import DatastoreQueryResponseItemsItem
+    from .day_count_response import DayCountResponse
     from .decision_answer_response import DecisionAnswerResponse
     from .decision_example_body import DecisionExampleBody
     from .decision_example_body_answers import DecisionExampleBodyAnswers
@@ -1170,6 +1187,8 @@ if TYPE_CHECKING:
     from .home_agent_response import HomeAgentResponse
     from .home_app_response import HomeAppResponse
     from .home_pod_response import HomePodResponse
+    from .home_seen_request import HomeSeenRequest
+    from .home_seen_response import HomeSeenResponse
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .identity_kind import IdentityKind
@@ -1200,6 +1219,7 @@ if TYPE_CHECKING:
     from .line_preview import LinePreview
     from .link_part import LinkPart
     from .link_state import LinkState
+    from .listed_origin import ListedOrigin
     from .listening_response import ListeningResponse
     from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
@@ -1253,6 +1273,9 @@ if TYPE_CHECKING:
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
+    from .needs_you_item_response import NeedsYouItemResponse
+    from .needs_you_kind import NeedsYouKind
+    from .needs_you_response import NeedsYouResponse
     from .notice_request import NoticeRequest
     from .notice_response import NoticeResponse
     from .notify_level import NotifyLevel
@@ -1274,6 +1297,8 @@ if TYPE_CHECKING:
     from .operation_execution_request_payload import OperationExecutionRequestPayload
     from .operation_execution_response import OperationExecutionResponse
     from .operation_summary import OperationSummary
+    from .organization_app_list_response import OrganizationAppListResponse
+    from .organization_app_response import OrganizationAppResponse
     from .organization_create_request import OrganizationCreateRequest
     from .organization_effective_permissions_response import OrganizationEffectivePermissionsResponse
     from .organization_home_response import OrganizationHomeResponse
@@ -1286,6 +1311,7 @@ if TYPE_CHECKING:
     from .organization_member_list_response import OrganizationMemberListResponse
     from .organization_member_response import OrganizationMemberResponse
     from .organization_message_response import OrganizationMessageResponse
+    from .organization_recents_response import OrganizationRecentsResponse
     from .organization_response import OrganizationResponse
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
@@ -1347,6 +1373,7 @@ if TYPE_CHECKING:
     from .pod_outcome import PodOutcome
     from .pod_permission_catalog_response import PodPermissionCatalogResponse
     from .pod_permission_response import PodPermissionResponse
+    from .pod_recents_response import PodRecentsResponse
     from .pod_recipe import PodRecipe
     from .pod_response import PodResponse
     from .pod_role import PodRole
@@ -1387,6 +1414,7 @@ if TYPE_CHECKING:
     from .read_request import ReadRequest
     from .read_response import ReadResponse
     from .reasoning_effort import ReasoningEffort
+    from .recent_chat_response import RecentChatResponse
     from .record_access_mode import RecordAccessMode
     from .record_create_response_record_create import RecordCreateResponseRecordCreate
     from .record_get_response_record_get import RecordGetResponseRecordGet
@@ -1760,6 +1788,8 @@ __all__ = [
     'AuthConfigUpdateSchema',
     'AuthConfigUpdateSchemaConfigType0',
     'AuthScheme',
+    'AutomationKind',
+    'AutomationResponse',
     'AvailableSurface',
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
@@ -1882,6 +1912,7 @@ __all__ = [
     'DatastoreQueryRequest',
     'DatastoreQueryResponse',
     'DatastoreQueryResponseItemsItem',
+    'DayCountResponse',
     'DecisionAnswerResponse',
     'DecisionExampleBody',
     'DecisionExampleBodyAnswers',
@@ -2001,6 +2032,8 @@ __all__ = [
     'HomeAgentResponse',
     'HomeAppResponse',
     'HomePodResponse',
+    'HomeSeenRequest',
+    'HomeSeenResponse',
     'IconUploadRequest',
     'IconUploadResponse',
     'IdentityKind',
@@ -2031,6 +2064,7 @@ __all__ = [
     'LinePreview',
     'LinkPart',
     'LinkState',
+    'ListedOrigin',
     'ListeningResponse',
     'ListeningResponseState',
     'LiteralInputBinding',
@@ -2084,6 +2118,9 @@ __all__ = [
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
+    'NeedsYouItemResponse',
+    'NeedsYouKind',
+    'NeedsYouResponse',
     'NoticeRequest',
     'NoticeResponse',
     'NotifyLevel',
@@ -2105,6 +2142,8 @@ __all__ = [
     'OperationExecutionRequestPayload',
     'OperationExecutionResponse',
     'OperationSummary',
+    'OrganizationAppListResponse',
+    'OrganizationAppResponse',
     'OrganizationCreateRequest',
     'OrganizationEffectivePermissionsResponse',
     'OrganizationHomeResponse',
@@ -2117,6 +2156,7 @@ __all__ = [
     'OrganizationMemberListResponse',
     'OrganizationMemberResponse',
     'OrganizationMessageResponse',
+    'OrganizationRecentsResponse',
     'OrganizationResponse',
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
@@ -2178,6 +2218,7 @@ __all__ = [
     'PodOutcome',
     'PodPermissionCatalogResponse',
     'PodPermissionResponse',
+    'PodRecentsResponse',
     'PodRecipe',
     'PodResponse',
     'PodRole',
@@ -2218,6 +2259,7 @@ __all__ = [
     'ReadRequest',
     'ReadResponse',
     'ReasoningEffort',
+    'RecentChatResponse',
     'RecordAccessMode',
     'RecordCreateResponseRecordCreate',
     'RecordGetResponseRecordGet',
