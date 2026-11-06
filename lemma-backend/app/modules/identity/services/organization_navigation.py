@@ -36,18 +36,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
-
 from app.core.authorization.listing_contexts import build_listing_contexts_for_pods
 from app.modules.agent.contracts import (
     PodAgentSummary,
     list_agent_summaries_by_pod,
 )
 from app.modules.apps.contracts import PodAppSummary, list_app_summaries_by_pod
-from app.modules.identity.domain.organization_entities import OrganizationRole
-from app.modules.identity.infrastructure.models.organization_models import (
-    Organization,
-    OrganizationMember,
+from app.modules.identity.services.organization_scope import (
+    memberships_of,
+    owned_organizations,
 )
 from app.modules.pod.contracts import VisiblePod, list_visible_pods
 
@@ -97,53 +94,6 @@ class OrganizationHome:
     pods: list[HomePod]
 
 
-@dataclass(frozen=True, slots=True)
-class _Membership:
-    organization_id: UUID
-    organization_member_id: UUID
-    role: str
-    name: str
-    slug: str | None
-
-
-async def _memberships(
-    *, session, user_id: UUID, organization_id: UUID | None = None
-) -> list[_Membership]:
-    """The caller's organization memberships, with the organization joined in."""
-    query = (
-        select(
-            OrganizationMember.organization_id,
-            OrganizationMember.id,
-            OrganizationMember.role,
-            Organization.name,
-            Organization.slug,
-        )
-        .join(Organization, Organization.id == OrganizationMember.organization_id)
-        .where(OrganizationMember.user_id == user_id)
-    )
-    if organization_id is not None:
-        query = query.where(OrganizationMember.organization_id == organization_id)
-    rows = (await session.execute(query.order_by(Organization.name))).all()
-    return [
-        _Membership(
-            organization_id=org_id,
-            organization_member_id=member_id,
-            role=str(role),
-            name=name,
-            slug=slug,
-        )
-        for org_id, member_id, role, name, slug in rows
-    ]
-
-
-def _owned(memberships: list[_Membership]) -> set[UUID]:
-    return {
-        membership.organization_id
-        for membership in memberships
-        if membership.role == OrganizationRole.ORG_OWNER
-    }
-
-
 def _pods_by_organization(pods: list[VisiblePod]) -> dict[UUID, list[VisiblePod]]:
     grouped: dict[UUID, list[VisiblePod]] = {}
     for pod in pods:
@@ -157,7 +107,7 @@ async def load_navigation(*, session, user_id: UUID) -> list[NavigationOrganizat
     Two regardless of how many organizations or pods there are — the point of
     the endpoint.
     """
-    memberships = await _memberships(session=session, user_id=user_id)
+    memberships = await memberships_of(session=session, user_id=user_id)
     if not memberships:
         return []
 
@@ -167,7 +117,7 @@ async def load_navigation(*, session, user_id: UUID) -> list[NavigationOrganizat
         organization_member_ids_by_org={
             m.organization_id: m.organization_member_id for m in memberships
         },
-        owned_organization_ids=_owned(memberships),
+        owned_organization_ids=owned_organizations(memberships),
     )
     grouped = _pods_by_organization(pods)
 
@@ -197,13 +147,14 @@ async def load_organization_home(
 ) -> OrganizationHome | None:
     """One organization in full. None when the caller is not a member.
 
-    Five queries: the membership, the pods with the caller's roles, the apps,
-    the roles behind the caller's per-pod authorization, and the agents. Fixed,
+    Five queries: the membership, the pods with the caller's roles, the roles
+    behind the caller's per-pod authorization, and the apps and agents each
+    filtered by it. Fixed,
     not per pod -- the property `test_home_query_count_does_not_grow_with_pods`
     pins, and the reason the contexts below are built in one go rather than one
     call at a time.
     """
-    memberships = await _memberships(
+    memberships = await memberships_of(
         session=session, user_id=user_id, organization_id=organization_id
     )
     if not memberships:
@@ -216,10 +167,8 @@ async def load_organization_home(
         organization_member_ids_by_org={
             organization_id: membership.organization_member_id
         },
-        owned_organization_ids=_owned(memberships),
+        owned_organization_ids=owned_organizations(memberships),
     )
-    pod_ids = [pod.id for pod in pods]
-    apps = await list_app_summaries_by_pod(session=session, pod_ids=pod_ids)
     # One per pod: an agent's visibility is decided against the caller's
     # permissions *in the pod that owns it*, and those differ from pod to pod.
     # Built in bulk -- a loop over `build_user_context` is a per-pod fan-out on
@@ -233,6 +182,9 @@ async def load_organization_home(
         # again here is what would make this per pod.
         pod_member_ids_by_pod={pod.id: pod.pod_member_id for pod in pods},
     )
+    # Apps are weighed the same way: an app carries its own visibility and
+    # owner, so a pod the caller may see can hold apps they may not.
+    apps = await list_app_summaries_by_pod(session=session, contexts=contexts)
     agents = await list_agent_summaries_by_pod(
         session=session, contexts=contexts, limit=HOME_AGENTS_PER_POD
     )
