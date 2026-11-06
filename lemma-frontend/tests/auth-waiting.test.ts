@@ -10,6 +10,22 @@ test("a destination that names a teammate names them", () => {
     assert.equal(waiting.faces.length, 1, "one door, one face");
 });
 
+test("the app's own paths name the Lemma they are inside, and the app's places name nobody", () => {
+    assert.equal(waitingFor("/t/outcome/marketing/apps").name, "Marketing");
+    assert.equal(waitingFor("/t/chats/marketing/c/c1").name, "Marketing");
+    assert.equal(waitingFor("/t/outcome/marketing").faces[0], waitingFor("/t/marketing/library").faces[0], "the same face either way");
+    assert.equal(waitingFor("/t/needs-you").name, null, "a place, not a Lemma called needs-you");
+    assert.equal(waitingFor("/t/outcomes").name, null);
+});
+
+test("a destination still under /o is read as the /t path it redirects to", () => {
+    assert.equal(waitingFor("/o/outcome/marketing/apps").name, "Marketing");
+    assert.equal(waitingFor("/o/marketing/library").name, "Marketing", "a workspace address, once it is under /t");
+    assert.equal(waitingFor("https://app.example/o/marketing").name, "Marketing");
+    assert.equal(waitingFor("/o/needs-you").name, null);
+    assert.equal(waitingFor("/o").name, null);
+});
+
 test("the face is that teammate's own, wherever you arrived from", () => {
     // Derived from the pod id, so it is the same creature the rail draws for
     // them — arriving at a sign-in should not introduce a stranger.

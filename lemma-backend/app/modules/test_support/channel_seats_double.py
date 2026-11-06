@@ -80,6 +80,8 @@ class InMemoryChannelSeats:
         self._seated: dict[_SeatKey, UUID] = {}
         self._answers: dict[UUID, ReplyAddress] = {}
         self._lines: list[_Line] = []
+        #: ``(chat, surface, agent)`` where that agent answers every line.
+        self.every_line: set[tuple[str, UUID, UUID]] = set()
 
     @property
     def sources(self) -> dict[_PlaceKey, Source]:
@@ -278,6 +280,11 @@ class InMemoryChannelSeats:
             if found:
                 freshest[person] = found[0]
         return freshest
+
+    async def answers_every_line_at(
+        self, *, external_channel_id: str, surface_id: UUID, agent_id: UUID
+    ) -> bool:
+        return (external_channel_id, surface_id, agent_id) in self.every_line
 
     async def places_hearing(
         self,

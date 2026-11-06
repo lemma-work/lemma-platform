@@ -7,8 +7,9 @@
   conversation with it in the channel (``services.channel_answers``). A JOB:
   authorizing the member commits before the conversation is opened. A retry
   finds the turn it already started (the line is the turn's client id). A
-  line in a group waiting for its agent to finish answering another thread
-  there is put off (``LineWaits``), uncharged, until that run has ended.
+  line in another thread of a group than the run its agent is working on
+  there is queued behind that run, and answered by the follow-up turn after
+  it (``domain/run_places``), as a platform's message said elsewhere is.
 * ``agent.channel_reply`` -- subscribed to ``AgentRunFinished`` for a run of
   a person's own conversation: the one way any run's answer is said
   (``services.run_answers``). At the place of the lines it answers: in
@@ -21,7 +22,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -32,7 +32,6 @@ from app.core.infrastructure.db.uow_factory import (
     UnitOfWorkFactory,
 )
 from app.core.infrastructure.work import (
-    Defer,
     FastContext,
     JobContext,
     WorkClass,
@@ -51,13 +50,10 @@ from app.modules.agent.events.work_kinds import (
     channel_line_key,
     channel_reply_key,
 )
-from app.modules.agent.services.channel_answers import LineWaits, answer_line
+from app.modules.agent.services.channel_answers import answer_line
 from app.modules.agent.services.run_answers import post_run_answer
 from app.modules.agent.services.contact_run_failures import after_contact_run
 from app.modules.channels.contracts.facts import ChannelMessagePosted
-
-#: How long a line waiting on its agent's other thread is put off at a time.
-LINE_WAITS_FOR = timedelta(seconds=3)
 
 
 class ChannelLinePayload(BaseModel):
@@ -117,14 +113,11 @@ async def fan_out(ctx: FastContext, payload: ChannelLinePayload) -> None:
 def make_channel_answer(uow_factory: UnitOfWorkFactory | None = None):
     async def channel_answer(ctx: JobContext, payload: ChannelAnswerWork) -> None:
         ctx.raise_if_stopping()
-        try:
-            await answer_line(
-                uow_factory or SessionUnitOfWorkFactory(async_session_maker),
-                message_id=payload.message_id,
-                agent_id=payload.agent_id,
-            )
-        except LineWaits:
-            raise Defer(LINE_WAITS_FOR) from None
+        await answer_line(
+            uow_factory or SessionUnitOfWorkFactory(async_session_maker),
+            message_id=payload.message_id,
+            agent_id=payload.agent_id,
+        )
 
     return channel_answer
 

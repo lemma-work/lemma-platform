@@ -335,6 +335,7 @@ class ChannelDeliveries:
                 platform=platform,
                 text=ready.text,
                 metadata=ready.metadata,
+                source=source,
             )
         try:
             await self._count_today(ready)
