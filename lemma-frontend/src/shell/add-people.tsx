@@ -205,7 +205,7 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                 pod_role: role,
                 /* Relative, so it resolves against whichever address they open
                    the invitation on; the accept page only honours a safe one. */
-                redirect_uri: "/t/" + encodeURIComponent(pod.id),
+                redirect_uri: "/l/" + encodeURIComponent(pod.id),
             })) as PodInvite;
             setQuery("");
             setInvited(email);

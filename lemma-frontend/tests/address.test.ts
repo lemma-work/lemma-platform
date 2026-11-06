@@ -16,35 +16,35 @@ function at(tabId: string | null, extra: Partial<Address> = {}): Address {
 
 /** Every address the grammar can express, and the URL it is spelled as. */
 const PLACES: [Address, string][] = [
-    [at(null), "/t/" + POD],
-    [at("conversation"), "/t/" + POD + "/conversation"],
-    [at("conversation", { conversationId: "c_17" }), "/t/" + POD + "/conversation/c_17"],
+    [at(null), "/l/" + POD],
+    [at("conversation"), "/l/" + POD + "/conversation"],
+    [at("conversation", { conversationId: "c_17" }), "/l/" + POD + "/conversation/c_17"],
     // A space's own lists. `/apps` is the Apps list.
-    [at("space:all"), "/t/" + POD + "/all"],
-    [at("space:pages"), "/t/" + POD + "/pages"],
-    [at("space:apps"), "/t/" + POD + "/apps"],
-    [at("space:tables"), "/t/" + POD + "/tables"],
-    [at("space:files"), "/t/" + POD + "/files"],
-    [at("bot:invoice_filer"), "/t/" + POD + "/bot/invoice_filer"],
-    [at("space:workflows"), "/t/" + POD + "/workflows"],
-    [at("space:home"), "/t/" + POD + "/home"],
-    [at("space:chats"), "/t/" + POD + "/chats"],
-    [at("run:run_42"), "/t/" + POD + "/run/run_42"],
-    [at("workflow:budget-sign-off"), "/t/" + POD + "/workflow/budget-sign-off"],
-    [at("space:channels"), "/t/" + POD + "/channels"],
-    [at("space:contacts"), "/t/" + POD + "/contacts"],
-    [at("channel:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/channel/7f3c9a2e-4b1d-4e8a"],
-    [at("space:about"), "/t/" + POD + "/about"],
-    [at("space:about", { section: "schedules" }), "/t/" + POD + "/about/schedules"],
-    [at("library"), "/t/" + POD + "/library"],
-    [at("history"), "/t/" + POD + "/history"],
-    [at("computer"), "/t/" + POD + "/computer"],
-    [at("profile"), "/t/" + POD + "/profile"],
-    [at("profile", { agentName: "researcher" }), "/t/" + POD + "/profile/researcher"],
-    [at("table:invoices"), "/t/" + POD + "/table/invoices"],
-    [at("app:launch-plan"), "/t/" + POD + "/app/launch-plan"],
-    [at("record:invoices:7"), "/t/" + POD + "/record/invoices/7"],
-    [at("file:/me/notes.md"), "/t/" + POD + "/file/me/notes.md"],
+    [at("space:all"), "/l/" + POD + "/all"],
+    [at("space:pages"), "/l/" + POD + "/pages"],
+    [at("space:apps"), "/l/" + POD + "/apps"],
+    [at("space:tables"), "/l/" + POD + "/tables"],
+    [at("space:files"), "/l/" + POD + "/files"],
+    [at("bot:invoice_filer"), "/l/" + POD + "/bot/invoice_filer"],
+    [at("space:workflows"), "/l/" + POD + "/workflows"],
+    [at("space:home"), "/l/" + POD + "/home"],
+    [at("space:chats"), "/l/" + POD + "/chats"],
+    [at("run:run_42"), "/l/" + POD + "/run/run_42"],
+    [at("workflow:budget-sign-off"), "/l/" + POD + "/workflow/budget-sign-off"],
+    [at("space:channels"), "/l/" + POD + "/channels"],
+    [at("space:contacts"), "/l/" + POD + "/contacts"],
+    [at("channel:7f3c9a2e-4b1d-4e8a"), "/l/" + POD + "/channel/7f3c9a2e-4b1d-4e8a"],
+    [at("space:about"), "/l/" + POD + "/about"],
+    [at("space:about", { section: "schedules" }), "/l/" + POD + "/about/schedules"],
+    [at("library"), "/l/" + POD + "/library"],
+    [at("history"), "/l/" + POD + "/history"],
+    [at("computer"), "/l/" + POD + "/computer"],
+    [at("profile"), "/l/" + POD + "/profile"],
+    [at("profile", { agentName: "researcher" }), "/l/" + POD + "/profile/researcher"],
+    [at("table:invoices"), "/l/" + POD + "/table/invoices"],
+    [at("app:launch-plan"), "/l/" + POD + "/app/launch-plan"],
+    [at("record:invoices:7"), "/l/" + POD + "/record/invoices/7"],
+    [at("file:/me/notes.md"), "/l/" + POD + "/file/me/notes.md"],
 ];
 
 test("every place has a URL, and every URL reads back as the place", () => {
@@ -54,9 +54,9 @@ test("every place has a URL, and every URL reads back as the place", () => {
     }
 });
 
-test("the classic workspace at /l reads every address the app at /t does", () => {
+test("an address written under /l still reads under /t, where older links say it", () => {
     for (const [address, url] of PLACES) {
-        assert.deepEqual(readAddress("/l" + url.slice("/t".length)), address, "reading " + url + " under /l");
+        assert.deepEqual(readAddress("/t" + url.slice("/l".length)), address, "reading " + url + " under /t");
     }
     assert.deepEqual(readAddress("/x/" + POD), NOWHERE, "any other root names nowhere");
 });
@@ -85,7 +85,7 @@ test("a part of About is a page under it, and Back steps out to the overview", (
 test("every teammate at once has an address of its own", () => {
     // Zoomed out, nobody is chosen — and it is not the bare root, which opens
     // whoever was open last. Refreshing or going Back must land here again.
-    assert.equal(writeAddress(TEAMMATES), "/t/teammates");
+    assert.equal(writeAddress(TEAMMATES), "/l/teammates");
     assert.deepEqual(readAddress("/t/teammates"), TEAMMATES);
     assert.deepEqual(readAddress("/t/teammates/"), TEAMMATES);
     assert.equal(readAddress("/t/teammates").podId, null);
@@ -107,14 +107,14 @@ test("zooming out and back in is a move either way", () => {
 test("the bare root names no teammate", () => {
     assert.deepEqual(readAddress("/t"), NOWHERE);
     assert.deepEqual(readAddress("/t/"), NOWHERE);
-    assert.equal(writeAddress(NOWHERE), "/t");
+    assert.equal(writeAddress(NOWHERE), "/l");
 });
 
 test("a file keeps its folders and loses nothing else", () => {
     // The separator between `file` and the first segment is the leading slash
     // a pod path always has, so a deep path survives intact.
     const deep = "file:/me/launch/notes/2026/q1/summary.md";
-    assert.equal(writeAddress(at(deep)), "/t/" + POD + "/file/me/launch/notes/2026/q1/summary.md");
+    assert.equal(writeAddress(at(deep)), "/l/" + POD + "/file/me/launch/notes/2026/q1/summary.md");
     assert.equal(readAddress("/t/" + POD + "/file/me/launch/notes/2026/q1/summary.md").tabId, deep);
 });
 
@@ -123,7 +123,7 @@ test("a file name with a character that means something in a URL survives", () =
     // per segment. The slashes are structure and stay slashes.
     const tab = "file:/me/Q1 notes #2.md";
     const url = writeAddress(at(tab));
-    assert.equal(url, "/t/" + POD + "/file/me/Q1%20notes%20%232.md");
+    assert.equal(url, "/l/" + POD + "/file/me/Q1%20notes%20%232.md");
     assert.equal(readAddress(url).tabId, tab);
 });
 
@@ -131,7 +131,7 @@ test("a table or app whose name has a space is still one segment", () => {
     // `readableName` turns `launch_plan` into `Launch Plan` for the strip, but
     // the id carries the real name — and a real name can have a space in it.
     const url = writeAddress(at("app:Launch Plan"));
-    assert.equal(url, "/t/" + POD + "/app/Launch%20Plan");
+    assert.equal(url, "/l/" + POD + "/app/Launch%20Plan");
     assert.equal(readAddress(url).tabId, "app:Launch Plan");
 });
 
@@ -140,7 +140,7 @@ test("a row id may contain a colon", () => {
     // taking it off the back would cut a composite key in half.
     const tab = "record:invoices:acme:2026-01";
     const url = writeAddress(at(tab));
-    assert.equal(url, "/t/" + POD + "/record/invoices/acme%3A2026-01");
+    assert.equal(url, "/l/" + POD + "/record/invoices/acme%3A2026-01");
     assert.equal(readAddress(url).tabId, tab);
 });
 
@@ -177,8 +177,8 @@ test("nothing outside the workspace root is an address here", () => {
 test("a tab kind this build cannot spell leaves the URL at the teammate", () => {
     // Better a URL that is merely less specific than one that reads back as
     // somewhere else entirely.
-    assert.equal(writeAddress(at("widget:abc")), "/t/" + POD);
-    assert.equal(writeAddress(at("record:nocolon")), "/t/" + POD);
+    assert.equal(writeAddress(at("widget:abc")), "/l/" + POD);
+    assert.equal(writeAddress(at("record:nocolon")), "/l/" + POD);
 });
 
 /** The five tabs a link can open before anything has loaded. */
@@ -270,7 +270,7 @@ test("a link from when groups had pages of their own opens Channels", () => {
     // channel is in. The shell writes the new address back.
     assert.deepEqual(readAddress("/t/" + POD + "/groups"), at("space:channels"));
     assert.deepEqual(readAddress("/t/" + POD + "/group/7f3c9a2e"), at("space:channels"));
-    assert.equal(writeAddress(readAddress("/t/" + POD + "/groups")), "/t/" + POD + "/channels");
+    assert.equal(writeAddress(readAddress("/t/" + POD + "/groups")), "/l/" + POD + "/channels");
     assert.deepEqual(readAddress("/t/" + POD + "/group"), at(null));
     assert.deepEqual(readAddress("/t/" + POD + "/group/a/b"), at(null));
     assert.deepEqual(readAddress("/t/" + POD + "/groups/extra"), at(null));

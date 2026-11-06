@@ -132,7 +132,7 @@ export function SiteHeader() {
                 <HostedOnly><Link href="/download" data-nav="download">Download</Link></HostedOnly>
                 <a href={githubUrl} data-nav="github">GitHub ↗</a>
                 <a href={discordUrl} data-nav="discord">Discord ↗</a>
-                <Link href="/t">Get started ↗</Link>
+                <Link href="/home">Get started ↗</Link>
             </nav>
         </header>
     );

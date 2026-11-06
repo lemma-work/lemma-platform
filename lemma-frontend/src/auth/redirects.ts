@@ -166,7 +166,7 @@ export function newOrganizationLink(here: string): string {
 /** Where a new organization opens: what the link asked for, if this app
  *  would honour it after a sign-in, else the organization itself. */
 export function afterNewOrganizationIn(orgId: string, search: string, where: Where): string {
-    return safeDestinationIn(rawDestination(search), where) ?? "/t?org=" + encodeURIComponent(orgId);
+    return safeDestinationIn(rawDestination(search), where) ?? "/home?org=" + encodeURIComponent(orgId);
 }
 
 export function afterNewOrganization(orgId: string, search: string): string {

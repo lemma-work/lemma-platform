@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Org } from "@/data";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
-import { CLASSIC_ROOT, readAddress } from "@/shell/address";
+import { readAddress } from "@/shell/address";
 import { NotYours } from "@/shell/not-yours";
 import { isForbidden } from "@/session/auth-state";
 import { useAnalyticsIdentity } from "@/site/analytics/identity";
@@ -31,13 +31,15 @@ import { FirstProfileStep } from "@/session/first-profile-step";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import {
     NEW_CHAT,
-    chatOpenOfView, chatView, isFramePath, outcomeView, podOfView, queueItems, readView, viewOfAddress, writeView,
-    type Ask, type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type View,
+    HOME, chatOpenOfView, chatView, outcomeView, podOfView, queueItems, readTrialView, readView, viewOfAddress, writeView,
+    type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type View,
 } from "./model";
 import { usePlans, usePodActivity, usePodDetails } from "./data";
 import { Bars, Icon, Empty } from "./parts";
 import { Sidebar } from "./sidebar";
 import { Today } from "./today";
+import { AppsPage } from "./apps";
+import { ConnectorsPage } from "./connectors";
 import { OutcomesList } from "./list";
 import { NeedsYou } from "./needs";
 import { People } from "./people";
@@ -51,6 +53,16 @@ import { CallDock, CallStage, useCalls } from "./calls";
 /** The organization the workspace last opened, shared with the classic
  *  workspace (`/l`) so the two agree on where you are. */
 const ORG_KEY = key("org");
+/** Whether the reader put the sidebar away: theirs, on this browser. */
+const SIDE_KEY = key("outcomes-side-closed");
+
+function storedSideClosed(): boolean {
+    try {
+        return localStorage.getItem(SIDE_KEY) === "1";
+    } catch {
+        return false;
+    }
+}
 
 /** The app a remix link names, if it is a web address at all. */
 function remixOf(raw: string | null): string | null {
@@ -120,22 +132,22 @@ export function OutcomesShell() {
        embedded thread or chat page writes its links as workspace addresses,
        and following one should stay here. */
     const last = useRef<View>({ name: "today" });
-    const view = useMemo(() => {
-        const path = pathname ?? "/t";
-        if (isFramePath(path)) return readView(path);
-        return viewOfLink(path, arrival) ?? last.current;
+    /* The app's own address first; then the frame's first one (`/t/outcome/…`)
+       and the workspace's (`/l/{pod}/conversation/…`), which links written
+       before the app moved still carry. */
+    const view = useMemo<View>(() => {
+        const path = pathname ?? HOME;
+        return readView(path) ?? readTrialView(path) ?? viewOfLink(path, arrival) ?? last.current;
     }, [pathname, arrival]);
     useEffect(() => { last.current = view; }, [view]);
     useEffect(() => {
-        const path = pathname ?? "/t";
-        if (isFramePath(path) && !path.startsWith("/o")) return;
-        /* A workspace address, or `/o` from while the frame was tried beside
-           the workspace: written back as the frame's own, the query kept for
-           whatever on the page still has to read it. */
-        const here = isFramePath(path) ? readView(path) : viewOfLink(path, arrival);
-        const tail = window.location.search + window.location.hash;
-        if (here) window.history.replaceState(window.history.state, "", writeView(here) + tail);
-        else window.location.assign(CLASSIC_ROOT + path.replace(/^\/[tl](?=\/|$)/, "") + tail);
+        const path = pathname ?? HOME;
+        if (readView(path)) return;
+        /* An old address, written back as the app's own for the same place,
+           the query kept for whatever on the page still has to read it. One
+           that names nowhere it knows opens Home. */
+        const here = readTrialView(path) ?? viewOfLink(path, arrival) ?? { name: "today" };
+        window.history.replaceState(window.history.state, "", writeView(here) + window.location.search + window.location.hash);
     }, [pathname, arrival]);
 
     /* Words on their way to a chat: what Home or ⌘K asked, or what an app put
@@ -144,6 +156,21 @@ export function OutcomesShell() {
     const [handoff, setHandoff] = useState<Handoff | null>(null);
     const [fill, setFill] = useState<Fill | null>(null);
     const [navOpen, setNavOpen] = useState(false);
+    const [sideClosed, setSideClosed] = useState(storedSideClosed);
+    const toggleSide = useCallback(() => setSideClosed((was) => !was), []);
+    useEffect(() => {
+        try { localStorage.setItem(SIDE_KEY, sideClosed ? "1" : "0"); } catch { /* kept for this visit only */ }
+    }, [sideClosed]);
+    useEffect(() => {
+        const onKey = (event: KeyboardEvent) => {
+            if ((event.metaKey || event.ctrlKey) && (event.key === "\\" || event.code === "Backslash")) {
+                event.preventDefault();
+                toggleSide();
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [toggleSide]);
     const go = useCallback<Go>((next, options = {}) => {
         const url = writeView(next);
         if (options.replace) {
@@ -233,15 +260,12 @@ export function OutcomesShell() {
        reply streams into the thread on screen; without a live session the
        words wait in the box instead. */
     const asks = useRef(0);
-    const ask = useCallback((podId: string, text: string, extra: AskWith = {}, replace = false) => {
+    const ask = useCallback((podId: string, text: string, extra: AskWith = {}) => {
         asks.current += 1;
         const target = chatView({ kind: "chat", podId, id: NEW_CHAT });
-        if (source.label === "live") go(target, { replace, handoff: { text, id: asks.current, podId, sent: false, createWith: extra.createWith, files: extra.files } });
-        else go(target, { replace, fill: { text, id: asks.current, podId, files: extra.files } });
+        if (source.label === "live") go(target, { handoff: { text, id: asks.current, podId, sent: false, createWith: extra.createWith, files: extra.files, folder: extra.folder } });
+        else go(target, { fill: { text, id: asks.current, podId, files: extra.files } });
     }, [go]);
-    /* From a new chat's own box: the chat is already open, so the words
-       start it in place rather than as another step back to go through. */
-    const askHere = useCallback<Ask>((podId, text, extra) => ask(podId, text, extra, true), [ask]);
     /* Words for a chat's box, without sending: what a table's "ask" and an
        app's button put there. */
     const prompt = useCallback((podId: string, text: string, fresh = true) => {
@@ -310,6 +334,7 @@ export function OutcomesShell() {
         share: (podId, subject = { kind: "space" }) => setShared({ podId, subject }),
         addPeople: setAddingPeople,
         prompt: (podId, text) => prompt(podId, text),
+        fill: (podId, text) => prompt(podId, text, false),
         ask: (podId, text, createWith, files) => ask(podId, text, { createWith, files }),
     }), [openSettings, prompt, ask]);
 
@@ -411,6 +436,10 @@ export function OutcomesShell() {
         page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
     } else if (view.name === "today") {
         page = <Today org={org} pods={withPeople} activity={activity} queue={queue} me={myName} go={go} onAsk={ask} />;
+    } else if (view.name === "apps") {
+        page = <AppsPage pods={withPeople} go={go} />;
+    } else if (view.name === "connectors") {
+        page = <ConnectorsPage org={org} />;
     } else if (view.name === "outcomes") {
         page = <OutcomesList org={org} pods={withPeople} activity={activity} plans={plans} queue={queue} go={go} />;
     } else if (view.name === "needs") {
@@ -447,7 +476,7 @@ export function OutcomesShell() {
     } else if (unlisted && (linked.isPending || elsewhere)) {
         page = <p className="ox-loading">Opening…</p>;
     } else if (view.name === "chats") {
-        page = <ChatPane pods={withPeople} open={view.open} activity={activity} go={go} onAsk={askHere} actions={actions} calls={calls} handoff={handoff} onHandoffSent={sentHandoff} fill={fill} onFilled={filled} />;
+        page = <ChatPane pods={withPeople} open={view.open} activity={activity} go={go} actions={actions} calls={calls} handoff={handoff} onHandoffSent={sentHandoff} fill={fill} onFilled={filled} />;
     } else if (!pod) {
         page = <div className="ox-page"><Empty title="This Lemma isn’t one you can open."><p>It may have been removed, or you were never added to it.</p></Empty></div>;
     } else if (view.name === "outcome" && view.tab === "settings") {
@@ -474,7 +503,7 @@ export function OutcomesShell() {
     }
 
     return (
-        <div className="ox" data-nav={navOpen || undefined}>
+        <div className={"ox" + (sideClosed ? " ox--railed" : "")} data-nav={navOpen || undefined}>
             {contactFeeds}
             <Sidebar
                 org={org}
@@ -491,6 +520,8 @@ export function OutcomesShell() {
                 onPlan={() => openSettings("plan")}
                 onNewOrg={() => setMakingOrg(true)}
                 open={navOpen}
+                closed={sideClosed}
+                onToggle={toggleSide}
             />
             {navOpen && <button type="button" className="ox-navscrim" aria-label="Close the menu" onClick={() => setNavOpen(false)} />}
             <div className="ox-body">

@@ -123,7 +123,7 @@ button svg, a svg { flex-shrink:0; }
 .account-details { width:100%;margin:10px 0; }.account-details > div { display:flex;justify-content:space-between;gap:20px;padding:13px 0;border-bottom:1px solid var(--line);font-size:12px; }.account-details dt { display:flex;align-items:center;gap:7px;color:var(--ink-2); }.account-details dd { margin:0;text-align:right;overflow-wrap:anywhere; }.account-disconnect { border:0;background:none;display:flex;align-items:center;gap:7px;font-size:12px;padding:10px;color:var(--ink-2);cursor:pointer; }.account-disconnect[disabled] { opacity:.6;cursor:default; }.account-aside { font-size:11.5px;color:var(--ink-3);text-decoration:none; }.account-aside:hover { color:var(--ink-2); }.account-error { text-align:center; }
 .modal { z-index:1000;animation:backdrop-in 160ms ease;backdrop-filter:blur(5px); }.modal__panel { animation:panel-in 200ms var(--ease-out); }.modal__close { display:grid;place-items:center; }.theme__menu { animation:menu-in 150ms var(--ease-out); }
 .hero__acts { flex-wrap:wrap; }.hero__oncall { letter-spacing:.05em; }.project__status,.resource__go { display:inline-flex;align-items:center;gap:5px; }
-.history__new,.history__more,.callbar__mute,.callbar__end { display:flex;align-items:center;gap:8px; }.history__item { min-height:36px; }.steps__chev { display:inline-flex;align-items:center; }.composer__input { padding-left:8px; }.composer__send,.composer__stop { display:grid;place-items:center; }.composer__box:focus-within { border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-soft); }.composer__wave { display:grid;place-items:center; }
+.history__new,.history__more,.callbar__mute,.callbar__end { display:flex;align-items:center;gap:8px; }.history__item { min-height:36px; }.composer__input { padding-left:8px; }.composer__send,.composer__stop { display:grid;place-items:center; }.composer__box:focus-within { border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-soft); }.composer__wave { display:grid;place-items:center; }
 .pane--profile .profile { animation:panel-in 180ms var(--ease-out); }
 @keyframes menu-in { from {opacity:0;transform:translateY(-4px);} to {opacity:1;transform:none;} }
 @keyframes panel-in { from {opacity:0;transform:translateY(7px);} to {opacity:1;transform:none;} }
@@ -370,7 +370,6 @@ button svg, a svg { flex-shrink:0; }
     .convo-host { --turn-indent:36px; }
     .msg--you .msg__body { padding:9px 13px 10px; }
     .said { padding:11px 14px 12px; }
-    .steps__peek { display:none; }
     .composer { padding:8px 12px 12px; }
 }
 /* The view toolbar owns navigation and actions; tools get the full canvas. */
@@ -1079,7 +1078,6 @@ button svg, a svg { flex-shrink:0; }
    a thought is prose, a call is a command. */
 .steps__list li[data-kind="thought"] .steps__label { color:var(--ink-3);font-family:inherit;font-size:12px;font-style:italic; }
 .steps__list li[data-kind="thought"] .steps__detail { color:var(--ink-2); }
-.steps[data-live] .steps__toggle { color:var(--ink-2); }
 
 /* Chrome anchors scrolling content by itself, which fights a transcript
    that is deliberately choosing where to sit. */
