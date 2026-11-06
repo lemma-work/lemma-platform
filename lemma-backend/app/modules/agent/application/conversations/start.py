@@ -7,6 +7,10 @@ whether the person may run it), what kind it is, where it works, and which of
 the server-only facts (a contact, an origin, a parent run, an ask, a call) it
 carries. None of those last ones is reachable from a request a client sends.
 
+Where it works is the one claim a client may make, by naming a GitHub
+repository: checked here against the organization's installation, as the
+person opening it, before anything is written (``ProjectRepositories``).
+
 Writes ride the caller's transaction, as opening always has: the request's unit
 of work commits it, or the caller's own does.
 """
@@ -15,11 +19,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.calls import CallMark
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_ask_record import PodAsk
-from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.domain.ports import AgentRepository, ProjectRepositories
+from app.modules.agent.domain.project_repo import ProjectRepo
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationOrigin,
@@ -28,6 +34,9 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.domain.workspace_location import apply_location
 from app.modules.agent.infrastructure import repositories
 from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.github_project_repositories import (
+    GithubProjectRepositories,
+)
 from app.modules.agent.services.conversation_access import (
     named_agent,
     require_execute,
@@ -65,15 +74,30 @@ class StartConversation:
     """Opens a new conversation, checked and placed."""
 
     def __init__(
-        self, uow: SqlAlchemyUnitOfWork, *, agent_repository: AgentRepository
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        agent_repository: AgentRepository,
+        project_repositories: ProjectRepositories | None = None,
     ) -> None:
         self.uow = uow
         self.conversations = Conversations(uow)
         self.agent_repository = agent_repository
+        # Only an opener naming a repository asks it, and building one is free.
+        self.project_repositories = project_repositories or GithubProjectRepositories()
 
     @classmethod
-    def build(cls, uow: SqlAlchemyUnitOfWork) -> StartConversation:
-        return cls(uow, agent_repository=repositories.AgentRepository(uow))
+    def build(
+        cls,
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        project_repositories: ProjectRepositories | None = None,
+    ) -> StartConversation:
+        return cls(
+            uow,
+            agent_repository=repositories.AgentRepository(uow),
+            project_repositories=project_repositories,
+        )
 
     async def start(
         self,
@@ -97,6 +121,7 @@ class StartConversation:
         ask: PodAsk | None = None,
         call: CallMark | None = None,
         started_on: str | None = None,
+        repository: ProjectRepo | None = None,
     ) -> Conversation:
         """A new conversation in the pod.
 
@@ -107,6 +132,11 @@ class StartConversation:
         says otherwise), a sub-agent's link to its parent, the ask another pod
         opened it with, the call it belongs to. ``started_on`` is the platform
         (or ``web_widget``) a surface opened it on, for the started count.
+
+        ``repository`` is the GitHub repository the person picked to work in.
+        It is refused unless the organization's installation covers it for
+        them, and stored as GitHub names it, which is also what sets the
+        conversation's directory to the repository's checkout.
         """
         organization_id = await pod_organization_id(self.uow, pod_id)
         # A parent is the caller's own conversation in this pod, or it does not
@@ -138,6 +168,11 @@ class StartConversation:
         # releases its connection.
         if require_execute_grant:
             await require_execute(pod_id=pod_id, user_id=user_id, agent=agent)
+        repo = (
+            await self._checked(repository, pod_id=pod_id, user_id=user_id)
+            if repository is not None
+            else None
+        )
         # A PROJECT is an explicit user choice (a pinned group); never coerce it.
         # Otherwise a structured-output agent implies a TASK conversation.
         if type == ConversationType.PROJECT:
@@ -171,11 +206,22 @@ class StartConversation:
             reports_to_parent=reports_to_parent,
             ask=ask,
             call=call,
+            repo=repo,
         )
         await self._apply_inherited_cwd(conversation, parent=parent)
         return await self.conversations.create_conversation(
             conversation, started_on=started_on
         )
+
+    async def _checked(
+        self, repository: ProjectRepo, *, pod_id: UUID, user_id: UUID
+    ) -> ProjectRepo:
+        # Everything before this only read, so the request's connection goes
+        # back to the pool while GitHub is asked; the check opens its own.
+        async with connection_released(self.uow.session):
+            return await self.project_repositories.checked(
+                repository, pod_id=pod_id, user_id=user_id
+            )
 
     async def _apply_inherited_cwd(
         self,

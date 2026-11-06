@@ -90,7 +90,7 @@ object, and none inherits from another.
 
 | Use case | Does |
 | --- | --- |
-| `conversations/start.StartConversation` | Open a conversation: its agent and the right to run it (`authorize_opening` checks that alone), its kind, where it works, the server-only facts |
+| `conversations/start.StartConversation` | Open a conversation: its agent and the right to run it (`authorize_opening` checks that alone), its kind, where it works -- a GitHub repository the person names is checked through the `ProjectRepositories` port first -- and the server-only facts |
 | `conversations/update.UpdateConversation` | Change title, instructions, runtime, client tags, archived |
 | `conversations/read.ConversationReads` | The query side: list, get, messages, runs, the pending-interactions inbox, and the oldest open pause of each kind |
 | `turns/send_message.SendMessage` | Find or open the conversation, authorize the sender, then admit the message (`typed_in_lemma` only from Lemma's composer) |
@@ -124,7 +124,7 @@ and in `domain/` (`turn_admission`, `interaction_reply`).
 
 | Layer | What is there |
 | --- | --- |
-| `domain/` | Pure: entities and value types, the run's resolved runtime (`resolved_runtime`) and the pure steps of runtime resolution (`runtime_choice`), history assembly (`runtime_history`), a provider PATCH (`runtime_provider_patch`), the live frames (`live_events`), a background call's terms (`background`), prompt assembly (the `prompt/` package), and the ports (`ports.py`: `Harness`, `ModelProvider`, `LiveEvents`) |
+| `domain/` | Pure: entities and value types, the run's resolved runtime (`resolved_runtime`) and the pure steps of runtime resolution (`runtime_choice`), history assembly (`runtime_history`), a provider PATCH (`runtime_provider_patch`), the live frames (`live_events`), a background call's terms (`background`), prompt assembly (the `prompt/` package), and the ports (`ports.py`: `Harness`, `ModelProvider`, `LiveEvents`, `ProjectRepositories`) |
 | `application/` | The use cases above; each opens and commits its own unit of work |
 | `services/` | Shared steps that never commit on their own. The "one of each": `runtime_resolution.resolve_runtime(request, purpose=...)` is the one chain every model choice goes through (a turn, a title, the memory pass, the vision delegate, compaction); `background_model.BackgroundModel` resolves, builds, meters and runs every non-turn model call through the `ModelProvider` port; `run_session.RunSession` loads what a run works against once (conversation, agent, run, history, runtime, grants) and builds the tools' context for the runner, the resume path, the Agent Host MCP call (`agent_host/relayed_session`, with the runtime and grants cached per lease by grant generation) and the pod MCP server (`pod_tool_context`); the run's briefs are the `context_brief/` package |
 | `infrastructure/` | Repositories (`db/`), model construction and vendor quirks (`providers/`, the only place besides the harness that imports pydantic-ai or a vendor SDK), the in-process harness on pydantic-ai (`harness/lemma/`), the harness registry (`harness/registry.py`), the live publisher (`live.py`) and the MCP wire format (`mcp.py`, `mcp_content.py`) |
@@ -139,7 +139,7 @@ adapter is consolidated.
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
-| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
+| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
@@ -184,6 +184,62 @@ already holds is stored under a new one, its return following it
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
+
+### A conversation in a GitHub repository
+
+Create takes `repository` (`owner/name`). It is checked as the person opening
+the conversation, through the pod's `github` connector -- the account, and the
+sandbox rule for a shared one, that the clone will use
+(`tools/workspace_cli/github_credential`) -- and then against that account's
+installation: it must be on the repository's owner, and then cover every
+repository there, or the repository is private (an App's user token reads one
+only where the App is installed), or the installation's selection lists it
+(`connectors.contracts.github.installation_repository`). Each refusal keeps its
+own code; GitHub not answering is a 503, never a pass, and a selection too long
+to walk is `GITHUB_REPOSITORY_UNCHECKED`, not "not installed". The listing
+shows at most a picker's worth and says `complete: false` past it.
+The repository is stored as GitHub spells it, and the conversation's directory
+is a worktree of it of its own, `~/lemma/worktrees/{owner}/{repo}/{slug}` on
+branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
+sub-agent inherits its parent's worktree; a run a webhook started, which is not
+stamped at creation, gets one keyed by its conversation id.
+
+Before the agent's first shell or Python call, the sandbox clones the
+repository once per person, at `~/lemma/repos/{owner}/{repo}`, with the
+person's token -- or fetches it if it is already there -- and then adds this
+conversation's worktree from `origin/<ref>` or `origin/HEAD`
+(`tools/workspace_cli/github_project`). A worktree whose directory was lost is
+made again on its surviving branch. A failed clone, a failed worktree and a
+failed fetch each tell the agent once.
+
+A pull request (`pull/123/head`) is fetched by name into
+`origin/pull/123/head`, since a clone does not fetch `refs/pull`, and checked
+out from there. A run on a shared pod machine already starts in a directory of
+its own (`~/lemma/runs/{agent}/{run}`), and the project goes there instead: a
+detached worktree of the same clone, cleared with the run directory by the
+machine rather than by the sweep below.
+
+So the clone's objects and `origin/*` are shared, and nothing else is: no
+conversation works in another's tree or on another's branch. Conversations from
+before worktrees recorded the clone itself as their directory and keep working
+there, with the old prompt that tells them it is shared.
+
+A worktree goes when its conversations are finished with it
+(`domain/worktree_sweep`): every conversation working in it -- the root and the
+sub-agents that share it -- is archived and an hour quiet, or two weeks quiet
+whether archived or not, and none has a run going. The hour outlasts the
+checkout marker, so a conversation brought back from the archive makes its
+worktree again rather than trusting a marker. The sweep
+(`tools/workspace_cli/worktree_sweep`) reads the person's conversations across
+pods in one workspace, in a short unit of work of its own, and runs after a
+repository conversation's checkout -- never waking a sleeping sandbox -- at most
+once a day per sandbox. It starts `git worktree remove` in the sandbox and is
+not waited on. Without `--force`, git keeps a tree with changes or untracked
+files, to be tried again the next day; ignored files (`node_modules`, build
+output) go with a clean tree. The branch is never deleted: commits that never
+reached GitHub stay in the clone, and a conversation that runs again gets its
+worktree made again on its branch. A worktree whose conversations were deleted
+with their pod is not swept.
 
 ## Prompt context
 

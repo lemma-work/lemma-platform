@@ -6321,6 +6321,69 @@
         "title": "ConversationListResponse",
         "type": "object"
       },
+      "ConversationRepositoryListResponse": {
+        "properties": {
+          "complete": {
+            "default": true,
+            "description": "False when the installation covers more repositories than are listed. Create still accepts the ones not shown.",
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationRepositoryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ConversationRepositoryListResponse",
+        "type": "object"
+      },
+      "ConversationRepositoryResponse": {
+        "description": "A GitHub repository a conversation can be opened in.",
+        "properties": {
+          "default_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Branch"
+          },
+          "full_name": {
+            "description": "'owner/name', the value create takes.",
+            "title": "Full Name",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "private": {
+            "default": false,
+            "title": "Private",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "full_name",
+          "owner",
+          "name"
+        ],
+        "title": "ConversationRepositoryResponse",
+        "type": "object"
+      },
       "ConversationResponse": {
         "properties": {
           "agent_id": {
@@ -7042,6 +7105,19 @@
               }
             ],
             "title": "Parent Id"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "maxLength": 140,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A GitHub repository to work in, as 'owner/name': one the organization's GitHub installation covers for you, as listed by the conversation repositories endpoint. The conversation's workspace_cwd is then a git worktree of it on a branch of its own (lemma/<slug>), made before the agent's first command from one clone of the repository, which is fetched first. Other conversations in the repository get worktrees of their own.",
+            "title": "Repository"
           },
           "title": {
             "anyOf": [
@@ -42974,7 +43050,7 @@
         }
       },
       "post": {
-        "description": "Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default pod assistant. Workflow and sub-agent executions also use conversations as their external execution handle.",
+        "description": "Create a new pod-scoped conversation. When agent_name is omitted, the conversation uses the default pod assistant. Workflow and sub-agent executions also use conversations as their external execution handle. Name a repository to work in a checkout of it: it is refused unless the organization's GitHub installation covers it for you.",
         "operationId": "agent.conversation.create",
         "parameters": [
           {
@@ -43110,6 +43186,57 @@
           "kind": "query",
           "paginates": true,
           "resource": "agent.conversation.pending_interaction",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/repositories": {
+      "get": {
+        "description": "The GitHub repositories you can open a conversation in: those the organization's GitHub installation covers and your account can see, through this pod's 'github' connector. Refused with the connector's own code when that connector cannot give your sandbox a checkout. An installation covering a very large organization is listed in part, with complete=false.",
+        "operationId": "agent.conversation.repository.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationRepositoryListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Repositories A Conversation Can Open In",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.repository",
           "result": "collection",
           "verb": "list"
         }

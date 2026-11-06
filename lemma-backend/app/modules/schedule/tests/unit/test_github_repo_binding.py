@@ -130,4 +130,4 @@ class TestTheTwoHalvesAgree:
         assert parsed is not None
         assert parsed.full_name == "octo/api"
         assert parsed.ref == "feature/commas"
-        assert parsed.cwd.endswith("/octo/api")
+        assert parsed.clone_dir.endswith("/repos/octo/api")
