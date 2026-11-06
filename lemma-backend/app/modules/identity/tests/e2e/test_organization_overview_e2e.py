@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -40,6 +40,7 @@ from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.tests.e2e.lifecycle_helpers import opening_for
 from app.modules.apps.infrastructure.models import AppModel
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.channels.tests.e2e.channel_pod import contact_place
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
@@ -611,6 +612,35 @@ async def test_apps_are_every_pods_newest_first_and_only_what_you_may_open(
     assert [app["id"] for app in as_member["items"]] == [str(personal), str(older)]
 
 
+async def test_the_landing_page_lists_only_the_apps_its_reader_may_open(
+    scenario: E2EScenario,
+):
+    """``org.home`` applies the rule ``org.apps.list`` does: a pod its reader
+    may see can hold apps they may not, and those are not named."""
+    (pod_id,) = await _org_with_pods(scenario, 1)
+    owner = scenario.owner_user
+    member = await _member(scenario, pods={pod_id: "POD_USER"}, prefix="ov-home-apps")
+    shared = await _app(
+        pod_id, owner["id"], name="tracker", visibility="POD", updated_ago=timedelta(0)
+    )
+    personal = await _app(
+        pod_id,
+        member["id"],
+        name="scratch",
+        visibility="PERSONAL",
+        updated_ago=timedelta(0),
+    )
+
+    async def apps_on_home(who: dict[str, str] | None) -> set[str]:
+        home = await _as(scenario, who)(f"/organizations/{scenario.org_id}/home")
+        assert home.status_code == status.HTTP_200_OK, home.text
+        (pod,) = [each for each in home.json()["pods"] if each["id"] == pod_id]
+        return {app["id"] for app in pod["apps"]}
+
+    assert await apps_on_home(None) == {str(shared)}, "another member's own app"
+    assert await apps_on_home(member) == {str(shared), str(personal)}
+
+
 # -- Home seen ---------------------------------------------------------------------
 
 
@@ -649,6 +679,54 @@ async def test_home_seen_is_each_members_own_and_only_moves_forward(
 
     # Theirs alone.
     assert (await _as(scenario, member)(url)).json()["seen_at"] is None
+
+
+async def _preferences(user_id: str, value: object = ...) -> object:
+    """The user's stored preferences, written first when ``value`` is given."""
+    async with async_session_maker() as session:
+        if value is not ...:
+            await session.execute(
+                update(User).where(User.id == UUID(user_id)).values(preferences=value)
+            )
+            await session.commit()
+        return await session.scalar(
+            select(User.preferences).where(User.id == UUID(user_id))
+        )
+
+
+async def test_a_home_seen_mark_keeps_everything_else_in_the_preferences(
+    scenario: E2EScenario,
+):
+    """Only the ``home_seen`` key is written. What sits beside it is kept as
+    stored, even when the preferences model could not read it."""
+    await _org_with_pods(scenario, 1)
+    url = f"/organizations/{scenario.org_id}/home/seen"
+    user_id = scenario.owner_user["id"]
+    unreadable = {
+        "default_surfaces": {"WHATSAPP": "not-a-surface-id"},
+        "elsewhere": {"kept": True},
+    }
+    await _preferences(user_id, unreadable)
+
+    marked = await scenario.owner_client.put(url)
+    assert marked.status_code == status.HTTP_200_OK, marked.text
+    stored = await _preferences(user_id)
+    assert {key: stored[key] for key in unreadable} == unreadable
+    assert set(stored["home_seen"]) == {scenario.org_id}
+    assert (await scenario.owner_client.get(url)).json()["seen_at"] == (
+        marked.json()["seen_at"]
+    )
+
+    # Nothing stored yet, or a `home_seen` that is not an object: it starts over.
+    for start in (None, {"home_seen": "junk", "elsewhere": 1}):
+        await _preferences(user_id, start)
+        marked = await scenario.owner_client.put(url)
+        assert marked.status_code == status.HTTP_200_OK, marked.text
+        assert marked.json()["previous_seen_at"] is None
+        stored = await _preferences(user_id)
+        assert set(stored["home_seen"]) == {scenario.org_id}
+        if start is not None:
+            assert stored["elsewhere"] == 1
 
 
 # -- the point of all four ---------------------------------------------------------

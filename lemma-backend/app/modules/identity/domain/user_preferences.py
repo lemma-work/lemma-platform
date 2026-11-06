@@ -16,8 +16,10 @@ class UserPreferences(BaseModel):
     belongs to pods in more than one organization. Absent platform → no default.
 
     ``home_seen`` maps an organization id to when the user last marked its Home
-    seen, so Home can say what moved since on any browser or device. Only ever
-    moved forward (``infrastructure/organization_home_seen``).
+    seen, so Home can say what moved since on any browser or device. Written
+    only by ``infrastructure/organization_home_seen``, one key at a time; it is
+    declared here so every other writer of preferences, which round-trips this
+    model, keeps it.
     """
 
     default_surfaces: dict[str, UUID] = Field(default_factory=dict)
@@ -39,11 +41,3 @@ class UserPreferences(BaseModel):
         merged = dict(self.default_surfaces)
         merged.pop(str(platform).upper(), None)
         return self.model_copy(update={"default_surfaces": merged})
-
-    def with_home_seen(self, organization_id: UUID, at: datetime) -> "UserPreferences":
-        """Return a copy with the organization's Home seen at ``at``, unless it
-        was already seen later."""
-        merged = dict(self.home_seen)
-        was = merged.get(organization_id)
-        merged[organization_id] = at if was is None else max(was, at)
-        return self.model_copy(update={"home_seen": merged})

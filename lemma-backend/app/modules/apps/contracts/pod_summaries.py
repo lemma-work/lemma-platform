@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Subquery, and_, func, or_, select
+from sqlalchemy import ColumnElement, Subquery, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import Context, ResourceType
@@ -57,14 +57,21 @@ class ReadablePodApp:
 async def list_app_summaries_by_pod(
     *,
     session,
-    pod_ids: list[UUID],
+    contexts: Mapping[UUID, Context],
 ) -> dict[UUID, list[PodAppSummary]]:
-    """Apps for every given pod, keyed by pod, in one query.
+    """The apps each pod's own viewer may read, keyed by pod, in one query.
 
-    Pods with no apps are absent rather than mapped to an empty list; callers
-    read through ``.get(pod_id, [])`` so the difference never reaches a response.
+    A context per pod, as ``list_readable_apps_by_pod`` takes one: an app
+    carries its own visibility and owner, so being able to see a pod is not
+    being able to see its apps. Without it the organization landing page named
+    another member's personal app, and a restricted one granted to somebody
+    else, to everyone in the pod.
+
+    Pods with no readable apps are absent rather than mapped to an empty list;
+    callers read through ``.get(pod_id, [])`` so the difference never reaches a
+    response.
     """
-    if not pod_ids:
+    if not contexts:
         return {}
     rows = (
         await session.execute(
@@ -76,7 +83,7 @@ async def list_app_summaries_by_pod(
                 AppModel.public_slug,
                 AppModel.status,
             )
-            .where(AppModel.pod_id.in_(pod_ids))
+            .where(AppModel.pod_id.in_(list(contexts)), _readable_in(contexts))
             .order_by(AppModel.name)
         )
     ).all()
@@ -105,12 +112,9 @@ async def list_readable_app_summaries(
 ) -> list[PodAppSummary]:
     """One pod's apps, filtered to what this context may actually read.
 
-    Separate from the bulk listing above rather than an optional argument on
-    it. The bulk one answers for the organization landing page, which does its
-    own authorization upstream and wants every pod at once; this one answers for
-    an agent's runtime brief, where the reader is one user and an app carries
-    its own visibility and owner. An optional ``ctx`` would be the version a
-    caller forgets to pass.
+    Separate from the bulk listing above, which wants every pod at once and a
+    context for each; this one answers for an agent's runtime brief, where the
+    reader is one user in one pod.
 
     ``limit`` is required for the same reason. The brief caps what it renders,
     but capping the render is not capping the read -- the first version of this
@@ -154,9 +158,8 @@ async def list_readable_app_summaries(
     ]
 
 
-def readable_apps_ranked_by_pod(contexts: Mapping[UUID, Context]) -> Subquery:
-    """Apps each pod's own viewer may read, numbered within their pod, newest
-    first -- the statement ``list_readable_apps_by_pod`` caps.
+def _readable_in(contexts: Mapping[UUID, Context]) -> ColumnElement[bool]:
+    """An app its pod's own viewer may read, for every pod in ``contexts``.
 
     A context per pod, as ``agent.contracts.pod_summaries`` takes one and for
     the same reason: an app carries its own visibility and owner, and the
@@ -164,7 +167,7 @@ def readable_apps_ranked_by_pod(contexts: Mapping[UUID, Context]) -> Subquery:
     holds none of the caller's permissions in pod B. The OR of per-pod
     expressions is what keeps it one statement.
     """
-    readable = or_(
+    return or_(
         *[
             and_(
                 AppModel.pod_id == pod_id,
@@ -183,6 +186,11 @@ def readable_apps_ranked_by_pod(contexts: Mapping[UUID, Context]) -> Subquery:
             for pod_id, ctx in contexts.items()
         ]
     )
+
+
+def readable_apps_ranked_by_pod(contexts: Mapping[UUID, Context]) -> Subquery:
+    """Apps each pod's own viewer may read, numbered within their pod, newest
+    first -- the statement ``list_readable_apps_by_pod`` caps."""
     return (
         select(
             AppModel.id,
@@ -200,7 +208,7 @@ def readable_apps_ranked_by_pod(contexts: Mapping[UUID, Context]) -> Subquery:
             )
             .label("rank"),
         )
-        .where(AppModel.pod_id.in_(list(contexts)), readable)
+        .where(AppModel.pod_id.in_(list(contexts)), _readable_in(contexts))
         .subquery("ranked")
     )
 
@@ -213,9 +221,8 @@ async def list_readable_apps_by_pod(
 ) -> dict[UUID, list[ReadablePodApp]]:
     """Each pod's apps that pod's own viewer may read, newest first, in one query.
 
-    Unlike ``list_app_summaries_by_pod`` this one does its own authorization
-    (``readable_apps_ranked_by_pod``), which is what lets a list across every
-    pod show no app its reader could not open.
+    The same rule as ``list_app_summaries_by_pod`` (``_readable_in``), newest
+    first and capped per pod, with each app's visibility and when it changed.
 
     ``limit`` caps each pod rather than the whole answer, so one pod's apps
     cannot crowd another's out; it is a ceiling no ordinary pod reaches, not a

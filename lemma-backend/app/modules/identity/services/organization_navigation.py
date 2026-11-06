@@ -147,8 +147,9 @@ async def load_organization_home(
 ) -> OrganizationHome | None:
     """One organization in full. None when the caller is not a member.
 
-    Five queries: the membership, the pods with the caller's roles, the apps,
-    the roles behind the caller's per-pod authorization, and the agents. Fixed,
+    Five queries: the membership, the pods with the caller's roles, the roles
+    behind the caller's per-pod authorization, and the apps and agents each
+    filtered by it. Fixed,
     not per pod -- the property `test_home_query_count_does_not_grow_with_pods`
     pins, and the reason the contexts below are built in one go rather than one
     call at a time.
@@ -168,8 +169,6 @@ async def load_organization_home(
         },
         owned_organization_ids=owned_organizations(memberships),
     )
-    pod_ids = [pod.id for pod in pods]
-    apps = await list_app_summaries_by_pod(session=session, pod_ids=pod_ids)
     # One per pod: an agent's visibility is decided against the caller's
     # permissions *in the pod that owns it*, and those differ from pod to pod.
     # Built in bulk -- a loop over `build_user_context` is a per-pod fan-out on
@@ -183,6 +182,9 @@ async def load_organization_home(
         # again here is what would make this per pod.
         pod_member_ids_by_pod={pod.id: pod.pod_member_id for pod in pods},
     )
+    # Apps are weighed the same way: an app carries its own visibility and
+    # owner, so a pod the caller may see can hold apps they may not.
+    apps = await list_app_summaries_by_pod(session=session, contexts=contexts)
     agents = await list_agent_summaries_by_pod(
         session=session, contexts=contexts, limit=HOME_AGENTS_PER_POD
     )

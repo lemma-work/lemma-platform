@@ -9,6 +9,10 @@ by that person and only while they are a member.
 It only moves forward. A tab left open since yesterday that marks Home seen as
 of when it loaded must not undo what a newer tab already marked, so the write
 keeps the later of the stored moment and the new one.
+
+The rest of the preferences are not this module's. Only the one entry is read,
+and only the ``home_seen`` key is written, merged in SQL, so a mark never
+rewrites -- or empties -- a default surface or anything else stored beside it.
 """
 
 from __future__ import annotations
@@ -17,15 +21,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import ValidationError
-from sqlalchemy import exists, select, update
+from pydantic import TypeAdapter, ValidationError
+from sqlalchemy import Text, case, exists, func, literal, select, update
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.identity.domain.user_preferences import UserPreferences
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
 from app.modules.identity.infrastructure.models.user_models import User
+
+_MOMENT = TypeAdapter(datetime)
+_KEY = "home_seen"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,21 +43,27 @@ class HomeSeen:
     previous_seen_at: datetime | None
 
 
-def _preferences(raw: object) -> UserPreferences:
-    """Stored preferences, or none: a value this model no longer reads is
-    treated as empty rather than failing the page that asked."""
-    if not raw:
-        return UserPreferences()
+def _seen_in(preferences: object, organization_id: UUID) -> datetime | None:
+    """This organization's entry in stored preferences, or None. Whatever else
+    is stored there, readable or not, is left alone."""
+    if not isinstance(preferences, dict):
+        return None
+    seen = preferences.get(_KEY)
+    if not isinstance(seen, dict):
+        return None
     try:
-        return UserPreferences.model_validate(raw)
+        moment = _MOMENT.validate_python(seen.get(str(organization_id)))
     except ValidationError:
-        return UserPreferences()
+        return None
+    # Every mark is written aware; one that is not was not written here.
+    return moment if moment.tzinfo is not None else None
 
 
 async def _preferences_of_member(
     session: AsyncSession, *, user_id: UUID, organization_id: UUID, lock: bool
-) -> UserPreferences | None:
-    """The member's preferences, or None when they are not a member."""
+) -> tuple[object] | None:
+    """The member's stored preferences as a one-tuple (they may be NULL), or
+    None when they are not a member."""
     stmt = select(User.preferences).where(
         User.id == user_id,
         exists().where(
@@ -61,19 +74,19 @@ async def _preferences_of_member(
     if lock:
         stmt = stmt.with_for_update(of=User)
     row = (await session.execute(stmt)).one_or_none()
-    return None if row is None else _preferences(row.preferences)
+    return None if row is None else (row.preferences,)
 
 
 async def read_home_seen(
     session: AsyncSession, *, user_id: UUID, organization_id: UUID
 ) -> HomeSeen | None:
     """The member's mark. None when they are not a member."""
-    preferences = await _preferences_of_member(
+    found = await _preferences_of_member(
         session, user_id=user_id, organization_id=organization_id, lock=False
     )
-    if preferences is None:
+    if found is None:
         return None
-    seen_at = preferences.home_seen.get(organization_id)
+    seen_at = _seen_in(found[0], organization_id)
     return HomeSeen(seen_at=seen_at, previous_seen_at=seen_at)
 
 
@@ -84,24 +97,41 @@ async def mark_home_seen(
 
     The user's row is locked for the read of what it was, so two tabs marking
     at once each see the other's write rather than both reporting the same
-    previous moment. ``updated_at`` is left alone: looking at a page is not a
-    change to the account.
+    previous moment. Stored preferences that are not an object are not this
+    module's to replace: the mark is refused and reported as unset.
+    ``updated_at`` is left alone: looking at a page is not a change to the
+    account.
     """
-    preferences = await _preferences_of_member(
+    found = await _preferences_of_member(
         session, user_id=user_id, organization_id=organization_id, lock=True
     )
-    if preferences is None:
+    if found is None:
         return None
-    previous = preferences.home_seen.get(organization_id)
-    marked = preferences.with_home_seen(organization_id, at)
+    stored = found[0]
+    if stored is not None and not isinstance(stored, dict):
+        return HomeSeen(seen_at=None, previous_seen_at=None)
+    previous = _seen_in(stored, organization_id)
+    seen_at = at if previous is None else max(previous, at)
+    entry = {str(organization_id): _MOMENT.dump_python(seen_at, mode="json")}
+
+    # Only the one key is set. A missing or JSON-null blob starts empty, and
+    # a `home_seen` that is not an object is replaced: neither holds anything
+    # another reader could use.
+    empty = literal({}, JSONB)
+    seen = User.preferences[_KEY]
+    base = case(
+        (func.jsonb_typeof(User.preferences) == "object", User.preferences),
+        else_=empty,
+    )
+    kept = case((func.jsonb_typeof(seen) == "object", seen), else_=empty)
+    merged = func.jsonb_set(
+        base,
+        literal([_KEY], ARRAY(Text)),
+        kept.op("||", return_type=JSONB)(literal(entry, JSONB)),
+    )
     await session.execute(
         update(User)
         .where(User.id == user_id)
-        .values(
-            preferences=marked.model_dump(mode="json"),
-            updated_at=User.updated_at,
-        )
+        .values(preferences=merged, updated_at=User.updated_at)
     )
-    return HomeSeen(
-        seen_at=marked.home_seen[organization_id], previous_seen_at=previous
-    )
+    return HomeSeen(seen_at=seen_at, previous_seen_at=previous)
