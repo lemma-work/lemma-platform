@@ -10,7 +10,7 @@ import { isForbidden } from "@/session/auth-state";
 import { isPodDefaultAgent } from "@/data/agent-names";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshIcon } from "@/ui/icons";
 import {
-    useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules, useServerEvents,
+    useCreateSchedule, useRetryRun, useRunNow, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules, useServerEvents,
 } from "./queries";
 import {
     CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, WHENS, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may, serverGroups,
@@ -143,6 +143,10 @@ function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversat
        one schedule does not put every other row's button into its pending
        state. */
     const active = useScheduleActive(podId);
+    const runNow = useRunNow(podId, job.id);
+    /* Only a time schedule can be run by hand: a webhook's or a table's run
+       carries the event that fired it, and there is none to give it here. */
+    const runnable = mine && job.kind === "TIME" && job.active;
 
     if (job.broken) {
         return (
@@ -214,6 +218,16 @@ function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversat
                 {mine ? (
                     <>
                         {job.kind !== "DATASTORE" && <ShareToggle podId={podId} job={job} />}
+                        {runnable && (
+                            <button
+                                className="btn"
+                                disabled={!may(job, SCHEDULE_EDIT) || runNow.isPending}
+                                title={may(job, SCHEDULE_EDIT) ? "Run it once now, outside its timing" : "You may read this schedule, not change it."}
+                                onClick={() => runNow.mutate()}
+                            >
+                                {runNow.isPending ? "Starting…" : runNow.isSuccess ? "Started" : "Run now"}
+                            </button>
+                        )}
                         <button
                             className="btn"
                             disabled={!may(job, SCHEDULE_EDIT) || active.isPending}
@@ -228,6 +242,11 @@ function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversat
                 )}
             </div>
 
+            {runNow.isError && (
+                <p className="sched-row__problem" role="alert">
+                    {runNow.error instanceof Error ? runNow.error.message : "Couldn’t start a run."}
+                </p>
+            )}
             {active.isError && (
                 <p className="sched-row__problem" role="alert">
                     {active.error instanceof Error ? active.error.message : "Couldn’t update this schedule."}

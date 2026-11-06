@@ -3585,6 +3585,22 @@ export const fixtureSource: PodSource = {
         runs.unshift(redrive);
         return readRun(redrive);
     },
+    async runScheduleNow(_podId: string, scheduleId: string) {
+        await wait(420);
+        const runs = (SCHEDULE_RUNS[scheduleId] ??= []);
+        const started = {
+            id: "manual-" + Date.now(),
+            schedule_id: scheduleId,
+            status: "PROCESSING",
+            attempts: 0,
+            source_event_id: "manual:" + Date.now(),
+            created_at: new Date().toISOString(),
+            started_at: null,
+            completed_at: null,
+        };
+        runs.unshift(started);
+        return readRun(started);
+    },
     async createSchedule(_podId: string, draft: ScheduleDraft) {
         await wait(520);
         const body = createRequest(draft);

@@ -1903,6 +1903,12 @@ export const liveSource: PodSource = {
         ));
     },
 
+    async runScheduleNow(podId: string, scheduleId: string): Promise<ScheduleRun> {
+        /* 202 with the run it reserved; its target is started by the job a
+           timer's firing uses, so it reads PROCESSING until handed over. */
+        return readRun(await lemma(podId).schedules.runNow(scheduleId));
+    },
+
     async createSchedule(podId: string, draft: ScheduleDraft): Promise<StandingJob> {
         const made = await lemma(podId).request(
             "POST",
