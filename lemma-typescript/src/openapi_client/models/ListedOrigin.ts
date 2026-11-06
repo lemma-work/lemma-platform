@@ -2,7 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export enum ConversationOrigin {
+export enum ListedOrigin {
     CHAT = 'chat',
     CHANNEL = 'channel',
     NOTIFICATION = 'notification',

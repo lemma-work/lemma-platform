@@ -6302,20 +6302,6 @@
         "title": "ConversationListResponse",
         "type": "object"
       },
-      "ConversationOrigin": {
-        "enum": [
-          "chat",
-          "channel",
-          "notification",
-          "schedule",
-          "workflow",
-          "resource",
-          "task",
-          "ask"
-        ],
-        "title": "ConversationOrigin",
-        "type": "string"
-      },
       "ConversationResponse": {
         "properties": {
           "agent_id": {
@@ -13152,6 +13138,20 @@
         "title": "LinkState",
         "type": "string"
       },
+      "ListedOrigin": {
+        "enum": [
+          "chat",
+          "channel",
+          "notification",
+          "schedule",
+          "workflow",
+          "resource",
+          "task",
+          "ask"
+        ],
+        "title": "ListedOrigin",
+        "type": "string"
+      },
       "ListeningResponse": {
         "description": "How a schedule on a connected MCP server's event is hearing from it.",
         "properties": {
@@ -18874,7 +18874,7 @@
             "type": "string"
           },
           "origin": {
-            "$ref": "#/components/schemas/ConversationOrigin",
+            "$ref": "#/components/schemas/ListedOrigin",
             "description": "`chat` or `channel` -- or, for a conversation waiting on its owner, whatever started it."
           },
           "platform": {

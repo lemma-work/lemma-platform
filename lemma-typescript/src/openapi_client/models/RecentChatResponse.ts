@@ -2,7 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { ConversationOrigin } from './ConversationOrigin.js';
+import type { ListedOrigin } from './ListedOrigin.js';
 export type RecentChatResponse = {
     agent_id?: (string | null);
     channel_name?: (string | null);
@@ -11,7 +11,7 @@ export type RecentChatResponse = {
     /**
      * `chat` or `channel` -- or, for a conversation waiting on its owner, whatever started it.
      */
-    origin: ConversationOrigin;
+    origin: ListedOrigin;
     /**
      * The platform a channel's conversation came in on.
      */

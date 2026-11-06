@@ -1,7 +1,7 @@
 from enum import Enum
 
 
-class ConversationOrigin(str, Enum):
+class ListedOrigin(str, Enum):
     ASK = "ask"
     CHANNEL = "channel"
     CHAT = "chat"

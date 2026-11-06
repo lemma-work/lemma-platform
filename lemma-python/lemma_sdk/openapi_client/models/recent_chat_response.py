@@ -9,7 +9,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-from ..models.conversation_origin import ConversationOrigin
+from ..models.listed_origin import ListedOrigin
 from ..types import UNSET, Unset
 
 T = TypeVar("T", bound="RecentChatResponse")
@@ -21,7 +21,7 @@ class RecentChatResponse:
     Attributes:
         conversation_id (UUID):
         last_activity_at (datetime.datetime):
-        origin (ConversationOrigin):
+        origin (ListedOrigin):
         waiting_on_you (bool):
         agent_id (None | Unset | UUID):
         channel_name (None | str | Unset):
@@ -32,7 +32,7 @@ class RecentChatResponse:
 
     conversation_id: UUID
     last_activity_at: datetime.datetime
-    origin: ConversationOrigin
+    origin: ListedOrigin
     waiting_on_you: bool
     agent_id: None | Unset | UUID = UNSET
     channel_name: None | str | Unset = UNSET
@@ -112,7 +112,7 @@ class RecentChatResponse:
 
         last_activity_at = isoparse(d.pop("last_activity_at"))
 
-        origin = ConversationOrigin(d.pop("origin"))
+        origin = ListedOrigin(d.pop("origin"))
 
         waiting_on_you = d.pop("waiting_on_you")
 

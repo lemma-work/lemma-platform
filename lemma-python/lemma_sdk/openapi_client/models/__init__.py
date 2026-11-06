@@ -183,7 +183,6 @@ _NAME_TO_MODULE = {
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
     'ConversationListResponse': 'conversation_list_response',
-    'ConversationOrigin': 'conversation_origin',
     'ConversationResponse': 'conversation_response',
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
@@ -376,6 +375,7 @@ _NAME_TO_MODULE = {
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
     'LinkState': 'link_state',
+    'ListedOrigin': 'listed_origin',
     'ListeningResponse': 'listening_response',
     'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
@@ -967,7 +967,6 @@ if TYPE_CHECKING:
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
     from .conversation_list_response import ConversationListResponse
-    from .conversation_origin import ConversationOrigin
     from .conversation_response import ConversationResponse
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
@@ -1160,6 +1159,7 @@ if TYPE_CHECKING:
     from .line_preview import LinePreview
     from .link_part import LinkPart
     from .link_state import LinkState
+    from .listed_origin import ListedOrigin
     from .listening_response import ListeningResponse
     from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
@@ -1764,7 +1764,6 @@ __all__ = [
     'ContactsCapResponse',
     'ContactsCapUpdate',
     'ConversationListResponse',
-    'ConversationOrigin',
     'ConversationResponse',
     'ConversationResponseMetadataType0',
     'ConversationStatus',
@@ -1957,6 +1956,7 @@ __all__ = [
     'LinePreview',
     'LinkPart',
     'LinkState',
+    'ListedOrigin',
     'ListeningResponse',
     'ListeningResponseState',
     'LiteralInputBinding',
