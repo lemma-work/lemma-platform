@@ -67,7 +67,7 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     open: boolean;
 }) {
     const reader = useMe();
-    const [channels, feeds] = useChannelsByPod(pods);
+    const [channels, feeds] = useChannelsByPod(pods, { live: true });
     const [chosen, setChosen] = useState<Map<string, boolean>>(readChosen);
     const [now] = useState(() => Date.now());
     const choose = useCallback((podId: string, opened: boolean) => {
