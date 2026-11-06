@@ -55,22 +55,33 @@ test("a workspace address names the kind of place, never which one", () => {
     assert.equal(at({ tabId: "profile", agentName: "scout" }), "/t/[pod]/profile/[agent]");
     /* Unreadable is not a reason to echo it: a bad escape reads as nowhere. */
     assert.equal(toRouteTemplate("/t/pod-1/%E0%A4%A"), "/t");
+    /* The classic workspace at `/l` reads the same grammar, under its own root. */
+    assert.equal(toRouteTemplate("/l"), "/l");
+    assert.equal(toRouteTemplate("/l/teammates"), "/l/teammates");
+    assert.equal(toRouteTemplate("/l/pod-1/table/payroll"), "/l/[pod]/table/[name]");
+    assert.equal(toRouteTemplate("/l/pod-1/file/private/q3.md"), "/l/[pod]/file/[...path]");
 });
 
-test("an outcome-frame address names the kind of view, never which one", () => {
+test("an app address names the kind of view, never which one", () => {
     const at = (view: View) => toRouteTemplate(writeView(view));
-    assert.equal(at({ name: "today" }), "/o");
-    assert.equal(at({ name: "needs" }), "/o/needs-you");
-    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "new" } }), "/o/chats/[pod]/c/new");
-    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "c-9" } }), "/o/chats/[pod]/c/[id]");
-    assert.equal(at({ name: "chats", open: { kind: "contact", podId: "pod-1", id: "k-1" } }), "/o/chats/[pod]/contacts/[id]");
-    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "home" }), "/o/outcome/[pod]");
-    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "settings", section: "people" }), "/o/outcome/[pod]/settings/[section]");
-    assert.equal(at({ name: "table", podId: "pod-1", table: "payroll" }), "/o/outcome/[pod]/table/[name]");
-    assert.equal(at({ name: "file", podId: "pod-1", path: "/private/q3.md" }), "/o/outcome/[pod]/file/[...path]");
-    assert.equal(at({ name: "record", podId: "pod-1", table: "payroll", recordId: "r" }), "/o/outcome/[pod]/record/[table]/[id]");
-    /* The template is read with the frame's own grammar, so it agrees with it. */
-    assert.equal(readView("/o/outcome/pod-1/table/payroll").name, "table");
+    assert.equal(at({ name: "today" }), "/t");
+    assert.equal(at({ name: "needs" }), "/t/needs-you");
+    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "new" } }), "/t/chats/[pod]/c/new");
+    assert.equal(at({ name: "chats", open: { kind: "chat", podId: "pod-1", id: "c-9" } }), "/t/chats/[pod]/c/[id]");
+    assert.equal(at({ name: "chats", open: { kind: "contact", podId: "pod-1", id: "k-1" } }), "/t/chats/[pod]/contacts/[id]");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "home" }), "/t/outcome/[pod]");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "settings", section: "people" }), "/t/outcome/[pod]/settings/[section]");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "automations", section: "schedules" }), "/t/outcome/[pod]/automations/schedules", "one of a fixed few views");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "chats", section: "channels" }), "/t/outcome/[pod]/chats/channels");
+    assert.equal(at({ name: "table", podId: "pod-1", table: "payroll" }), "/t/outcome/[pod]/table/[name]");
+    assert.equal(at({ name: "file", podId: "pod-1", path: "/private/q3.md" }), "/t/outcome/[pod]/file/[...path]");
+    assert.equal(at({ name: "record", podId: "pod-1", table: "payroll", recordId: "r" }), "/t/outcome/[pod]/record/[table]/[id]");
+    assert.equal(at({ name: "computer", podId: "pod-1", conversationId: "c-9" }), "/t/outcome/[pod]/computer/[id]");
+    /* The template is read with the app's own grammar, so it agrees with it. */
+    assert.equal(readView("/t/outcome/pod-1/table/payroll").name, "table");
+    /* `/o`, where the app was tried, redirects to the same path under `/t`. */
+    assert.equal(toRouteTemplate("/o/outcome/pod-1/table/payroll"), "/t/outcome/[pod]/table/[name]");
+    assert.equal(toRouteTemplate("/o/pod-1/table/payroll"), "/t/[pod]/table/[name]");
 });
 
 test("other routes still template by the route list, and nothing unknown is echoed", () => {
@@ -84,16 +95,19 @@ test("other routes still template by the route list, and nothing unknown is echo
 test("only a move to a new place is a new pageview", () => {
     assert.equal(isNewView(null, "/t"), true);
     assert.equal(isNewView("/t", "/t"), false);
-    /* The workspace settling on where it opened, and a new chat being named. */
-    assert.equal(isNewView("/t", "/t/pod-1/home"), false);
-    assert.equal(isNewView("/t/pod-1", "/t/pod-1/home"), false);
-    assert.equal(isNewView("/t/pod-1/conversation", "/t/pod-1/conversation/c-9"), false);
-    assert.equal(isNewView("/o/chats/pod-1/c/new", "/o/chats/pod-1/c/c-9"), false);
+    /* The classic workspace settling on where it opened, the app writing a
+       workspace address as its own path, and a new chat being named. */
+    assert.equal(isNewView("/l", "/l/pod-1/home"), false);
+    assert.equal(isNewView("/l/pod-1", "/l/pod-1/home"), false);
+    assert.equal(isNewView("/l/pod-1/conversation", "/l/pod-1/conversation/c-9"), false);
+    assert.equal(isNewView("/t/pod-1/table/payroll", "/t/outcome/pod-1/table/payroll"), false);
+    assert.equal(isNewView("/t/chats/pod-1/c/new", "/t/chats/pod-1/c/c-9"), false);
     /* Real moves. */
-    assert.equal(isNewView("/t/pod-1/home", "/t/pod-1/pages"), true);
-    assert.equal(isNewView("/t/pod-1/conversation/c-1", "/t/pod-1/conversation/c-2"), true);
-    assert.equal(isNewView("/t/pod-1/home", "/t/pod-2/home"), true);
-    assert.equal(isNewView("/o", "/o/needs-you"), true);
-    assert.equal(isNewView("/o/chats/pod-1/c/c-1", "/o/chats/pod-1/c/c-2"), true);
+    assert.equal(isNewView("/l/pod-1/home", "/l/pod-1/pages"), true);
+    assert.equal(isNewView("/l/pod-1/conversation/c-1", "/l/pod-1/conversation/c-2"), true);
+    assert.equal(isNewView("/l/pod-1/home", "/l/pod-2/home"), true);
+    assert.equal(isNewView("/t", "/t/needs-you"), true);
+    assert.equal(isNewView("/t/chats/pod-1/c/c-1", "/t/chats/pod-1/c/c-2"), true);
+    assert.equal(isNewView("/t/outcome/pod-1", "/t/pod-1/table/payroll"), true, "a workspace link followed from inside the app");
     assert.equal(isNewView("/", "/t"), true);
 });

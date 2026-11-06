@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { cellText, rowLabel, type Row } from "./record-cache";
-import { isFinished, rankedFields, type ColumnProfile, type FormChoice, type TableProfile } from "./profile";
+import { isFinished, rankedFields, statusOptions, type ColumnProfile, type FormChoice, type TableProfile } from "./profile";
 import { compact, dayStart, readableNumber, whenever } from "./reading";
 
 /** The shapes a table can take when the grid is not one of them.
@@ -110,10 +110,13 @@ function number(value: unknown): number {
  *  The options are the table's own: whatever the schema calls the column, the
  *  values a pod actually puts in it are written down in its rows. `＋` is there
  *  because a fixed list read off today's rows would otherwise be a list nobody
- *  can ever add a stage to. */
+ *  can ever add a stage to -- unless the schema fixes the list (an ENUM). Then
+ *  every option it allows is offered, even one no row holds yet, and `＋` is
+ *  not, because the table would refuse what was typed into it. */
 function StatusPicker({ column, row, onChange }: { column: ColumnProfile; row: Row; onChange(row: Row, changes: Row): void }) {
     const [adding, setAdding] = useState(false);
     const current = cellText(row[column.name]);
+    const offered = statusOptions(column);
 
     if (adding) {
         return <input className="form-status form-status--new" autoFocus aria-label={"New " + column.name} defaultValue=""
@@ -136,9 +139,9 @@ function StatusPicker({ column, row, onChange }: { column: ColumnProfile; row: R
                 if (event.target.value === "\u0000new") { setAdding(true); return; }
                 onChange(row, { [column.name]: event.target.value });
             }}>
-            {column.values.includes(current) ? null : <option value={current}>{current}</option>}
-            {column.values.map((value) => <option key={value} value={value}>{value}</option>)}
-            <option value={"\u0000new"}>＋ another…</option>
+            {offered.includes(current) ? null : <option value={current}>{current}</option>}
+            {offered.map((value) => <option key={value} value={value}>{value}</option>)}
+            {!column.fixed && <option value={"\u0000new"}>＋ another…</option>}
         </select>
     </span>;
 }

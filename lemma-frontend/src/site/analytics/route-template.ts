@@ -14,14 +14,17 @@
  * regenerates it from `app/` and fails when the two disagree
  * (`tests/analytics-routes.test.ts`).
  *
- * The workspace (`/t`) and the outcome frame (`/o`) are one catch-all route
+ * The app (`/t`) and the classic workspace (`/l`) are one catch-all route
  * each, and every place inside them would template to the same row. They are
  * read with their own address grammars instead, so a pageview says which kind
- * of place it was -- a table, a chat, an app -- and never which one.
+ * of place it was -- a table, a chat, an app -- and never which one. A
+ * workspace address under `/t`, from a link written before the app took it,
+ * is read with the workspace's grammar; `/o` redirects to `/t`.
  */
 
 import { isNewPlace, readAddress } from "@/shell/address";
 import { NEW_CHAT, readView, type View } from "@/outcomes/address";
+import { fromTrial, isFramePath } from "@/outcomes/paths";
 
 /** Every page route in `app/`, with route groups such as `(marketing)` stripped
  *  because they do not appear in URLs. */
@@ -73,8 +76,8 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/import/github/[owner]/[repo]",
     "/invitations/[invitationId]/accept",
     "/invitations/[invitationId]/reject",
+    "/l/[[...podId]]",
     "/logout",
-    "/o/[[...path]]",
     "/oauth/complete",
     "/organizations/new",
     "/privacy",
@@ -88,7 +91,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/slack/connect",
     "/slack/install",
     "/slack/installed",
-    "/t/[[...podId]]",
+    "/t/[[...path]]",
     "/templates",
     "/templates/[slug]",
     "/tos",
@@ -166,12 +169,13 @@ const PARSED: ReadonlyArray<{ template: string; segments: Segment[] }> =
 
 /** A workspace place, by kind. Ids, names and paths become placeholders; what
  *  survives is either a fixed word of the grammar or a value `readAddress`
- *  only produces from a fixed list (a space's own lists, a part of About). */
-function workspaceTemplate(pathname: string): string {
+ *  only produces from a fixed list (a space's own lists, a part of About).
+ *  Under the root it was read from, `/l` or `/t`. */
+function workspaceTemplate(pathname: string, root: string): string {
     const address = readAddress(pathname);
-    if (address.team) return "/t/teammates";
-    if (!address.podId) return "/t";
-    const pod = "/t/[pod]";
+    if (address.team) return root + "/teammates";
+    if (!address.podId) return root;
+    const pod = root + "/[pod]";
     const { tabId } = address;
     if (!tabId) return pod;
 
@@ -206,26 +210,30 @@ function workspaceTemplate(pathname: string): string {
     }
 }
 
-/** An outcome-frame view, by kind, the same way. */
+/** An app view, by kind, the same way. */
 function viewTemplate(view: View): string {
-    const pod = "/o/outcome/[pod]";
+    const pod = "/t/outcome/[pod]";
     switch (view.name) {
-        case "today": return "/o";
-        case "outcomes": return "/o/outcomes";
-        case "needs": return "/o/needs-you";
-        case "people": return "/o/people";
-        case "hire": return "/o/new-lemma";
+        case "today": return "/t";
+        case "outcomes": return "/t/outcomes";
+        case "needs": return "/t/needs-you";
+        case "people": return "/t/people";
+        case "hire": return "/t/new-lemma";
         case "chats": {
             const { open } = view;
-            if (open.kind === "none") return "/o/chats";
+            if (open.kind === "none") return "/t/chats";
             const tail = open.kind === "chat" ? "c" : open.kind === "shared" ? "g" : "contacts";
             /* A chat not started yet is the one fixed word an id slot holds. */
             const id = open.kind === "chat" && open.id === NEW_CHAT ? NEW_CHAT : "[id]";
-            return "/o/chats/[pod]/" + tail + "/" + id;
+            return "/t/chats/[pod]/" + tail + "/" + id;
         }
         case "outcome":
             if (view.tab === "home") return pod;
-            return pod + "/" + view.tab + (view.tab === "settings" && view.section ? "/[section]" : "");
+            if (!view.section) return pod + "/" + view.tab;
+            /* A view of Automations or Chats is only ever one of a fixed few
+               words; a settings section is whatever the address said. */
+            return pod + "/" + view.tab + "/" + (view.tab === "settings" ? "[section]" : view.section);
+        case "computer": return pod + "/computer" + (view.conversationId ? "/[id]" : "");
         case "run": return pod + "/run/[id]";
         case "app": return pod + "/app/[name]";
         case "table": return pod + "/table/[name]";
@@ -245,8 +253,11 @@ function viewTemplate(view: View): string {
 export function toRouteTemplate(pathname: string): string {
     const parts = splitPath(pathname);
     if (parts.length === 0) return "/";
-    if (parts[0] === "t") return workspaceTemplate(pathname);
-    if (parts[0] === "o") return viewTemplate(readView(pathname));
+    if (parts[0] === "l") return workspaceTemplate(pathname, "/l");
+    if (parts[0] === "t" || parts[0] === "o") {
+        const path = fromTrial(pathname);
+        return isFramePath(path) ? viewTemplate(readView(path)) : workspaceTemplate(path, "/t");
+    }
 
     let best: string | null = null;
     let bestScore = -1;
@@ -284,22 +295,28 @@ export function toTemplateUrl(rawUrl: string): string | null {
 /**
  * Whether moving from one pathname to the next is a new pageview.
  *
- * Both frames rewrite their own address as they settle: a bare `/t` becomes the
+ * Both frames rewrite their own address as they settle: a bare `/l` becomes the
  * place it opened, and a new chat gets its id once it has one. Each rewrite
  * changes the pathname, and counting each one made every arrival two or three
  * pageviews. The workspace already decides which moves are worth a Back
- * (`isNewPlace`), and a pageview is the same question. The outcome frame's
- * only such rewrite is a new chat being named.
+ * (`isNewPlace`), and a pageview is the same question. The app's rewrites are
+ * a new chat being named, and a workspace address under `/t` being read and
+ * written again as the app's own path for the same place.
  */
 export function isNewView(previous: string | null, next: string): boolean {
     if (previous === null) return true;
     if (previous === next) return false;
-    const [from] = splitPath(previous);
-    const [to] = splitPath(next);
-    if (from === "t" && to === "t") return isNewPlace(readAddress(previous), readAddress(next));
-    if (from === "o" && to === "o") {
-        const before = readView(previous);
-        const after = readView(next);
+    const was = fromTrial(previous);
+    const now = fromTrial(next);
+    const [from] = splitPath(was);
+    const [to] = splitPath(now);
+    if (from === "l" && to === "l") return isNewPlace(readAddress(was), readAddress(now));
+    if (from === "t" && to === "t") {
+        const framed = isFramePath(now);
+        if (!isFramePath(was)) return framed ? false : isNewPlace(readAddress(was), readAddress(now));
+        if (!framed) return true;
+        const before = readView(was);
+        const after = readView(now);
         const named =
             before.name === "chats" && after.name === "chats" &&
             before.open.kind === "chat" && after.open.kind === "chat" &&
