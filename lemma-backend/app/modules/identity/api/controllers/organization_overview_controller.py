@@ -146,7 +146,7 @@ async def get_recents(
     zone: ZoneName = DEFAULT_ZONE,
 ) -> OrganizationRecentsResponse:
     recents = await load_recents(
-        uow.session,
+        uow,
         user_id=user.id,
         organization_id=organization_id,
         days=days,

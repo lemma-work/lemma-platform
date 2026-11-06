@@ -26,15 +26,19 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
+    ConversationOrigin,
     ConversationStatus,
     MessageDraft,
 )
 from app.modules.agent.infrastructure.models import (
+    AgentPauseModel,
     AgentRunModel,
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.tests.e2e.lifecycle_helpers import opening_for
 from app.modules.apps.infrastructure.models import AppModel
 from app.modules.channels.tests.e2e.channel_pod import contact_place
 from app.modules.schedule.domain.schedule import ScheduleType
@@ -153,17 +157,19 @@ async def _pause(
     """A run that called ``tool_name`` ``ago`` and left the conversation WAITING."""
     tool_call_id = f"call-{uuid4().hex[:12]}"
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        run = await repo.create_agent_run(
+        run = await Runs(uow).create_agent_run(
             conversation_id=conversation_id,
             agent_id=None,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
         )
-        message = await repo.append_message(
+        message = await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(
-                tool_call_id=tool_call_id, tool_name=tool_name, tool_args=tool_args
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                pause=opening_for(tool_name, tool_args),
             ),
         )
         # A pause ends its run and leaves the conversation waiting.
@@ -180,6 +186,14 @@ async def _pause(
         await uow.session.execute(
             update(MessageModel)
             .where(MessageModel.id == message.id)
+            .values(created_at=datetime.now(UTC) - ago)
+        )
+        await uow.session.execute(
+            update(AgentPauseModel)
+            .where(
+                AgentPauseModel.conversation_id == conversation_id,
+                AgentPauseModel.tool_call_id == tool_call_id,
+            )
             .values(created_at=datetime.now(UTC) - ago)
         )
         await uow.commit()
@@ -431,13 +445,17 @@ async def test_recents_are_each_pods_chats_automations_and_days(
     #: agent started it: what the day counts must add up to.
     worked: list[tuple[datetime, bool]] = []
 
-    async def conversation(title: str, at: datetime, *, by_agent=False, **made):
+    async def conversation(
+        title: str, at: datetime, *, by_agent=False, origin=None, **made
+    ):
         made_id = await _conversation(scenario, busy, title=title, **made)
-        await _touch(made_id, last_activity_at=at)
+        # What opened it is set by the code that did, never by a client.
+        typed = {"origin": origin} if origin is not None else {}
+        await _touch(made_id, last_activity_at=at, **typed)
         worked.append((at, by_agent))
         return made_id
 
-    started = {"kind": "TASK", "metadata": {"source": "SCHEDULE"}}
+    started = {"kind": "TASK", "origin": ConversationOrigin.SCHEDULE}
     older_chat = await conversation("Pricing", now - timedelta(days=2))
     newer_chat = await conversation("Launch", now)
     scheduled = await conversation("Digest", now, by_agent=True, **started)

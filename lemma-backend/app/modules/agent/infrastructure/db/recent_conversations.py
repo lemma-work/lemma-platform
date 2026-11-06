@@ -32,52 +32,48 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent.domain.conversation_origin import (
-    AUDIENCE_KEY,
+from app.modules.agent.domain.listed_origin import (
+    BY_ORIGIN,
     CHATS,
-    OUTSIDERS,
     RESOURCE_KEY,
-    SOURCE_ORIGINS,
     STARTED_BY_AN_AGENT,
     TASK_TYPE,
-    ConversationOrigin,
+    ListedOrigin,
 )
 from app.modules.agent.domain.recent_conversations import DayActivity, RecentChat
+from app.modules.agent.infrastructure.db.pauses import waiting_on_person_column
 from app.modules.agent.infrastructure.models import ConversationModel
-from app.modules.agent.infrastructure.repositories.pending_interaction_queries import (
-    has_pending_interaction_column,
-)
 
 
-def origin_column() -> ColumnElement[str]:
-    """``conversation_origin.origin_of``, as SQL over ``ConversationModel``.
+def listed_origin_column() -> ColumnElement[str]:
+    """``listed_origin.listed_origin_of``, as SQL over ``ConversationModel``.
 
-    The branches are tried in the same order as the Python rule, which is the
-    whole of the agreement between them; ``test_conversation_origin_sql_agrees``
-    runs both over every shape.
+    Built from the same ``BY_ORIGIN`` and tried in the same order as the Python
+    rule, which is the whole of the agreement between them;
+    ``test_listed_origin_sql_agrees`` runs both over every shape.
     """
-    metadata = ConversationModel.conversation_metadata
-    source = metadata["source"].astext
-    resource = metadata[RESOURCE_KEY]
+    resource = ConversationModel.conversation_metadata[RESOURCE_KEY]
     return case(
-        (metadata[AUDIENCE_KEY].astext == OUTSIDERS, ConversationOrigin.CHANNEL.value),
-        *[(source == value, origin.value) for value, origin in SOURCE_ORIGINS],
+        *[
+            (ConversationModel.origin == origin, listed.value)
+            for origin, listed in BY_ORIGIN.items()
+        ],
         (
             and_(
                 func.jsonb_typeof(resource) == "string",
                 func.btrim(resource.astext, " \t\r\n") != "",
             ),
-            ConversationOrigin.RESOURCE.value,
+            ListedOrigin.RESOURCE.value,
         ),
         (
             ConversationModel.conversation_type == TASK_TYPE,
-            ConversationOrigin.TASK.value,
+            ListedOrigin.TASK.value,
         ),
-        else_=ConversationOrigin.CHAT.value,
+        else_=ListedOrigin.CHAT.value,
     )
 
 
-def _origins(origins: frozenset[ConversationOrigin]) -> list[str]:
+def _origins(origins: frozenset[ListedOrigin]) -> list[str]:
     return sorted(origin.value for origin in origins)
 
 
@@ -104,9 +100,8 @@ async def recent_chats_by_pod(
     pods = values(column("pod_id", Uuid), name="pods").data(
         [(pod_id,) for pod_id in dict.fromkeys(pod_ids)]
     )
-    origin = origin_column()
-    waiting = has_pending_interaction_column()
-    metadata = ConversationModel.conversation_metadata
+    origin = listed_origin_column()
+    waiting = waiting_on_person_column()
     chats = (
         select(
             ConversationModel.id.label("conversation_id"),
@@ -116,8 +111,6 @@ async def recent_chats_by_pod(
             ConversationModel.agent_id.label("agent_id"),
             ConversationModel.last_activity_at.label("last_activity_at"),
             waiting.label("waiting_on_you"),
-            metadata["surface_platform"].astext.label("platform"),
-            metadata["channel_name"].astext.label("channel_name"),
         )
         .where(
             ConversationModel.user_id == user_id,
@@ -150,13 +143,11 @@ async def recent_chats_by_pod(
                 pod_id=row.pod_id,
                 conversation_id=row.conversation_id,
                 title=row.title,
-                origin=ConversationOrigin(row.origin),
+                origin=ListedOrigin(row.origin),
                 status=row.status,
                 agent_id=row.agent_id,
                 last_activity_at=row.last_activity_at,
                 waiting_on_you=bool(row.waiting_on_you),
-                platform=row.platform,
-                channel_name=row.channel_name,
             )
         )
     return by_pod
@@ -185,7 +176,7 @@ async def daily_activity_by_pod(
     """
     if not pod_ids:
         return []
-    by_agent = origin_column().in_(_origins(STARTED_BY_AN_AGENT))
+    by_agent = listed_origin_column().in_(_origins(STARTED_BY_AN_AGENT))
     worked = (
         select(
             ConversationModel.pod_id.label("pod_id"),
@@ -221,4 +212,4 @@ async def daily_activity_by_pod(
     ]
 
 
-__all__ = ["daily_activity_by_pod", "origin_column", "recent_chats_by_pod"]
+__all__ = ["daily_activity_by_pod", "listed_origin_column", "recent_chats_by_pod"]

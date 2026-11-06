@@ -233,7 +233,7 @@ async def load_needs_you(
     if scope is None:
         return None
     pauses, more_pauses = await list_pending_interactions_in_pods(
-        uow.session, user_id=user_id, pod_ids=scope.pod_ids, limit=limit
+        uow, user_id=user_id, pod_ids=scope.pod_ids, limit=limit
     )
     waits, more_waits = await list_waits_assigned_to(
         uow.session, pod_member_ids=scope.pod_member_ids, limit=limit

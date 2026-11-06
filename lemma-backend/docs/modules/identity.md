@@ -20,9 +20,9 @@ Pod membership is deliberately owned by the [pod module](pod.md).
 
 | Table | Meaning |
 | --- | --- |
-| `users` | Lemma profile keyed to the SuperTokens user id |
+| `users` | Lemma profile keyed to the SuperTokens user id, and its `preferences` (JSONB: default surfaces, and when each organization's Home was last marked seen) |
 | `organizations` | Organization name, slug, policy, and owner context |
-| `organization_members` | User membership, organization role, and when the member last marked the organization's Home seen (`home_seen_at`) |
+| `organization_members` | User membership and organization role |
 | `organization_invitations` | Pending/accepted invitation lifecycle |
 | `identity_email_challenges` | An email verification in progress — purpose, binding hash, the SuperTokens pre-auth session/code/device ids, a three-attempt ceiling, and terminal verified/revoked state. It is durable so a challenge outlives the browser session that started it |
 
@@ -123,19 +123,21 @@ grant lookup.
 | `GET .../needs-you` (`org.needs_you.list`) | One list, oldest first, capped at `limit` with `truncated`: questions, approvals and Agent Host permission requests in the caller's own conversations (one item per conversation, aged by its longest wait); workflow forms and decisions assigned to their pod memberships; contacts waiting on a person, in pods where their own context holds `channel.read` and `contact.read`. Each item carries `kind`, `pod_id`/`pod_name`, `title`, `detail`, `since` and what to open: a `conversation_id` (with the pause's `tool_call_id`), a `workflow_run_id`, or a `channel_id` | `agent.contracts.conversation_summaries`, `workflow.contracts.assigned_waits`, `channels.contracts.contacts_waiting` |
 | `GET .../recents` (`org.recents.get`) | Per pod, quiet ones included: the caller's latest chats (conversations of no channel they talk in, plus any waiting on them), the workflows and schedules that ran in the window -- one each, with the newest run, its status, a count, and what it opens -- and one count per day of the window of the caller's root conversations by the day each was last active, split into started by an agent (`schedule`, `workflow`, `notification`, `task`, `ask`) and by a person. `days` (1-31), `chats` (1-25) and `timezone` (an IANA name; days are its calendar days) shape it | `agent.contracts.conversation_summaries`, `workflow.contracts.run_activity`, `schedule.contracts.fire_activity` |
 | `GET .../apps` (`org.apps.list`) | Every app the caller may open, newest first, each filtered by its own visibility against their permissions in its pod | `apps.contracts.pod_summaries.list_readable_apps_by_pod` |
-| `GET`/`PUT .../home/seen` (`org.home.seen.get`, `org.home.seen.set`) | When the caller last marked Home seen, and what it was before a write. A write takes an optional `seen_at` (aware; a future moment is read as now) and only ever moves the mark forward, so an older tab cannot undo a newer one | `infrastructure/organization_home_seen` |
+| `GET`/`PUT .../home/seen` (`org.home.seen.get`, `org.home.seen.set`) | When the caller last marked Home seen, and what it was before a write. A write takes an optional `seen_at` (aware; a future moment is read as now) and only ever moves the mark forward, so an older tab cannot undo a newer one. Kept in the user's own `preferences` (`UserPreferences.home_seen`), one entry per organization | `infrastructure/organization_home_seen` |
 
 Chats and day counts are the caller's own conversations, as every
 conversation list is. Automations are the pod's: every run of a workflow, or
 fire of a schedule, the caller may read, whoever started it -- a run is
 readable by whoever may read its workflow. Internal schedules and fires a
-schedule's filter skipped are left out. Where a conversation came from is one
-rule in two forms, `agent/domain/conversation_origin.origin_of` and its SQL
-twin `origin_column`, held to each other by
-`test_conversation_origin_sql_agrees_e2e`; the web client reads the same keys.
+schedule's filter skipped are left out. How a conversation is listed is read
+off its typed `origin` column, refined by a bound resource and the `TASK` type:
+one rule in two forms, `agent/domain/listed_origin.listed_origin_of` and its
+SQL twin `listed_origin_column`, both built from `BY_ORIGIN` and held to each
+other by `test_listed_origin_sql_agrees_e2e`. The platform a chat was heard on
+is agent_surfaces' record, read for the page at once.
 
 The workflow runs are read by `ix_workflow_flow_runs_pod_created`, which
-migration 0065 adds; conversations by `ix_agent_conv_user_pod_roots_activity`,
+migration 0072 adds; conversations by `ix_agent_conv_user_pod_roots_activity`,
 one lateral range per pod for the chats; schedule fires by
 `ix_schedule_runs_schedule_fires`. Nothing here is cached: Needs you is what a
 person acts on, and a stale list is the failure it exists to prevent.

@@ -15,10 +15,16 @@ and never another member's.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_origin import (
+from collections.abc import Collection, Sequence
+from dataclasses import replace
+from datetime import datetime
+from uuid import UUID
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.listed_origin import (
     CHATS,
     STARTED_BY_AN_AGENT,
-    ConversationOrigin,
+    ListedOrigin,
 )
 from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
@@ -26,18 +32,79 @@ from app.modules.agent.domain.pending_interactions import (
     PodPendingInteraction,
 )
 from app.modules.agent.domain.recent_conversations import DayActivity, RecentChat
-from app.modules.agent.infrastructure.repositories.pending_interaction_queries import (
-    list_pending_interactions_in_pods,
-)
-from app.modules.agent.infrastructure.repositories.recent_conversation_queries import (
-    daily_activity_by_pod,
-    recent_chats_by_pod,
-)
+from app.modules.agent.infrastructure.db import recent_conversations
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent_surfaces.contracts.conversations import conversation_surfaces
+
+
+async def list_pending_interactions_in_pods(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    user_id: UUID,
+    pod_ids: Collection[UUID],
+    limit: int,
+) -> tuple[list[PodPendingInteraction], bool]:
+    """This person's pauses across these pods, longest-waiting first, and
+    whether more were waiting than ``limit``: the per-pod pending list's rule,
+    in one statement."""
+    return await Pauses(uow).waiting_on_person_in_pods(
+        user_id=user_id, pod_ids=pod_ids, limit=limit
+    )
+
+
+async def recent_chats_by_pod(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    user_id: UUID,
+    pod_ids: Sequence[UUID],
+    per_pod: int,
+) -> dict[UUID, list[RecentChat]]:
+    """Each pod's latest ``per_pod`` chats of this person's, newest first, each
+    with the platform and channel name it was heard on, if any.
+
+    Where a chat was heard is agent_surfaces' record, not the conversation's,
+    so it is read for the whole page at once after the chats are.
+    """
+    by_pod = await recent_conversations.recent_chats_by_pod(
+        uow.session, user_id=user_id, pod_ids=pod_ids, per_pod=per_pod
+    )
+    heard = await conversation_surfaces(
+        uow, [chat.conversation_id for chats in by_pod.values() for chat in chats]
+    )
+    return {
+        pod_id: [
+            replace(
+                chat,
+                platform=surface.surface_platform,
+                channel_name=surface.channel_name,
+            )
+            if (surface := heard.get(chat.conversation_id)) is not None
+            else chat
+            for chat in chats
+        ]
+        for pod_id, chats in by_pod.items()
+    }
+
+
+async def daily_activity_by_pod(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    user_id: UUID,
+    pod_ids: Sequence[UUID],
+    since: datetime,
+    zone: str,
+) -> list[DayActivity]:
+    """How many of this person's conversations were last active each day in
+    ``zone``, by pod, split by whether an agent started them."""
+    return await recent_conversations.daily_activity_by_pod(
+        uow.session, user_id=user_id, pod_ids=pod_ids, since=since, zone=zone
+    )
+
 
 __all__ = [
     "CHATS",
-    "ConversationOrigin",
     "DayActivity",
+    "ListedOrigin",
     "PendingInteraction",
     "PendingInteractionKind",
     "PodPendingInteraction",

@@ -13,7 +13,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, Field
 
 from app.core.api.schemas import BaseSchema
-from app.modules.agent.contracts.conversation_summaries import ConversationOrigin
+from app.modules.agent.contracts.conversation_summaries import ListedOrigin
 from app.modules.identity.services.organization_needs_you import NeedsYouKind
 from app.modules.identity.services.organization_recents import AutomationKind
 
@@ -77,7 +77,7 @@ class NeedsYouResponse(BaseSchema):
 class RecentChatResponse(BaseSchema):
     conversation_id: UUID
     title: str | None = None
-    origin: ConversationOrigin = Field(
+    origin: ListedOrigin = Field(
         description=(
             "`chat` or `channel` -- or, for a conversation waiting on its "
             "owner, whatever started it."

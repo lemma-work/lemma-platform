@@ -24,7 +24,7 @@ from enum import Enum
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 from app.modules.agent.contracts.conversation_summaries import (
     DayActivity,
@@ -171,7 +171,7 @@ def filled_days(
 
 
 async def load_recents(
-    session: AsyncSession,
+    uow: SqlAlchemyUnitOfWork,
     *,
     user_id: UUID,
     organization_id: UUID,
@@ -187,6 +187,7 @@ async def load_recents(
     Every pod the member may open is listed, quiet ones included, so a board
     can draw a lane for each.
     """
+    session = uow.session
     scope = await load_member_scope(
         session=session, user_id=user_id, organization_id=organization_id
     )
@@ -196,10 +197,10 @@ async def load_recents(
         now=now or datetime.now(timezone.utc), zone=ZoneInfo(zone_name), days=days
     )
     chats = await recent_chats_by_pod(
-        session, user_id=user_id, pod_ids=scope.pod_ids, per_pod=chats_per_pod
+        uow, user_id=user_id, pod_ids=scope.pod_ids, per_pod=chats_per_pod
     )
     counted = await daily_activity_by_pod(
-        session, user_id=user_id, pod_ids=scope.pod_ids, since=since, zone=zone_name
+        uow, user_id=user_id, pod_ids=scope.pod_ids, since=since, zone=zone_name
     )
     workflows = await workflow_run_activity_by_pod(
         session, contexts=scope.contexts, since=since, per_pod=AUTOMATIONS_PER_POD
