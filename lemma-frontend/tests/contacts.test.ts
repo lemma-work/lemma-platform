@@ -4,6 +4,7 @@ import type { ContactResponse, WebWidgetResponse } from "lemma-sdk";
 import {
     EMPTY_WIDGET_DRAFT,
     answerChoices,
+    contactChannelId,
     contactName,
     groupsNote,
     contactSubline,
@@ -35,6 +36,25 @@ test("a contact with no name is called by a handle a person can read", () => {
     const contact = readContact(wire);
     assert.equal(contactName(contact), "Signed in on your site");
     assert.equal(contactSubline(contact), "ana@shop.example");
+});
+
+test("a contact's chat is what the backend says, and looked up only when it says nothing", async () => {
+    const asked: string[] = [];
+    const find = async (contactId: string) => { asked.push(contactId); return "found-chat"; };
+
+    const said = readContact({ ...wire, channel_id: "their-chat" } as unknown as ContactResponse);
+    assert.equal(await contactChannelId(said, find), "their-chat");
+
+    const none = readContact({ ...wire, channel_id: null } as unknown as ContactResponse);
+    assert.equal(none.channelId, null);
+    assert.equal(await contactChannelId(none, find), null);
+    assert.deepEqual(asked, [], "a contact the backend says has no chat is not looked up");
+
+    // A backend from before contacts carried their chat leaves the field out.
+    const older = readContact(wire);
+    assert.equal(older.channelId, undefined);
+    assert.equal(await contactChannelId(older, find), "found-chat");
+    assert.deepEqual(asked, ["c1"]);
 });
 
 test("a host id is never shown; a phone number is", () => {
