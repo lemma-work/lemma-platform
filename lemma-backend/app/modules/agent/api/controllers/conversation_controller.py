@@ -46,7 +46,6 @@ from app.modules.agent.api.controllers.conversation_page_token import (
 from app.modules.agent.api.dependencies import (
     ConversationReadsDep,
     DecidePauseDep,
-    StartConversationDep,
     StopConversationDep,
     UpdateConversationDep,
 )
@@ -55,7 +54,6 @@ from app.modules.agent.api.schemas import (
     ApprovalDecisionResponse,
     ConversationListResponse,
     ConversationResponse,
-    CreateConversationRequest,
     MessageListResponse,
     MessageResponse,
     ResolveUserApprovalRequest,
@@ -95,45 +93,6 @@ _CONVERSATION_ACCESS = "use conversations in this pod"
 #: to take a ``PodContextDep`` they never read, purely to make that happen.
 CONVERSATION_MEMBERSHIP = require_pod_membership(_CONVERSATION_ACCESS)
 CONVERSATION_ENUMERATION = require_pod_membership(_CONVERSATION_ACCESS, enumerates=True)
-
-
-@router.post(
-    "",
-    response_model=ConversationResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="agent.conversation.create",
-    dependencies=[CONVERSATION_MEMBERSHIP],
-    summary="Create Pod Agent Conversation",
-    description=(
-        "Create a new pod-scoped conversation. When agent_name is omitted, "
-        "the conversation uses the default pod assistant. Workflow and "
-        "sub-agent executions also use conversations as their external "
-        "execution handle."
-    ),
-)
-async def create_conversation(
-    pod_id: UUID,
-    data: CreateConversationRequest,
-    user: CurrentUser,
-    start: StartConversationDep,
-) -> ConversationResponse:
-    # Refused when saved, with the reason, rather than at the first turn.
-    await check_conversation_runtime_for_pod(
-        start.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
-    )
-    conversation = await start.start(
-        pod_id=pod_id,
-        agent_name=data.agent_name,
-        user_id=user.id,
-        title=data.title,
-        instructions=data.instructions,
-        agent_runtime=data.agent_runtime,
-        parent_id=data.parent_id,
-        type=data.type,
-        # Only tags: nothing the server decides on (``domain/conversations``).
-        metadata=data.metadata,
-    )
-    return await conversation_response(start.uow, conversation)
 
 
 @router.get(

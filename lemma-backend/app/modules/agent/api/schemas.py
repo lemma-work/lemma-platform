@@ -32,6 +32,12 @@ from app.modules.agent.domain.entities import (
     Message,
 )
 from app.modules.agent.domain.pending_interactions import PendingInteractionKind
+from app.modules.agent.domain.project_repo import (
+    ProjectRepo,
+    RepositoryChoice,
+    RepositoryChoices,
+    parse_repository_name,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunApprovalDecision,
@@ -383,6 +389,67 @@ class CreateConversationRequest(BaseModel):
     parent_id: UUID | None = None
     type: ConversationType = ConversationType.CHAT
     metadata: JsonObject | None = None
+    repository: str | None = Field(
+        default=None,
+        max_length=140,
+        description=(
+            "A GitHub repository to work in, as 'owner/name': one the "
+            "organization's GitHub installation covers for you, as listed by "
+            "the conversation repositories endpoint. The conversation's "
+            "workspace_cwd is then a git worktree of it on a branch of its own "
+            "(lemma/<slug>), made before the agent's first command from one "
+            "clone of the repository, which is fetched first. Other "
+            "conversations in the repository get worktrees of their own."
+        ),
+    )
+
+    @field_validator("repository")
+    @classmethod
+    def _owner_slash_name(cls, value: str | None) -> str | None:
+        if value is not None and parse_repository_name(value) is None:
+            raise ValueError("repository must be 'owner/name'")
+        return value
+
+    def project_repo(self) -> ProjectRepo | None:
+        return parse_repository_name(self.repository) if self.repository else None
+
+
+class ConversationRepositoryResponse(BaseModel):
+    """A GitHub repository a conversation can be opened in."""
+
+    full_name: str = Field(description="'owner/name', the value create takes.")
+    owner: str
+    name: str
+    private: bool = False
+    default_branch: str | None = None
+
+    @classmethod
+    def of(cls, choice: RepositoryChoice) -> ConversationRepositoryResponse:
+        return cls(
+            full_name=choice.repo.full_name,
+            owner=choice.repo.owner,
+            name=choice.repo.repo,
+            private=choice.private,
+            default_branch=choice.default_branch,
+        )
+
+
+class ConversationRepositoryListResponse(BaseModel):
+    items: list[ConversationRepositoryResponse]
+    complete: bool = Field(
+        default=True,
+        description=(
+            "False when the installation covers more repositories than are "
+            "listed. Create still accepts the ones not shown."
+        ),
+    )
+
+    @classmethod
+    def of(cls, listing: RepositoryChoices) -> ConversationRepositoryListResponse:
+        return cls(
+            items=[ConversationRepositoryResponse.of(c) for c in listing.choices],
+            complete=listing.complete,
+        )
 
 
 class UpdateConversationRequest(BaseModel):

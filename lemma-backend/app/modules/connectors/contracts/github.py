@@ -3,14 +3,32 @@
 A submodule rather than names on `contracts/__init__`: `install_url` reaches the
 App auth service, and every importer of any other contract would pay for that
 import. The budget gate says so out loud.
+
+`installation_repository` and `installation_repositories` answer which
+repositories an organization's installation covers for one person, asked with
+that person's token; they raise the refusals exported beside them.
 """
 
 from app.modules.connectors.config import connector_settings
+from app.modules.connectors.domain.github_installation_errors import (
+    GithubInstallationRequiredError,
+    GithubInstallationUnreachableError,
+    GithubRepositoryNotFoundError,
+    GithubRepositoryNotInstalledError,
+    GithubRepositoryUncheckedError,
+    GithubUnavailableError,
+)
 from app.modules.connectors.services.auth.github_installation import (
     InstallState,
     install_url as github_install_url,
     installation_still_needed,
     manage_installation_url,
+)
+from app.modules.connectors.services.auth.github_repositories import (
+    InstallationRepository,
+    RepositoryListing,
+    installation_repositories,
+    installation_repository,
 )
 
 
@@ -30,10 +48,20 @@ def install_state_for(connector_id: str, external_ref: str | None) -> InstallSta
 
 
 __all__ = [
+    "GithubInstallationRequiredError",
+    "GithubInstallationUnreachableError",
+    "GithubRepositoryNotFoundError",
+    "GithubRepositoryNotInstalledError",
+    "GithubRepositoryUncheckedError",
+    "GithubUnavailableError",
     "InstallState",
+    "InstallationRepository",
+    "RepositoryListing",
     "connector_settings",
     "github_install_url",
     "install_state_for",
+    "installation_repositories",
+    "installation_repository",
     "installation_still_needed",
     "manage_installation_url",
 ]

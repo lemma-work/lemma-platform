@@ -19,6 +19,9 @@ The connect flow itself uses the ordinary user-authorization endpoint rather tha
 never round-trips. That is not an edge case -- it is every reconnect, and every
 second person in an organization. Authorize always round-trips, and the
 installation is resolved afterwards from the token itself.
+
+Once bound, the same enumeration answers which repositories the installation
+covers: ``github_repositories``.
 """
 
 from __future__ import annotations
