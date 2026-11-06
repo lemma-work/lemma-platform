@@ -4,7 +4,7 @@ import type { Pod } from "@/data";
 import { WaitingBell } from "@/channels/waiting-panel";
 import { useMaySeeContacts } from "@/space/contact-queries";
 import type { FrameActions } from "./actions";
-import { NEW_CHAT, chatView, outcomeView, type Go, type OutcomeTab } from "./model";
+import { outcomeView, type Go, type OutcomeTab } from "./model";
 import { Icon, to, type IconName } from "./parts";
 
 export type LemmaSection = Exclude<OutcomeTab, "home">;
@@ -68,7 +68,14 @@ export function SectionSwitch({ pod, here, go }: { pod: Pod; here: LemmaSection;
 /** What every page of a Lemma offers at its top right: its inbox, a new
  *  chat with it, and the rest -- who has access, where people reach it,
  *  sharing it, its computer -- in a menu. */
-export function LemmaActions({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
+export function LemmaActions({ pod, go, actions, newChat = true }: {
+    pod: Pod;
+    go: Go;
+    actions: FrameActions;
+    /** The way to its page, where a chat with it starts -- left out on that
+     *  page itself. */
+    newChat?: boolean;
+}) {
     return (
         <>
             {/* Its inbox, as the workspace has it over a pod: the reader's
@@ -85,7 +92,7 @@ export function LemmaActions({ pod, go, actions }: { pod: Pod; go: Go; actions: 
                     <a role="menuitem" {...to({ name: "computer", podId: pod.id, conversationId: null }, go)} onClick={(event) => { closeMenu(event); to({ name: "computer", podId: pod.id, conversationId: null }, go).onClick(event); }}>Its computer</a>
                 </div>
             </details>
-            <a className="ox-btn ox-btn--primary ox-btn--small" {...to(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }), go)}>New chat</a>
+            {newChat && <a className="ox-btn ox-btn--primary ox-btn--small" {...to(outcomeView(pod.id), go)}>New chat</a>}
         </>
     );
 }

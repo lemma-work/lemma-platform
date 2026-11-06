@@ -326,13 +326,13 @@ test("a surface says which connector it runs as, and offers another shared one w
 });
 
 test("the server's connect_url lands on the teammate's Connections, opened on the connector", () => {
-    assert.equal(legacyAddress(["pods", "p1", "connections"], new URLSearchParams({ connector: "gmail" })), "/t/p1/about/connections?connector=gmail");
-    assert.equal(legacyAddress(["pods", "p1", "connections"], new URLSearchParams()), "/t/p1/about/connections");
-    assert.equal(legacyAddress(["pod", "p1", "connectors"], new URLSearchParams()), "/t/p1/about/connections");
-    assert.equal(connectionsPlace("p 1", "a b"), "/t/p%201/about/connections?connector=a%20b");
+    assert.equal(legacyAddress(["pods", "p1", "connections"], new URLSearchParams({ connector: "gmail" })), "/l/p1/settings/connections?connector=gmail");
+    assert.equal(legacyAddress(["pods", "p1", "connections"], new URLSearchParams()), "/l/p1/settings/connections");
+    assert.equal(legacyAddress(["pod", "p1", "connectors"], new URLSearchParams()), "/l/p1/about/connections");
+    assert.equal(connectionsPlace("p 1", "a b"), "/l/p%201/about/connections?connector=a%20b");
     const read = readAddress("/t/p1/about/connections");
     assert.equal(read.section, "connections");
-    assert.equal(writeAddress(read), "/t/p1/about/connections");
+    assert.equal(writeAddress(read), "/l/p1/about/connections");
     assert.equal(readAddress("/t/p1/about/connectors").section, "connections", "an old link to the part still opens it");
 });
 

@@ -678,7 +678,10 @@ test("work stays behind the fold, however well this app can read it", () => {
         message({ sequence: 8, role: "assistant", text: "Green." }),
     ]);
 
-    assert.deepEqual(turn.items.map((item) => item.kind), ["text"]);
+    /* One fold for the five calls, where they happened, and no card. */
+    assert.deepEqual(turn.items.map((item) => item.kind), ["steps", "text"]);
+    const [fold] = turn.items;
+    assert.ok(fold.kind === "steps" && fold.count === 5);
     assert.deepEqual(
         turn.notes.map((note) => note.label),
         ["Exec command", "Pod list files", "Browser open", "Browser screenshot", "View image"],

@@ -30,7 +30,7 @@ import { DocAskContext } from "@/docs/doc-ask";
 import { FloatingChat, moveDocThread, useFloatingChat, type ChatResource, type FloatingChatState } from "@/chat/floating-chat";
 import type { ShareSubject } from "@/space/share-sheet";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
-import { NEW_CHAT, chatView, outcomeView, type Go, type View } from "./model";
+import { chatView, outcomeView, type Go, type View } from "./model";
 import type { FrameActions } from "./actions";
 import { LemmaActions, SectionSwitch } from "./lemma-bar";
 import { Empty, to } from "./parts";
@@ -45,7 +45,7 @@ export type Back = (fallback: View) => void;
  *  an app, a file or page, a table and its rows, an agent. The bar says
  *  which Lemma it is in and is the way back; the workspace's own view of it
  *  fills the rest. */
-export function Stage({ pod, title, here, go, fill, actions, children }: {
+export function Stage({ pod, title, here, go, fill, ownBar = false, actions, children }: {
     pod: Pod;
     /** Where in the Lemma this is. Left out, the Lemma itself is: its
      *  summary, where the crumb ends at its name. */
@@ -55,24 +55,20 @@ export function Stage({ pod, title, here, go, fill, actions, children }: {
     here?: ReactNode;
     go: Go;
     fill?: boolean;
+    /** The page draws the one bar itself, with `StageCrumbs` at its start:
+     *  a page with a bar of its own under this one read as two headers. */
+    ownBar?: boolean;
     actions?: ReactNode;
     children: ReactNode;
 }) {
-    const last = here ?? (title ? <span className="ox-crumb__here">{title}</span> : null);
     return (
         <div className={"ox-stagepage" + (fill ? " ox-stagepage--fill" : "")}>
-            <div className="ox-stagebar">
-                <div className="ox-stagebar__l">
-                    <p className="ox-crumb">
-                        <a {...to({ name: "outcomes" }, go)}>Lemmas</a>
-                        <span aria-hidden="true">/</span>
-                        {last ? <a {...to(outcomeView(pod.id), go)}>{pod.name}</a> : <span className="ox-crumb__here">{pod.name}</span>}
-                        {last && <span aria-hidden="true">/</span>}
-                    </p>
-                    {last}
+            {!ownBar && (
+                <div className="ox-stagebar">
+                    <StageCrumbs pod={pod} title={title} here={here} go={go} />
+                    {actions && <div className="ox-stagebar__acts">{actions}</div>}
                 </div>
-                {actions && <div className="ox-stagebar__acts">{actions}</div>}
-            </div>
+            )}
             {/* Connections this Lemma needs that the reader has not made, as
                 the workspace asks for them over every page of a pod. */}
             <ConnectBanner key={pod.id} pod={pod} />
@@ -81,9 +77,25 @@ export function Stage({ pod, title, here, go, fill, actions, children }: {
     );
 }
 
+/** The start of a stage's bar: which Lemma this is in, and where in it. */
+export function StageCrumbs({ pod, title, here, go }: { pod: Pod; title?: string; here?: ReactNode; go: Go }) {
+    const last = here ?? (title ? <span className="ox-crumb__here">{title}</span> : null);
+    return (
+        <div className="ox-stagebar__l">
+            <p className="ox-crumb">
+                <a {...to({ name: "outcomes" }, go)}>Lemmas</a>
+                <span aria-hidden="true">/</span>
+                {last ? <a {...to(outcomeView(pod.id), go)}>{pod.name}</a> : <span className="ox-crumb__here">{pod.name}</span>}
+                {last && <span aria-hidden="true">/</span>}
+            </p>
+            {last}
+        </div>
+    );
+}
+
 /** The bar's end over something a Lemma holds: what the workspace offers on
  *  it -- open, reload, download, copy its link, refresh -- and sharing it. */
-function HeldActions({ pod, tab, subject, actions, onReload = NOTHING }: {
+export function HeldActions({ pod, tab, subject, actions, onReload = NOTHING }: {
     pod: Pod;
     tab: Tab;
     subject: ShareSubject;
@@ -370,7 +382,7 @@ export function SettingsView({ pod, org, section, go, actions }: { pod: Pod; org
                     section={isAboutSection(section) ? section : null}
                     onSection={(next) => go(outcomeView(pod.id, "settings", next))}
                     onOpenSettings={(next) => actions.openSettings(next)}
-                    onAsk={() => go(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }))}
+                    onAsk={() => go(outcomeView(pod.id))}
                     onOpenAgent={(name) => go({ name: "agent", podId: pod.id, agent: name })}
                     onOpenTeammate={(id) => go(outcomeView(id))}
                     onAskFor={(text) => actions.prompt(pod.id, text)}
@@ -386,19 +398,21 @@ export function SettingsView({ pod, org, section, go, actions }: { pod: Pod; org
 
 /** The machine a Lemma works on: what is on its screen, the sites it is
  *  signed in to, and its files -- from one chat's working folder when it is
- *  opened from that chat, else the whole machine. */
+ *  opened from that chat, else the whole machine. The screen takes the whole
+ *  stage, under one bar: where this is, how the machine is, and what opens
+ *  beside the screen. */
 export function ComputerPage({ pod, conversationId, go }: { pod: Pod; conversationId: string | null; go: Go }) {
     const cache = useQueryClient();
     return (
-        <Stage
-            pod={pod}
-            title="Computer"
-            go={go}
-            fill
-            actions={<button type="button" className="ox-btn ox-btn--small" onClick={() => void cache.invalidateQueries({ queryKey: ["computer"] })}>Refresh</button>}
-        >
+        <Stage pod={pod} title="Computer" go={go} fill ownBar>
             <div className="pane library-pane">
-                <ComputerView podId={pod.id} conversationId={conversationId} visible />
+                <ComputerView
+                    podId={pod.id}
+                    conversationId={conversationId}
+                    visible
+                    lead={<StageCrumbs pod={pod} title="Computer" go={go} />}
+                    trail={<button type="button" className="ox-btn ox-btn--small" onClick={() => void cache.invalidateQueries({ queryKey: ["computer"] })}>Refresh</button>}
+                />
             </div>
         </Stage>
     );

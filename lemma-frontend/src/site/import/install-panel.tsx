@@ -677,7 +677,7 @@ function Journey({ repo, owner, title }: Props) {
                 {app && (
                     <a
                         className={s.quiet}
-                        href={"/t/" + encodeURIComponent(job.pod_id)}
+                        href={"/l/" + encodeURIComponent(job.pod_id)}
                         onClick={markArrival}
                     >
                         Or open {who} instead

@@ -27,7 +27,7 @@ test("a permission request from an agent on your computer is its own kind of ask
     ]);
     assert.equal(row.kind, "permission");
     assert.equal(sayAsked(row), "Asks permission to go on");
-    assert.equal(askedHref(row), "/t/p1/conversation/c9");
+    assert.equal(askedHref(row), "/l/p1/conversation/c9");
 });
 
 test("conversation asks badge the teammate the same way workflow forms do", () => {

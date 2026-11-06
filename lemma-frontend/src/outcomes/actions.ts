@@ -18,6 +18,9 @@ export interface FrameActions {
     addPeople: (podId: string) => void;
     /** Words for a new chat with a Lemma, for the reader to finish and send. */
     prompt: (podId: string, text: string) => void;
+    /** Words for the box of the chat open with a Lemma -- or a new one when
+     *  none is -- for the reader to finish and send. */
+    fill: (podId: string, text: string) => void;
     /** Start a chat with a Lemma with these words, sent, and open it --
      *  with one of its agents when `createWith` names one. */
     ask: (podId: string, text: string, createWith?: Record<string, unknown>, files?: File[]) => void;

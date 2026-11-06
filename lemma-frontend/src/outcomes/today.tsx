@@ -1,61 +1,33 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ConversationRef, Org, Pod } from "@/data";
-import { key } from "@/session/storage";
-import { workSince, type Ask, type Go, type QueueItem } from "./model";
+import { sinceShort } from "@/channels/model";
+import { useMe } from "@/session/use-me";
+import { chatItems, chatView, inSidebar, rowOfChat, type Ask, type Go, type QueueItem } from "./model";
 import { NeedRow } from "./answer";
-import { AppTiles, AskBox, useApps } from "./ask";
+import { AskBox } from "./ask";
+import { useChannelsByPod } from "./chats";
+import { markOf, readsAhead } from "./sidebar";
 import { Empty, to } from "./parts";
 
-const SEEN_KEY = key("outcomes-seen");
-const DAY_MS = 86_400_000;
-/** Apps on Home before "Show all": one row. */
-const APPS_SHOWN = 5;
 /** What waits on the reader, on Home, before the rest is a click away. */
 const ASKS_SHOWN = 3;
+/** Chats to pick up again, under the box. */
+const RECENT_SHOWN = 5;
 
-/** When this person last looked at Home, read once, and written a few
- *  seconds after they arrive so a reload in passing does not reset it. */
-function useLastSeen(): number | null {
-    const [since] = useState<number | null>(() => {
-        try {
-            const raw = localStorage.getItem(SEEN_KEY);
-            return raw ? Number(raw) : null;
-        } catch {
-            return null;
-        }
-    });
-    useEffect(() => {
-        const timer = window.setTimeout(() => {
-            try { localStorage.setItem(SEEN_KEY, String(Date.now())); } catch { /* nowhere to keep it */ }
-        }, 4000);
-        return () => window.clearTimeout(timer);
-    }, []);
-    return since;
+/** A greeting for the hour, the way an empty chat opens. */
+function greeting(now: number): string {
+    const hour = new Date(now).getHours();
+    if (hour < 5 || hour >= 18) return "Good evening";
+    if (hour < 12) return "Good morning";
+    return "Good afternoon";
 }
 
-/** Every app across the Lemmas, newest first: what people use their work
- *  through. One row on Home, the rest a click away. */
-function AllApps({ pods, go }: { pods: readonly Pod[]; go: Go }) {
-    const { apps, pending } = useApps(pods);
-    const [all, setAll] = useState(false);
-    return (
-        <section aria-label="Apps">
-            <div className="ox-sec">
-                <h2>Apps</h2>
-                {apps.length > APPS_SHOWN && <button type="button" className="ox-link" onClick={() => setAll((was) => !was)}>{all ? "Show fewer" : `Show all ${apps.length}`}</button>}
-            </div>
-            {apps.length === 0
-                ? <p className="ox-vs ox-apps__none">{pending ? "Loading apps…" : "No apps yet. Ask a Lemma to build one, and it shows here."}</p>
-                : <AppTiles apps={all ? apps : apps.slice(0, APPS_SHOWN)} go={go} />}
-        </section>
-    );
-}
-
-/** Home: what needs the reader, said once; a box to ask any Lemma; what is
- *  waiting, a few lines of it; and the apps. The Lemmas' lanes are on
- *  Lemmas, and the chats are in the sidebar. */
+/** Home is a new chat: a greeting, or what needs the reader said once; the
+ *  box, with who is asked at its foot; a few of the things waiting; and the
+ *  chats to pick up again, across every Lemma -- the sidebar folds each
+ *  Lemma to its name, so this is where the latest of them are. */
 export function Today({ org, pods, activity, queue, me, go, onAsk }: {
     org: Org;
     pods: readonly Pod[];
@@ -66,17 +38,17 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
     onAsk: Ask;
 }) {
     const [now] = useState(() => Date.now());
-    const lastSeen = useLastSeen();
-    const all = useMemo(() => [...activity.values()].flat(), [activity]);
-    const work = workSince(all, lastSeen ?? now - DAY_MS);
+    const reader = useMe();
+    const [channels, feeds] = useChannelsByPod(pods);
+    const recent = useMemo(() => {
+        const { rest } = chatItems({ pods, conversations: activity, channels, me: reader });
+        return rest.filter(inSidebar).slice(0, RECENT_SHOWN);
+    }, [pods, activity, channels, reader]);
     const first = me === "You" ? null : me.split(" ")[0];
     const named = first ? `, ${first}` : "";
     const headline = queue.length > 0
         ? `${queue.length} ${queue.length === 1 ? "thing needs" : "things need"} you${named}.`
-        : `Nothing needs you${named}.`;
-    const sub = work.lemma > 0
-        ? `Your Lemmas started ${work.lemma} ${work.lemma === 1 ? "run" : "runs"} on their own ${lastSeen ? "since you were last here" : "in the last day"}.`
-        : null;
+        : `${greeting(now)}${named}.`;
 
     if (pods.length === 0) {
         return (
@@ -91,9 +63,9 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
 
     return (
         <div className="ox-page ox-home">
+            {feeds}
             <h1 className="ox-home__t">{headline}</h1>
-            {sub && <p className="ox-home__sub">{sub}</p>}
-            <AskBox pods={pods} onAsk={onAsk} />
+            <AskBox pods={pods} onAsk={onAsk} autoFocus />
             {queue.length > 0 && (
                 <section aria-label="Needs you">
                     <div className="ox-sec">
@@ -105,7 +77,26 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
                     </div>
                 </section>
             )}
-            <AllApps pods={pods} go={go} />
+            {recent.length > 0 && (
+                <section aria-label="Recent chats">
+                    <div className="ox-sec"><h2>Recent</h2></div>
+                    <div className="ox-recent">
+                        {recent.map((item) => {
+                            const row = rowOfChat(item);
+                            return (
+                                <a key={item.key} className="ox-recent__row" {...to(chatView(item.open), go)} {...readsAhead(chatView(item.open))}>
+                                    <span className="ox-glyph">{markOf(row)}</span>
+                                    <span className="ox-recent__t">{item.title}</span>
+                                    <span className="ox-recent__k">{item.podName}</span>
+                                    {item.running
+                                        ? <i className="ox-sign ox-sign--live" role="img" aria-label="Running now" />
+                                        : <span className="ox-recent__when">{item.at !== null ? sinceShort(new Date(item.at).toISOString()) : ""}</span>}
+                                </a>
+                            );
+                        })}
+                    </div>
+                </section>
+            )}
         </div>
     );
 }

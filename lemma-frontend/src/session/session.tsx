@@ -17,6 +17,7 @@ import { sessionStatus, doorFor, unreachableRetryDelay, type SessionStatus } fro
 import { LemmaLogo } from "@/ui/icons";
 import { signedOutOfThisComputer } from "@/desktop/auto-connect";
 import { openedTranscripts } from "@/thread/opened-transcripts";
+import { forgetOnDevice } from "./device-cache";
 
 /** Who is asking.
  *
@@ -73,11 +74,13 @@ function useAuthState(client: LemmaClient | null, enabled: boolean): AuthState {
        `loading` and is never published, because `sessionStatus` answers
        `unconfigured` before it is ever consulted. */
     const cache = useQueryClient();
-    /* The query cache and the transcripts the conversation pane keeps beside
-       it (`opened-transcripts.ts`): both are what the last person could see. */
+    /* The query cache, the transcripts the conversation pane keeps beside
+       it (`opened-transcripts.ts`) and what the device kept between visits
+       (`device-cache.ts`): all of it is what the last person could see. */
     const forgetEverything = () => {
         cache.clear();
         openedTranscripts.clear();
+        void forgetOnDevice();
     };
     const [state, setState] = useState<AuthState>({ status: "loading", user: null });
     useEffect(() => {
@@ -131,6 +134,9 @@ export function useSession(): Session {
         cache.clear();
         sent.clear();
         try { retainWorkspaceOwner(localStorage, null); } catch { /* no storage */ }
+        /* Waited for, unlike the rest: the page is about to go, and a wipe
+           still in flight could go with it. */
+        await forgetOnDevice();
         /* A full document load, deliberately: it is the only thing that drops
            every in-memory copy of what the last person could see — the query
            cache, the session hook, the mounted app frames. A soft navigation

@@ -3,21 +3,19 @@ import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
 import { aboutSectionOf, type AboutSection } from "@/space/about-sections";
 
-/** The segment every workspace URL hangs off. The app is `/t`; the classic
- *  workspace that this grammar was written for now lives at `/l`. Both read
- *  every address, so a link written for one opens in the other, and links
- *  that left Lemma before the move -- in an email, a WhatsApp message, a
+/** The segments a workspace URL hangs off. The workspace this grammar was
+ *  written for lived at `/t`, then `/l`; the app now lives at `/l` and reads
+ *  every address in it, and `/t` sends what it is given there. Links that
+ *  left Lemma before the moves -- in an email, a WhatsApp message, a
  *  bookmark -- still say `/t` and still open. */
 export const ROOT = "/t";
 export const CLASSIC_ROOT = "/l";
 
-/** Where an address is written: in the classic workspace, its own root, so
- *  moving around it stays there; anywhere else -- the app, a test, the
- *  server -- `/t`, which reads it. */
+/** Where an address is written: under `/l`, where the app reads it and
+ *  settles on its own address for the same place, with no trip through
+ *  `/t` and back. */
 function rootHere(): string {
-    if (typeof window === "undefined") return ROOT;
-    const path = window.location.pathname;
-    return path === CLASSIC_ROOT || path.startsWith(CLASSIC_ROOT + "/") ? CLASSIC_ROOT : ROOT;
+    return CLASSIC_ROOT;
 }
 
 /** The organization's own page — every teammate at once, zoomed out — sits

@@ -44,7 +44,7 @@ export function proxy(request: NextRequest): NextResponse {
            relative Location when the origins match -- so behind a sharing
            gateway, where the Host this server sees is loopback, a phone is
            not sent to its own localhost. */
-        return NextResponse.redirect(new URL('/t', request.url), 307);
+        return NextResponse.redirect(new URL('/home', request.url), 307);
     }
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {
