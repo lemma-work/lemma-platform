@@ -55,7 +55,7 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
             <div className="ox-page ox-home">
                 <Empty title={`No Lemmas at ${org.name} yet.`}>
                     <p>Give one something to own, and it builds and runs what it takes.</p>
-                    <a className="ox-btn ox-btn--primary" {...to({ name: "outcomes" }, go)}>Start a Lemma</a>
+                    <a className="ox-btn ox-btn--primary" {...to({ name: "hire" }, go)}>Start a Lemma</a>
                 </Empty>
             </div>
         );

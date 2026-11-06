@@ -18,10 +18,10 @@ import { useMe } from "@/session/use-me";
 import { useWorkflowList } from "@/workflow/use-run";
 import {
     NOTHING_OWNED, PLAN_PATH, PLAN_SECTIONS, SECTION_TITLES,
-    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, workRows,
-    type Ask, type Go, type OutcomeTab, type Plan, type PlanLine, type PlanSection, type QueueItem, type View,
+    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, withOwned, workRows,
+    type Ask, type Go, type OutcomeTab, type Owned, type Plan, type PlanLine, type PlanSection, type QueueItem, type View,
 } from "./model";
-import { mcpUrl, planRequest, PlanMovedOn, readPlan, savePlan, useMeasure } from "./data";
+import { mcpUrl, planRequest, PlanMovedOn, readPlan, saveOwned, savePlan, standingKey, useMeasure, useOwned, useWeeks } from "./data";
 import { Empty, Icon, to, type IconName } from "./parts";
 import type { FrameActions } from "./actions";
 import { NeedRow } from "./answer";
@@ -226,6 +226,7 @@ function LemmaSummary({ pod, plan, activity, queue, go, onAsk, actions }: {
                             <span className="ox-vs">Owns</span>
                             <span>{owns}</span>
                             {plan && value !== null && <span className="ox-num">{formatMeasure(value, plan.unit)}{plan.target ? ` of ${plan.target}` : ""}</span>}
+                            {plan?.owned && <Weeks podId={pod.id} owned={plan.owned} />}
                             {standing && <span className={"ox-pill" + (standing === "behind" ? " ox-pill--behind" : "")}>{standing === "behind" ? "Behind" : "On track"}</span>}
                             {measure.isError && <span className="ox-vs">The measure didn’t run</span>}
                         </p>
@@ -386,14 +387,56 @@ function Inside({ pod, plan, queue, apps, chats, tables, go, actions }: {
 /** The plan: what it owns and how, line by line, with who wrote each. With
  *  none yet, a draft read off what it already runs -- to save as it is, or
  *  to have the Lemma write properly in a chat. */
+/** The Lemma's last weeks against what it owns, once there are two to
+ *  compare: a Lemma started today has one week, and one bar says nothing. */
+function Weeks({ podId, owned }: { podId: string; owned: Owned }) {
+    const weeks = useWeeks(podId, true);
+    const list = weeks.data ?? [];
+    const read = list.flatMap((week) => (typeof week.value === "number" ? [week.value] : []));
+    if (read.length < 2) return null;
+    const top = Math.max(owned.target ?? 0, ...read, 1);
+    const said = list.map((week) => (typeof week.value === "number" ? formatMeasure(week.value, owned.unit) : "not read")).join(", ");
+    return (
+        <span className="ox-weeks" role="img" aria-label={`The last ${list.length} weeks: ${said}`}>
+            {list.map((week, index) => {
+                const value = typeof week.value === "number" ? week.value : null;
+                const tone = value === null ? " ox-weeks__b--none" : index === list.length - 1 ? " ox-weeks__b--now" : "";
+                return <span key={week.starts_on} className={"ox-weeks__b" + tone} style={{ height: `${value === null ? 8 : Math.max(8, Math.round((value / top) * 100))}%` }} />;
+            })}
+        </span>
+    );
+}
+
 function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: Ask }) {
     const queryClient = useQueryClient();
+    const solo = useMemo(() => [pod], [pod]);
+    const owned = useOwned(solo).get(pod.id) ?? null;
     /* The frame's own read of the plan, shared by key, asked here for its
        failure: a plan that could not be read is not a pod with no plan. */
     const read = useQuery({ queryKey: ["outcome-plan", pod.id], queryFn: () => readPlan(pod.id), staleTime: 5 * 60_000 });
     const plan = read.data;
     const [busy, setBusy] = useState(false);
     const [note, setNote] = useState<string | null>(null);
+
+    /* What it owns is the Lemma's, kept on the server, so a change to it goes
+       there and the number is read again; the plan's lines stay in the file.
+       The sample source has no server to keep it, so its plan file does. */
+    const own = source.label === "live"
+        ? async (next: Owned) => {
+            setBusy(true);
+            setNote(null);
+            try {
+                await saveOwned(pod.id, next);
+                await queryClient.invalidateQueries({ queryKey: standingKey(pod.id) });
+                setNote("Saved");
+            } catch (error) {
+                setNote(error instanceof Error ? `Couldn’t save: ${error.message}` : "Couldn’t save what it owns");
+                throw error;
+            } finally {
+                setBusy(false);
+            }
+        }
+        : null;
 
     const save = async (next: Plan, exists: boolean) => {
         setBusy(true);
@@ -421,7 +464,7 @@ function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: 
                     ? <p className="ox-loading">Reading the plan…</p>
                     : plan === null
                         ? <PlanDraft key={pod.id} pod={pod} busy={busy} onSave={(draft) => save(draft, false)} onAsk={() => onAsk(pod.id, planRequest(pod.description ?? ""))} me={me} />
-                        : <PlanEditor key={pod.id} plan={plan} busy={busy} me={me} onChange={(next) => save(next, true)} file={to({ name: "file", podId: pod.id, path: PLAN_PATH }, go)} />}
+                        : <PlanEditor key={pod.id} plan={plan} owned={owned} busy={busy} me={me} onChange={(next) => save(next, true)} onOwn={own} file={to({ name: "file", podId: pod.id, path: PLAN_PATH }, go)} />}
             {note && <p className="ox-note" role="status">{note}</p>}
         </div>
     );
@@ -477,16 +520,27 @@ function DraftSection({ title, lines }: { title: string; lines: readonly PlanLin
     );
 }
 
-function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: boolean; me: string; onChange: (plan: Plan) => void; file: ReturnType<typeof to> }) {
+function PlanEditor({ plan: lines, owned, busy, me, onChange, onOwn, file }: {
+    plan: Plan;
+    owned: Owned | null;
+    busy: boolean;
+    me: string;
+    onChange: (plan: Plan) => void;
+    /** Where what it owns is saved, when the Lemma keeps it rather than its file. */
+    onOwn: ((next: Owned) => Promise<void>) | null;
+    file: ReturnType<typeof to>;
+}) {
+    const plan = lines;
+    const shown = withOwned(lines, owned) ?? lines;
     const [editing, setEditing] = useState<{ section: PlanSection; index: number; text: string } | null>(null);
     const [adding, setAdding] = useState<Record<PlanSection, string>>({ must: "", how: "", who: "", never: "" });
     const [measureOpen, setMeasureOpen] = useState(false);
     const metaOf = (from: Plan) => ({ outcome: from.outcome, kind: from.kind ?? "week", target: from.target ?? "", unit: from.unit ?? "", due: from.due ?? "", measure: from.measure ?? "" });
-    const [meta, setMeta] = useState<{ outcome: string; kind: string; target: string; unit: string; due: string; measure: string }>(() => metaOf(plan));
+    const [meta, setMeta] = useState<{ outcome: string; kind: string; target: string; unit: string; due: string; measure: string }>(() => metaOf(shown));
     /* Filled from the plan as it is now each time the form opens, so a save
        never writes back values a later read replaced. */
     const toggleMeasure = () => {
-        if (!measureOpen) setMeta(metaOf(plan));
+        if (!measureOpen) setMeta(metaOf(shown));
         setMeasureOpen(!measureOpen);
     };
 
@@ -517,6 +571,20 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
         onChange(withSection(section, lines));
     };
     const saveMeta = () => {
+        if (onOwn) {
+            const target = Number.parseFloat(meta.target);
+            void onOwn({
+                sentence: meta.outcome.trim(),
+                kind: meta.kind === "date" ? "date" : "week",
+                target: Number.isFinite(target) ? target : null,
+                unit: meta.unit.trim() || (/%\s*$/.test(meta.target) ? "%" : null),
+                due: meta.kind === "date" ? meta.due.trim() || null : null,
+                measure: meta.measure.trim() || null,
+                value: null,
+                problem: null,
+            }).then(() => setMeasureOpen(false), () => undefined);
+            return;
+        }
         onChange({
             ...plan,
             outcome: meta.outcome.trim(),
@@ -565,7 +633,7 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
             ))}
             <div className="ox-measure">
                 <button type="button" className="ox-link" onClick={toggleMeasure} aria-expanded={measureOpen}>
-                    {plan.measure ? "The measure and target" : "Add a measure, so what it owns gets a number"}
+                    {shown.measure ? "The measure and target" : "Add a measure, so what it owns gets a number"}
                 </button>
                 <a className="ox-link" {...file}>Open plan.md</a>
             </div>
