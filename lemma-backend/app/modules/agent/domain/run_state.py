@@ -127,6 +127,10 @@ class RunPrivacy(BaseModel):
     private_note: bool = False
     #: A line in one of Lemma's own channels started it: answered in Lemma.
     asked_in_lemma: bool = False
+    #: The group thread that line was in (its root line): a line in another
+    #: thread waits for a turn of its own (``domain/run_places``). Kept in the
+    #: run's metadata, not a column of its own.
+    asked_in_thread: UUID | None = None
     #: A message typed in Lemma into a platform's conversation started it.
     written_in: WrittenIn | None = None
     #: The channel source the message that started it was heard at: it answers
@@ -167,6 +171,7 @@ class RunState(RunPrivacy):
         return RunPrivacy(
             private_note=self.private_note,
             asked_in_lemma=self.asked_in_lemma,
+            asked_in_thread=self.asked_in_thread,
             written_in=self.written_in,
             asked_at_source=self.asked_at_source,
         )

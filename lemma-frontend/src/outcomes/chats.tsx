@@ -14,13 +14,15 @@ import { useAbilities } from "@/channels/use-abilities";
 import { allChannels, useChannelList } from "@/channels/queries";
 import { filterFor, needsPerson } from "@/channels/views";
 import type { Channel } from "@/channels/model";
-import { channelHref } from "@/shell/place-link";
 import { ChannelIcon } from "@/shell/channels";
 import { useSurfaces } from "@/shell/surfaces";
 import { useMaySeeContacts } from "@/space/contact-queries";
 import { TeammateFace } from "@/space/teammate-face";
-import { NEW_CHAT, chatView, outcomeView, type ChatOpen, type Fill, type Go, type Handoff } from "./model";
-import { classic, readPlan } from "./data";
+import { NEW_CHAT, chatView, outcomeView, type Ask, type ChatOpen, type Fill, type Go, type Handoff } from "./model";
+import { readPlan } from "./data";
+import type { Calls } from "./calls";
+import { useVoiceConfigured } from "@/call/voice-config";
+import { ConnectBanner } from "@/connect/pod-connect";
 import { AskBox } from "./ask";
 import { Empty, Icon, to } from "./parts";
 import { WhatItRuns } from "./runs";
@@ -88,14 +90,15 @@ export function useContactsWaiting(pods: readonly Pod[]): [ReadonlyMap<string, r
 /** Whatever the sidebar opened, filling the main area: a chat with a Lemma
  *  on the workspace's own thread and composer, a shared chat on its own
  *  page, or a contact's chat. Nothing here leaves the frame. */
-export function ChatPane({ pods, open, activity, go, onAsk, actions, handoff, onHandoffSent, fill, onFilled }: {
+export function ChatPane({ pods, open, activity, go, onAsk, actions, calls, handoff, onHandoffSent, fill, onFilled }: {
     pods: readonly Pod[];
     open: ChatOpen;
     activity: Map<string, ConversationRef[]>;
     go: Go;
     /** Start a new chat with these words, here. */
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
     actions: FrameActions;
+    calls: Calls;
     handoff: Handoff | null;
     onHandoffSent: () => void;
     fill: Fill | null;
@@ -115,7 +118,7 @@ export function ChatPane({ pods, open, activity, go, onAsk, actions, handoff, on
     if (!pod) return <div className="ox-thread__none"><Empty title="This chat is with a Lemma you can’t open."><p>It may have been removed, or you were never added to it.</p></Empty></div>;
     if (open.kind === "chat") {
         const title = activity.get(pod.id)?.find((one) => one.id === open.id)?.title ?? null;
-        return <ChatThread pod={pod} id={open.id} title={title} pods={pods} go={go} onAsk={onAsk} actions={actions} handoff={handoff} onHandoffSent={onHandoffSent} fill={fill} onFilled={onFilled} />;
+        return <ChatThread pod={pod} id={open.id} title={title} pods={pods} go={go} onAsk={onAsk} actions={actions} calls={calls} handoff={handoff} onHandoffSent={onHandoffSent} fill={fill} onFilled={onFilled} />;
     }
     if (open.kind === "shared") return <SharedThread key={open.id} pod={pod} id={open.id} go={go} />;
     return <ContactThread key={open.id} pod={pod} id={open.id} go={go} />;
@@ -138,14 +141,15 @@ function usePaneKey(podId: string, id: string, adopted: RefObject<string | null>
  *  they do there. A chat not started yet opens on who it is with -- its
  *  apps, and ways to start one with people instead -- and the box at the
  *  bottom, which is where the Lemma is picked. */
-function ChatThread({ pod, id, title, pods, go, onAsk, actions, handoff, onHandoffSent, fill, onFilled }: {
+function ChatThread({ pod, id, title, pods, go, onAsk, actions, calls, handoff, onHandoffSent, fill, onFilled }: {
     pod: Pod;
     id: string;
     title: string | null;
     pods: readonly Pod[];
     go: Go;
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
     actions: FrameActions;
+    calls: Calls;
     handoff: Handoff | null;
     onHandoffSent: () => void;
     fill: Fill | null;
@@ -161,6 +165,9 @@ function ChatThread({ pod, id, title, pods, go, onAsk, actions, handoff, onHando
     const [started, setStarted] = useState<string | null>(null);
     if (pending && started !== key) setStarted(key);
     const threaded = !fresh || pending || started === key;
+    /* Offered only once the server says it can place a call: a voice engine
+       is a server setting. The sample pod has no server to ask. */
+    const voiceReady = useVoiceConfigured(source.label === "sample" ? null : pod.id) === true;
     const opens = {
         onOpenApp: (name: string) => go({ name: "app", podId: pod.id, app: name }),
         onOpenFile: (path: string) => go({ name: "file", podId: pod.id, path }),
@@ -171,8 +178,10 @@ function ChatThread({ pod, id, title, pods, go, onAsk, actions, handoff, onHando
             <header className="ox-thread__head">
                 <p className="ox-thread__t">{fresh ? "New chat" : title ?? "Chat"}</p>
                 <a className="ox-tag ox-tag--link" {...to(outcomeView(pod.id), go)}>{pod.name}</a>
-                {!fresh && <a className="ox-thread__out" href={classic.conversation(pod.id, id)}>Open in the workspace</a>}
+                {/* The machine this chat works on, from its working folder. */}
+                {source.label === "live" && <a className="ox-thread__tool" {...to({ name: "computer", podId: pod.id, conversationId: fresh ? null : id }, go)}><Icon name="grid" size={14} />Computer</a>}
             </header>
+            <ConnectBanner key={pod.id} pod={pod} />
             {!threaded ? <NewChat pod={pod} pods={pods} go={go} onAsk={onAsk} actions={actions} /> : (
                 <div className="ox-thread__body">
                     <div className="split">
@@ -191,6 +200,9 @@ function ChatThread({ pod, id, title, pods, go, onAsk, actions, handoff, onHando
                                         created.current = made;
                                         go(chatView({ kind: "chat", podId: pod.id, id: made }), { replace: true });
                                     }}
+                                    onVoice={voiceReady ? () => calls.start(pod, fresh ? null : id) : undefined}
+                                    callError={calls.error}
+                                    callRefresh={fresh ? "" : calls.refreshFor(id)}
                                     {...opens}
                                 />
                             ) : (
@@ -208,7 +220,7 @@ function ChatThread({ pod, id, title, pods, go, onAsk, actions, handoff, onHando
  *  -- its apps, tables and automations -- each a click away, with a way to
  *  ask for a new one; ways to start a chat with people instead; and the box,
  *  with which Lemma at its foot. */
-function NewChat({ pod, pods, go, onAsk, actions }: { pod: Pod; pods: readonly Pod[]; go: Go; onAsk: (podId: string, text: string) => void; actions: FrameActions }) {
+function NewChat({ pod, pods, go, onAsk, actions }: { pod: Pod; pods: readonly Pod[]; go: Go; onAsk: Ask; actions: FrameActions }) {
     const plan = useQuery({ queryKey: ["outcome-plan", pod.id], queryFn: () => readPlan(pod.id), staleTime: 5 * 60_000 });
     const owns = plan.data?.outcome || "";
     const [seed, setSeed] = useState<{ text: string; id: number } | null>(null);
@@ -289,15 +301,16 @@ function StartWith({ pod, go, onConnect }: { pod: Pod; go: Go; onConnect: () => 
  *  own channel page -- the timeline, threads, who is in it, its composer. */
 function SharedThread({ pod, id, go }: { pod: Pod; id: string; go: Go }) {
     const leave = useCallback(() => go(outcomeView(pod.id)), [go, pod.id]);
+    const [title, setTitle] = useState<string | null>(null);
     return (
         <div className="ox-thread">
             <header className="ox-thread__head ox-thread__head--slim">
+                {title && <p className="ox-thread__t">{title}</p>}
                 <a className="ox-tag ox-tag--link" {...to(outcomeView(pod.id), go)}>{pod.name}</a>
-                <a className="ox-thread__out" href={channelHref(pod.id, id)}>Open in the workspace</a>
             </header>
             <div className="ox-thread__body">
                 <div className="pane channel-pane">
-                    <ChannelPage pod={pod} channelId={id} visible onNamed={NOOP} onLeft={leave} />
+                    <ChannelPage pod={pod} channelId={id} visible onNamed={setTitle} onLeft={leave} />
                 </div>
             </div>
         </div>
@@ -314,7 +327,6 @@ function ContactThread({ pod, id, go }: { pod: Pod; id: string; go: Go }) {
         <div className="ox-thread">
             <header className="ox-thread__head ox-thread__head--slim">
                 <a className="ox-thread__crumb" {...to(queue, go)}><Icon name="back" size={14} />{pod.name} contacts</a>
-                <a className="ox-thread__out" href={channelHref(pod.id, id)}>Open in the workspace</a>
             </header>
             <div className="ox-thread__body">
                 <div className="pane channel-pane">

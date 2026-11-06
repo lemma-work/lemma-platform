@@ -22,7 +22,10 @@ from app.modules.channels.domain.entities import (
 )
 from app.modules.channels.infrastructure.rows import message_entity
 from app.modules.channels.infrastructure.line_search import LineSearch, SearchFilter
-from app.modules.channels.infrastructure.lines import LineRepository, heard_row
+from app.modules.channels.infrastructure.lines import (
+    LineRepository,
+    heard_rows,
+)
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
@@ -34,7 +37,7 @@ MAX_CHANNELS = 100
 __all__ = [
     "channels_for",
     "line_by_id",
-    "line_heard_at",
+    "lines_heard_at",
     "member_background",
     "page_lines",
     "said_outside",
@@ -76,13 +79,16 @@ async def line_by_id(
     return await LineRepository(uow.session).get(message_id)
 
 
-async def line_heard_at(
-    uow: SqlAlchemyUnitOfWork, *, source_id: UUID, external_message_id: str
-) -> ChannelMessage | None:
-    """The line a platform message is, at the place it was heard; None for a
-    message that is no line here."""
-    row = await heard_row(uow.session, source_id, external_message_id)
-    return message_entity(row) if row is not None else None
+async def lines_heard_at(
+    uow: SqlAlchemyUnitOfWork, keys: Sequence[tuple[UUID, str]]
+) -> dict[tuple[UUID, str], ChannelMessage]:
+    """The lines platform messages are -- (place, platform message id) each,
+    at the place it was heard -- in one read however many. A message that is
+    no line here is left out."""
+    rows = await heard_rows(uow.session, keys)
+    return {
+        key: message_entity(row) for key in keys if (row := rows.get(key)) is not None
+    }
 
 
 async def thread_root_at(

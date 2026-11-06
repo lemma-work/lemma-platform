@@ -27,8 +27,10 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.services.route_resolver import RouteResolver
 from app.modules.agent_surfaces.services.surface_candidates import (
     admitted_surfaces,
+    answering_unasked,
 )
 from app.modules.channels.contracts import Source, SourceKind
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
@@ -50,6 +52,10 @@ class _Seats(InMemoryChannelSeats):
     async def conversation_at(self, source_id, **kwargs):
         self.reads.append("conversation_at")
         return await super().conversation_at(source_id, **kwargs)
+
+    async def answers_every_line_at(self, **kwargs):
+        self.reads.append("answers_every_line_at")
+        return await super().answers_every_line_at(**kwargs)
 
 
 def _channel_place(surface: AgentSurfaceEntity) -> Source:
@@ -164,3 +170,76 @@ async def test_a_message_that_is_not_a_thread_reply_reads_nothing():
 
     assert await admitted_surfaces([surface], event, seats=seats) == [surface]
     assert seats.reads == []
+
+
+# ------------------------------------------- unasked, for an every-line agent
+
+
+def _said(*, thread: bool = False) -> ParsedInboundSurfaceEvent:
+    """A channel message nobody put to the bot."""
+    said = _reply(mentioned=False)
+    if thread:
+        return said
+    return said.model_copy(
+        update={"external_thread_id": None, "metadata": {"event_type": "message"}}
+    )
+
+
+async def test_a_message_nobody_put_to_the_bot_is_let_in_where_it_answers_every_line():
+    """The same line typed in Lemma starts an agent answering every line in
+    the channel; on the platform, its bot is let in to answer it."""
+    surface = _surface()
+    seats = _Seats()
+    assert surface.agent_id is not None
+    seats.every_line.add(("C1", surface.id, surface.agent_id))
+
+    for said in (_said(), _said(thread=True)):
+        assert await admitted_surfaces([surface], said, seats=seats) == []
+        assert await answering_unasked([surface], said, seats=seats) == [surface]
+
+
+async def test_nothing_unasked_is_let_in_where_the_bot_only_answers_when_named():
+    seats = _Seats()
+
+    assert await answering_unasked([_surface()], _said(), seats=seats) == []
+
+
+async def test_a_channel_the_bot_is_not_wired_to_lets_nothing_in_unasked():
+    surface = _surface()
+    seats = _Seats()
+    assert surface.agent_id is not None
+    elsewhere = _said().model_copy(update={"external_channel_id": "C2"})
+    seats.every_line.add(("C2", surface.id, surface.agent_id))
+
+    assert await answering_unasked([surface], elsewhere, seats=seats) == []
+
+
+async def test_a_message_the_door_let_in_unasked_reads_the_seats_no_more():
+    """The door that heard it asked once whether its agent answers every line
+    there and marked the event; nothing after it asks again."""
+    surface = _surface()
+    seats = _Seats()
+    let_in = _said().model_copy(update={"unasked": True})
+
+    assert await answering_unasked([surface], let_in, seats=seats) == [surface]
+    assert seats.reads == []
+
+
+async def test_routing_trusts_the_doors_unasked_mark_for_a_member():
+    """No unit of work at all: reading the seats again would raise."""
+    resolver = RouteResolver(uow=None)  # type: ignore[arg-type]
+    let_in = _said().model_copy(update={"unasked": True})
+
+    assert await resolver._every_line(_surface(), let_in, member=True)
+
+
+async def test_an_outsiders_message_nobody_put_to_the_bot_is_never_routed():
+    """Even marked unasked by the door: a message from outside the pod is
+    answered only when put to the bot, and nothing is read to decide it."""
+    resolver = RouteResolver(uow=None)  # type: ignore[arg-type]
+    for said in (_said(), _said().model_copy(update={"unasked": True})):
+        assert await resolver.resolve_route(surface=_surface(), parsed=said) is None
+        assert (
+            await resolver.resolve_route(surface=_surface(), parsed=said, member=False)
+            is None
+        )

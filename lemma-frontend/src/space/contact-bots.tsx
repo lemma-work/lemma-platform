@@ -29,7 +29,7 @@ export function ContactBots({ pod, onConnect }: { pod: Pod; onConnect?: () => vo
             {surfaces.isPending ? (
                 <p className="all__empty" role="status">Loading…</p>
             ) : bots.length === 0 ? (
-                <p className="ccard__sub">No WhatsApp number, Telegram bot or email address yet.</p>
+                <p className="ccard__sub">No WhatsApp number, Telegram or email address yet.</p>
             ) : (
                 <>
                     <ul className="crows cbots">

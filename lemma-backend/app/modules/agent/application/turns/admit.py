@@ -36,6 +36,7 @@ from app.modules.agent.domain.private_notes import (
     requested_private_note,
     run_state_for,
 )
+from app.modules.agent.domain.run_places import thread_of
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.turn_admission import (
     HeldTurn,
@@ -258,7 +259,9 @@ class AdmitMessage:
                 agent,
                 user_id=user_id,
                 state=run_state_for(
-                    message_state, message_source=message_source(message_metadata)
+                    message_state,
+                    message_source=message_source(message_metadata),
+                    asked_in_thread=thread_of(message_metadata),
                 ).model_copy(
                     update={"kind": await self._new_run_kind(conversation, kind)}
                 ),

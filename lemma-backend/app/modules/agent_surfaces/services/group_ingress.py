@@ -31,7 +31,10 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
     arrival_number,
 )
-from app.modules.agent_surfaces.services.surface_candidates import admitted_surfaces
+from app.modules.agent_surfaces.services.surface_candidates import (
+    admitted_surfaces,
+    answering_unasked,
+)
 
 
 async def logged_and_addressed(
@@ -130,6 +133,8 @@ async def own_bot_group_message(
         surfaces=[surface],
         parsed=parsed,
     )
-    if not await admitted_surfaces([surface], parsed, seats=seats):
-        return None
-    return parsed
+    if await admitted_surfaces([surface], parsed, seats=seats):
+        return parsed
+    if await answering_unasked([surface], parsed, seats=seats):
+        return parsed.model_copy(update={"unasked": True})
+    return None
