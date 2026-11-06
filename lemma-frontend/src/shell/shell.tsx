@@ -31,6 +31,7 @@ import { WorkflowPage } from "@/space/workflow-page";
 import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
 import { WorkflowsPage } from "@/space/workflows-page";
 import { ChannelPage } from "@/channels/channel-page";
+import type { ChatFilter } from "@/channels/chat-list";
 import { ContactsPage } from "@/space/contacts-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
@@ -169,7 +170,9 @@ function ContactsPlace({ pod, onConnect }: { pod: Pod; onConnect: () => void }) 
     return useContactsPlace(pod.id) ? <ContactsPage pod={pod} onConnect={onConnect} /> : <NotSwitchedOn what="Contacts" />;
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["channels", "Shared chats"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
+/* Shared chats are a filter of Chats, not a tab of their own: `space:channels`,
+   which old links and the backend's still name, opens Chats on Shared. */
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
@@ -535,8 +538,16 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     /* The old profile is About now: an address or a search result that
        still asks for it lands on the teammate's own page. */
     const rawTabId = (pod && tabs[pod.id]) || "space:home";
-    const activeTabId = rawTabId === "profile" ? "space:about" : rawTabId;
+    const activeTabId = rawTabId === "profile" ? "space:about" : rawTabId === "space:channels" ? "space:chats" : rawTabId;
     const activeTab: Tab | undefined = allTabs.find((tab) => tab.id === activeTabId) ?? allTabs[0];
+    /* Which filter Chats opens on, and a count that opens it again on it: a
+       link to the shared chats while Chats is already open still lands on
+       Shared. */
+    const [chatsOn, setChatsOn] = useState<{ filter: ChatFilter; at: number }>({ filter: "all", at: 0 });
+    /* Left, Chats opens on All again next time. */
+    useEffect(() => {
+        if (activeTab?.id !== "space:chats") setChatsOn((was) => (was.filter === "all" ? was : { filter: "all", at: was.at }));
+    }, [activeTab?.id]);
 
     /* The list you were last on in each space, which is where anything you
        open next sits beside. */
@@ -935,6 +946,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
            tab remembered from before the merge, or a link that still names
            them, opens that page instead of falling back to Home. */
         if (wanted === "space:settings") { wanted = "space:about"; replaceNext.current = true; }
+        /* Shared chats were a tab; they are a filter of Chats now. */
+        if (wanted === "space:channels") {
+            wanted = "space:chats";
+            setChatsOn((was) => ({ filter: "channels", at: was.at + 1 }));
+            replaceNext.current = true;
+        }
 
         setTabs((previous) => (previous[pod.id] === wanted ? previous : { ...previous, [pod.id]: wanted }));
         if (address.agentName) setOpenAgentName(address.agentName);
@@ -1964,11 +1981,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onFile={(path) => openFile(path, "space:about")}
                                             onDeleted={() => goToTeam(null)}
                                         />
-                                    ) : tab.view === "chats" || tab.view === "channels" ? (
+                                    ) : tab.view === "chats" ? (
                                         <ChatsPage
-                                            key={tab.view}
+                                            key={chatsOn.at}
                                             pod={pod}
-                                            initialFilter={tab.view === "channels" ? "channels" : "all"}
+                                            initialFilter={chatsOn.filter}
                                             onOpenChannel={(id) => openChannel({ id, title: null })}
                                             onConnect={() => setReaching(true)}
                                             openId={openConversationId}

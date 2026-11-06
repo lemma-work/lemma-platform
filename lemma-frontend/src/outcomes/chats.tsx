@@ -13,6 +13,7 @@ import { mayStartChannel } from "@/channels/abilities";
 import { useAbilities } from "@/channels/use-abilities";
 import { allChannels, useChannelList } from "@/channels/queries";
 import { filterFor, needsPerson } from "@/channels/views";
+import { useInboxLive } from "@/channels/waiting-panel";
 import type { Channel } from "@/channels/model";
 import { ChannelIcon } from "@/shell/channels";
 import { useSurfaces } from "@/shell/surfaces";
@@ -51,7 +52,11 @@ function useByPod<T>(): [ReadonlyMap<string, readonly T[]>, Keep<T>] {
     return [lists, keep];
 }
 
-function ChannelFeed({ podId, onList }: { podId: string; onList: Keep<Channel> }) {
+/** One Lemma's chats on a channel. `live`, it holds the Lemma's `inbox`
+ *  topic too, so new messages and waiting questions move its rows as they
+ *  happen, as the workspace's do under its bell. */
+function ChannelFeed({ podId, live, onList }: { podId: string; live: boolean; onList: Keep<Channel> }) {
+    useInboxLive(podId, live);
     const list = useChannelList(podId, { archived: false });
     const data = list.data;
     useEffect(() => { onList(podId, data ? allChannels(data) : null); }, [podId, data, onList]);
@@ -59,10 +64,12 @@ function ChannelFeed({ podId, onList }: { podId: string; onList: Keep<Channel> }
     return null;
 }
 
-/** Every Lemma's shared chats, by Lemma. Render the feeds it returns. */
-export function useChannelsByPod(pods: readonly Pod[]): [ReadonlyMap<string, readonly Channel[]>, ReactNode] {
+/** Every Lemma's shared chats, by Lemma. Render the feeds it returns. One
+ *  caller holds them `live`, the sidebar, which is always there; any other
+ *  reads the same lists from the cache. */
+export function useChannelsByPod(pods: readonly Pod[], { live = false }: { live?: boolean } = {}): [ReadonlyMap<string, readonly Channel[]>, ReactNode] {
     const [channels, keep] = useByPod<Channel>();
-    return [channels, pods.map((pod) => <ChannelFeed key={pod.id} podId={pod.id} onList={keep} />)];
+    return [channels, pods.map((pod) => <ChannelFeed key={pod.id} podId={pod.id} live={live} onList={keep} />)];
 }
 
 function WaitingFeed({ podId, onList }: { podId: string; onList: Keep<Channel> }) {

@@ -6131,6 +6131,19 @@
             "description": "When an agent first answered them; what the contact limit counts.",
             "title": "Answered At"
           },
+          "channel_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Their own chat with the pod, to open it without looking it up; absent until they first write.",
+            "title": "Channel Id"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
