@@ -48422,6 +48422,68 @@
           "result": "collection",
           "verb": "list"
         }
+      },
+      "post": {
+        "description": "Start one run of a TIME schedule now, outside its timing.\n\nTakes no body. The run carries what the schedule's own firing would, is\nheld to the same daily ceiling and `max_concurrent_runs`, and its target\nis started by the same job, so the run answers `PROCESSING` until it is\nhanded over. It runs as the person asking, who must be able to change the\nschedule and run its target; its metadata says `manual: true` and who\nstarted it. Refused with 422 for a WEBHOOK or DATASTORE schedule, which\nhas no event to carry, and with 409 while the schedule is paused, has no\ntarget, is full, or has reached its daily ceiling.",
+        "operationId": "schedule.run.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Schedule Run",
+        "tags": [
+          "Schedules"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "schedule.run"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "schedule.run",
+          "result": "entity",
+          "verb": "create"
+        }
       }
     },
     "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry": {

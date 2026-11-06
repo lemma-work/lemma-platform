@@ -298,6 +298,35 @@ async def list_schedule_skips(
 
 
 @router.post(
+    "/{schedule_id}/runs",
+    response_model=ScheduleRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="schedule.run.create",
+)
+async def create_schedule_run(
+    pod_id: UUID,
+    schedule_id: UUID,
+    service: ScheduleServiceDep,
+    ctx: PodContextDep,
+) -> ScheduleRunResponse:
+    """Start one run of a TIME schedule now, outside its timing.
+
+    Takes no body. The run carries what the schedule's own firing would, is
+    held to the same daily ceiling and `max_concurrent_runs`, and its target
+    is started by the same job, so the run answers `PROCESSING` until it is
+    handed over. It runs as the person asking, who must be able to change the
+    schedule and run its target; its metadata says `manual: true` and who
+    started it. Refused with 422 for a WEBHOOK or DATASTORE schedule, which
+    has no event to carry, and with 409 while the schedule is paused, has no
+    target, is full, or has reached its daily ceiling.
+    """
+    schedule_run = await service.run_service.start_manual_run(
+        pod_id=pod_id, schedule_id=schedule_id, ctx=ctx
+    )
+    return ScheduleRunResponse.model_validate(schedule_run)
+
+
+@router.post(
     "/{schedule_id}/runs/{run_id}/retry",
     response_model=ScheduleRunResponse,
     status_code=status.HTTP_202_ACCEPTED,

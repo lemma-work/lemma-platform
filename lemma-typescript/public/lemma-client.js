@@ -20873,6 +20873,36 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Create Schedule Run
+     * Start one run of a TIME schedule now, outside its timing.
+     *
+     * Takes no body. The run carries what the schedule's own firing would, is
+     * held to the same daily ceiling and `max_concurrent_runs`, and its target
+     * is started by the same job, so the run answers `PROCESSING` until it is
+     * handed over. It runs as the person asking, who must be able to change the
+     * schedule and run its target; its metadata says `manual: true` and who
+     * started it. Refused with 422 for a WEBHOOK or DATASTORE schedule, which
+     * has no event to carry, and with 409 while the schedule is paused, has no
+     * target, is full, or has reached its daily ceiling.
+     * @param podId
+     * @param scheduleId
+     * @returns ScheduleRunResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleRunCreate(podId, scheduleId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/runs",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Retry Schedule Run
      * @param podId
      * @param scheduleId
@@ -20995,6 +21025,17 @@ var LemmaClient = (() => {
             (_b = options.pageToken) != null ? _b : void 0
           );
         }
+      );
+    }
+    /**
+     * Start one run of a TIME schedule now, outside its timing, as the caller;
+     * answers the run (`PROCESSING` until its target is handed over). Held to the
+     * schedule's daily ceiling and `max_concurrent_runs` like any firing. A
+     * WEBHOOK or DATASTORE schedule is refused (422), as is a paused one (409).
+     */
+    runNow(scheduleId) {
+      return this.client.request(
+        () => SchedulesService.scheduleRunCreate(this.podId(), scheduleId)
       );
     }
     /** Run a failed or dead-lettered run again with the same event; answers the new run. */

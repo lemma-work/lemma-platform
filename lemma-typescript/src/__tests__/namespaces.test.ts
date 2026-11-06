@@ -306,6 +306,20 @@ describe("SchedulesNamespace.skips", () => {
   });
 });
 
+describe("SchedulesNamespace.runNow", () => {
+  it("starts a run of the schedule in the bound pod and answers it", async () => {
+    const run = { id: "run-1", status: "PROCESSING" };
+    const createSpy = vi
+      .spyOn(SchedulesService, "scheduleRunCreate")
+      .mockResolvedValue(run as never);
+    const schedules = new SchedulesNamespace(passthroughAdapter, () => "pod-1");
+
+    await expect(schedules.runNow("sched-1")).resolves.toEqual(run);
+
+    expect(createSpy).toHaveBeenCalledWith("pod-1", "sched-1");
+  });
+});
+
 describe("PodLinksNamespace.connect", () => {
   it("shares tables and folders for reading only", async () => {
     const connectSpy = vi
