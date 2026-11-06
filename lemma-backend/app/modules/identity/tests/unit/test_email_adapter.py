@@ -2,8 +2,10 @@ import pytest
 
 from app.modules.identity.domain.organization_entities import OrganizationRole
 from app.modules.identity.infrastructure.adapters import email_adapter
+from app.core.email.transactional import render_transactional_email
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
+    invitation_note,
 )
 from app.modules.identity.services.email_policy import (
     EmailPolicyError,
@@ -103,42 +105,21 @@ async def test_pod_invitation_humanizes_partially_formatted_stored_name(monkeypa
     assert "Pod Pod" not in sent["html_content"]
 
 
-@pytest.mark.asyncio
-async def test_an_invitation_quotes_the_inviters_note_and_escapes_it(monkeypatch):
-    adapter = SmtpIdentityEmailAdapter()
-    sent: dict[str, str] = {}
-
-    async def capture_send(**kwargs):
-        sent.update(kwargs)
-        return True
-
-    monkeypatch.setattr(adapter, "_send", capture_send)
-
-    await adapter.send_invitation_email(
-        to_email="dev@example.com",
-        organization_name="Acme",
-        inviter_email="ada@example.com",
-        role=OrganizationRole.ORG_MEMBER,
-        accept_url="https://lemma.work/invitations/test/accept",
-        pod_name="Support",
-        note="You answered most of these <b>customers</b>.",
+def test_an_invitation_quotes_the_inviters_note_and_escapes_it():
+    """The note is the inviter's own words: quoted after the invite, escaped
+    where the email draws it, and left out when it says nothing."""
+    said = invitation_note("Ada", "  You answered most of these <b>customers</b>. ")
+    assert said == (
+        "Ada wrote: \u201cYou answered most of these <b>customers</b>.\u201d",
     )
-
-    html, text = sent["html_content"], sent["text_content"]
-    assert "You answered most of these" in text
-    assert "&lt;b&gt;customers&lt;/b&gt;" in html and "<b>customers</b>" not in html
-
-    sent.clear()
-    await adapter.send_invitation_email(
-        to_email="dev@example.com",
-        organization_name="Acme",
-        inviter_email="ada@example.com",
-        role=OrganizationRole.ORG_MEMBER,
-        accept_url="https://lemma.work/invitations/test/accept",
-        pod_name="Support",
-        note="   ",
+    rendered = render_transactional_email(
+        preheader="p", eyebrow="e", heading="h", body=("Invited.", *said)
     )
-    assert "wrote:" not in sent["text_content"]
+    assert "You answered most of these" in rendered.text
+    assert "&lt;b&gt;customers&lt;/b&gt;" in rendered.html
+    assert "<b>customers</b>" not in rendered.html
+    assert invitation_note("Ada", "   ") == ()
+    assert invitation_note("Ada", None) == ()
 
 
 @pytest.mark.asyncio
