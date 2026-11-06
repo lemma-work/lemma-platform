@@ -80,6 +80,8 @@ class InMemoryChannelSeats:
         self._seated: dict[_SeatKey, UUID] = {}
         self._answers: dict[UUID, ReplyAddress] = {}
         self._lines: list[_Line] = []
+        #: ``(chat, surface, agent)`` where that agent answers every line.
+        self.every_line: set[tuple[str, UUID, UUID]] = set()
 
     @property
     def sources(self) -> dict[_PlaceKey, Source]:
@@ -222,8 +224,16 @@ class InMemoryChannelSeats:
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:
         return self.channels.setdefault(("DIRECT", pod_id, user_id), uuid4())
 
-    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None:
+    async def reply_address(
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
+    ) -> ReplyAddress | None:
         answer = self._answers.get(conversation_id)
+        if at_source_id is not None and (
+            answer is None or answer.source.id != at_source_id
+        ):
+            # Asked at a place this double heard nothing at: its last word.
+            place = self._by_id(at_source_id)
+            return ReplyAddress(source=place, ref=place.delivery_ref) if place else None
         if answer is None:
             return None
         # The place as it is now, not as it was when the line was said.
@@ -270,6 +280,11 @@ class InMemoryChannelSeats:
             if found:
                 freshest[person] = found[0]
         return freshest
+
+    async def answers_every_line_at(
+        self, *, external_channel_id: str, surface_id: UUID, agent_id: UUID
+    ) -> bool:
+        return (external_channel_id, surface_id, agent_id) in self.every_line
 
     async def places_hearing(
         self,

@@ -75,6 +75,7 @@ class SendMessage:
         typed_in_lemma: bool = False,
         client_message_id: str | None = None,
         kind: RunKind = RunKind.CHAT,
+        asked_at: UUID | None = None,
     ) -> AgentRunStartResult:
         """Store a message and start, or join, the run that answers it.
 
@@ -91,6 +92,7 @@ class SendMessage:
         A person's own send and a new conversation's first message go through
         `send_window`; a chat platform's next line in a thread does not (people
         say "yes" twice, and its delivery id already catches redeliveries).
+        ``asked_at`` is the channel source a surface heard it at.
         """
         if typed_in_lemma:
             carried = (message_metadata or {}).get(CLIENT_MESSAGE_ID_REQUEST_KEY)
@@ -112,6 +114,7 @@ class SendMessage:
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
             kind=kind,
+            asked_at=asked_at,
         )
         if not typed_in_lemma and conversation_id is not None:
             return await start()
@@ -137,6 +140,7 @@ class SendMessage:
         typed_in_lemma: bool,
         client_message_id: str | None,
         kind: RunKind,
+        asked_at: UUID | None,
     ) -> AgentRunStartResult:
         conversation = await self._get_or_create_conversation(
             conversation_id=conversation_id,
@@ -176,6 +180,7 @@ class SendMessage:
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
             kind=kind,
+            asked_at=asked_at,
         )
 
     async def _get_or_create_conversation(

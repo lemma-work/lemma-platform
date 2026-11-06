@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.channels.domain.answering import answers_every_line
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
@@ -42,6 +43,7 @@ __all__ = [
     "ReplyAddress",
     "addressed_at",
     "adopt_place",
+    "answers_every_line_at",
     "change_place",
     "confirm_group",
     "conversation_at",
@@ -55,7 +57,6 @@ __all__ = [
     "people_places",
     "person_places",
     "place_became_private",
-    "place_by_request",
     "place_heard_on",
     "place_resumed",
     "place_stopped",
@@ -108,10 +109,22 @@ async def addressed_at(
 
 
 async def reply_address(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+    uow: SqlAlchemyUnitOfWork,
+    conversation_id: UUID,
+    *,
+    at_source_id: UUID | None = None,
 ) -> ReplyAddress | None:
-    """Where this conversation's answer goes, or None if it is said nowhere."""
-    found = await SourceRepository(uow.session).reply_address(conversation_id)
+    """Where this conversation's answer goes, or None if it is said nowhere.
+
+    ``at_source_id`` keeps it to the place a run was asked at, whoever has
+    written from elsewhere since: the latest line said there, else -- nobody
+    there has spoken in this conversation yet -- the place's last word. None
+    once the place is gone."""
+    sources = SourceRepository(uow.session)
+    found = await sources.reply_address(conversation_id, at_source_id=at_source_id)
+    if found is None and at_source_id is not None:
+        asked = await sources.get(at_source_id)
+        found = (asked, asked.delivery_ref) if asked is not None else None
     return ReplyAddress(source=found[0], ref=found[1]) if found else None
 
 
@@ -158,6 +171,26 @@ async def adopt_place(
         await change_place(uow, known.id, {"title": place.title})
         known = known.model_copy(update={"title": place.title})
     return known, False
+
+
+async def answers_every_line_at(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    external_channel_id: str,
+    surface_id: UUID,
+    agent_id: UUID,
+) -> bool:
+    """Whether this agent answers every line said in the shared place this
+    surface hears on that chat -- so its bot answers a member's message
+    there that nobody put to it, as it would the same line typed in Lemma
+    (``domain/answering``)."""
+    members = MemberRepository(uow.session)
+    for source in await SourceRepository(uow.session).hearing(
+        external_channel_id=external_channel_id, surface_ids=[surface_id]
+    ):
+        if answers_every_line(agent_id, await members.agents(source.channel_id)):
+            return True
+    return False
 
 
 async def person_places(
@@ -240,20 +273,6 @@ async def conversation_at(
         source_id,
         sender_external_id=sender_external_id,
         external_thread_id=external_thread_id,
-    )
-
-
-async def place_by_request(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    request_id: str,
-    surface_ids: Collection[UUID] | None = None,
-    platform: str | None = None,
-) -> Source | None:
-    """A pending group by the platform's request id, on these surfaces or --
-    for a platform whose request ids are unique everywhere -- that platform."""
-    return await SourceRepository(uow.session).by_request_on_surfaces(
-        request_id=request_id, surface_ids=surface_ids, platform=platform
     )
 
 

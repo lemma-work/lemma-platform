@@ -2,15 +2,14 @@
 
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { source, type Pod } from "@/data";
-import type { AgentRow } from "@/data/agents";
+import { source, type AgentRow, type Pod } from "@/data";
 import { readableName } from "@/library/reading";
 import { StandingWork } from "@/schedule/standing-work";
 import { WorkflowsPage, type WorkflowsView } from "@/space/workflows-page";
 import { platformName } from "@/thread/conversation-origin";
 import { useWorkflowList } from "@/workflow/use-run";
 import type { FrameActions } from "./actions";
-import { AUTOMATION_SECTIONS, ageOf, chatView, outcomeView, type AutomationSection, type Go, type QueueItem } from "./model";
+import { AUTOMATION_SECTIONS, agentKey, agentView, ageOf, chatView, outcomeView, type AutomationSection, type Go, type QueueItem } from "./model";
 import { Icon, to, type IconName } from "./parts";
 
 const LABELS: Record<AutomationSection, string> = {
@@ -100,7 +99,9 @@ function AgentsTab({ pod, go }: { pod: Pod; go: Go }) {
     if (rows.length === 0) return <p className="ox-vs">{pod.name} does its own work, and hands nothing on.</p>;
     return (
         <div className="ox-pieces">
-            {rows.map((agent, at) => <AgentPiece key={agent.id || "unnamed-" + at} agent={agent} pod={pod} go={go} name={agent.label} />)}
+            {rows.map((agent, at) => (
+                <Piece key={agentKey(agent, at)} icon="agent" name={agent.label} line={agent.blurb} link={agentLink(pod, agent, go)} tone="lemma" />
+            ))}
         </div>
     );
 }
@@ -112,35 +113,28 @@ function lastRan(at: string): string {
     return Number.isNaN(ms) ? "" : ` · last ran ${ageOf(ms, Date.now())} ago`;
 }
 
+/** An agent row's link, or none for a row with nothing to open
+ *  (`agentView`). */
+function agentLink(pod: Pod, agent: AgentRow, go: Go): PieceLink | undefined {
+    const view = agentView(pod.id, agent);
+    return view ? to(view, go) : undefined;
+}
+
+type PieceLink = { href: string; onClick?: ReturnType<typeof to>["onClick"] };
+
 /** One thing a Lemma runs on. Opens in the frame when the frame shows that
- *  kind of thing, in the workspace when it does not. */
-/** One thing the Lemma has. Without a `link` -- an agent row that arrived
- *  with no name, which has no page to open -- it is said, not linked. */
-function Piece({ icon, name, line, link, tone }: { icon: IconName; name: string; line?: string; link?: { href: string; onClick?: ReturnType<typeof to>["onClick"] }; tone?: "lemma" | "off" }) {
-    const inside = (
+ *  kind of thing, in the workspace when it does not; with no link it is only
+ *  shown. */
+function Piece({ icon, name, line, link, tone }: { icon: IconName; name: string; line?: string; link?: PieceLink; tone?: "lemma" | "off" }) {
+    const className = "ox-piece" + (tone === "off" ? " ox-piece--off" : "");
+    const body = (
         <>
             <span className={"ox-piece__i" + (tone === "lemma" ? " ox-piece__i--lemma" : "")}><Icon name={icon} /></span>
             <span className="ox-piece__t">{name}</span>
             {line && <span className="ox-piece__d">{line}</span>}
         </>
     );
-    if (!link) return <div className="ox-piece ox-piece--off">{inside}</div>;
-    return <a className={"ox-piece" + (tone === "off" ? " ox-piece--off" : "")} {...link}>{inside}</a>;
-}
-
-/** An agent's piece: its page when it has a name to open it by; a row that
- *  arrived without one says so and opens nothing. Listed by its id, or --
- *  since two nameless rows share the empty one -- by where it sits. */
-function AgentPiece({ agent, pod, go, name }: { agent: AgentRow; pod: Pod; go: Go; name: string }) {
-    return (
-        <Piece
-            icon="agent"
-            name={name}
-            line={agent.blurb}
-            link={agent.broken ? undefined : to({ name: "agent", podId: pod.id, agent: agent.name }, go)}
-            tone="lemma"
-        />
-    );
+    return link ? <a className={className} {...link}>{body}</a> : <div className={className}>{body}</div>;
 }
 
 export function XrayTab({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
@@ -174,7 +168,7 @@ export function XrayTab({ pod, go, actions }: { pod: Pod; go: Go; actions: Frame
             pending: agents.isPending,
             failed: agents.isError,
             empty: "Only its own agent.",
-            pieces: (agents.data ?? []).map((agent, at) => <AgentPiece key={agent.id || "unnamed-" + at} agent={agent} pod={pod} go={go} name={agent.front ? `${agent.label} (answers here)` : agent.label} />),
+            pieces: (agents.data ?? []).map((agent, at) => <Piece key={agentKey(agent, at)} icon="agent" name={agent.front ? `${agent.label} (answers here)` : agent.label} line={agent.blurb} link={agentLink(pod, agent, go)} tone="lemma" />),
         },
         {
             title: "Tables",

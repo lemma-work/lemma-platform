@@ -16,6 +16,8 @@ arguments.
 
 from __future__ import annotations
 
+from app.core.authorization.delegation import effective_agent_id
+
 from app.modules.agent_surfaces.domain.routing_facts import InboundRoutingFacts
 
 from uuid import UUID
@@ -266,4 +268,37 @@ async def admitted_surfaces(
         for surface in surfaces
         if surface.id in engaged
         and surface.allows_inbound_event(parsed, thread_is_ours=True)
+    ]
+
+
+async def answering_unasked(
+    surfaces: list[AgentSurfaceEntity],
+    parsed: ParsedInboundSurfaceEvent,
+    *,
+    seats: ChannelSeats,
+) -> list[AgentSurfaceEntity]:
+    """The surfaces whose agent answers every line in this group's channel,
+    for a message ``admitted_surfaces`` let by because nobody put it to the
+    bot: the same line typed in Lemma would start that agent
+    (``channels.domain.answering``). The caller marks the event ``unasked``,
+    so only a member of the pod is answered; anybody else is only logged."""
+    if parsed.is_dm or not parsed.external_channel_id:
+        return []
+    if parsed.unasked:
+        # Already let in unasked by the door that heard it (``group_ingress``):
+        # the seats were read there, once.
+        return [
+            surface
+            for surface in surfaces
+            if surface.allows_inbound_event(parsed, asked=False)
+        ]
+    return [
+        surface
+        for surface in surfaces
+        if surface.allows_inbound_event(parsed, asked=False)
+        and await seats.answers_every_line_at(
+            external_channel_id=parsed.external_channel_id,
+            surface_id=surface.id,
+            agent_id=effective_agent_id(surface.agent_id, pod_id=surface.pod_id),
+        )
     ]

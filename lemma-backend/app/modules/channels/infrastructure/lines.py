@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Row, Select, cast, func, or_, select, update
+from sqlalchemy import ColumnElement, Row, Select, and_, cast, func, or_, select, update
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.dialects.postgresql import insert
@@ -161,6 +161,24 @@ async def heard_row(
             populate_existing=True
         )
     return await session.scalar(statement)
+
+
+async def heard_rows(
+    session: AsyncSession, keys: Sequence[tuple[UUID, str]]
+) -> dict[tuple[UUID | None, str | None], ChannelMessageModel]:
+    """``heard_row`` for many messages, in one read, keyed as asked."""
+    message = ChannelMessageModel
+    each = [
+        and_(
+            message.source_id == place, *_external_is(message.external_message_id, id_)
+        )
+        for place, id_ in dict.fromkeys(keys)
+    ]
+    if not each:
+        return {}
+    # One line per message at a place (``uq_channel_messages_external``).
+    rows = await session.scalars(select(message).where(or_(*each)).limit(len(each)))
+    return {(row.source_id, row.external_message_id): row for row in rows}
 
 
 class LineRepository:

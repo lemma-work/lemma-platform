@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.message_state import MessageState
@@ -64,6 +65,13 @@ PRIVATE_NOTE_IN_DM_LABEL = (
 #: asked; only the run can. A run asked in Lemma is answered in Lemma: no
 #: platform's guidance, tools, files or progress.
 LEMMA_CHANNEL = "lemma_channel"
+
+#: What a turn started by a line heard on a platform says it came from, when
+#: the agent answering it is not the bot it came through: one the line names,
+#: or one answering every line in the channel (``channels.domain.answering``).
+#: Started from the channel, but not written in Lemma: its run answers at the
+#: line's place (``asked_at_source``).
+HEARD_IN_CHANNEL = "channel_heard"
 
 #: A message's ``source`` when the platform handed something back rather than
 #: anybody saying it, and what the run it starts was triggered by.
@@ -136,14 +144,25 @@ def note_in_member_dm(conversation: Conversation, surface_kind: str | None) -> b
 
 
 def run_state_for(
-    message: MessageState, *, message_source: str | None = None
+    message: MessageState,
+    *,
+    message_source: str | None = None,
+    asked_in_thread: UUID | None = None,
 ) -> RunState:
-    """What a run started by this message is created with."""
+    """What a run started by this message is created with.
+
+    A message heard on a platform starts a run that answers there
+    (``domain/run_places``); a line in Lemma's own channels, one answered in
+    Lemma -- in a group, in ``asked_in_thread``, the line's thread.
+    """
+    asked_in_lemma = message_source == LEMMA_CHANNEL
     return RunState(
         trigger=_HANDED_BACK_TRIGGERS.get(message_source or "", RunTrigger.MESSAGE),
         private_note=message.private_note,
-        asked_in_lemma=message_source == LEMMA_CHANNEL,
+        asked_in_lemma=asked_in_lemma,
+        asked_in_thread=asked_in_thread if asked_in_lemma else None,
         written_in=message.written_in,
+        asked_at_source=None if asked_in_lemma else message.asked_at_source,
     )
 
 

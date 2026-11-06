@@ -12,6 +12,8 @@
  *  calling the teammate "the bot", is easiest to catch side by side.
  */
 
+import type { ChatFilter } from "@/channels/chat-list";
+
 /** The picture above the words: what the place will look like once it has
  *  something in it, drawn in the page's own greys. */
 export type EmptyArt = "pages" | "apps" | "tables" | "files" | "folder" | "workflows" | "chats" | "rows";
@@ -51,7 +53,7 @@ export interface Empty {
 export type EmptyPlace =
     | { place: "pages" | "apps" | "tables" | "workflows" | "rows" | "all" }
     | { place: "files"; scope: "shared" | "personal"; folder: boolean }
-    | { place: "chats"; filter: "all" | "chats" | "channels" | "automations" | "docs" };
+    | { place: "chats"; filter: ChatFilter };
 
 /** `name` is the teammate's, which does the work "teammate" would otherwise
  *  do: inside the app the category word is only for naming the category. */
@@ -142,7 +144,16 @@ export function emptyFor(where: EmptyPlace, name: string): Empty {
     }
 }
 
-function chatsEmpty(filter: "all" | "chats" | "channels" | "automations" | "docs", name: string): Empty {
+function chatsEmpty(filter: ChatFilter, name: string): Empty {
+    if (filter === "archived") {
+        return {
+            art: "chats",
+            title: "Nothing archived",
+            line: "A shared chat you archive waits here, where you can bring it back.",
+            primary: { kind: "chat", label: "New chat" },
+            starters: [],
+        };
+    }
     if (filter === "channels") {
         return {
             art: "chats",

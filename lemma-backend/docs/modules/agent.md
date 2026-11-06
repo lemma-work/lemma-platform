@@ -204,12 +204,25 @@ run), so an edit, a deletion or a forgotten contact reaches every later
 prompt; the visitor's page and an export read a follow-up the same way. Only
 the runs carried whole get their background -- an older run is reduced to its
 requests and answer -- so the read is bounded and moves in elision's blocks.
-A run answering a line in Lemma answers the lines whose words it read
-(`services/channel_answers`, recorded in `channel_line_answers`).
+Every run of a person's conversation is answered one way
+(`services/run_answers`, `agent.channel_reply` on `AgentRunFinished`): at the
+place of the lines whose words it read, each recorded in
+`channel_line_answers` as a turn took it up -- in Lemma under the oldest of
+them, on a platform as the agent's line with a delivery there
+(`agent_surfaces/contracts/egress.post_answer_at_place`). A run that read
+no line answers where its conversation last took one up.
 
 A message the person sends while a run is finishing is steered into it
-(`capabilities/pending_user_messages`), and the run goes on to answer that
-too. The answer it had already written is then not the run's final answer --
+(`harness/lemma/pending_user_messages`), and the run goes on to answer that
+too -- if it is of the run's kind: a note or not alike, and said at the place
+the run was asked or at none (`domain/run_places`). Each thread of a group in
+Lemma is a place of its own (`lemma:<thread>`, kept on the message's and the
+run's metadata), so a line in another thread waits as a platform's message
+said elsewhere does. One said elsewhere waits
+for the follow-up turn that claims it, which is asked where it was said, and
+that turn reads it after the answer of the run it waited for
+(`harness/lemma/history_replay`), not above it. The answer it had already
+written is then not the run's final answer --
 its output is still the last -- but it was an answer: the pydantic-ai node
 loop marks it `answered_before_steer` when the request that sent the run on
 carries the person's words rather than a retry (`domain/steered_answers`).

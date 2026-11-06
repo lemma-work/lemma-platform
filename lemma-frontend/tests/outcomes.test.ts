@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     NO_CHAT,
+    agentKey,
+    agentView,
     ageOf,
     answersHere,
     chatItems,
@@ -13,7 +15,6 @@ import {
     workRows,
     inSidebar,
     isFramePath,
-    lineTitle,
     repeatedTitles,
     sidebarSections,
     QUIET_AFTER_MS,
@@ -37,6 +38,7 @@ import {
     type View,
 } from "../src/outcomes/model.ts";
 import type { ConversationRef } from "../src/data/types.ts";
+import { chatTitle } from "../src/channels/chat-list.ts";
 import type { Channel } from "../src/channels/model.ts";
 import type { AskedRow } from "../src/thread/waiting-on-you.ts";
 import type { WaitingRow } from "../src/workflow/waiting-inbox.tsx";
@@ -638,10 +640,10 @@ test("the sidebar puts the busiest Lemma first, each folded to its name until th
     assert.ok(QUIET_AFTER_MS > 0);
 });
 
-test("a private line is named for what it is, and repeated names get told apart", () => {
-    assert.equal(lineTitle("Email"), "Your chat on Email");
-    assert.equal(lineTitle("WhatsApp and Email"), "Your chat on WhatsApp and Email");
-    assert.equal(lineTitle("Notices"), "Notices");
+test("a person's own chat is named for what it is, and repeated names get told apart", () => {
+    assert.equal(chatTitle(channel("mine", "DIRECT", { sources: [{ platform: "RESEND", title: null }] }), "Support"), "Your chat on Email");
+    assert.equal(chatTitle(channel("mine", "DIRECT", { sources: [{ platform: "WHATSAPP", title: null }, { platform: "RESEND", title: null }] }), "Support"), "Your chat on WhatsApp and Email");
+    assert.equal(chatTitle(channel("mine", "DIRECT"), "Support"), "Notices");
     const repeated = repeatedTitles([
         { key: "a", title: "LLM Lab tutor" },
         { key: "b", title: "Casual greeting" },
@@ -689,4 +691,11 @@ test("every sidebar line knows its Lemma, so one list of all of them can show wh
     });
     const rows = sectionRows(rest, work);
     assert.deepEqual(rows.map((row) => [row.kind, row.podId]), [["automation", "p2"], ["chat", "p1"], ["table", "p2"]]);
+});
+
+test("an agent row that arrived without a name opens nothing, and keys apart from its twin", () => {
+    assert.deepEqual(agentView("p1", { name: "billing", broken: false }), { name: "agent", podId: "p1", agent: "billing" });
+    assert.equal(agentView("p1", { name: "", broken: true }), null, "its address would end at agent/ and open the settings instead");
+    assert.notEqual(agentKey({ id: "" }, 0), agentKey({ id: "" }, 1), "two nameless rows share an empty id");
+    assert.equal(agentKey({ id: "a1" }, 3), "a1");
 });

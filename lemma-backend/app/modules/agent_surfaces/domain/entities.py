@@ -193,6 +193,11 @@ class ParsedInboundSurfaceEvent(BaseModel):
     #: Lemma instead, which the chat never saw -- quoting would point the answer
     #: at whoever spoke last. Never read off a payload: egress decides it.
     answers_inbound: bool = True
+    #: Nobody put this group message to the bot: it is acted on only because
+    #: the bot's agent answers every line in the group's channel, and so only
+    #: for a member of the pod (``channels.domain.answering``). Never read off
+    #: a payload: admission decides it.
+    unasked: bool = False
 
 
 class SurfaceLifecycleKind(StrEnum):
@@ -512,7 +517,11 @@ class AgentSurfaceEntity(AggregateRoot):
         return None
 
     def allows_inbound_event(
-        self, event: ParsedInboundSurfaceEvent, *, thread_is_ours: bool = True
+        self,
+        event: ParsedInboundSurfaceEvent,
+        *,
+        thread_is_ours: bool = True,
+        asked: bool = True,
     ) -> bool:
         """Whether this surface should act on this event.
 
@@ -522,6 +531,10 @@ class AgentSurfaceEntity(AggregateRoot):
         it defaults to ``True`` so a caller that only wants the pure checks --
         `has_somewhere_to_talk`, which is asking whether anywhere *could* take
         the message -- keeps the answer it had.
+
+        ``asked=False`` asks whether the surface may act on a group message
+        nobody put to the bot: every check but the mention, for an agent that
+        answers every line there (``surface_candidates.admitted_surfaces``).
         """
         if not self.status.accepts_inbound_events():
             return False
@@ -564,6 +577,8 @@ class AgentSurfaceEntity(AggregateRoot):
         # its own it admitted every threaded reply in a connected channel,
         # whoever it was to. The caller resolves the rest; see
         # `SurfaceInboundMixin._admit`.
+        if not asked:
+            return True
         if InboundRoutingFacts.of(event).is_thread_reply and thread_is_ours:
             return True
         # `mentioned_agent` means *this* bot by now: where the parser could

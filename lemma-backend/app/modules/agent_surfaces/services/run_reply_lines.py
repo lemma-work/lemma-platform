@@ -15,7 +15,8 @@ An answer the run gave before the person said more (``domain/steered_answers``
 in the agent module) is a line of its own, posted first, named by the run and
 its place among them -- so they arrive in the order they were given.
 
-No network: written in a FAST item (``events/reply_for_run_work``).
+No network: written in the FAST item that answers every run
+(``agent.channel_reply``, through ``contracts.egress.post_answer_at_place``).
 """
 
 from __future__ import annotations
@@ -44,17 +45,15 @@ from app.modules.agent_surfaces.services.channel_lines import (
     answered_for,
     shown_on_web,
 )
-from app.modules.agent_surfaces.services.place_threads import THREADED
 from app.modules.agent_surfaces.services.progress_events import failure_notice
 from app.modules.channels.contracts import (
     ChannelMessage,
+    ChannelNotFound,
     NewLine,
     Sender,
-    Source,
-    SourceKind,
     post,
 )
-from app.modules.channels.contracts.lines import thread_root_at
+from app.modules.channels.contracts.placement import answer_placement, placement_at
 from app.modules.channels.contracts.places import ReplyAddress
 
 logger = get_logger(__name__)
@@ -77,6 +76,65 @@ def answer_text(material: RunReplyMaterial, *, platform: str) -> str | None:
     return sanitize_user_visible_text(material.answer) or ALL_REASONING_REPLY
 
 
+async def post_unplaced_reply(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    material: RunReplyMaterial,
+    gone_source_id: UUID | None,
+) -> ChannelMessage | None:
+    """The run's answer as a line in its conversation's channel, sent nowhere.
+
+    For a run whose place went while it worked -- the source it was asked at,
+    or the one the line it answers was heard at, was removed. The answer must
+    not go to wherever else the person last wrote, and must not vanish
+    either: it is on the timeline, where a member reads it. The same line as
+    a placed answer would be (``run:{run}``), so a retry is one.
+    """
+    logger.warning(
+        "agent_surfaces.reply_for_run.asked_place_gone.degraded",
+        run_id=str(run_id),
+        conversation_id=str(conversation_id),
+        source_id=str(gone_source_id) if gone_source_id else None,
+    )
+    channel_id = await agent_conversations.channel_of_conversation(uow, conversation_id)
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    text = answer_text(material, platform=WEB)
+    said = [
+        (earlier_answer_client_id(run_id, number), one)
+        for number, one in enumerate(
+            filter(None, map(sanitize_user_visible_text, material.earlier)), start=1
+        )
+    ] + ([(answer_line_client_id(run_id), text)] if text is not None else [])
+    if channel_id is None or conversation is None or not said:
+        return None
+    agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
+    sender = Sender.agent(
+        agent_id,
+        on_behalf_of=answered_for(conversation.audience, conversation.user_id),
+        display_name=await _agent_name(uow, agent_id),
+    )
+    line: ChannelMessage | None = None
+    try:
+        for client_message_id, one in said:
+            line = await post(
+                uow,
+                channel_id=channel_id,
+                line=NewLine(
+                    sender=sender,
+                    text=one,
+                    client_message_id=client_message_id,
+                    conversation_id=conversation_id,
+                    agent_run_id=run_id,
+                ),
+            )
+    except ChannelNotFound:
+        # The channel went with the place: there is nowhere left to show it.
+        return None
+    return line
+
+
 async def post_run_reply(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -84,8 +142,14 @@ async def post_run_reply(
     conversation_id: UUID,
     address: ReplyAddress,
     material: RunReplyMaterial,
+    answering: ChannelMessage | None = None,
 ) -> ChannelMessage | None:
-    """Post the run's answer at ``address`` and plan its delivery there."""
+    """Post the run's answer at ``address`` and plan its delivery there.
+
+    ``answering``: the heard line it answers, which places it -- in that
+    line's thread, pointing at it (``channels.contracts.placement``) -- and
+    which its delivery answers in place. Without one, it is placed by what
+    the place last heard of the conversation."""
     source = address.source
     # The place's platform, not a missing surface: a place whose bot was
     # removed has no surface either, and its answer is not shown anywhere --
@@ -103,7 +167,11 @@ async def post_run_reply(
         return None
     event = _answered_event(address)
     sender = await agent_sender(uow, conversation)
-    thread_root_id = await _thread_root(uow, source, event)
+    placement = (
+        await answer_placement(uow, answering, source=source)
+        if answering is not None and answering.source_id == source.id
+        else await placement_at(uow, address)
+    )
     said = [
         (earlier_answer_client_id(run_id, number), one)
         for number, one in enumerate(earlier, start=1)
@@ -125,7 +193,9 @@ async def post_run_reply(
                 # The thread it goes to, so the place knows the agent is in it
                 # -- and a Slack or Teams thread is a thread here too.
                 external_thread_id=event.external_thread_id if event else None,
-                thread_root_id=thread_root_id,
+                thread_root_id=placement.thread_root_id,
+                # What its delivery answers in place (``place_aim``).
+                reply_to_id=placement.reply_to_id,
             ),
             deliver_to=[source.id],
         )
@@ -141,20 +211,6 @@ def _answered_event(address: ReplyAddress) -> ParsedInboundSurfaceEvent | None:
         return ParsedInboundSurfaceEvent.model_validate(address.ref)
     except ValidationError:
         return None
-
-
-async def _thread_root(
-    uow: SqlAlchemyUnitOfWork,
-    source: Source,
-    event: ParsedInboundSurfaceEvent | None,
-) -> UUID | None:
-    if event is None or source.kind is not SourceKind.CHAT:
-        return None
-    if source.platform not in THREADED:
-        return None
-    return await thread_root_at(
-        uow, source_id=source.id, external_thread_id=event.external_thread_id
-    )
 
 
 async def agent_sender(
@@ -179,4 +235,10 @@ async def _agent_name(uow: SqlAlchemyUnitOfWork, agent_id: UUID) -> str:
     return agent.name
 
 
-__all__ = ["ALL_REASONING_REPLY", "agent_sender", "answer_text", "post_run_reply"]
+__all__ = [
+    "ALL_REASONING_REPLY",
+    "agent_sender",
+    "answer_text",
+    "post_run_reply",
+    "post_unplaced_reply",
+]

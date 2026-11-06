@@ -61,7 +61,8 @@ def _no_typing_keepalive(monkeypatch):
 #: notes what it heard there; the heard line marks when they last wrote; and
 #: the answer's way out asks where the conversation's reply goes -- once to
 #: post the answer as a line at that place, once for the typing indicator,
-#: once for the place its delivery names, and once more for the send itself.
+#: and once for the place its delivery names. The send itself goes there,
+#: aimed at the line it answers (``place_aim``), without asking again.
 #: That the place a line was heard at or goes to feeds its channel is the
 #: database's to check (the lines' composite foreign keys), not a read. A read
 #: keyed by the conversation and joined to its lines counts here, against the
@@ -71,23 +72,26 @@ def _no_typing_keepalive(monkeypatch):
 #: returns it with the account's surface.
 #:
 #: ``channel_messages`` is the two lines -- what they said, and what was said
-#: back -- and the line they last said, which is where the answer goes; a
+#: back -- and the line the run read, found by its platform message id, which
+#: is where the answer goes; a
 #: line is looked for by its key twice, before and under the channel's lock,
 #: so two deliveries of one message make one line -- a heard line by its
 #: platform message id, the answer by its run (a redelivered finish is the
-#: same line); and the answer's delivery reads the line it sends. (The
-#: questions waiting on the member are ``channel_questions`` now.)
+#: same line); and the answer's delivery reads the line it sends, and the line
+#: that one answers, so the send replies to it in place rather than to
+#: whatever the place heard last. (The questions waiting on the member are
+#: ``channel_questions`` now.)
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
-    "channel_sources": 12,
-    "channel_messages": 8,
+    "channel_sources": 10,
+    "channel_messages": 9,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
 _LATER_MESSAGE = {
     "agent_surfaces": 5,
-    "channel_sources": 10,
-    "channel_messages": 8,
+    "channel_sources": 8,
+    "channel_messages": 9,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }

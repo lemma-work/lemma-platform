@@ -29,6 +29,17 @@ pytestmark = pytest.mark.asyncio
 _CONVERSATION = uuid4()
 
 
+@pytest.fixture(autouse=True)
+def asked_nowhere_in_particular(monkeypatch):
+    """The conversation's latest run was asked at no place of its own, so
+    its target is wherever the conversation was last written to. `agent`
+    owns the run, so its published read is what is doubled."""
+    monkeypatch.setattr(
+        "app.modules.agent.contracts.channel_replies.latest_run_asked_at",
+        AsyncMock(return_value=None),
+    )
+
+
 def _answered_at(surface_id, *, last_event=None) -> InMemoryChannelSeats:
     """A conversation answered at a WhatsApp place on this surface."""
     seats = InMemoryChannelSeats()

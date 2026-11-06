@@ -79,8 +79,10 @@ export function LemmaActions({ pod, go, actions, newChat = true }: {
     return (
         <>
             {/* Its inbox, as the workspace has it over a pod: the reader's
-                private line with it, what waits on them, and mentions. */}
-            <WaitingBell podId={pod.id} />
+                private line with it, what waits on them, and mentions. The
+                sidebar holds every Lemma's inbox topic, so it is not held
+                twice. */}
+            <WaitingBell podId={pod.id} live={false} />
             <details className="ox-more">
                 <summary aria-label={`More for ${pod.name}`} title="More"><Icon name="more" size={16} /></summary>
                 <div className="ox-more__menu" role="menu">

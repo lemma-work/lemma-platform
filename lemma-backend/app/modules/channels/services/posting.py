@@ -22,8 +22,8 @@ from app.modules.channels.contracts.facts import (
     ChannelDeliveryDue,
     ChannelMessagePosted,
 )
+from app.modules.channels.domain.answering import answering_agents
 from app.modules.channels.domain.entities import (
-    AgentAnswers,
     Channel,
     ChannelKind,
     ChannelMessage,
@@ -31,7 +31,6 @@ from app.modules.channels.domain.entities import (
     Question,
     SeatedBy,
     Sender,
-    SenderKind,
 )
 from app.modules.channels.infrastructure.cases import CaseRepository
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
@@ -68,6 +67,9 @@ class Post:
     deliver_to: Sequence[UUID] = ()
     #: The pod's own agent, which answers everything in a member's channel.
     pod_agent_id: UUID | None = None
+    #: For a line heard on a platform: the agent of the bot it came through,
+    #: which answers it there (``domain/answering``).
+    door_agent_id: UUID | None = None
 
 
 class Timeline:
@@ -218,7 +220,6 @@ class Timeline:
             self.session,
             message=message,
             people=post.mentions,
-            agents=post.mentioned_agents,
             fresh=True,
         )
 
@@ -231,28 +232,22 @@ class Timeline:
     async def _answering(
         self, channel: Channel, message: ChannelMessage, post: Post
     ) -> list[UUID]:
-        """The agents that answer a member's line written in Lemma -- wherever
-        it is carried: those it names, those in the channel that answer every
+        """The agents this line starts, wherever it was said (``domain/
+        answering``): those it names, those in the channel that answer every
         line, and -- in a member's own channel with none -- the pod's agent.
-        A line heard on a platform is answered there, by ``agent_surfaces``.
-        A members' note is answered only by the agents it names -- as a note
-        -- never by one answering every line: notes are members talking."""
-        sender = message.sender
-        if sender.kind is not SenderKind.MEMBER or message.heard_outside:
-            return []
-        answering = list(dict.fromkeys(post.mentioned_agents))
-        if message.members_only:
-            return answering
-        for member in await self.members.agents(channel.id):
-            if (
-                member.answers is AgentAnswers.EVERY_LINE
-                and member.agent_id is not None
-                and member.agent_id not in answering
-            ):
-                answering.append(member.agent_id)
-        if not answering and channel.kind is ChannelKind.DIRECT and post.pod_agent_id:
-            answering.append(post.pod_agent_id)
-        return answering
+        A line heard on a platform is answered at its door by the bot it came
+        through (``agent_surfaces``); the others the rule names start here,
+        and answer at its place too."""
+        return answering_agents(
+            sender_kind=message.sender.kind,
+            members_only=message.members_only,
+            named=post.mentioned_agents,
+            seated=await self.members.agents(channel.id),
+            channel_kind=channel.kind,
+            pod_agent_id=post.pod_agent_id,
+            door_agent_id=post.door_agent_id,
+            heard=message.heard_outside,
+        )
 
     async def _deliver(
         self,

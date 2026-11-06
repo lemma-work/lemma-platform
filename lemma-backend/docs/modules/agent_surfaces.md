@@ -20,7 +20,7 @@ Resend address.
 | --- | --- |
 | API routers | Pod surface CRUD/setup/catalog/send, current-user defaults, public webhooks/verification |
 | Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
-| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribes `AgentRunFinished`; posts the answer as the agent's line with a delivery to its place), `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it; one at a time per place or member), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
+| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination, for held and resent messages), `surface.reply_for_run` (subscribed by nothing: drains answers queued before `agent.channel_reply` said every run's, then goes), `surface.channel_delivery` (sends one channel delivery and records the platform's message id on it; one at a time per place or member), `surface.receiver` (`receivers`, one leased item per polling credential), `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
 | Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
 
 ## Main data model
@@ -116,10 +116,9 @@ sequenceDiagram
 sends it, and records the outcome on it (`services/delivery_outcome.py`).
 Every outcome but `SENT` carries a `DeliveryReasonCode` beside the sentence a
 member reads (`Outcome.code`): code that decides by why a delivery stands
-where it does reads the code, never the sentence. Each try is a
-`channel_delivery_attempts` row, begun at the claim and ended with the outcome
-and the platform's HTTP status when it gave one (`SendOutcome.provider_status`,
-read from a platform client's own error too). A `401` refuses the bot, not the
+where it does reads the code, never the sentence. A failed send keeps the
+platform's HTTP status when it gave one (`SendOutcome.provider_status`, read
+from a platform client's own error too). A `401` refuses the bot, not the
 message: its surface carries the reason as `problem` (`surface_problems`, in
 Redis) -- as it does a webhook the platform refused -- its `/setup` is not
 ready, and a contact the bot was writing to waits on a person; a send that
@@ -163,16 +162,17 @@ waiting out its backoff; settling one announces the next.
 A **push** to a member stands for every line of one channel they heard since
 their last push from it (channels coalesces them, one push per member per
 channel window): it carries the line it leads with and says how many more
-wait in Lemma. It is sent under its delivery's key, charged to the member's
-hourly push budget once per delivery (not per try), and never sent on a
+wait in Lemma. It is sent under its delivery's key, and never sent on a
 second app after a send that may already be on the first. One that names the
 member or asks them something (`Delivery.urgent`) is never held. Any other is
 `SKIPPED` (`IN_APP`) once the member has read past it in the channel; while
 they had the app open in the last `push_sends.PRESENT_FOR_SECONDS` it is held
 (`FOLDED`) until its newest line is that old, and pushed then if still unread
--- the app open somewhere in the pod is not this channel read. Held by the
-budget, `SKIPPED` (`FOLDED`): its lines go back into the member's window and
-with their next push from that channel, no sooner than `push_sends.HOLD_FOR`. A plain
+-- the app open somewhere in the pod is not this channel read. Held, it is
+`SKIPPED` (`FOLDED`) and its lines go back into the member's window, with
+whatever comes meanwhile, as one push. There is no ceiling on pushes beyond
+the window: a busy channel is one push a window however many lines it hears,
+and what calls a member goes at once. A plain
 line in a group is not emailed unless the member chose email for it: email is
 for their own channel, a contact's, and what names them or asks them
 something.
@@ -497,16 +497,18 @@ is answered *for the pod*, in a group the pod has opened to them.
   server's alone, so nothing a client writes to the conversation changes whom
   it answers.
   What such a run may do:
-  - **Tools, by name.** Toolsets are cut to pod reads, web search and
-    messaging, and then each tool is allow-listed one by one
-    (`tools/outsider_tools`): the pod's read tools, `web_search` and
-    `ask_a_person`. `web_fetch` (it fetches inside the
-    owner's sandbox) and the pod's write tools are withheld by name, and the
-    harness's last capability (`capabilities/outsider_gate`) and the tool
-    dispatcher drop anything not on the list, however it arrived. A workspace
-    -- sandbox, host session, the owner's files -- is never opened for such a
-    run (`refuse_owner_workspace`), and a test fails until any new tool in a
-    kept toolset is classified. In a group it also has `group_history` (the
+  - **Tools, by name.** A member's run and such a run get two toolsets, and
+    each tool's policy says which it is in (`ToolPolicy.offered_to`: members,
+    anyone, or outsiders). Toolsets are cut to pod reads, web search and
+    messaging, and inside them such a run has the pod's read tools,
+    `web_search` and `ask_a_person` -- the last never offered to a member's
+    run. `web_fetch` (it fetches inside the owner's sandbox) and the pod's
+    write tools are a member's only, the catalog never offers them, and the
+    tool runtime holds the same line for a caller that built its own list;
+    no tool refuses a stranger from inside. A workspace -- sandbox, host
+    session, the owner's files -- is never opened for such a run
+    (`refuse_owner_workspace`), and a test fails until any new tool in a kept
+    toolset is classified. In a group it also has `group_history` (the
     group it sits in, from its seat, never another), and `group_records` and
     `group_add_record` for the tables the group was given (channels' "Tables
     a group was given"), read and added as the member who gave them.
@@ -541,10 +543,13 @@ is answered *for the pod*, in a group the pod has opened to them.
   their runs never pause.
 - **Files** they send are not saved -- the owner's space is the only place they
   could go -- and the run is told so.
-- **Limits**: `SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES` and
-  `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`, counted in Redis and failing
-  closed. Only a turn that runs is charged to the group, so one person looping
-  cannot spend everybody's day. A member opens at most
+- **Limits**: one limiter for every door (`ContactTurnLimiter`):
+  `SURFACE_CONTACT_TURNS_PER_PERSON_PER_10_MINUTES` per person in the pod,
+  counted together wherever they write -- a group, a private chat, email, a
+  web chat -- and a day's ceiling per place: `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`
+  for a group, `SURFACE_CONTACT_TURNS_PER_SURFACE_PER_DAY` for a bot or a web
+  widget. Counted in Redis and failing closed. Only a turn that runs is
+  charged to the place, so one person looping cannot spend everybody's day. A member opens at most
   `OPENS_PER_MEMBER_PER_DAY` WhatsApp groups on one bot a day, and only one who
   may configure the bot may open any.
 - **The bot's own switch.** `config.groups.answers_outsiders` on a surface,
@@ -657,6 +662,19 @@ is answered *for the pod*, in a group the pod has opened to them.
   either keeps its kind. `surface_send_message` from a note's run is refused.
   In a contact's conversation a note is the keeper's alone: no later turn of
   the contact's reads it.
+- **A run answers the place it was asked.** One conversation spans a member's
+  every place -- their email, their WhatsApp, Lemma -- so the run a message
+  starts is stamped with the place it was heard at (the `asked_in_place`
+  metadata key, from `BoundThread.source_id`; see the agent module's
+  `domain/run_places`). A
+  message from another place, sent while it works, is not steered into it: it
+  waits, and the follow-up turn that claims it is asked at its place. The
+  answer is posted at the run's place (`reply_address(..., at_source_id=)`),
+  and while the run works its typing, progress and cards go there too
+  (`SurfaceDelivery.resolve_egress_target` reads the latest run's place). A
+  run asked nowhere in particular -- typed into the conversation in Lemma --
+  answers where the conversation was last written to, as before. The second
+  place's answer waits for the first's.
 - **A turn its model cannot run is said, once, not retried.** A teammate on a
   member's own runtime runs only for them; anybody else's message to it is
   refused before a run exists (`RuntimeUnavailableError`,

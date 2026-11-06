@@ -161,6 +161,36 @@ class DatastoreInfrastructureError(DatastoreDomainError):
         )
 
 
+class DatastoreMeasureError(DatastoreDomainError):
+    """A measure that runs but does not answer one number.
+
+    422 rather than the 400 a malformed query gets: the query is well formed
+    and the database ran it, and what it answered is not something a pod can
+    hold itself to -- several rows, several columns, or text.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message, code="DATASTORE_MEASURE_INVALID", status_code=422)
+
+
+class DatastoreMeasureUncheckedError(DatastoreDomainError):
+    """A measure counting a table whose row security its check never covered.
+
+    Row security was turned on after the measure was set, so nobody who
+    administers the table agreed to count every row of it for everyone. It is
+    not read until someone who does sets it again.
+    """
+
+    def __init__(self, table_name: str):
+        super().__init__(
+            f"Row security is on for {table_name} now, and the measure was set "
+            f"before it was. Someone who administers {table_name} has to set "
+            f"the measure again before it is counted.",
+            code="DATASTORE_MEASURE_UNCHECKED",
+            status_code=403,
+        )
+
+
 class DatastoreQueryUnavailableError(DatastoreDomainError):
     """Direct querying is not available on this deployment.
 

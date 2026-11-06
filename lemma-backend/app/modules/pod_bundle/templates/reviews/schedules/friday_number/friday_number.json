@@ -1,0 +1,10 @@
+{
+  "name": "friday_number",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 16 * * 5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Write this week's number to a page named after the week: pull requests reviewed the same day out of all opened, and the ones still waiting."
+}

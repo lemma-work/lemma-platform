@@ -29,6 +29,7 @@ the whole design:
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from app.modules.agent.contracts import AgentEvent
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
@@ -42,6 +43,9 @@ from app.modules.agent_surfaces.services.progress_plan import (
     render_plan,
     render_plan_line,
 )
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.services.pending_envelope import RunFiles
 
 # How often a live, edited progress message may be rewritten. Slack never comes
 # through here: it streams the answer token by token, and a step chunk appended
@@ -75,6 +79,9 @@ _POST_HEARTBEAT_TEXT = (
 
 class ProgressDisplayMixin:
     """The "what does the person see while they wait" half of the observer."""
+
+    # Set by the observer this is mixed into: the run the progress is for.
+    _run_files: RunFiles
 
     async def _maybe_send_text_progress(
         self,
@@ -208,6 +215,7 @@ class ProgressDisplayMixin:
             service = self.egress_factory(uow)
             handle = await service.progress.send_progress_update(
                 conversation_id=conversation_id,
+                run_id=self._run_files.agent_run_id,
                 progress_text=progress_text,
                 progress_handle=self._progress_handle,
             )

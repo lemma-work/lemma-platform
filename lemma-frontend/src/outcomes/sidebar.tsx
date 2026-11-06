@@ -101,7 +101,7 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     onToggle: () => void;
 }) {
     const reader = useMe();
-    const [channels, feeds] = useChannelsByPod(pods);
+    const [channels, feeds] = useChannelsByPod(pods, { live: true });
     const [chosen, setChosen] = useState<Map<string, boolean>>(readChosen);
     const choose = useCallback((podId: string, opened: boolean) => {
         setChosen((was) => new Map(was).set(podId, opened));

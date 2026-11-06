@@ -19,6 +19,7 @@ from app.modules.agent.domain.replay import request_body
 from app.modules.agent.domain.tools import (
     ReplayClass,
     ToolAccess,
+    ToolAudience,
     ToolGroup,
     ToolPolicy,
     ToolSpec,
@@ -49,6 +50,9 @@ from app.modules.agent.infrastructure.tools.pod.pod_file_tools import (
     pod_search_files,
     pod_view_document_pages,
     pod_write_file,
+)
+from app.modules.agent.infrastructure.tools.pod.pod_outcome_tool import (
+    set_what_you_own,
 )
 from app.modules.datastore.contracts import (
     TableContext,
@@ -308,7 +312,7 @@ def _read(
         title=title,
         view=view,
         open_world=open_world,
-        outsider_allowed=True,
+        offered_to=ToolAudience.ANYONE,
         replay=ReplayClass.SAFE,
     )
 
@@ -365,6 +369,19 @@ SPECS = (
         _read("Get a link to a file", open_world=True),
     ),
     tool(pod_search_files, ToolGroup.POD, _read("Search files")),
+    # Writes the pod's config, so `pod:write`. It replaces the outcome whole,
+    # and a new measure restarts its weeks, so it is destructive: a client that
+    # confirms destructive calls confirms this one. Idempotent -- the same
+    # outcome set twice is the same outcome -- but replayed it can undo what a
+    # person set since, as a rewritten file can. Never deferred: only the pod
+    # default runs with ToolSearch, so a deferred tool would be out of reach of
+    # every named agent with POD. Not for a stranger: what the pod owns is its
+    # members' to decide.
+    tool(
+        set_what_you_own,
+        ToolGroup.POD,
+        ToolPolicy(title="Set what the pod owns", destructive=True),
+    ),
 )
 
 

@@ -209,6 +209,8 @@ def _asked_by(row: ChannelQuestionModel) -> Asker | None:
 
 
 def question_entity(row: ChannelQuestionModel) -> Question:
+    # Only a member is asked now (``QuestionRepository.ask``), but a row from
+    # before may wait on a contact until the migration that drops the column.
     awaits = principal_of(row.awaits_user_id, row.awaits_contact_id)
     assert awaits is not None  # a CHECK holds it to exactly one
     return Question(

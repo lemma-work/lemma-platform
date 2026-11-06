@@ -6,8 +6,8 @@ reads the same specs -- the in-process harness through
 ``harness/lemma/toolset_adapter``, MCP clients through
 ``mcp/toolspec_adapter`` -- and every call runs through
 ``services/tool_runtime``. What used to be a dozen tables keyed by tool name
-(pausing, outsider allow-list, MCP annotations, deferral, metrics kind) is the
-policy on the spec.
+(pausing, which runs it is offered to, MCP annotations, deferral, metrics kind)
+is the policy on the spec.
 """
 
 from __future__ import annotations
@@ -31,6 +31,25 @@ class ToolAccess(StrEnum):
 
     READ = "read"
     WRITE = "write"
+
+
+class ToolAudience(StrEnum):
+    """Which runs a tool is offered to, by whom the run answers
+    (``domain/outsiders``). A member's run and a run answering somebody
+    outside the pod are given two toolsets, and a tool is in one of them, the
+    other, or both -- decided here, on the spec, and never refused at call
+    time instead."""
+
+    #: A member's runs only: the default, since anything that acts as the
+    #: conversation's owner would hand a stranger the owner's reach.
+    MEMBERS = "members"
+    #: Both: read and found to reach nothing but what the pod made Public, so
+    #: a run answering somebody outside the pod may call it too.
+    ANYONE = "anyone"
+    #: A run answering somebody outside the pod only: what it has in place of
+    #: a member's tools -- calling a member in, a contact's own rows, a guest's
+    #: group, a visitor's form. A member's run has no use for them.
+    OUTSIDERS = "outsiders"
 
 
 #: The planning tool, whose stored returns the progress readers parse back.
@@ -105,10 +124,9 @@ class ToolPolicy:
     view: str | None = None
     #: Ends the run until something resolves it. Never derived from the name.
     pauses: PauseKind | None = None
-    #: Read and found to reach nothing but what the pod made Public, so a run
-    #: answering somebody outside the pod may call it. Everything else is
-    #: withheld from such a run.
-    outsider_allowed: bool = False
+    #: Which runs are offered it: a member's, one answering somebody outside
+    #: the pod, or both.
+    offered_to: ToolAudience = ToolAudience.MEMBERS
     #: Hidden behind tool search on the pod default assistant's runs.
     deferrable: bool = False
     #: One of the few tools every tool profile keeps in view
@@ -120,6 +138,12 @@ class ToolPolicy:
     kind: ToolKind = "builtin"
     #: Undeclared is UNSAFE: an honest "outcome unknown" beats a duplicate.
     replay: ReplayClass | ReplayRefinement = ReplayClass.UNSAFE
+
+    def offered(self, *, answers_outsiders: bool) -> bool:
+        """Whether a run answering somebody outside the pod (or not) has it."""
+        if answers_outsiders:
+            return self.offered_to is not ToolAudience.MEMBERS
+        return self.offered_to is not ToolAudience.OUTSIDERS
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +299,7 @@ __all__ = [
     "ReplayClass",
     "TODO_TOOL_NAME",
     "ToolAccess",
+    "ToolAudience",
     "ToolGroup",
     "ToolKind",
     "ToolPolicy",

@@ -147,6 +147,11 @@ PRODUCERS: dict[str, Producer] = {
         Sends.NOTE,
         f"{_PRODUCERS_E2E}::test_a_notice_is_a_note_in_their_channel_and_never_sent",
     ),
+    "agent_surfaces/services/run_reply_lines.py:post_unplaced_reply": Producer(
+        Sends.NOTE,
+        f"{_SURFACES}/test_answered_where_asked_e2e.py"
+        "::test_an_answer_whose_place_went_mid_run_stays_on_the_timeline",
+    ),
     "agent_surfaces/services/opt_out_notes.py:note_opt_out": Producer(
         Sends.NOTE,
         f"{_SURFACES}/test_contact_care_e2e.py"

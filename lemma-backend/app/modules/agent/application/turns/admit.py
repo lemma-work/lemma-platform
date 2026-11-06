@@ -21,7 +21,11 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.services.run_signals import STEER, signal_run
 from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
-from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
+from app.modules.agent.services.turn_staging import (
+    AgentTurnStart,
+    stage_agent_turn,
+    turn_for,
+)
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.outsiders import Audience
@@ -32,6 +36,7 @@ from app.modules.agent.domain.private_notes import (
     requested_private_note,
     run_state_for,
 )
+from app.modules.agent.domain.run_places import thread_of
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.turn_admission import (
     HeldTurn,
@@ -162,19 +167,32 @@ class AdmitMessage:
         typed_in_lemma: bool = False,
         client_message_id: str | None = None,
         supersede_pauses: bool = True,
+        stage_turn: bool = True,
+        commit: bool = True,
         kind: RunKind | None = RunKind.CHAT,
+        asked_at: UUID | None = None,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it. Commits.
 
         The conversation is already loaded and access-checked by the caller --
         this is the half that needs the lock. ``typed_in_lemma`` is the caller
         saying a person typed this in Lemma's own composer, rather than a chat
-        platform, a sub-agent or a reply delivery handing it on.
+        platform, a sub-agent or a reply delivery handing it on. ``asked_at``
+        is a surface saying which channel source it heard the message at: the
+        run it starts answers there, and a run already going takes it in only
+        if it was asked there too (``domain/run_places``).
 
         ``client_message_id`` is the sender's id for this send: a second send
         with the same id is the first one retried, and gets the first one's run
         back rather than a second message. ``supersede_pauses`` is False for a
         sender who is not the person a pause asked (``domain/turn_admission``).
+
+        ``commit=False`` leaves the transaction to a caller writing more beside
+        it -- a Lemma being started writes its pod in the same one -- and
+        ``stage_turn=False`` writes the run without the work that executes it,
+        for a caller that stages it later with ``stage_agent_turn`` (the
+        template a Lemma is started from has to be applied first).
+
         ``kind`` is who a run it starts is for, as the entry point says; None
         for a delivery that continues the conversation's last run (a
         delegated result, replies), whose kind it takes.
@@ -188,6 +206,7 @@ class AdmitMessage:
             else None,
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
+            asked_at=asked_at,
         )
         # Resolve the agent (a read) before taking the conversation lock, so the
         # FOR UPDATE span covers only the active-run check + run/message writes.
@@ -204,7 +223,7 @@ class AdmitMessage:
                 conversation_id=conversation.id, client_message_id=client_message_id
             )
             if original is not None and original.agent_run_id is not None:
-                await self.uow.commit()
+                await self._commit_unless_deferred(commit)
                 return AgentRunStartResult(
                     conversation_id=conversation.id,
                     agent_run_id=original.agent_run_id,
@@ -240,7 +259,9 @@ class AdmitMessage:
                 agent,
                 user_id=user_id,
                 state=run_state_for(
-                    message_state, message_source=message_source(message_metadata)
+                    message_state,
+                    message_source=message_source(message_metadata),
+                    asked_in_thread=thread_of(message_metadata),
                 ).model_copy(
                     update={"kind": await self._new_run_kind(conversation, kind)}
                 ),
@@ -267,17 +288,17 @@ class AdmitMessage:
         if started_new_run:
             # The turn commits with the run and its message, or not at all.
             assert active_run is not None
-            await stage_agent_turn(
-                self.uow,
+            await self._stage_unless_held(
                 turn_for(
                     conversation, active_run, user_id=user_id, agent_name=agent_name
                 ),
+                held=not stage_turn,
             )
 
         # Streaming endpoints need the message/run and its outbox event committed
         # atomically before the worker can safely load them; normal CRUD methods
         # still rely on the request UoW.
-        await self.uow.commit()
+        await self._commit_unless_deferred(commit)
         # After the commit, not inside it: this claimed to run "now that they're
         # durably committed", but the commit is the caller's, so it held a
         # connection across a Redis round trip with the row locked. Not the
@@ -301,6 +322,16 @@ class AdmitMessage:
             agent_run_id=answering_run_id,
             started_new_run=started_new_run,
         )
+
+    async def _commit_unless_deferred(self, commit: bool) -> None:
+        """Commit, unless the caller writes more in the same transaction."""
+        if commit:
+            await self.uow.commit()
+
+    async def _stage_unless_held(self, turn: AgentTurnStart, *, held: bool) -> None:
+        """Stage the turn's work, unless the caller stages it later."""
+        if not held:
+            await stage_agent_turn(self.uow, turn)
 
     async def _new_run_kind(
         self, conversation: Conversation, kind: RunKind | None

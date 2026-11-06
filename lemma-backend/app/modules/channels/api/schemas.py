@@ -187,8 +187,8 @@ class ChannelResponse(BaseModel):
     case_id: UUID | None = Field(
         default=None,
         description=(
-            "A contact's channel: its current case, the one `status`, "
-            "`assignee` and `attention` are read from (`/cases` lists them all)."
+            "A contact's channel: its case, the one `status`, `assignee` and "
+            "`attention` are read from. A channel keeps one case."
         ),
     )
     assignee: PersonRef | None = Field(
@@ -255,13 +255,6 @@ class ChannelDetailResponse(ChannelResponse):
     source_places: list[ChannelSourceResponse] = Field(default_factory=list)
     members: list[ChannelMemberResponse] = Field(default_factory=list)
     me: MyMembershipResponse = Field(default_factory=MyMembershipResponse)
-
-
-class ChannelMemberListResponse(BaseModel):
-    items: list[ChannelMemberResponse]
-    next_cursor: str | None = Field(
-        default=None, description="Pass as `cursor` for the next page."
-    )
 
 
 class ChannelListResponse(BaseModel):

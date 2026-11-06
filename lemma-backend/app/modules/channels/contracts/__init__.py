@@ -52,7 +52,9 @@ from app.modules.channels.domain.parts import (
 )
 from app.modules.channels.domain.projection import (
     Reader,
+    is_outside,
     may_read,
+    not_held,
     readable,
     withheld_from,
 )
@@ -138,6 +140,7 @@ __all__ = [
     "direct_channel",
     "erase_line",
     "hand_back",
+    "is_outside",
     "join",
     "keyed_client_id",
     "may_read",
@@ -148,6 +151,7 @@ __all__ = [
     "answered_in",
     "named_in",
     "names_of",
+    "not_held",
     "post",
     "read_upto",
     "readable",
@@ -232,13 +236,18 @@ async def post(
     mentions: Sequence[Principal] = (),
     mentioned_agents: Sequence[UUID] = (),
     deliver_to: Sequence[UUID] = (),
+    door_agent_id: UUID | None = None,
 ) -> ChannelMessage | None:
     """Add a line to the channel's timeline -- the same message once -- and
     whatever follows: who is told, where it goes, which agents answer.
 
     ``deliver_to``: the outside places to carry it to (a line written in
-    Lemma); a line heard on a platform is already there. ``None`` for a line
-    with nothing in it; ``ChannelNotFound`` when the channel is gone.
+    Lemma); a line heard on a platform is already there. ``door_agent_id``:
+    the agent of the bot a heard line came through, which answers it there;
+    the other agents the one rule names (``domain/answering``) are started
+    for it here. ``None``
+    for a line with nothing in it; ``ChannelNotFound`` when the channel is
+    gone.
     """
     channel = await ChannelRepository(uow.session).get(channel_id)
     if channel is None:
@@ -254,6 +263,7 @@ async def post(
             mentioned_agents=mentioned_agents,
             deliver_to=deliver_to,
             pod_agent_id=effective_agent_id(None, pod_id=channel.pod_id),
+            door_agent_id=door_agent_id,
         ),
     )
 
@@ -290,18 +300,12 @@ async def revise_line(
     text: str,
     parts: Sequence[Part],
     mentions: Sequence[Principal] = (),
-    mentioned_agents: Sequence[UUID] = (),
 ) -> ChannelMessage | None:
     """A line said again differently -- a platform's edit of a message heard
     there: its words and parts, and whom it names now (``named_in`` of the
     new parts). ``None`` when the line is gone or deleted."""
     return await rewrite_line(
-        uow,
-        message_id=message_id,
-        text=text,
-        parts=parts,
-        people=mentions,
-        agents=mentioned_agents,
+        uow, message_id=message_id, text=text, parts=parts, people=mentions
     )
 
 

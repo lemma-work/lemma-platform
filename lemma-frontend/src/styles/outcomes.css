@@ -1563,7 +1563,7 @@ a.ox-row:hover .ox-row__t {
     border-top: 0;
 }
 
-.ox-piece:hover .ox-piece__t {
+a.ox-piece:hover .ox-piece__t {
     text-decoration: underline;
 }
 

@@ -72,7 +72,6 @@ def _identity(row: ContactIdentityModel) -> ContactHandle:
         value=row.value,
         strength=IdentityStrength(row.strength),
         verified_at=row.verified_at,
-        last_inbound_at=row.last_inbound_at,
         issuer=row.issuer,
         value_raw=row.value_raw,
     )
@@ -303,20 +302,6 @@ class ContactRepository:
             )
         )
         return bool(result.rowcount)
-
-    async def note_inbound(
-        self, *, pod_id: UUID, kind: IdentityKind, value: str
-    ) -> None:
-        """The contact just wrote from this handle: they want an answer here."""
-        await self.session.execute(
-            update(ContactIdentityModel)
-            .where(
-                ContactIdentityModel.pod_id == pod_id,
-                ContactIdentityModel.kind == kind.value,
-                ContactIdentityModel.value == normalize_handle(kind, value),
-            )
-            .values(last_inbound_at=datetime.now(timezone.utc))
-        )
 
     async def holders_of(self, *, kind: IdentityKind, value: str) -> list[Contact]:
         """Every pod's contact holding this handle -- one per pod at most."""

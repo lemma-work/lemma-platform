@@ -337,6 +337,13 @@ def _said(found: list[Message], text: str) -> Message:
     return message
 
 
+# The decision's approval item is run here (``execute_approval_jobs_inline``),
+# but a session worker started by a module packed into the same process can
+# claim it first. That worker stages the resumed turn where suppressing the
+# enqueue does not reach, runs it, and settles the calls this test is about to
+# send -- so the run ends on a return it never made. Seen in the agent shard
+# once a new module moved the packing (#1046); the hold is the cure.
+@pytest.mark.drives_work
 async def test_a_resumed_run_ending_with_calls_it_never_ran_answers_with_its_last_words(
     scenario,
 ):

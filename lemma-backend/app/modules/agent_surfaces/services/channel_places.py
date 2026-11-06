@@ -84,7 +84,9 @@ class ChannelSeats(Protocol):
 
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID: ...
 
-    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None: ...
+    async def reply_address(
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
+    ) -> ReplyAddress | None: ...
 
     async def person_places(
         self,
@@ -112,6 +114,10 @@ class ChannelSeats(Protocol):
         external_channel_id: str,
         surface_ids: Collection[UUID] | None,
     ) -> list[Source]: ...
+
+    async def answers_every_line_at(
+        self, *, external_channel_id: str, surface_id: UUID, agent_id: UUID
+    ) -> bool: ...
 
     async def conversation_at(
         self,
@@ -206,8 +212,12 @@ class ChannelSeatsInDatabase:
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:
         return (await direct_channel(self.uow, pod_id=pod_id, user_id=user_id)).id
 
-    async def reply_address(self, conversation_id: UUID) -> ReplyAddress | None:
-        return await places.reply_address(self.uow, conversation_id)
+    async def reply_address(
+        self, conversation_id: UUID, *, at_source_id: UUID | None = None
+    ) -> ReplyAddress | None:
+        return await places.reply_address(
+            self.uow, conversation_id, at_source_id=at_source_id
+        )
 
     async def person_places(
         self,
@@ -255,6 +265,16 @@ class ChannelSeatsInDatabase:
             platform=platform,
             external_channel_id=external_channel_id,
             surface_ids=surface_ids,
+        )
+
+    async def answers_every_line_at(
+        self, *, external_channel_id: str, surface_id: UUID, agent_id: UUID
+    ) -> bool:
+        return await places.answers_every_line_at(
+            self.uow,
+            external_channel_id=external_channel_id,
+            surface_id=surface_id,
+            agent_id=agent_id,
         )
 
     async def conversation_at(

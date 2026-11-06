@@ -13,6 +13,7 @@ configuration read into value objects, and the service is storage.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,36 @@ from app.modules.agent.domain.runtime_profiles import (
 logger = get_logger(__name__)
 
 DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
+
+SystemOpenAICatalogCustomizer = Callable[
+    [list[RuntimeModelCatalogEntry]], list[RuntimeModelCatalogEntry]
+]
+
+#: Not dead, whatever an in-repo grep says. A deployment's provider overlay
+#: registers it at startup -- lemma-cloud maps short public names onto
+#: Fireworks' provider ids (`deepseek-v4.1-flash` ->
+#: `accounts/fireworks/models/deepseek-v4p1-flash-1017`) and declares vision
+#: here. #1112 removed it as registered only by tests; without it every system
+#: model is sent to the provider under its public name, which the provider
+#: rejects, and every run on the system profile fails.
+_system_openai_catalog_customizer: SystemOpenAICatalogCustomizer | None = None
+
+
+def register_system_openai_catalog_customizer(
+    customizer: SystemOpenAICatalogCustomizer | None,
+) -> None:
+    """Register (or clear with ``None``) the system OpenAI catalog customizer.
+
+    Call once at application startup from an extension module. The customizer
+    receives the env-built catalog -- each entry with ``provider_model_name ==
+    name`` and the TEXT+TOOLS baseline (plus any env-declared vision) -- and
+    returns a rewritten catalog. This is the supported seam for a provider
+    overlay to keep short public model names user-facing while sending the real
+    provider model ID to the API and declaring per-model vision, without the
+    operator hand-configuring provider IDs in the environment.
+    """
+    global _system_openai_catalog_customizer
+    _system_openai_catalog_customizer = customizer
 
 
 def _load_runtime_env() -> None:
@@ -175,8 +206,7 @@ def _build_system_openai_catalog(
         RuntimeModelCatalogEntry(
             name=model_name,
             display_name=_display_model_name(model_name),
-            # The operator configures the exact provider model IDs, so the public
-            # name is the provider name.
+            # The public name is the provider name unless a customizer remaps it.
             provider_model_name=model_name,
             capabilities=_openai_compat_model_capabilities(
                 model_name, vision_model_names
@@ -187,6 +217,10 @@ def _build_system_openai_catalog(
         )
         for model_name in model_names
     ]
+    # Before the reasoning declaration, so a customizer that rebuilds entries
+    # cannot quietly drop what the operator configured.
+    if _system_openai_catalog_customizer is not None:
+        catalog = _system_openai_catalog_customizer(catalog)
     return _declare_reasoning_models(catalog)
 
 
