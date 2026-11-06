@@ -187,15 +187,9 @@ class BrowserRelayClient:
         user; that is the same exposure the environment variable already
         had, and it is why a credential put here should be scoped to this.
         """
-        require_capability(self._provider, ProviderCapability.SECRET_DELIVERY)
-        deadline = datetime.now(timezone.utc) + timedelta(
-            seconds=_QUICK_TIMEOUT_SECONDS
-        )
-        await self._provider.deliver_secret(
-            self._instance,
-            path=BROWSER_PROXY_DECISION_PATH,
-            value=decision_bytes(browser_proxy_for(sandbox_id, kind)),
-            deadline_at=deadline,
+        await self._deliver(
+            BROWSER_PROXY_DECISION_PATH,
+            decision_bytes(browser_proxy_for(sandbox_id, kind)),
         )
 
     async def deliver_token(self) -> None:
@@ -205,18 +199,32 @@ class BrowserRelayClient:
         sandbox that has been resumed has a filesystem that may or may not still
         carry it, and asking is more expensive than writing.
         """
+        await self._deliver(RELAY_TOKEN_PATH, self._token.encode())
+
+    async def deliver_stream_files(self) -> None:
+        """The streamer's ticket key and the density decision, likewise."""
+        from app.modules.workspace.services import browser_stream as stream
+
+        key = stream.stream_key_file(self.provider_id)
+        await asyncio.gather(
+            self._deliver(stream.STREAM_KEY_PATH, key),
+            self._deliver(stream.DISPLAY_DECISION_PATH, stream.display_decision()),
+        )
+
+    @property
+    def provider_id(self) -> str:
+        return self._instance.provider_id
+
+    async def _deliver(self, path: str, value: bytes) -> None:
         require_capability(self._provider, ProviderCapability.SECRET_DELIVERY)
         deadline = datetime.now(timezone.utc) + timedelta(
             seconds=_QUICK_TIMEOUT_SECONDS
         )
         await self._provider.deliver_secret(
-            self._instance,
-            path=RELAY_TOKEN_PATH,
-            value=self._token.encode(),
-            deadline_at=deadline,
+            self._instance, path=path, value=value, deadline_at=deadline
         )
 
-    async def _request(
+    async def request(
         self,
         method: str,
         path: str,
@@ -264,7 +272,7 @@ class BrowserRelayClient:
         reached, and the relay could not be started on E2B at all.
         """
         try:
-            response = await self._request("GET", "/health")
+            response = await self.request("GET", "/health")
             if _nothing_is_listening(response):
                 raise BrowserRelayUnavailable(
                     f"the browser relay answered {response.status_code}"
@@ -282,7 +290,7 @@ class BrowserRelayClient:
             if not start:
                 raise
             await self.ensure_running()
-            response = await self._request("GET", "/health")
+            response = await self.request("GET", "/health")
         if response.status_code != 200:
             raise BrowserRelayUnavailable(
                 f"the browser relay answered {response.status_code}"
@@ -297,7 +305,7 @@ class BrowserRelayClient:
         zero, because acting on a guess here resizes a display somebody is
         looking at.
         """
-        response = await self._request("GET", "/health", timeout=10.0)
+        response = await self.request("GET", "/health", timeout=10.0)
         if response.status_code != 200:
             return None
         body = response.json()
@@ -357,7 +365,7 @@ class BrowserRelayClient:
         for _ in range(self._start_polls):
             await asyncio.sleep(self._start_poll_interval_seconds)
             with suppress(BrowserRelayUnavailable):
-                response = await self._request("GET", "/health")
+                response = await self.request("GET", "/health")
                 if response.status_code != 200:
                     continue
                 answered = True
@@ -393,7 +401,7 @@ class BrowserRelayClient:
         meaningful against the Chrome that minted it.
         """
         await self.health(start=True)
-        response = await self._request(
+        response = await self.request(
             "POST",
             "/browser:ensure",
             json_body={"origin": origin, "session": session, "domain": domain},
@@ -409,7 +417,7 @@ class BrowserRelayClient:
 
     async def reset_display(self) -> str:
         """Put the display back to the size the image starts it at."""
-        response = await self._request("POST", "/display:reset", timeout=30.0)
+        response = await self.request("POST", "/display:reset", timeout=30.0)
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
         return str(response.json().get("size") or "")
@@ -421,7 +429,7 @@ class BrowserRelayClient:
         `running: False`, which is a state a settings page can render rather
         than an error it has to explain.
         """
-        response = await self._request(
+        response = await self.request(
             "GET",
             "/profile:cookies",
             params={"start": "true"} if start else None,
@@ -462,7 +470,7 @@ class BrowserRelayClient:
         raises like everything else here, and the sign-in flow decides that
         a lost label must not fail a sign-in that worked.
         """
-        response = await self._request(
+        response = await self.request(
             "POST",
             "/profile:signed-in",
             json_body={"site": site},
@@ -479,7 +487,7 @@ class BrowserRelayClient:
         derived: grouping is a public-suffix question and that list lives on
         this side of the boundary.
         """
-        response = await self._request(
+        response = await self.request(
             "POST",
             "/profile:forget",
             json_body={"domains": domains, "sites": sites},
@@ -491,18 +499,18 @@ class BrowserRelayClient:
         return int(dropped) if isinstance(dropped, int) else 0
 
     async def vnc_socket_url(
-        self, *, mode: str, session: str | None = None
+        self,
+        *,
+        mode: str,
+        session: str | None = None,
+        viewer: str | None = None,
+        transport: str = "vnc",
     ) -> tuple[str, dict[str, str]]:
-        """Where to attach for a VNC view of the sandbox's whole display.
+        """Where to attach a viewer of the sandbox's whole display.
 
-        No target in the query: VNC shows the shared Xvfb display rather than
-        one CDP-selected tab, so there is nothing to name. `session` is not a
-        selector either -- it cannot be, for the same reason -- it is only
-        which name the driving lease is recorded under, so the agent's own
-        script (which checks a lease for *its* session before acting) is not
-        told a login session's wheel is free while a person is visibly
-        driving it on this same shared screen. Callers pass the session
-        `ensure_browser` actually resolved, not one they derive themselves.
+        `/vnc` carries the picture, `/rtc` only WebRTC signalling. Neither
+        names a tab: both show the shared Xvfb display. `viewer` is the name
+        the resize lease follows from this socket to a later resize.
         """
         endpoint = await self._endpoint(deadline_seconds=_QUICK_TIMEOUT_SECONDS)
         base = endpoint.url.rstrip("/")
@@ -511,8 +519,11 @@ class BrowserRelayClient:
         query = f"mode={quote(mode, safe='')}"
         if session:
             query += f"&session={quote(session, safe='')}"
+        if viewer:
+            query += f"&viewer={quote(viewer, safe='')}"
+        path = "rtc" if transport == "rtc" else "vnc"
         headers = {**endpoint.headers, RELAY_TOKEN_HEADER: self._token}
-        return f"{scheme}://{host}/vnc?{query}", headers
+        return f"{scheme}://{host}/{path}?{query}", headers
 
     async def targets(self, *, domain: str | None = None) -> list[dict[str, object]]:
         """Open pages in one session, named the same way `ensure_browser` is.
@@ -522,21 +533,20 @@ class BrowserRelayClient:
         this replaced, which sent a `url` message on every navigation.
         """
         path = f"/targets?domain={quote(domain, safe='')}" if domain else "/targets"
-        response = await self._request("GET", path)
+        response = await self.request("GET", path)
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
         found = response.json().get("targets")
         return found if isinstance(found, list) else []
 
-    async def resize_display(self, *, width: int, height: int) -> str:
-        """Make the sandbox display the shape of the pane watching it.
-
-        Returns the size it settled on, which is not always the size asked
-        for: the framebuffer Xvfb allocated at startup is a ceiling RandR
-        cannot raise, so a large request is clamped rather than refused.
-        """
-        response = await self._request(
-            "POST", "/display:resize", json_body={"width": width, "height": height}
+    async def resize_display(
+        self, *, width: int, height: int, viewer: str | None = None
+    ) -> str:
+        """Put the display at a preset; the size it settled on (maybe clamped)."""
+        response = await self.request(
+            "POST",
+            "/display:resize",
+            json_body={"width": width, "height": height, "viewer": viewer},
         )
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))

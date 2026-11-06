@@ -9,7 +9,7 @@ ran.
 
 The double here is the *provider* -- a collaborator, passed to the constructor
 -- and the relay it points at is a real HTTP server on a real port. So this
-exercises `health`, `_request`, `_nothing_is_listening` and `ensure_running` as
+exercises `health`, `request`, `_nothing_is_listening` and `ensure_running` as
 they ship, and the only thing standing in is the fabric.
 """
 
@@ -216,7 +216,7 @@ class _ResizeRelay:
 async def test_a_resize_reaches_the_relay_with_its_size(_key) -> None:
     """Driven over real HTTP because the bug this pins was in the call itself.
 
-    `_request` takes `json_body`; the first version of this passed `json=`,
+    `request` takes `json_body`; the first version of this passed `json=`,
     which is httpx's spelling and not this method's. Nothing failed until a
     person opened the pane, because no test ever made the call -- it raised
     `TypeError` inside the endpoint and the pane simply never resized.
@@ -232,7 +232,11 @@ async def test_a_resize_reaches_the_relay_with_its_size(_key) -> None:
     assert relay.paths == ["/display:resize"]
     import json as _json
 
-    assert _json.loads(relay.bodies[0]) == {"width": 1440, "height": 960}
+    assert _json.loads(relay.bodies[0]) == {
+        "width": 1440,
+        "height": 960,
+        "viewer": None,
+    }
 
 
 async def test_a_clamped_resize_reports_what_the_display_became(_key) -> None:

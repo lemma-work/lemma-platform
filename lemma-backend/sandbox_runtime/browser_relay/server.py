@@ -18,6 +18,10 @@ from .app import DEFAULT_PORT, create_app
 
 
 def main() -> None:
+    # Every `agent-browser` this process runs -- the keepalive, the toolbar --
+    # is a person's or the relay's, never the agent's. The wrapper reads this
+    # to leave the "agent is driving" marker alone.
+    os.environ["LEMMA_BROWSER_ACTOR"] = "relay"
     logging.basicConfig(
         level=os.environ.get("LEMMA_RELAY_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -28,6 +32,12 @@ def main() -> None:
         port=DEFAULT_PORT,
         log_level="warning",
         access_log=False,
+        # Off. Every frame `/vnc` carries is already JPEG or zlib, and
+        # deflating it again for the API -- which inflated it and deflated it
+        # once more for the browser -- was measured as the relay's largest
+        # single cost: about half a core and tens of milliseconds a frame,
+        # for bytes it could not shrink.
+        ws_per_message_deflate=False,
     )
 
 

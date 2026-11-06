@@ -198,3 +198,20 @@ the right cannot be a credential.
 regexes = [
   '''ttl_seconds=60''',
 ]
+
+[[allowlists]]
+description = '''
+A fabricated HMAC key in the browser streamer's ticket test: the hex of the
+ASCII string "0123456789abcdef0123456789abcdef", the same test key the file
+declares as `key`. It was never a credential. The literal is gone --
+`ticket_test.go` now writes `hex.EncodeToString(key)` -- but the commit that
+introduced it is still in this branch's history, and gitleaks scans commits.
+
+Exact value, in the style of the entries above, so any other high-entropy
+string in that file is still a finding. Both spellings are listed because
+gitleaks hex-decodes the literal and matches the rule against the decoded text.
+'''
+regexes = [
+  '''3031323334353637383961626364656630313233343536373839616263646566''',
+  '''0123456789abcdef0123456789abcdef''',
+]

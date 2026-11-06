@@ -20,7 +20,7 @@ import pytest_asyncio
 import httpx
 import uvicorn
 
-from app.core.server_limits import WS_MAX_BYTES
+from app.core.server_limits import WS_MAX_BYTES, WS_PER_MESSAGE_DEFLATE
 from app.modules.datastore.config import datastore_settings
 from app.modules.function.config import function_settings
 from app.core.config import settings
@@ -457,6 +457,7 @@ async def backend_server(
         lifespan="on",
         ws="websockets-sansio",
         ws_max_size=WS_MAX_BYTES,
+        ws_per_message_deflate=WS_PER_MESSAGE_DEFLATE,
     )
     server = uvicorn.Server(config)
     server_task = asyncio.create_task(server.serve())
@@ -822,3 +823,43 @@ async def full_stack(
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+
+#: What `browser_stream_settings_overridden` may change. A table of literals,
+#: so the settings gate can check every name against the real fields.
+_BROWSER_STREAM_SETTINGS = (
+    "turn_provider",
+    "coturn_urls",
+    "coturn_secret",
+    "browser_stream",
+    "browser_stream_users",
+)
+
+
+@contextlib.contextmanager
+def browser_stream_settings_overridden(
+    **values: object,
+) -> Generator[None, None, None]:
+    """The browser stream's settings changed for one test, and put back after.
+
+    For an e2e test that needs a deployment shape the harness does not set up
+    -- a TURN relay, a rollout list -- on the API that runs in this process
+    and reads its settings per call. Here rather than in the test so the
+    change is made through the harness's own seam, the way
+    `local_sandbox_server` sets the provider, and every key is restored even
+    when the test fails.
+    """
+    unknown = set(values) - set(_BROWSER_STREAM_SETTINGS)
+    if unknown:
+        raise ValueError(f"not a browser stream setting: {sorted(unknown)}")
+    original = {
+        key: getattr(workspace_settings, key) for key in _BROWSER_STREAM_SETTINGS
+    }
+    for key in _BROWSER_STREAM_SETTINGS:
+        if key in values:
+            setattr(workspace_settings, key, values[key])
+    try:
+        yield
+    finally:
+        for key in _BROWSER_STREAM_SETTINGS:
+            setattr(workspace_settings, key, original[key])

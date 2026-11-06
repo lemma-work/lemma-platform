@@ -26,4 +26,14 @@ from __future__ import annotations
 #: The largest websocket message the API server reads: 1 MiB.
 WS_MAX_BYTES = 1024 * 1024
 
-__all__ = ["WS_MAX_BYTES"]
+#: Whether the API negotiates permessage-deflate. Off, and passed by every
+#: launcher beside the cap (``--ws-per-message-deflate false``), because
+#: uvicorn decides it for the whole server and the socket that dominates the
+#: bytes is the browser view: VNC frames that are already JPEG or zlib, which
+#: the API used to inflate from the relay and deflate again for the browser.
+#: The stream bench measured that recompression at tens of milliseconds a frame
+#: for no saving. The JSON sockets give up a compression they barely needed --
+#: a socket carries what changed, which is small.
+WS_PER_MESSAGE_DEFLATE = False
+
+__all__ = ["WS_MAX_BYTES", "WS_PER_MESSAGE_DEFLATE"]

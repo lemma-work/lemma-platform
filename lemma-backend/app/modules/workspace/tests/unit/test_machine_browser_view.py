@@ -22,6 +22,7 @@ from app.modules.workspace.api.controllers.machine_socket_auth import (
 from app.modules.workspace.api.controllers.browser_view_session import (
     user_id_resolver,
 )
+from app.modules.workspace.services.browser_view_service import ViewUpstream
 from app.modules.workspace.services.ws_bridge import (
     origins_from,
     MAX_FRAME_BYTES,
@@ -225,7 +226,14 @@ class _FakeService:
         self.closed = False
 
     async def open_vnc_session(
-        self, user_id, *, mode, origin=None, conversation_id=None
+        self,
+        user_id,
+        *,
+        mode,
+        origin=None,
+        conversation_id=None,
+        viewer=None,
+        transport="vnc",
     ):
         self.opened.append(
             {
@@ -237,7 +245,9 @@ class _FakeService:
         )
         if self.fail is not None:
             raise self.fail
-        return "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}
+        return ViewUpstream(
+            "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}, "sbx-1"
+        )
 
     async def status(self, user_id):
         return {"state": "stopped"}
@@ -421,7 +431,9 @@ class _VncRelay(_Relay):
         self.ensured = {"origin": origin, "session": session, "domain": domain}
         return {"session": session or "workspace"}
 
-    async def vnc_socket_url(self, *, mode, session):
+    provider_id = "sbx-1"
+
+    async def vnc_socket_url(self, *, mode, session, viewer=None, transport="vnc"):
         return f"ws://sandbox.test/vnc?mode={mode}&session={session}", {}
 
 
@@ -892,9 +904,135 @@ def test_a_computer_that_is_still_starting_is_a_close_the_pane_retries() -> None
     assert closed, "the service was left open on the way out"
 
 
+def test_a_container_that_went_away_is_a_close_the_pane_retries() -> None:
+    """`ProviderGone` escaped the handler as a bare 500, which the pane cannot
+    read; the next attempt makes a new container, so it is a retry."""
+    from app.modules.workspace.providers.base import ProviderGone
+
+    code, closed = _close_code_for(ProviderGone("sandbox container x is gone"))
+    assert code == view.CLOSE_SANDBOX_UNAVAILABLE
+    assert closed
+
+
+def test_webrtc_that_cannot_be_had_is_the_pane_s_cue_to_use_vnc() -> None:
+    """4427 is distinct from every refusal the pane reads as trouble."""
+    from app.modules.workspace.api.controllers.browser_view_stream import (
+        CLOSE_USE_VNC,
+    )
+
+    assert CLOSE_USE_VNC == 4427
+    assert CLOSE_USE_VNC not in {
+        view.CLOSE_UNAUTHENTICATED,
+        view.CLOSE_ORIGIN_REFUSED,
+        view.CLOSE_NO_BROWSER,
+        view.CLOSE_UNSUPPORTED,
+        view.CLOSE_RELAY_ABSENT,
+        view.CLOSE_SANDBOX_UNAVAILABLE,
+    }
+
+
 def test_a_definitive_sandbox_refusal_is_a_close_the_pane_stops_on() -> None:
     from sandbox_runtime.errors import SandboxRejected
 
     code, closed = _close_code_for(SandboxRejected("no such port"))
     assert code == view.CLOSE_RELAY_ABSENT
     assert closed
+
+
+class _SlowStartService(_FakeService):
+    """A browser that takes its time to start, released by the test.
+
+    Polls a thread-safe flag rather than awaiting an `asyncio.Event`: the
+    TestClient runs the app on a loop of its own, in another thread, and the
+    test sets the flag from this one. The poll gives up after a while so that
+    a socket that is *not* accepted early fails this test instead of hanging
+    it -- the handshake would wait on the poll, and the poll on the handshake.
+    """
+
+    def __init__(self, *, fail: Exception | None = None) -> None:
+        import threading
+
+        super().__init__(fail=fail)
+        self.release = threading.Event()
+        self.accepted_first = False
+
+    async def open_vnc_session(self, user_id, **kwargs):
+        for _ in range(500):
+            if self.release.is_set():
+                self.accepted_first = True
+                break
+            await asyncio.sleep(0.01)
+        return await super().open_vnc_session(user_id, **kwargs)
+
+
+def _signed_in_client(service: _FakeService):
+    async def _signed_in(_websocket):
+        return str(uuid4())
+
+    client = _client(service)
+    client.app.dependency_overrides[user_id_resolver] = lambda: _signed_in
+    return client
+
+
+def test_the_socket_is_accepted_before_the_browser_is_started() -> None:
+    """A browser lets one socket per host be CONNECTING at a time.
+
+    So a view whose handshake waited on a cold browser start held every other
+    socket the page opened -- the terminal's stream, the pod's live socket --
+    in CONNECTING behind it, and the Terminal tab sat on "Starting a shell..."
+    for as long as the screen sat on "Connecting...". The handshake has to
+    finish before the slow part starts; the refusal that follows it still
+    arrives with its own code.
+    """
+    from app.modules.workspace.services.browser_relay_client import (
+        BrowserRelayUnavailable,
+    )
+
+    service = _SlowStartService(fail=BrowserRelayUnavailable("not yet"))
+    client = _signed_in_client(service)
+    with client.websocket_connect(
+        "/machines/me/browser/view", headers={"Origin": "https://app.lemma.test"}
+    ) as socket:
+        # Open already, with the browser still starting behind it.
+        service.release.set()
+        refusal = socket.receive()
+
+    assert service.accepted_first, "the handshake waited on the browser starting"
+    assert refusal["type"] == "websocket.close"
+    assert refusal["code"] == view.CLOSE_NO_BROWSER
+
+
+def test_webrtc_refused_after_the_early_accept_still_reaches_the_pane(
+    monkeypatch,
+) -> None:
+    """`CLOSE_USE_VNC` is the pane's cue to fall back, and it is now sent on a
+    socket that was accepted before WebRTC's setup ran -- so it has to arrive
+    as a close frame on that socket, not be lost to a second `accept()`."""
+    from app.modules.workspace.api.controllers.browser_view_stream import (
+        CLOSE_USE_VNC,
+    )
+    from app.modules.workspace.config import workspace_settings
+
+    from app.modules.workspace.domain.machine_access import MachineAccess
+
+    async def _own_machine_in_use(websocket, ref, user_id, *, need, refuse):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            machine=SimpleNamespace(id=_MACHINE_ID), access=MachineAccess.USE
+        )
+
+    # No TURN relay, which is what makes WebRTC unavailable.
+    monkeypatch.setattr(workspace_settings, "turn_provider", "none")
+    service = _FakeService()
+    client = _signed_in_client(service)
+    client.app.dependency_overrides[view_machine_resolver] = lambda: _own_machine_in_use
+    with client.websocket_connect(
+        "/machines/me/browser/view?transport=rtc",
+        headers={"Origin": "https://app.lemma.test"},
+    ) as socket:
+        refusal = socket.receive()
+
+    assert refusal["type"] == "websocket.close"
+    assert refusal["code"] == CLOSE_USE_VNC
+    assert service.closed

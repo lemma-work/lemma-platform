@@ -49,6 +49,7 @@ The sandbox set breaks down further:
 [lifecycle state model](architecture/sandbox/lifecycle-state-model.md) ·
 [provider adapters](architecture/sandbox/provider-adapters.md) ·
 [function execution](architecture/sandbox/function-execution.md) ·
+[live browser view](architecture/sandbox/live-browser-view.md) ·
 [testing strategy](architecture/sandbox/testing-strategy.md) ·
 [verification and rollout](architecture/sandbox/verification-and-rollout.md)
 

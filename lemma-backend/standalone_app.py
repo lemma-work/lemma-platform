@@ -16,7 +16,7 @@ app = create_standalone_app()
 if __name__ == "__main__":
     import uvicorn
 
-    from app.core.server_limits import WS_MAX_BYTES
+    from app.core.server_limits import WS_MAX_BYTES, WS_PER_MESSAGE_DEFLATE
 
     uvicorn.run(
         "standalone_app:app",
@@ -25,5 +25,6 @@ if __name__ == "__main__":
         reload=False,
         ws="websockets-sansio",
         ws_max_size=WS_MAX_BYTES,
+        ws_per_message_deflate=WS_PER_MESSAGE_DEFLATE,
         access_log=False,
     )

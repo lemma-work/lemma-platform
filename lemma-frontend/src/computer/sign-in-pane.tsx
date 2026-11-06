@@ -5,9 +5,9 @@ import { LoadingIndicator } from "@/ui/loading";
 import { useState } from "react";
 import { ExternalIcon, LockIcon, WarningIcon } from "@/ui/icons";
 import { live } from "@/usage/queries";
-import { LiveScreen } from "./live-screen";
+import { LiveView } from "./live-view";
 import { outcomeSay, whereabouts } from "./sign-in";
-import { useAnswerSignIn, useCurrentPage, useOpenBrowserTab, usePendingSignIn } from "./queries";
+import { useAnswerSignIn, useBrowserDetails, useCurrentPage, useOpenBrowserTab, usePendingSignIn } from "./queries";
 import { type LiveState } from "./live";
 import { usePaneVisible } from "@/shell/pane-visible";
 
@@ -55,6 +55,11 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
        and the browser the steer was aimed at has been retired since. */
     const [reopen, setReopen] = useState(0);
     const tab = useOpenBrowserTab();
+    /* Which transport this person gets. Not waited for: VNC until it says,
+       which is what everyone had before. */
+    const details = useBrowserDetails(!sample);
+    const stream = details.data;
+    const setting = details.isPending ? undefined : (stream?.transport ?? null);
 
     const origin = request.data?.origin ?? null;
     /* Only while the picture is up, the pause is open and this pane is in
@@ -105,7 +110,7 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
     if (compact) {
         const glass = (
             <div className="signin__glass">
-                <LiveScreen mode="control" origin={request.data.origin} reopen={reopen} onState={setPicture} />
+                <LiveView mode="control" origin={request.data.origin} reopen={reopen} setting={setting} density={stream?.density ?? 1} onState={setPicture} />
                 {picture === "live" && !where.arrived && (
                     <div className="signin__waiting">
                         <LoadingIndicator label={"Connecting to " + whereabouts(request.data.origin, null).host} />
@@ -175,10 +180,12 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
             </header>
 
             <div className="signin__glass">
-                <LiveScreen
+                <LiveView
                     mode="control"
                     origin={request.data.origin}
                     reopen={reopen}
+                    setting={setting}
+                    density={stream?.density ?? 1}
                     onState={setPicture}
                 />
                 {/* Steering is not instant and until it is visible it reads as
