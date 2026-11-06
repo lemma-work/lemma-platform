@@ -40,7 +40,7 @@ export function appsDomainSuffix(): string {
 
 /** Where somebody lands when they signed in without saying where they were
  *  going — somebody who typed the address, rather than being sent here. */
-export const DEFAULT_LANDING = "/t";
+export const DEFAULT_LANDING = "/home";
 
 declare global {
     interface Window {

@@ -59,33 +59,33 @@ test("template links preserve the source repository and installation entry point
 test("old links reach their resource rather than the default workspace", () => {
   assert.equal(
     legacyAddress(["pod", "a b", "conversations", "c"], new URLSearchParams()),
-    "/t/a%20b/conversation/c",
+    "/l/a%20b/conversation/c",
   );
   assert.equal(
     legacyAddress(["pod", "p", "data"], new URLSearchParams({ tab: "orders" })),
-    "/t/p/table/orders",
+    "/l/p/table/orders",
   );
   assert.equal(
     legacyAddress(
       ["pod", "p", "files"],
       new URLSearchParams({ file: "/docs/a b.md" }),
     ),
-    "/t/p/file/docs/a%20b.md",
+    "/l/p/file/docs/a%20b.md",
   );
   assert.equal(
     legacyAddress(
       ["organizations", "o", "settings", "billing"],
       new URLSearchParams(),
     ),
-    "/t?settings=team-billing&org=o",
+    "/home?settings=team-billing&org=o",
   );
   assert.equal(
     legacyAddress(["profile", "usage"], new URLSearchParams()),
-    "/t?settings=usage",
+    "/home?settings=usage",
   );
   assert.equal(
     legacyAddress(["pod", "p", "notifications"], new URLSearchParams()),
-    "/t/p/channels",
+    "/l/p/channels",
     "notifications became the channels' inbox",
   );
   assert.equal(legacyAddress(["not-a-page"], new URLSearchParams()), null);

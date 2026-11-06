@@ -32,7 +32,7 @@ export function Closing() {
         <section className={s.close} aria-labelledby="closing-title">
             <h2 id="closing-title" className={s.closeTitle}>What would you<br />hand over first?</h2>
             <div className={s.ctas}>
-                <Link className={s.closePrimary} href="/t">Get started free</Link>
+                <Link className={s.closePrimary} href="/home">Get started free</Link>
                 <a className={s.closeGhost} href={githubUrl} target="_blank" rel="noreferrer">View on GitHub</a>
             </div>
             <div className={s.lineup} aria-hidden="true">

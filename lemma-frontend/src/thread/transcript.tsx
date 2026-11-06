@@ -11,7 +11,7 @@ import { liveNote, type Streaming, type Turn } from "./turns";
 import type { Persona } from "@/data";
 import { AddModelAction, OpenModelsAction } from "./add-model-action";
 import { noModelSentence } from "./model-setup";
-import { Notes, Reply, TurnRow } from "./turn-row";
+import { Reply, TurnRow, WorkingLine } from "./turn-row";
 import { Mark } from "@/shell/mark";
 
 
@@ -135,6 +135,11 @@ export function Transcript({
     const mergeInto = (live || working) && lastIndex >= 0 ? lastIndex : -1;
     const inFlight = streaming ?? (working ? NOTHING_YET : null);
     const runEnded = !loading && state !== "running";
+    /* A run is stale once the person has said something after it: folded
+       then to its answer, and not the moment it finishes, when what it just
+       did is what they are reading. */
+    let lastAsked = -1;
+    turns.forEach((turn, index) => { if (turn.human) lastAsked = index; });
 
     return (
         <div aria-busy={loading} className="pane convo-scroll" ref={scroll.containerRef} onScroll={scroll.onScroll}>
@@ -168,6 +173,7 @@ export function Transcript({
                             outsiders={outsiders}
                             dockedId={dockedId}
                             runEnded={runEnded}
+                            stale={index < lastAsked && index !== mergeInto}
                             resumesOnAnswer={state === "waiting"}
                             onOpenApp={onOpenApp}
                             onOpenFile={onOpenFile}
@@ -180,12 +186,7 @@ export function Transcript({
 
                     {(live || working) && mergeInto < 0 && inFlight && (
                         <Reply seed={speakerSeed ?? podId} teammate={teammate}>
-                            <Notes
-                                notes={liveNote(inFlight)}
-                                live={!inFlight.text}
-                                podId={podId}
-                                conversationId={conversationId}
-                            />
+                            {!inFlight.text && <WorkingLine inFlight={liveNote(inFlight)} />}
                             {inFlight.text && (
                                 <div className="said">
                                     <StreamingProse text={inFlight.text} />

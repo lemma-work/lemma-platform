@@ -18,7 +18,10 @@ test("the app's own paths name the Lemma they are inside, and the app's places n
     assert.equal(waitingFor("/t/outcomes").name, null);
 });
 
-test("a destination still under /o is read as the /t path it redirects to", () => {
+test("a destination at an old address is read as the place it is sent on to", () => {
+    assert.equal(waitingFor("/l/marketing/apps").name, "Marketing");
+    assert.equal(waitingFor("/t/outcome/marketing/apps").name, "Marketing");
+    assert.equal(waitingFor("/t/marketing/library").name, "Marketing", "a workspace address under /t");
     assert.equal(waitingFor("/o/outcome/marketing/apps").name, "Marketing");
     assert.equal(waitingFor("/o/marketing/library").name, "Marketing", "a workspace address, once it is under /t");
     assert.equal(waitingFor("https://app.example/o/marketing").name, "Marketing");
