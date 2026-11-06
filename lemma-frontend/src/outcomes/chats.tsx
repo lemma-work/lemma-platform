@@ -263,7 +263,7 @@ function ChatThread({ pod, id, title, go, actions, calls, handoff, onHandoffSent
 function SetupStrip({ pod }: { pod: Pod }) {
     const setup = useSetup(pod.id);
     if (!setup) return null;
-    const brought = broughtSaid((setup.plan?.steps ?? []).map((step) => step.kind));
+    const brought = broughtSaid(setup.plan?.steps ?? []);
     const status = setup.status as string;
     const said = status === "COMPLETED"
         ? `Brought in ${brought || "what it starts with"}.`

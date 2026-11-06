@@ -136,8 +136,19 @@ test("a pasted link opens where this app installs it, and only such links", () =
     assert.equal(sharedLinkPath("not a link at all"), null);
 });
 
-test("what a template brings is counted by kind", () => {
-    assert.equal(broughtSaid(["table", "file", "file", "schedule", "schedule", "pod_meta"]), "1 table, 2 files and 2 automations");
-    assert.equal(broughtSaid(["schedule"]), "1 automation");
+test("what a template brings is counted as a person would count it", () => {
+    const steps = [
+        { kind: "TABLE", name: "conversations" },
+        { kind: "SCHEDULE", name: "friday_number" },
+        { kind: "SCHEDULE", name: "morning_drafts" },
+        { kind: "FILE", name: "skills" },
+        { kind: "FILE", name: "skills/set-up" },
+        { kind: "FILE", name: "skills/set-up/SKILL.md" },
+        { kind: "FILE", name: "skills/keep-conversations/SKILL.md" },
+        { kind: "FILE", name: "notes/readme.md" },
+        { kind: "POD", name: "meta" },
+    ];
+    assert.equal(broughtSaid(steps), "1 table, 2 automations, 2 skills and 1 file", "folders made on the way are nothing");
+    assert.equal(broughtSaid([{ kind: "SCHEDULE", name: "x" }]), "1 automation");
     assert.equal(broughtSaid([]), "");
 });

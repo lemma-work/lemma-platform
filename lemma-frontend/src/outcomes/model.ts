@@ -1126,26 +1126,32 @@ export function sharedLinkPath(text: string): string | null {
     return ["s", "d", "remix", "import"].includes(parts[0] ?? "") ? url.pathname + url.search : null;
 }
 
-const BROUGHT: Record<string, [string, string]> = {
-    table: ["table", "tables"],
-    schedule: ["automation", "automations"],
-    workflow: ["automation", "automations"],
-    file: ["file", "files"],
-    agent: ["agent", "agents"],
-    app: ["app", "apps"],
-};
-
-/** "1 table, 2 automations and 4 files": what a template's import brings,
- *  counted by kind, in the order it brings them. */
-export function broughtSaid(kinds: readonly string[]): string {
-    const counts = new Map<string, number>();
-    for (const kind of kinds) {
-        const said = BROUGHT[kind];
-        if (said) counts.set(said[1], (counts.get(said[1]) ?? 0) + 1);
+/** What one step of a template's import adds, said as a person would count
+ *  it: a skill is its SKILL.md, and a folder made on the way is nothing. */
+function broughtKind(step: { kind: string; name: string }): [string, string] | null {
+    const kind = step.kind.toUpperCase();
+    if (kind === "TABLE") return ["table", "tables"];
+    if (kind === "SCHEDULE" || kind === "WORKFLOW") return ["automation", "automations"];
+    if (kind === "AGENT") return ["agent", "agents"];
+    if (kind === "APP") return ["app", "apps"];
+    if (kind === "FILE") {
+        const last = step.name.split("/").pop() ?? "";
+        if (last === "SKILL.md") return ["skill", "skills"];
+        return last.includes(".") ? ["file", "files"] : null;
     }
-    const parts = [...counts].map(([plural, count]) => {
-        const singular = Object.values(BROUGHT).find((pair) => pair[1] === plural)?.[0] ?? plural;
-        return `${count} ${count === 1 ? singular : plural}`;
-    });
+    return null;
+}
+
+/** "1 table, 2 automations and 2 skills": what a template's import brings,
+ *  counted by kind, in the order it brings them. */
+export function broughtSaid(steps: readonly { kind: string; name: string }[]): string {
+    const counts = new Map<string, { one: string; many: string; count: number }>();
+    for (const step of steps) {
+        const said = broughtKind(step);
+        if (!said) continue;
+        const now = counts.get(said[1]) ?? { one: said[0], many: said[1], count: 0 };
+        counts.set(said[1], { ...now, count: now.count + 1 });
+    }
+    const parts = [...counts.values()].map(({ one, many, count }) => `${count} ${count === 1 ? one : many}`);
     return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }

@@ -17,6 +17,14 @@ function Face({ face, name, size }: { face: string | null; name: string; size: n
     return <TeammateFace pod={{ id: name, name, iconUrl: characterUrl(known) }} size={size} />;
 }
 
+/** What a kind of work's card says under its name: its templates' names, or,
+ *  when its one template is called what the work is, what that one owns. */
+function lineOf(work: ShelfWork): string {
+    const [only] = work.cards;
+    if (work.cards.length === 1 && only.name.toLowerCase() === work.label.toLowerCase()) return sentenceFor(only, null);
+    return work.cards.map((card) => card.name).join(" · ");
+}
+
 /** Where a new Lemma starts: the kind of work, then what it owns there, from
  *  the templates the server ships -- or the owner's own words, or something
  *  someone shared. Starting one lands in the chat it sets itself up in. */
@@ -47,7 +55,7 @@ export function Shelf({ org, go }: { org: Org; go: Go }) {
                             <Face face={one.face} name={one.label} size={40} />
                             <span className="ox-shelf__t">
                                 <span className="ox-shelf__name">{one.label}</span>
-                                <span className="ox-shelf__line">{one.cards.map((card) => card.name).join(" · ")}</span>
+                                <span className="ox-shelf__line">{lineOf(one)}</span>
                                 {one.places.length > 0 && <span className="ox-vs">Usually in {one.places.join(", ")}</span>}
                             </span>
                             <span className="ox-vs ox-shelf__n">{one.cards.length} to own</span>
