@@ -18,6 +18,12 @@ def _routers():
     from app.modules.workspace.api.controllers.machine_files_controller import (
         router as files,
     )
+    from app.modules.workspace.api.controllers.machine_connections_controller import (
+        router as machine_connections,
+    )
+    from app.modules.workspace.api.controllers.machine_link_controller import (
+        router as machine_link,
+    )
     from app.modules.workspace.api.controllers.machine_preview_proxy import (
         router as preview_proxy,
     )
@@ -39,6 +45,10 @@ def _routers():
     return [
         consents,
         previews,
+        # `/machine-connections*` and the machine's own routes under
+        # `/agent-host/compute`: no `/machines/{ref}` path to shadow.
+        machine_connections,
+        machine_link,
         machines,
         processes,
         files,

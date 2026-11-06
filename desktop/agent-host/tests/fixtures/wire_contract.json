@@ -30,9 +30,20 @@
     "`host_execution` is the vocabulary of `op` frames: the methods in",
     "`host_exec::wire::method` and `AgentHostSandboxProvider`, and the failure",
     "kinds an `OP_FAILED` answer names in `detail.kind`. See",
-    "docs/architecture/desktop-host-execution.md §4."
+    "docs/architecture/desktop-host-execution.md §4.",
+    "",
+    "`protocol_version` is the newest protocol each side speaks;",
+    "`min_protocol_version` is the oldest a host may still connect with",
+    "(`MIN_AGENT_HOST_PROTOCOL_VERSION`). 4 only added the `compute` role.",
+    "",
+    "`compute` is the link's `compute` role, which a machine joined with",
+    "`lemma machine connect` speaks: its role name, the body fields it sends and",
+    "is sent, the stream targets it serves, and the binary mux its streams travel",
+    "in (`sandbox_runtime/machine_link/mux.py`, `src/link/protocol.rs` `compute`).",
+    "See docs/architecture/connected-machines.md."
   ],
-  "protocol_version": 3,
+  "protocol_version": 4,
+  "min_protocol_version": 3,
   "event_types": [
     "run_state",
     "agent_message_chunk",
@@ -478,5 +489,92 @@
     "staged_body_max_bytes": 33554432,
     "outbound_inline_bytes": 524288,
     "hello_flag": "staged_bodies"
+  },
+  "compute": {
+    "role": "compute",
+    "default_role": "agent_host",
+    "min_protocol_version": 4,
+    "pair_fields": [
+      "role",
+      "pairing_code",
+      "claim_key",
+      "hello"
+    ],
+    "paired_fields": [
+      "connection_id",
+      "user_id",
+      "name",
+      "machine_secret"
+    ],
+    "hello_fields": [
+      "role",
+      "hello",
+      "machine"
+    ],
+    "machine_fields": [
+      "mode",
+      "platform",
+      "home",
+      "runtime_version",
+      "runtime_ready",
+      "runtime_port",
+      "relay_port",
+      "capabilities"
+    ],
+    "modes": [
+      "host",
+      "image"
+    ],
+    "capabilities": [
+      "processes",
+      "files",
+      "python",
+      "browser",
+      "docker",
+      "previews"
+    ],
+    "welcome_fields": [
+      "connection_id",
+      "user_id",
+      "name",
+      "protocol_version",
+      "heartbeat_ms",
+      "server_time",
+      "runtime"
+    ],
+    "runtime_fields": [
+      "token",
+      "version"
+    ],
+    "stream_targets": [
+      "port",
+      "runtime_bundle"
+    ],
+    "mux": {
+      "header": "type u8, stream id u32 big endian, payload",
+      "frame_types": {
+        "open": 1,
+        "accept": 2,
+        "data": 3,
+        "window": 4,
+        "fin": 5,
+        "reset": 6
+      },
+      "max_data_bytes": 65536,
+      "default_window_bytes": 262144,
+      "max_window_bytes": 16777216,
+      "max_streams": 512,
+      "max_control_bytes": 8192,
+      "opener_ids": "odd",
+      "reset_codes": [
+        "refused",
+        "cancelled",
+        "flow_control",
+        "protocol",
+        "link_lost",
+        "too_many_streams",
+        "internal"
+      ]
+    }
   }
 }

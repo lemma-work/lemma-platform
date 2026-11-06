@@ -7,7 +7,7 @@ const Actions = dynamic(() => import("./actions").then((m) => m.Actions), {
     loading: () => <p role="status">Opening…</p>,
 });
 export type ActionProps = {
-    action: "invite" | "logout" | "remix" | "organization" | "delete-account";
+    action: "invite" | "logout" | "remix" | "organization" | "machine" | "delete-account";
     invitationId?: string;
     decision?: "accept" | "reject";
     source?: string;

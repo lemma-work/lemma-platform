@@ -22,6 +22,7 @@ connection id" did.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 from uuid import UUID
 
@@ -52,10 +53,14 @@ class LinkOwnership:
         store: GenerationReader,
         channels: RealtimeChannel,
         connection_id: UUID,
+        channel_for: Callable[[UUID], str] = host_poke_channel,
     ) -> None:
         self._store = store
         self._channels = channels
         self._connection_id = connection_id
+        #: Where the owner's notices travel. A compute link passes its own
+        #: channel; the rule is the same for both roles.
+        self._channel_for = channel_for
         #: What this link's ``hello`` claimed; 0 until it has said one.
         self.generation = 0
 
@@ -109,7 +114,7 @@ class LinkOwnership:
     async def _announce(self, host_id: UUID) -> None:
         try:
             await self._channels.publish(
-                host_poke_channel(host_id),
+                self._channel_for(host_id),
                 superseded_notice(self._connection_id, self.generation),
             )
         except RedisError, RuntimeError, OSError:
