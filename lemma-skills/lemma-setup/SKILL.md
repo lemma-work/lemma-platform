@@ -39,6 +39,12 @@ people tell you". Never assume email. If they pick "nowhere yet", skip to
 step 5 and say rows will come from people telling you, or from a form
 (`lemma-form`).
 
+Put everything else you need into the same `ask_user` (their timezone, who
+holds the work), so the person answers once. Each option is one concrete
+value: "London", not "Europe (London/Berlin)". Never ask whether they are
+ready or may do something; say what you need ("Upload the export here") and
+end your turn.
+
 ## 2. Connect it
 
 Run a read operation through the CLI, by catalog id and what you want:
@@ -107,9 +113,10 @@ what is new since the last row is the fallback; say so.
 
 ## 6. Count it
 
-A template's measure already counts its tables: check that it reads now.
-Change it only to fix something it gets wrong, and say what and why in your
-reply. Otherwise, write one with `set_what_you_own`:
+A template's measure already counts its tables, this week, only what is due:
+keep it, and check that it reads now. Never swap its window for a rolling one.
+If it gets something wrong, change it and say what and why in your reply.
+Otherwise, write one with `set_what_you_own`:
 
 - one read-only query, one row, one column;
 - only over tables with `enable_rls: false`, because the number is the same
@@ -118,6 +125,8 @@ reply. Otherwise, write one with `set_what_you_own`:
 - count only what is due: an item whose deadline has not passed yet is
   neither a hit nor a miss, so leave it out until it is one or the other;
 - with `unit` "%" it answers 0 to 100, as the target is written;
+- a week with nothing due answers null, never `coalesce(…, 0)`: zero says
+  everyone was missed;
 - keep the person's sentence; a finish line also needs `due`.
 
 The tool reads the measure once and returns `value`. A null or an error means
@@ -125,14 +134,14 @@ the query is wrong; fix it now, not later.
 
 ## 7. Show it
 
-Show the weekly number for the weeks you imported, as a widget over the
-work table, not a sentence:
+Always show the weekly number for the weeks you imported, as a widget over
+the work table, not only a sentence:
 
 ```html
 <p id="f" style="font:500 16px/1.4 var(--lemma-widget-font,system-ui);margin:0 0 12px">…</p>
 <div id="v"></div>
 <script>
-lemma.query("select date_trunc('week', opened_at)::date as week, 1.0 * count(*) filter (where answered_in_time) / nullif(count(*), 0) as share from conversations group by 1 order by 1").then(function (rows) {
+lemma.query("select date_trunc('week', opened_at)::date as week, 1.0 * count(*) filter (where answered_in_time) / nullif(count(*) filter (where answered_at is not null or opened_at < now() - interval '1 day'), 0) as share from conversations group by 1 order by 1").then(function (rows) {
   document.getElementById("f").textContent = "…the last four weeks against the target…";
   lemma.line("v", rows, { x: "week", y: "share", format: "pct" });
 }, function (e) { document.getElementById("f").textContent = e.message; });

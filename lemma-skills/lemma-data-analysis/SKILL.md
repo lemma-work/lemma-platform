@@ -112,6 +112,8 @@ stricter rules because everyone sees the number it gives:
 - Count only what is due: an item whose deadline has not passed is neither a
   hit nor a miss yet.
 - A share with `unit` "%" answers 0 to 100, as the target is written.
+- A week with nothing due answers null, never `coalesce(…, 0)`: zero says
+  everyone was missed.
 
 Before setting it, run the query with `pod_query` over each of the last few
 weeks and check the numbers against the rows. The tool reads it once and
