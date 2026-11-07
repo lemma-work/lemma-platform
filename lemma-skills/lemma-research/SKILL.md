@@ -95,6 +95,10 @@ and citations back to the originating source where possible.
 
 ### Pod files
 
+Inside a Lemma, use `pod_search_files`, `pod_read_file` (with a page range) and
+`pod_view_document_pages`: the same search and reading, as structured results.
+The commands below are the same steps from outside one.
+
 Search narrowly, then open the exact passage:
 
 ```bash

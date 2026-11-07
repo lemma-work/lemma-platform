@@ -58,9 +58,10 @@ semantics from a column name when the schema or sample rows can establish them.
 
 ### 2. Acquire the smallest sufficient dataset
 
-Push filters, joins, and aggregates into `lemma query run` when practical. Use
-`lemma records export` for a reproducible row-level extract and `lemma files
-download` for a tabular file stored in the pod. Preserve the raw extract
+Push filters, joins, and aggregates into SQL when practical: `pod_query` inside
+a Lemma (structured rows, nothing truncated by a pipe), `lemma query run` from
+outside one. Use `lemma records export` for a reproducible row-level extract and
+`lemma files download` for a tabular file stored in the pod. Preserve the raw extract
 unchanged. Record the exact SQL or extraction command, snapshot time, source,
 and returned row count.
 
@@ -95,6 +96,26 @@ queries or script, machine-readable result data, and necessary charts/workbooks
 to `/me/analysis/<slug>/` by default. Use a shared folder only when the user asks
 for pod-wide access. Verify uploads with `lemma files stat` and provide a member
 link only when useful.
+
+## Write a Lemma's measure
+
+What a Lemma owns is counted by one SQL query, set with `set_what_you_own` and
+read again on a regular sweep into its weekly history. It is the same analysis, held to
+stricter rules because everyone sees the number it gives:
+
+- One read-only query that answers one row and one column.
+- Only shared tables (`enable_rls: false`). It is read for everyone alike, and
+  `set_what_you_own` refuses a measure over rows you cannot read in full.
+- The unit of work is a row. Count rows, not something worked out in chat.
+- A weekly bar counts this week (`>= date_trunc('week', now())`); a finish line
+  counts everything up to its due date.
+- Count only what is due: an item whose deadline has not passed is neither a
+  hit nor a miss yet.
+- A share with `unit` "%" answers 0 to 100, as the target is written.
+
+Before setting it, run the query with `pod_query` over each of the last few
+weeks and check the numbers against the rows. The tool reads it once and
+returns `value`; a null means the query is wrong.
 
 ## Apply non-negotiable quality gates
 
