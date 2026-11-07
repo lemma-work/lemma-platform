@@ -93,12 +93,14 @@ def _invalid(exc: ValidationError) -> str:
 
 
 async def plan_outcome(
-    block: object, pod: OwnedOutcome
+    manifest: Mapping[str, object], pod: OwnedOutcome | None
 ) -> tuple[PlannedOutcome | None, list[str]]:
-    """What the import plan says about ``pod.json -> outcome`` (``block``, as
-    written): the outcome and what the apply will do with it, or ``None`` and
-    why, as plan warnings, when there is none to set."""
-    if block is None:
+    """What the import plan says about ``pod.json -> outcome``, as ``manifest``
+    has it: the outcome and what the apply will do with it, or ``None`` and
+    why, as plan warnings, when there is none to set. No ``pod`` means this
+    import sets none: a template's start does."""
+    block = manifest.get("outcome")
+    if block is None or pod is None:
         return None, []
     try:
         wanted = OutcomeInput.model_validate(block)
@@ -165,6 +167,14 @@ class SessionOwnedOutcome:
         from app.modules.pod.contracts.outcome import read_pod_outcome
 
         return await read_pod_outcome(self._session, self._pod_id)
+
+
+def owned_for_plan(state: ImportState, session: AsyncSession) -> OwnedOutcome | None:
+    """What the plan reads the target pod's outcome through, or ``None`` for a
+    template import, whose outcome its start sets (as :func:`carry` skips it)."""
+    if state.source.kind is BundleSourceKind.TEMPLATE:
+        return None
+    return SessionOwnedOutcome(session=session, pod_id=state.pod_id)
 
 
 class PodOutcomeTarget:
@@ -235,6 +245,7 @@ async def carry(
 
 
 __all__ = [
+    "owned_for_plan",
     "OutcomeTarget",
     "OwnedOutcome",
     "PodOutcomeTarget",

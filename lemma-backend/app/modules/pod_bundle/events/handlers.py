@@ -39,7 +39,6 @@ from app.modules.pod_bundle.domain.errors import (
     BundleStateConflictError,
 )
 from app.modules.pod_bundle.domain.state import (
-    BundleSourceKind,
     ExportState,
     ExportStatus,
     ImportState,
@@ -407,21 +406,13 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 directory = ServiceConnectorDirectory(
                     uow=uow, pod_id=state.pod_id, organization_id=ctx.organization_id
                 )
-                # A template's outcome is its start's to set, as `carry` skips it.
-                outcome = (
-                    None
-                    if state.source.kind is BundleSourceKind.TEMPLATE
-                    else bundle_outcome.SessionOwnedOutcome(
-                        session=uow.session, pod_id=state.pod_id
-                    )
-                )
                 plan = await PlanBuilder(
                     existing,
                     directory,
                     connectors=ServiceConnectorLookup(**scope, user_id=state.user_id),
                     grants=ServiceGrantConferral(**scope),
                     accounts=ServiceAccountUsability(**scope),
-                    outcome=outcome,
+                    outcome=bundle_outcome.owned_for_plan(state, uow.session),
                 ).build_plan(bundle_root=bundle_root)
 
     await _raise_if_cancelled(store, import_id)

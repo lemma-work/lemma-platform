@@ -51,11 +51,7 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
     NoConnectorLookup,
     plan_connectors,
 )
-from app.modules.pod_bundle.infrastructure import account_checks
-from app.modules.pod_bundle.infrastructure.bundle_outcome import (
-    OwnedOutcome,
-    plan_outcome,
-)
+from app.modules.pod_bundle.infrastructure import account_checks, bundle_outcome
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
@@ -241,11 +237,10 @@ class PlanBuilder:
         connectors: ConnectorLookup | None = None,
         grants: GrantConferral | None = None,
         accounts: account_checks.AccountUsability | None = None,
-        outcome: OwnedOutcome | None = None,
+        outcome: bundle_outcome.OwnedOutcome | None = None,
     ):
         self._existing = existing
-        #: What the target pod owns now, for ``pod.json -> outcome``. ``None``
-        #: when this import does not set one: a template's start sets it.
+        #: What the target pod owns now; ``None`` when this import sets none.
         self._outcome = outcome
         #: Whether the importer could use an account a schedule names.
         self._accounts = accounts or account_checks.AnyAccountUsable()
@@ -440,12 +435,7 @@ class PlanBuilder:
             check=self._accounts,
         )
 
-        outcome = None
-        if self._outcome is not None:
-            outcome, notes = await plan_outcome(
-                pod_manifest.get("outcome"), self._outcome
-            )
-            warnings += notes
+        outcome, notes = await bundle_outcome.plan_outcome(pod_manifest, self._outcome)
 
         return ImportPlan(
             format_version=format_version,
@@ -453,7 +443,7 @@ class PlanBuilder:
             description=pod_manifest.get("description"),
             steps=steps,
             variables=variables,
-            warnings=warnings,
+            warnings=warnings + notes,
             connectors=connectors,
             outcome=outcome,
         )
