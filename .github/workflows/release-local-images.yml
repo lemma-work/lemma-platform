@@ -649,7 +649,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
     steps:
@@ -836,7 +836,7 @@ jobs:
       # Before the archive is uploaded, on the pack that is actually shipped.
       #
       # `check_host_pack.py` existed and ran only in `host-pack-macos`, which is
-      # a merge-to-main lane on `macos-14`. So the pack users download was never
+      # a merge-to-main lane on `macos-15`. So the pack users download was never
       # checked at all, and the Windows one was checked by nothing on any
       # trigger. That is the wrong way round: the merge lane is the rehearsal,
       # this is the performance.
@@ -1263,7 +1263,7 @@ jobs:
     timeout-minutes: 90
     name: Publish signed nightly macOS DMG
     if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
-    runs-on: macos-14
+    runs-on: macos-15
     needs: manifest
     steps:
       - name: Checkout code
