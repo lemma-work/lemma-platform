@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from rich.console import Console
 from typer.testing import CliRunner
 
 from lemma_cli.cli_core.app import app
@@ -98,32 +97,26 @@ def _generated_answering(status: int, body: object) -> SimpleNamespace:
 
 
 @pytest.fixture
-def fake(monkeypatch):
+def fake(patch_run):
     fake_pods = FakePods()
     client = SimpleNamespace(
         pods=fake_pods, generated=_generated_answering(200, [SUPPORT_CARD])
     )
-
-    def fake_run_with_client(ctx, fn):
-        state = SimpleNamespace(
-            config={"defaults": {"org_id": ORG_UUID, "pod_id": POD_UUID}},
-            output="pretty",
-            server="local",
-        )
-        return fn(client, state)
-
-    monkeypatch.setattr(pods, "run_with_client", fake_run_with_client)
+    state = SimpleNamespace(
+        config={"defaults": {"org_id": ORG_UUID, "pod_id": POD_UUID}},
+        output="pretty",
+        server="local",
+    )
+    patch_run(pods, client=client, state=state)
     return client
 
 
 # -- templates ---------------------------------------------------------------------
 
 
-def test_templates_lists_each_card_with_what_it_owns(fake, monkeypatch):
+def test_templates_lists_each_card_with_what_it_owns(fake):
     # Wide enough that no cell folds, so the row reads as one line.
-    monkeypatch.setattr(pods, "console", Console(width=200))
-
-    result = runner.invoke(app, ["pods", "templates"])
+    result = runner.invoke(app, ["pods", "templates"], env={"COLUMNS": "200"})
 
     assert result.exit_code == 0, result.output
     assert "support" in result.stdout
@@ -140,26 +133,18 @@ def test_templates_json_is_the_cards(fake):
     assert cards[0]["outcome"]["target"] == 90
 
 
-def test_templates_refusal_is_reported_not_parsed(monkeypatch):
+def test_templates_refusal_is_reported_not_parsed(patch_run):
     client = SimpleNamespace(
         generated=_generated_answering(403, {"detail": "Not allowed"})
     )
-    seen: list[BaseException] = []
-
-    def fake_run_with_client(ctx, fn):
-        try:
-            return fn(client, SimpleNamespace(config={}, output="pretty"))
-        except Exception as exc:  # noqa: BLE001 — what run_with_client would see
-            seen.append(exc)
-            raise SystemExit(1) from exc
-
-    monkeypatch.setattr(pods, "run_with_client", fake_run_with_client)
+    patch_run(pods, client=client, state=SimpleNamespace(config={}, output="pretty"))
 
     result = runner.invoke(app, ["pods", "templates"])
 
-    assert result.exit_code == 1
-    assert getattr(seen[0], "status_code", None) == 403
-    assert "Not allowed" in str(seen[0])
+    # The refusal reaches run_with_client as the API's own error, not a parse.
+    assert result.exit_code != 0
+    assert getattr(result.exception, "status_code", None) == 403
+    assert "Not allowed" in str(result.exception)
 
 
 # -- start ---------------------------------------------------------------------------
