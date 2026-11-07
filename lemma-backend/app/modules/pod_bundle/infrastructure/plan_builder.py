@@ -52,6 +52,10 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
     plan_connectors,
 )
 from app.modules.pod_bundle.infrastructure import account_checks
+from app.modules.pod_bundle.infrastructure.bundle_outcome import (
+    OwnedOutcome,
+    plan_outcome,
+)
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
@@ -237,8 +241,12 @@ class PlanBuilder:
         connectors: ConnectorLookup | None = None,
         grants: GrantConferral | None = None,
         accounts: account_checks.AccountUsability | None = None,
+        outcome: OwnedOutcome | None = None,
     ):
         self._existing = existing
+        #: What the target pod owns now, for ``pod.json -> outcome``. ``None``
+        #: when this import does not set one: a template's start sets it.
+        self._outcome = outcome
         #: Whether the importer could use an account a schedule names.
         self._accounts = accounts or account_checks.AnyAccountUsable()
         #: Grants on connectors the pod does not declare (``connector_grants``).
@@ -432,6 +440,13 @@ class PlanBuilder:
             check=self._accounts,
         )
 
+        outcome = None
+        if self._outcome is not None:
+            outcome, notes = await plan_outcome(
+                pod_manifest.get("outcome"), self._outcome
+            )
+            warnings += notes
+
         return ImportPlan(
             format_version=format_version,
             bundle_name=bundle_name,
@@ -440,6 +455,7 @@ class PlanBuilder:
             variables=variables,
             warnings=warnings,
             connectors=connectors,
+            outcome=outcome,
         )
 
     def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:

@@ -12,6 +12,9 @@ what it owns and somebody sets the measure once the rows it counts are there.
 A pod that already owns something keeps it: an import adds to a pod, it does
 not change what that pod is for. A template import never comes here: a
 template's outcome is set by the start that asks for its due date.
+
+The import plan shows the same decision before anyone approves it
+(:func:`plan_outcome`); :func:`outcome_action` is the one rule both follow.
 """
 
 from __future__ import annotations
@@ -24,12 +27,18 @@ from uuid import UUID
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_pod_bundle.layout import POD_MANIFEST_FILE
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.concurrency.offload import run_blocking
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.pod.contracts.outcome import OutcomeInput, PodOutcome
-from app.modules.pod_bundle.domain.state import BundleSourceKind, ImportState
+from app.modules.pod_bundle.domain.state import (
+    BundleSourceKind,
+    ImportState,
+    OutcomePlanAction,
+    PlannedOutcome,
+)
 
 
 def read_bundle_outcome(bundle_root: Path) -> dict[str, object] | None:
@@ -45,10 +54,14 @@ def read_bundle_outcome(bundle_root: Path) -> dict[str, object] | None:
     return block if isinstance(block, dict) else None
 
 
-class OutcomeTarget(Protocol):
-    """The pod an import sets what it owns on, as the person importing."""
+class OwnedOutcome(Protocol):
+    """What the pod an import lands in owns now."""
 
     async def owned(self) -> PodOutcome | None: ...
+
+
+class OutcomeTarget(OwnedOutcome, Protocol):
+    """The pod an import sets what it owns on, as the person importing."""
 
     async def set(self, outcome: OutcomeInput) -> None:
         """Set ``outcome``, its measure read first; a refusal is a DomainError."""
@@ -62,6 +75,47 @@ def _same_promise(owned: PodOutcome, wanted: OutcomeInput) -> bool:
     return all(getattr(owned, key) == getattr(wanted, key) for key in fields)
 
 
+def outcome_action(owned: PodOutcome | None, wanted: OutcomeInput) -> OutcomePlanAction:
+    """What an import does with ``wanted`` on a pod owning ``owned``: the one
+    rule the plan shows and the apply follows."""
+    if owned is None:
+        return OutcomePlanAction.SET
+    if _same_promise(owned, wanted):
+        return OutcomePlanAction.SAME
+    return OutcomePlanAction.KEEP
+
+
+def _invalid(exc: ValidationError) -> str:
+    """Where the block is wrong and why, as ``where: why``."""
+    first = exc.errors()[0]
+    where = ".".join(str(part) for part in first["loc"]) or "outcome"
+    return f"{where}: {first['msg']}"
+
+
+async def plan_outcome(
+    block: object, pod: OwnedOutcome
+) -> tuple[PlannedOutcome | None, list[str]]:
+    """What the import plan says about ``pod.json -> outcome`` (``block``, as
+    written): the outcome and what the apply will do with it, or ``None`` and
+    why, as plan warnings, when there is none to set."""
+    if block is None:
+        return None, []
+    try:
+        wanted = OutcomeInput.model_validate(block)
+    except ValidationError as exc:
+        return None, [f"What this bundle's pod owns will not be set: {_invalid(exc)}."]
+    planned = PlannedOutcome(
+        sentence=wanted.sentence,
+        kind=wanted.kind.value,
+        target=wanted.target,
+        unit=wanted.unit,
+        due=wanted.due,
+        has_measure=wanted.measure is not None,
+        action=outcome_action(await pod.owned(), wanted),
+    )
+    return planned, []
+
+
 async def carry_outcome(
     block: Mapping[str, object], target: OutcomeTarget
 ) -> list[str]:
@@ -70,13 +124,12 @@ async def carry_outcome(
     try:
         wanted = OutcomeInput.model_validate(block)
     except ValidationError as exc:
-        first = exc.errors()[0]
-        where = ".".join(str(part) for part in first["loc"]) or "outcome"
-        return [f"What this bundle's pod owns was not set: {where}: {first['msg']}."]
+        return [f"What this bundle's pod owns was not set: {_invalid(exc)}."]
     owned = await target.owned()
-    if owned is not None:
-        if _same_promise(owned, wanted):
-            return []
+    action = outcome_action(owned, wanted)
+    if action is OutcomePlanAction.SAME:
+        return []
+    if owned is not None:  # KEEP
         kept = (
             f"Kept what this pod already owns ('{owned.sentence}'); the "
             f"bundle's ('{wanted.sentence}') was not set."
@@ -98,6 +151,20 @@ async def carry_outcome(
         f"could not be read ({refusal}). Set the measure again once it reads."
     )
     return [unmeasured]
+
+
+class SessionOwnedOutcome:
+    """Production :class:`OwnedOutcome` for the plan, read in the planning
+    unit of work it is given."""
+
+    def __init__(self, *, session: AsyncSession, pod_id: UUID) -> None:
+        self._session = session
+        self._pod_id = pod_id
+
+    async def owned(self) -> PodOutcome | None:
+        from app.modules.pod.contracts.outcome import read_pod_outcome
+
+        return await read_pod_outcome(self._session, self._pod_id)
 
 
 class PodOutcomeTarget:
@@ -142,11 +209,16 @@ class PodOutcomeTarget:
 
 
 async def carry(
-    uow_factory: SessionUnitOfWorkFactory, state: ImportState, bundle_root: Path
+    uow_factory: SessionUnitOfWorkFactory,
+    state: ImportState,
+    bundle_root: Path,
+    *,
+    target: OutcomeTarget | None = None,
 ) -> None:
     """Set what the bundle's pod owned on the pod ``state`` imports into, once
     its steps have landed; what was kept instead, or set without its measure,
-    joins the import's warnings."""
+    joins the import's warnings. ``target`` is the pod as the importer reaches
+    it, built from ``state`` when not given."""
     # A template's outcome is its start's to set (`start_use_cases`), with the
     # date a finish line is due, which only the start asks for.
     if state.source.kind is BundleSourceKind.TEMPLATE:
@@ -154,7 +226,7 @@ async def carry(
     block = await run_blocking(read_bundle_outcome, bundle_root, limiter="cpu_bound")
     if block is None:
         return
-    target = PodOutcomeTarget(
+    target = target or PodOutcomeTarget(
         uow_factory=uow_factory, pod_id=state.pod_id, user_id=state.user_id
     )
     for note in await carry_outcome(block, target):
@@ -164,8 +236,12 @@ async def carry(
 
 __all__ = [
     "OutcomeTarget",
+    "OwnedOutcome",
     "PodOutcomeTarget",
+    "SessionOwnedOutcome",
     "carry",
     "carry_outcome",
+    "outcome_action",
+    "plan_outcome",
     "read_bundle_outcome",
 ]

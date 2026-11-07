@@ -227,3 +227,37 @@ def test_a_refused_publish_carries_its_connect_link():
     assert response["connect_url"].endswith("connector=github")
     # Deprecated, always null; older generated clients read it as required.
     assert response["account_id"] is None
+
+
+def test_the_import_plan_shows_what_the_import_will_own():
+    from datetime import date
+
+    from app.modules.pod_bundle.api.schemas import ImportPlanResponse
+    from app.modules.pod_bundle.domain.state import (
+        ImportPlan,
+        OutcomePlanAction,
+        PlannedOutcome,
+    )
+
+    planned = PlannedOutcome(
+        sentence="The launch ships.",
+        kind="date",
+        due=date(2026, 12, 1),
+        action=OutcomePlanAction.SET,
+    )
+
+    owning = ImportPlanResponse.from_domain(
+        ImportPlan(format_version=3, outcome=planned)
+    ).model_dump(mode="json")
+
+    assert owning["outcome"] == {
+        "sentence": "The launch ships.",
+        "kind": "date",
+        "target": None,
+        "unit": None,
+        "due": "2026-12-01",
+        "has_measure": False,
+        "action": "SET",
+    }
+    plain = ImportPlanResponse.from_domain(ImportPlan(format_version=3))
+    assert plain.outcome is None

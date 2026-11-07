@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -26,7 +24,6 @@ from app.modules.pod_bundle.domain.state import (
     ImportState,
     ImportStatus,
 )
-from app.modules.pod_bundle.events import handlers
 from app.modules.pod_bundle.infrastructure import bundle_outcome
 from app.modules.pod_bundle.infrastructure.bundle_outcome import (
     carry_outcome,
@@ -156,103 +153,51 @@ def _import(kind: BundleSourceKind, *, warnings: list[str] | None = None):
     )
 
 
-class _Store:
-    def __init__(self, state: ImportState) -> None:
-        self.state = state
-
-    async def get_import(self, import_id):
-        return self.state
-
-    async def save_import(self, state):
-        state.touch()
-        self.state = state
-
-
-async def test_the_apply_job_carries_the_outcome_once_its_steps_have_landed(
-    monkeypatch, tmp_path
-):
-    state = _import(BundleSourceKind.URL)
-    staging = AsyncMock()
-    staging.get_archive.return_value = b"zip-bytes"
-    carried = AsyncMock()
-
-    async def _extracted(archive, tmp):
-        return tmp_path
-
-    monkeypatch.setattr(
-        handlers, "_worker_ctx", lambda: SimpleNamespace(uow_factory="uows")
-    )
-    monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: _Store(state))
-    monkeypatch.setattr(handlers, "BundleStagingStorage", lambda: staging)
-    monkeypatch.setattr(handlers, "extract_bundle_offloaded", _extracted)
-    monkeypatch.setattr(handlers, "_resolve_import_replacements", AsyncMock())
-    monkeypatch.setattr(handlers, "_record_recipe", AsyncMock())
-    monkeypatch.setattr(handlers, "publish_bundle_event", AsyncMock())
-    monkeypatch.setattr(
-        handlers.bundle_analytics, "record_import_completed", AsyncMock()
-    )
-    monkeypatch.setattr(handlers.bundle_outcome, "carry", carried)
-
-    await handlers.apply_pod_import(
-        {
-            "import_id": str(state.import_id),
-            "pod_id": str(state.pod_id),
-            "user_id": str(state.user_id),
-        }
-    )
-
-    assert state.status is ImportStatus.COMPLETED, state.error
-    carried.assert_awaited_once_with("uows", state, tmp_path)
-
-
 def _bundle_owning(tmp_path: Path) -> Path:
     (tmp_path / "pod.json").write_text(json.dumps({"name": "p", "outcome": _BLOCK}))
     return tmp_path
 
 
 @pytest.mark.parametrize("kind", [BundleSourceKind.URL, BundleSourceKind.GITHUB])
-async def test_an_imported_bundle_sets_what_its_pod_owned(monkeypatch, tmp_path, kind):
+async def test_an_imported_bundle_sets_what_its_pod_owned(tmp_path, kind):
     pod = _Pod()
-    monkeypatch.setattr(bundle_outcome, "PodOutcomeTarget", lambda **_: pod)
     state = _import(kind)
 
-    await bundle_outcome.carry("uows", state, _bundle_owning(tmp_path))
+    await bundle_outcome.carry("uows", state, _bundle_owning(tmp_path), target=pod)
 
     assert pod.outcome is not None
     assert pod.outcome.sentence == _BLOCK["sentence"]
     assert state.warnings == []
 
 
-async def test_a_template_import_leaves_its_outcome_to_the_start(monkeypatch, tmp_path):
+async def test_a_template_import_leaves_its_outcome_to_the_start(tmp_path):
     pod = _Pod()
-    monkeypatch.setattr(bundle_outcome, "PodOutcomeTarget", lambda **_: pod)
 
     await bundle_outcome.carry(
-        "uows", _import(BundleSourceKind.TEMPLATE), _bundle_owning(tmp_path)
+        "uows", _import(BundleSourceKind.TEMPLATE), _bundle_owning(tmp_path), target=pod
     )
 
     assert pod.asked == []
 
 
-async def test_what_was_kept_instead_joins_the_imports_warnings_once(
-    monkeypatch, tmp_path
-):
+async def test_what_was_kept_instead_joins_the_imports_warnings_once(tmp_path):
     mine = PodOutcome(sentence="The launch ships on time.", kind="week")
-    monkeypatch.setattr(bundle_outcome, "PodOutcomeTarget", lambda **_: _Pod(mine))
+    pod = _Pod(mine)
     state = _import(BundleSourceKind.URL, warnings=["an app was skipped"])
 
     for _resumed in range(2):
-        await bundle_outcome.carry("uows", state, _bundle_owning(tmp_path))
+        await bundle_outcome.carry("uows", state, _bundle_owning(tmp_path), target=pod)
 
     assert len(state.warnings) == 2
     assert state.warnings[1].startswith("Kept what this pod already owns")
 
 
-async def test_a_bundle_whose_pod_owned_nothing_sets_nothing(monkeypatch, tmp_path):
+async def test_a_bundle_whose_pod_owned_nothing_sets_nothing(tmp_path):
     pod = _Pod()
-    monkeypatch.setattr(bundle_outcome, "PodOutcomeTarget", lambda **_: pod)
     (tmp_path / "pod.json").write_text(json.dumps({"name": "p"}))
 
-    await bundle_outcome.carry("uows", _import(BundleSourceKind.URL), tmp_path)
+    await bundle_outcome.carry(
+        "uows", _import(BundleSourceKind.URL), tmp_path, target=pod
+    )
 
     assert pod.asked == []

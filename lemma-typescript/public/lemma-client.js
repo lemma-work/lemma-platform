@@ -16262,6 +16262,78 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/QueryService.ts
+  var QueryService = class {
+    /**
+     * Execute Query
+     * Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.
+     * @param podId
+     * @param requestBody
+     * @param mode Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user — the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.
+     * @returns DatastoreQueryResponse Successful Response
+     * @throws ApiError
+     */
+    static queryExecute(podId, requestBody, mode) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/datastore/query",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "mode": mode
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Where the pod has stood, week by week
+     * The last `weeks` weeks of the pod's measure, each on its last reading. The measure is read on a schedule and when it is set; a week it was never read in has a null value.
+     * @param podId
+     * @param weeks
+     * @returns OutcomeHistoryResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeHistory(podId, weeks = 8) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/outcome/history",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "weeks": weeks
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Where the pod stands
+     * What the pod owns and what its measure answers now. The measure is read over every row of the tables it names, so every member sees the same number, including members who cannot open some of those rows; only someone who can read all of them may set it. A measure that cannot be read comes back as a `problem` rather than an error.
+     * @param podId
+     * @returns OutcomeStandingResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeStanding(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/outcome/standing",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
   // src/namespaces/pods.ts
   var PodsNamespace = class {
     constructor(client, http) {
@@ -16304,6 +16376,31 @@ var LemmaClient = (() => {
      */
     join(podId) {
       return this.client.request(() => PodsService.podJoin(podId));
+    }
+    /**
+     * What the pod owns and where its measure stands now. `outcome` is null when
+     * it owns nothing; a measure that cannot be read comes back as `problem`.
+     */
+    outcomeStanding(podId) {
+      return this.client.request(() => QueryService.outcomeStanding(podId));
+    }
+    /** The measure's weekly readings, the most recent `weeks` of them (default 8). */
+    outcomeHistory(podId, options = {}) {
+      return this.client.request(() => {
+        var _a;
+        return QueryService.outcomeHistory(podId, (_a = options.weeks) != null ? _a : 8);
+      });
+    }
+    /**
+     * Set what the pod owns, replacing what it had. A new or changed measure is
+     * read once first, and refused when the caller cannot read every row it counts.
+     */
+    setOutcome(podId, input) {
+      return this.client.request(() => PodsService.outcomeSet(podId, input));
+    }
+    /** Let go of what the pod owns. */
+    clearOutcome(podId) {
+      return this.client.request(() => PodsService.outcomeClear(podId));
     }
   };
 
@@ -21774,78 +21871,6 @@ var LemmaClient = (() => {
         if (part.size < step) break;
       }
       return new Blob(parts);
-    }
-  };
-
-  // src/openapi_client/services/QueryService.ts
-  var QueryService = class {
-    /**
-     * Execute Query
-     * Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.
-     * @param podId
-     * @param requestBody
-     * @param mode Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user — the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.
-     * @returns DatastoreQueryResponse Successful Response
-     * @throws ApiError
-     */
-    static queryExecute(podId, requestBody, mode) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/datastore/query",
-        path: {
-          "pod_id": podId
-        },
-        query: {
-          "mode": mode
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Where the pod has stood, week by week
-     * The last `weeks` weeks of the pod's measure, each on its last reading. The measure is read on a schedule and when it is set; a week it was never read in has a null value.
-     * @param podId
-     * @param weeks
-     * @returns OutcomeHistoryResponse Successful Response
-     * @throws ApiError
-     */
-    static outcomeHistory(podId, weeks = 8) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/outcome/history",
-        path: {
-          "pod_id": podId
-        },
-        query: {
-          "weeks": weeks
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Where the pod stands
-     * What the pod owns and what its measure answers now. The measure is read over every row of the tables it names, so every member sees the same number, including members who cannot open some of those rows; only someone who can read all of them may set it. A measure that cannot be read comes back as a `problem` rather than an error.
-     * @param podId
-     * @returns OutcomeStandingResponse Successful Response
-     * @throws ApiError
-     */
-    static outcomeStanding(podId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/outcome/standing",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
     }
   };
 

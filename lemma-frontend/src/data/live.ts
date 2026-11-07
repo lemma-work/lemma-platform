@@ -11,7 +11,7 @@ import { readOpening } from "./public-rows";
 import { readOwned, type OwnedInput } from "./owned";
 import { isMissing } from "@/session/auth-state";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
-import { PodAccountVisibility } from "lemma-sdk";
+import { OutcomeKind, PodAccountVisibility } from "lemma-sdk";
 import type { AgentPermissionsReplaceRequest, PodAccountCreateRequest, PodAccountUpdateRequest, PodConnectorCreateRequest, PodConnectorUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
@@ -633,11 +633,11 @@ export const liveSource: PodSource = {
         const answer = await lemma(podId).datastore.query(sql);
         return { items: (answer.items ?? []) as Record<string, unknown>[], truncated: answer.truncated === true };
     },
-    /* No SDK method for either yet; the generated client has only the raw
-       services. A 404 is an API from before a pod kept what it owns. */
+    /* Read through `readOwned` all the same: it is the one place that says what
+       a usable answer is. A 404 is an API from before a pod kept what it owns. */
     async getOwned(podId: string) {
         try {
-            return readOwned(await lemma().request("GET", `/pods/${encodeURIComponent(podId)}/outcome/standing`));
+            return readOwned(await lemma().pods.outcomeStanding(podId));
         } catch (error) {
             if (isMissing(error)) return null;
             throw error;
@@ -645,9 +645,8 @@ export const liveSource: PodSource = {
     },
     async setOwned(podId: string, input: OwnedInput) {
         try {
-            const kept = await lemma().request<{ outcome?: Record<string, unknown> | null; value?: unknown }>(
-                "PUT", `/pods/${encodeURIComponent(podId)}/outcome`, { body: input },
-            );
+            const kind = input.kind === "date" ? OutcomeKind.DATE : OutcomeKind.WEEK;
+            const kept = await lemma().pods.setOutcome(podId, { ...input, kind });
             return readOwned({ outcome: kept.outcome, value: kept.value, problem: null });
         } catch (error) {
             if (isMissing(error)) return null;
