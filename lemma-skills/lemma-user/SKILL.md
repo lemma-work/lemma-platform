@@ -91,18 +91,19 @@ lemma pods get --output json        # config.outcome: the sentence, target and m
 lemma files cat /plan.md
 ```
 
-The CLI has no command for the number itself. Use the SDK or the API:
+The number, and changing what it owns:
 
-```python
-from lemma_sdk import Lemma, Pod
-pod = Pod.from_env()
-pods = Lemma.from_env().pods
-pods.outcome_standing(pod.pod_id)          # value, measured_at, problem
-pods.outcome_history(pod.pod_id, weeks=8)  # weeks, oldest first: starts_on, value, target
+```bash
+lemma pods owns                          # what it owns, and value, measured_at, problem
+lemma pods owns get --history 8          # plus the last 8 weeks, oldest first
+lemma pods owns set "Every customer hears back within a day" --kind week \
+  --target 90 --unit % --measure-file measure.sql   # replaces all of it
+lemma pods owns clear --yes              # let it go; its weeks are kept
 ```
 
-The API is `GET /pods/{pod_id}/outcome/standing` and
-`GET /pods/{pod_id}/outcome/history?weeks=N`. `value` is null when there is no
+From a script, the SDK: `Lemma.from_env().pods.outcome_standing(pod_id)` and
+`.outcome_history(pod_id, weeks=8)`; the API: `GET /pods/{pod_id}/outcome/standing`
+and `GET /pods/{pod_id}/outcome/history?weeks=N`. `value` is null when there is no
 measure or it could not be read; `problem` says why in plain words. Changing the
 measure starts a new history. A measure that counts a per-person table is read
 only after someone who administers that table has set it.
