@@ -134,6 +134,9 @@ test("a pasted link opens where this app installs it, and only such links", () =
     assert.equal(sharedLinkPath("https://example.com/whatever"), null);
     assert.equal(sharedLinkPath("github.com/acme"), null);
     assert.equal(sharedLinkPath("not a link at all"), null);
+    assert.equal(sharedLinkPath("https://lemma.work/s/a%20b/<x>?q=<y>"), "/s/a%20b/%3Cx%3E?q=%3Cy%3E", "every part is encoded again");
+    assert.equal(sharedLinkPath("https://lemma.work/s/%E0%A4%A"), null, "broken percent-encoding opens nothing");
+    assert.equal(sharedLinkPath("javascript:alert(1)"), null);
 });
 
 test("what a template brings is counted as a person would count it", () => {

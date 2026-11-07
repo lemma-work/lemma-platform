@@ -1118,12 +1118,33 @@ export function sharedLinkPath(text: string): string | null {
     } catch {
         return null;
     }
-    const parts = url.pathname.split("/").filter(Boolean);
+    const parts = url.pathname.split("/").filter(Boolean).map(decodedSegment);
+    if (parts.some((part) => part === null)) return null;
+    const segments = parts as string[];
     if (url.hostname === "github.com" || url.hostname === "www.github.com") {
-        const [owner, repo] = parts;
+        const [owner, repo] = segments;
         return owner && repo ? `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo.replace(/\.git$/, ""))}` : null;
     }
-    return ["s", "d", "remix", "import"].includes(parts[0] ?? "") ? url.pathname + url.search : null;
+    const [head] = segments;
+    if (!head || !SHARED_HEADS.has(head)) return null;
+    /* Rebuilt from its parts, each encoded, rather than passed on as typed: a
+       link is somebody else's text, and what this navigates to is only ever
+       one of this app's own paths. */
+    const path = "/" + segments.map(encodeURIComponent).join("/");
+    const query = [...url.searchParams].map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join("&");
+    return query ? `${path}?${query}` : path;
+}
+
+/** The first words of the paths a shared link of this app's opens at. */
+const SHARED_HEADS: ReadonlySet<string> = new Set(["s", "d", "remix", "import"]);
+
+/** One path segment as written, or null for one that is not valid percent-encoding. */
+function decodedSegment(segment: string): string | null {
+    try {
+        return decodeURIComponent(segment);
+    } catch {
+        return null;
+    }
 }
 
 /** What one step of a template's import adds, said as a person would count
