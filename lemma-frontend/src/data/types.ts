@@ -897,6 +897,10 @@ export interface PodSource {
     setScheduleActive(podId: string, scheduleId: string, active: boolean): Promise<StandingJob>;
     /** Run a failed firing again, with the event it originally carried. */
     retryScheduleRun(podId: string, scheduleId: string, runId: string): Promise<ScheduleRun>;
+    /** Start one run of a time schedule now, outside its timing, as the
+     *  person asking. Held to the schedule's daily ceiling and how many runs
+     *  it may have at once, like any firing. */
+    runScheduleNow(podId: string, scheduleId: string): Promise<ScheduleRun>;
     createSchedule(podId: string, draft: ScheduleDraft): Promise<StandingJob>;
     /** What a new schedule could wake: this pod's agents and its workflows. */
     scheduleTargets(podId: string): Promise<TargetChoice[]>;

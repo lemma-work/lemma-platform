@@ -4,6 +4,7 @@
   "description": "Gets the launch out on its date, and chases every step on the way.",
   "lemma": {
     "position": 5,
+    "function": "engineering",
     "face": "spark",
     "place": "Linear",
     "brings": [

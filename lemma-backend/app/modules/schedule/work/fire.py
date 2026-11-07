@@ -36,7 +36,10 @@ async def run_time_fire(ctx: FastContext, payload: TimeFire) -> None:
     from app.modules.schedule.repositories.time_arming import arm_time_fire
     from app.modules.schedule.services.paused_notice import stage_paused_notice
     from app.modules.schedule.services.trigger_fire import TriggerEvent, fire_trigger
-    from app.modules.schedule.work.kinds import time_source_event_id
+    from app.modules.schedule.work.kinds import (
+        time_event_payload,
+        time_source_event_id,
+    )
     from app.core.observability.product_metrics import record_schedule_fire_lag
 
     session = ctx.uow.session
@@ -88,7 +91,7 @@ async def run_time_fire(ctx: FastContext, payload: TimeFire) -> None:
         schedule,
         TriggerEvent(
             source_event_id=time_source_event_id(row.id, payload.fire_at),
-            payload=dict((schedule.config or {}).get("payload") or {}),
+            payload=time_event_payload(schedule.config),
             source_occurred_at=payload.fire_at.astimezone(timezone.utc),
         ),
         work=ctx.work,

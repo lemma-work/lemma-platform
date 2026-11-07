@@ -1,15 +1,22 @@
 "use client";
 
-/** What the outcome frame reads, all of it through the existing data source:
- *  no endpoint here is new. The plan is a pod file and its number is a
- *  read-only query, so a plan works on any deployment that can store a file. */
+/** What the outcome frame reads. Most of it goes through the existing data
+ *  source; what a Lemma owns, its number, the templates a new one starts from
+ *  and what waits on you across the organization come from the server's own
+ *  reads of them, on a live session only. The plan's lines are a pod file. */
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { OutcomeKind, type ImportStatusResponse, type NeedsYouItemResponse, type OutcomeStandingResponse, type OutcomeTemplateCard, type StartLemmaRequest } from "lemma-sdk";
 import { source, NEW_CONVERSATION, type ConversationRef, type Pod, type PodDetail } from "@/data";
+import { characterUrl, CHARACTERS, type CharacterName } from "@/shell/character";
 import { isMissing } from "@/session/auth-state";
+import { lemma } from "@/session/client";
 import { configuredApiUrl } from "@/session/origins";
-import { PLAN_PATH, parsePlan, readMeasure, serializePlan, type Plan } from "./model";
+import { CONVERSATION_ASKS, ASKS_REFETCH_MS } from "@/thread/waiting-on-you";
+import { PLAN_PATH, parsePlan, readMeasure, serializePlan, type NeedsItem, type Owned, type Plan, type ShelfCard } from "./model";
+
+const live = () => source.label === "live";
 
 /** Each outcome's recent conversations, every agent's, as the viewer can see
  *  them: the first page, newest first, which is what "lately" means here.
@@ -106,16 +113,189 @@ export function usePlans(pods: readonly Pod[]): Map<string, Plan | null | undefi
     });
 }
 
-/** The number a plan's measure answers, when it has one. */
+/** The number a plan's measure answers, when it has one: the server's
+ *  reading when the Lemma keeps what it owns, else -- for a Lemma from
+ *  before it did, whose plan file carries the measure -- the query run here. */
 export function useMeasure(podId: string, plan: Plan | null | undefined) {
-    const sql = plan?.measure ?? null;
-    return useQuery({
+    const sql = plan?.owned ? null : plan?.measure ?? null;
+    const asked = useQuery({
         queryKey: ["outcome-measure", podId, sql],
         queryFn: async () => readMeasure((await source.runQuery(podId, sql as string)).items),
         enabled: Boolean(sql),
         staleTime: 5 * 60_000,
         retry: false,
     });
+    if (plan?.owned) return { data: plan.owned.value, isError: Boolean(plan.owned.problem) };
+    return { data: asked.data, isError: asked.isError };
+}
+
+/** What a standing read says, in the frame's names; null when the Lemma owns
+ *  nothing on the server. */
+export function ownedOf(standing: OutcomeStandingResponse | undefined): Owned | null {
+    const outcome = standing?.outcome;
+    if (!outcome) return null;
+    return {
+        sentence: outcome.sentence,
+        kind: outcome.kind === "date" ? "date" : "week",
+        target: outcome.target ?? null,
+        unit: outcome.unit ?? null,
+        due: outcome.due ?? null,
+        measure: outcome.measure ?? null,
+        value: standing?.value ?? null,
+        problem: standing?.problem ?? null,
+    };
+}
+
+export const standingKey = (podId: string) => ["outcome-standing", podId];
+
+/** What each Lemma owns and where it stands, as the server keeps it: one
+ *  number, the same for every member. */
+export function useOwned(pods: readonly Pod[]): Map<string, Owned | null | undefined> {
+    return useQueries({
+        queries: pods.map((pod) => ({
+            queryKey: standingKey(pod.id),
+            queryFn: async () => ownedOf(await lemma(pod.id).pods.outcome.standing(pod.id)),
+            enabled: live(),
+            staleTime: 60_000,
+            retry: false,
+        })),
+        combine: useByPod<Owned | null>(pods),
+    });
+}
+
+/** The Lemma's last weeks against what it owns, oldest first. */
+export function useWeeks(podId: string, enabled: boolean) {
+    return useQuery({
+        queryKey: ["outcome-weeks", podId],
+        queryFn: async () => (await lemma(podId).pods.outcome.history(podId, 8)).weeks,
+        enabled: enabled && live(),
+        staleTime: 5 * 60_000,
+        retry: false,
+    });
+}
+
+/** A bar every week or a finish line by a date, as the server names it. */
+export function kindOf(kind: "week" | "date"): OutcomeKind {
+    return kind === "date" ? OutcomeKind.DATE : OutcomeKind.WEEK;
+}
+
+/** Set what a Lemma owns on the server. */
+export async function saveOwned(podId: string, owned: Pick<Owned, "sentence" | "kind" | "target" | "unit" | "due" | "measure">): Promise<void> {
+    await lemma(podId).pods.outcome.set(podId, {
+        sentence: owned.sentence,
+        kind: kindOf(owned.kind),
+        target: owned.target,
+        unit: owned.unit,
+        due: owned.kind === "date" ? owned.due : null,
+        measure: owned.measure,
+    });
+}
+
+/* ── starting a Lemma ─────────────────────────────────────────────────── */
+
+function shelfCardOf(card: OutcomeTemplateCard): ShelfCard {
+    return {
+        id: card.id,
+        name: card.name,
+        sentence: card.sentence,
+        kind: card.kind === "date" ? "date" : "week",
+        work: card.function ?? null,
+        face: card.face ?? null,
+        place: card.place ?? null,
+        brings: card.brings ?? [],
+        never: card.plan?.never ?? [],
+    };
+}
+
+/** The templates a new Lemma can start from, as the server ships them. */
+export function useShelf() {
+    return useQuery({
+        queryKey: ["lemma-templates"],
+        queryFn: async () => (await lemma().pods.templates()).map(shelfCardOf),
+        enabled: live(),
+        staleTime: 30 * 60_000,
+    });
+}
+
+const SETUP_KEY = (podId: string) => `lemma:setup:${podId}`;
+
+/** Start a Lemma, then wear the template's face. Answers where to land: its
+ *  setup chat. The import that brings a template's tables and automations is
+ *  remembered for the tab, so the chat can say how far it has got. */
+export async function startLemma(request: StartLemmaRequest, face: string | null): Promise<{ podId: string; conversationId: string }> {
+    const started = await lemma().pods.start(request);
+    const podId = started.pod.id;
+    const known = CHARACTERS.find((name) => name === face) as CharacterName | undefined;
+    if (known) await lemma(podId).pods.update(podId, { icon_url: characterUrl(known) }).catch(() => undefined);
+    if (started.import_id) {
+        try { sessionStorage.setItem(SETUP_KEY(podId), started.import_id); } catch { /* the chat still opens; it just says nothing of the import */ }
+    }
+    return { podId, conversationId: started.conversation_id };
+}
+
+const SETTLED = new Set(["COMPLETED", "FAILED", "CANCELLED", "PARTIALLY_CANCELLED"]);
+
+/** How far a just-started Lemma's template has got, while it is coming in:
+ *  null once it is in, or when this tab did not start it. */
+export function useSetup(podId: string): ImportStatusResponse | null {
+    const [importId, setImportId] = useState<string | null>(null);
+    useEffect(() => {
+        try { setImportId(sessionStorage.getItem(SETUP_KEY(podId))); } catch { setImportId(null); }
+    }, [podId]);
+    const status = useQuery({
+        queryKey: ["lemma-setup", podId, importId],
+        queryFn: () => lemma(podId).request<ImportStatusResponse>("GET", `/pods/${encodeURIComponent(podId)}/bundle/imports/${encodeURIComponent(importId as string)}`),
+        enabled: Boolean(importId) && live(),
+        /* Stops once the import settles, and on a read that failed: a gone
+           import answers the same every time, and the strip hides on it. */
+        refetchInterval: (query) => (query.state.status === "error" || (query.state.data && SETTLED.has(query.state.data.status)) ? false : 1500),
+        retry: false,
+    });
+    const settled = status.data && SETTLED.has(status.data.status);
+    useEffect(() => {
+        if (settled && status.data?.status === "COMPLETED") {
+            try { sessionStorage.removeItem(SETUP_KEY(podId)); } catch { /* nothing kept to forget */ }
+        }
+    }, [settled, status.data?.status, podId]);
+    if (!importId || status.isError) return null;
+    return status.data ?? null;
+}
+
+/* ── what waits on you, across the organization ───────────────────────── */
+
+function needsItemOf(item: NeedsYouItemResponse): NeedsItem {
+    return {
+        key: item.key,
+        kind: item.kind as NeedsItem["kind"],
+        podId: item.pod_id,
+        podName: item.pod_name,
+        title: item.title ?? null,
+        detail: item.detail ?? null,
+        since: item.since,
+        conversationId: item.conversation_id ?? null,
+        workflowRunId: item.workflow_run_id ?? null,
+        channelId: item.channel_id ?? null,
+        messageId: item.message_id ?? null,
+        choices: item.choices ?? [],
+    };
+}
+
+/** Everything waiting on you in one organization, in one read. Kept under the
+ *  asks' key, so whatever re-reads the asks -- an answer given in a chat, a
+ *  conversation that starts waiting -- re-reads this too. */
+export function useNeedsYou(orgId: string | null) {
+    return useQuery({
+        queryKey: [CONVERSATION_ASKS, "organization", orgId],
+        queryFn: async () => (await lemma().organizations.needsYou(orgId as string)).items.map(needsItemOf),
+        enabled: Boolean(orgId) && live(),
+        staleTime: ASKS_REFETCH_MS,
+        refetchInterval: ASKS_REFETCH_MS,
+    });
+}
+
+/** Answer a question a Lemma asked in your chat with it. */
+export async function answerLine(podId: string, line: { channelId: string; messageId: string }, answer: { choice: string } | { text: string }): Promise<void> {
+    await lemma(podId).channels.answer(podId, line.channelId, line.messageId, answer);
 }
 
 /** The address Claude, ChatGPT or any MCP client connects to for one pod. */
@@ -130,14 +310,12 @@ export async function askIn(podId: string, text: string): Promise<string | null>
     return conversation.id;
 }
 
-/** What "Ask Lemma to write the plan" sends: the format and the rules, so
- *  the agent's file reads back here line for line. */
+/** What "Ask Lemma to write the plan" sends: set what it owns where the
+ *  server keeps it, then the plan's lines in the file this frame reads. */
 export function planRequest(outcome: string): string {
     return [
-        `Write the plan for what you own to ${PLAN_PATH}${outcome ? `: "${outcome}"` : ""}.`,
-        "Use front matter with outcome (the one sentence you own: a bar held every week, or a finish line by a date), kind (week or date), target (like 90%), due (YYYY-MM-DD, only for a date), unit (% for a share) and measure: one read-only SQL query over this pod's tables that returns a single number.",
-        "Quote target, unit and due in double quotes, as in unit: \"%\" and due: \"2026-11-30\": unquoted, a % does not parse and a date may be read as something other than the text you wrote.",
-        "Then four sections: ## What must be true, ## How we work, ## Who holds what, ## Never. One line per bullet, each ending with \" — Lemma, <Mon D>\".",
+        `Set what you own with set_what_you_own${outcome ? `: "${outcome}"` : ""} -- one sentence, a bar held every week or a finish line by a date, its target, and a measure: one read-only SQL query over this pod's tables that returns a single number. Build the tables it counts first.`,
+        `Then write the plan to ${PLAN_PATH} in four sections: ## What must be true, ## How we work, ## Who holds what, ## Never. One line per bullet, each ending with " — Lemma, <Mon D>". No front matter: what you own is kept on the pod.`,
         "Only write lines that name something that exists here or that you are about to set up. If you build anything for this, say what you built in your reply.",
     ].join(" ");
 }

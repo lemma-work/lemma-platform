@@ -68,6 +68,7 @@ class OrganizationInvitationCreatedEvent(DomainEvent):
     accept_url: str
     pod_name: str | None = None
     pod_description: str | None = None
+    note: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:

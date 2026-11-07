@@ -402,6 +402,7 @@ class OrganizationService:
             accept_url=self._build_invitation_accept_url(entity.id),
             pod_name=pod_name,
             pod_description=pod_description,
+            note=entity.note,
         )
         persisted = await self.organization_repository.add_invitation(entity)
         persisted.organization_name = organization.name

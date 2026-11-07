@@ -80,6 +80,9 @@ window rather than a differently cut one.
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/schedules` | Create/list/get/update/delete logical schedules |
+| `GET /pods/{pod_id}/schedules/{id}/runs` | A schedule's runs, newest first, with `status` and `skipped` filters |
+| `POST /pods/{pod_id}/schedules/{id}/runs` | Start one run of a TIME schedule now, outside its timing (`schedule.run.create`; see [Runs started by hand](#runs-started-by-hand)) |
+| `POST /pods/{pod_id}/schedules/{id}/runs/{run_id}/retry` | Run a failed or dead-lettered run again, as the person asking |
 | `POST /webhooks/{source}` | Verify a delivery against its source plugin, normalize it, match schedules, and publish or enqueue filtering |
 | `GET /webhooks/{source}/verify` | Provider challenge/verification path |
 
@@ -204,6 +207,30 @@ including the poller's own retirements, so no schedule goes inactive silently.
 A schedule whose target was deleted keeps its row (`workflow_id` and `agent_id`
 are `SET NULL`) and records each firing as failed saying the target is missing.
 Every item a fire needs is written in the transaction that claims it.
+
+### Runs started by hand
+
+`POST .../schedules/{id}/runs` fires a TIME schedule once, now, through
+`fire_trigger` like a timer's occurrence (`services/manual_run.py`): in the
+request's transaction it checks the daily ceiling and `max_concurrent_runs`,
+reserves the run under `manual:<uuid>`, and writes the `schedule.start_target`
+item that starts the target. The timer's own cursor and fire item are left
+alone. The run carries the config's `payload`, as an occurrence does, and its
+metadata says `manual: true` and `started_by_user_id`; no column records it.
+
+It runs as the person asking, never as the owner, as a retried run does:
+they need `schedule.update` on the schedule and execute on its target, and the
+start job asks the latter again when it starts. Its filter, on a TIME schedule
+saved with one before they were refused, is not asked -- the person is the
+decision it would make, and could edit it away with the same authority.
+
+| Refusal | When |
+| --- | --- |
+| 422 `SCHEDULE_RUN_NEEDS_EVENT` | A WEBHOOK or DATASTORE schedule: its run carries the delivery or changed record that fired it, and a run by hand has none |
+| 409 `SCHEDULE_INACTIVE` | Paused, by a person or by the platform -- a failure streak or the ceiling is a stop a run by hand must not walk around |
+| 409 `SCHEDULE_TARGET_MISSING` | Its agent or workflow was deleted |
+| 409 `SCHEDULE_AT_CAPACITY` | `max_concurrent_runs` runs already in flight; the skipped run is committed, as a timer's is |
+| 409 `SCHEDULE_FIRE_CAP_REACHED` | Past the daily ceiling; the pause, the skip and the owner's notice are committed, as a timer's are. Not 429, which clients replay as if nothing had happened |
 
 ### Filters
 

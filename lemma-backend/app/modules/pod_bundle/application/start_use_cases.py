@@ -268,9 +268,10 @@ def setup_request(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
     if card is not None:
         return (
             f"{start} You start from the {card.name} template, which brings its "
-            "tables, a skill and schedules, and what you own is counted from its "
-            "tables. Check what is here, then ask me where this work happens and "
-            "connect it." + rest
+            "tables, skills and schedules, and what you own is counted from its "
+            "tables. Follow its set-up skill: ask me where this work happens, "
+            "connect it, fill your tables from what is already there, keep them "
+            "filling, then show me where we stand and ask me for the bar." + rest
         )
     return (
         f"{start} Look at what is already connected here and build what it "
