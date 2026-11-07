@@ -146,14 +146,31 @@ class GithubRepositoryNotInstalledError(ConnectorDomainError):
     """
 
     def __init__(
-        self, full_name: str, *, installed_on: str | None, manage_url: str
+        self,
+        full_name: str,
+        *,
+        installed_on: str | tuple[str, ...] | None,
+        manage_url: str,
     ) -> None:
         owner = full_name.partition("/")[0]
-        if installed_on and installed_on.lower() != owner.lower():
-            message = (
-                "This organization's GitHub installation is on "
-                f"'{installed_on}', so it does not cover '{full_name}'."
-            )
+        # One account, or every account the organization's installations are
+        # on when none of them is the repository's owner.
+        accounts = (
+            (installed_on,) if isinstance(installed_on, str) else installed_on or ()
+        )
+        if accounts and owner.lower() not in {one.lower() for one in accounts}:
+            if len(accounts) == 1:
+                message = (
+                    "This organization's GitHub installation is on "
+                    f"'{accounts[0]}', so it does not cover '{full_name}'."
+                )
+            else:
+                named = ", ".join(f"'{one}'" for one in accounts)
+                message = (
+                    f"This organization's GitHub installations are on {named}, "
+                    f"so none of them covers '{full_name}'. Install the Lemma "
+                    f"app on '{owner}' and connect it to reach it."
+                )
         else:
             message = (
                 f"'{full_name}' is not one of the repositories this "
@@ -166,7 +183,7 @@ class GithubRepositoryNotInstalledError(ConnectorDomainError):
             status_code=422,
             details={
                 "repository": full_name,
-                "installed_on": installed_on,
+                "installed_on": ", ".join(accounts) or None,
                 "manage_url": manage_url,
             },
         )

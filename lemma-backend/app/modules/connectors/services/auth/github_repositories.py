@@ -1,10 +1,16 @@
-"""Which repositories an organization's GitHub installation covers, for one person.
+"""Which repositories an organization's GitHub installations cover, for one person.
 
 Asked with that person's own user token, never as the App: GitHub then answers
-with the repositories the installation covers *and* the person can see, which
+with the repositories an installation covers *and* the person can see, which
 is exactly what their sandbox can clone with the same token. The enumeration is
 the one ``github_installation`` describes -- a user token has no `/user/repos`,
 only `/user/installations` and the repositories under one.
+
+An organization may hold several installations -- someone's own GitHub account
+and the GitHub organization they work in, each connected through an account of
+its own -- and the caller names which (``github_bindings.bound_installations``).
+The token reaches others too, another Lemma organization's included; only the
+ones named are read.
 
 Every failure comes back as one of the refusals in
 ``domain/github_installation_errors``, never as a raw `httpx` error: the caller
@@ -14,7 +20,7 @@ is not installed" need different words.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from urllib.parse import quote
@@ -31,12 +37,13 @@ from app.modules.connectors.domain.github_installation_errors import (
 )
 from app.modules.connectors.services.auth.github_installation import (
     _API_ROOT,
+    _MAX_INSTALLATION_PAGES,
     _PER_PAGE,
     _TIMEOUT,
     _USER_INSTALLATIONS_URL,
+    InstallationChoice,
     _choice,
     _headers,
-    _listed,
 )
 
 logger = get_logger(__name__)
@@ -65,7 +72,7 @@ class RepositoryListing:
     complete: bool = True
 
 
-#: Pages a picker reads. A selected-repositories installation fits on the
+#: Pages a picker reads of each installation. A selected-repositories installation fits on the
 #: first; one covering every repository of a large organization is where this
 #: bites, and a picker shows the first few hundred rather than walking
 #: thousands on a page load -- saying so with ``complete``.
@@ -157,6 +164,42 @@ async def _repository_pages(
             return
 
 
+async def _reachable(
+    client: httpx.AsyncClient, access_token: str, installation_ids: Sequence[str]
+) -> list[InstallationChoice]:
+    """The named installations this token's person can see, in the order named.
+
+    One read of `/user/installations` rather than one per installation. One
+    the person cannot see -- a GitHub organization they are not in, an app
+    since uninstalled -- is left out; none at all is refused, since nothing
+    can be cloned then.
+    """
+    wanted = [str(one) for one in installation_ids]
+    seen: dict[str, InstallationChoice] = {}
+    for page in range(1, _MAX_INSTALLATION_PAGES + 1):
+        response = await client.get(
+            _USER_INSTALLATIONS_URL,
+            headers=_headers(access_token),
+            params={"per_page": _PER_PAGE, "page": page},
+        )
+        if _refused(response):
+            raise GithubInstallationUnreachableError()
+        response.raise_for_status()
+        payload = response.json()
+        found = payload.get("installations") if isinstance(payload, dict) else None
+        items = [item for item in (found or []) if isinstance(item, dict)]
+        for item in items:
+            choice = _choice(item)
+            if choice is not None and choice.installation_id in wanted:
+                seen[choice.installation_id] = choice
+        if len(items) < _PER_PAGE or len(seen) == len(set(wanted)):
+            break
+    reachable = [seen[one] for one in dict.fromkeys(wanted) if one in seen]
+    if not reachable:
+        raise GithubInstallationUnreachableError()
+    return reachable
+
+
 @asynccontextmanager
 async def _asking_github() -> AsyncIterator[None]:
     """GitHub's failures, said as this module's refusals.
@@ -185,43 +228,54 @@ async def _asking_github() -> AsyncIterator[None]:
 
 async def installation_repositories(
     access_token: str,
-    installation_id: str,
+    installation_ids: Sequence[str],
     *,
     client: httpx.AsyncClient | None = None,
 ) -> RepositoryListing:
-    """The repositories this token's person reaches through one installation.
+    """The repositories this token's person reaches through these installations.
 
     Asked as the person, not as the App: GitHub answers with the repositories
-    the installation covers *and* the person can see, which is exactly what
-    their sandbox can clone. At most a picker's worth; ``complete`` says
-    whether that was all of them.
+    each installation covers *and* the person can see, which is exactly what
+    their sandbox can clone. Installation by installation, in the order
+    named, at most a picker's worth of each; ``complete`` says whether that
+    was all of them.
     """
     repositories: list[InstallationRepository] = []
-    more = False
+    complete = True
     async with _asking_github(), _http(client) as http:
-        async for page, more in _repository_pages(
-            http, access_token, installation_id, max_pages=_MAX_LISTING_PAGES
-        ):
-            repositories.extend(page)
-    return RepositoryListing(repositories=tuple(repositories), complete=not more)
+        for choice in await _reachable(http, access_token, installation_ids):
+            more = False
+            async for page, more in _repository_pages(
+                http,
+                access_token,
+                choice.installation_id,
+                max_pages=_MAX_LISTING_PAGES,
+            ):
+                repositories.extend(page)
+            complete = complete and not more
+    # Two installations never share an owner, so a repository is listed once;
+    # the guard is for GitHub answering a page twice while it changes.
+    unique = {repository.full_name.lower(): repository for repository in repositories}
+    return RepositoryListing(repositories=tuple(unique.values()), complete=complete)
 
 
 async def installation_repository(
     access_token: str,
-    installation_id: str,
+    installation_ids: Sequence[str],
     *,
     owner: str,
     name: str,
     client: httpx.AsyncClient | None = None,
 ) -> InstallationRepository:
-    """``owner/name`` as GitHub names it, if this installation covers it.
+    """``owner/name`` as GitHub names it, if one of these installations covers it.
 
-    The installation decides, not the token alone. A user token reaches every
+    The installations decide, not the token alone. A user token reaches every
     installation of the App its person can see -- another Lemma organization's
     included -- and any public repository at all, so "the token can read it"
     would accept repositories this organization never installed the app on.
-    An installation lives on exactly one GitHub account, so the repository's
-    owner has to be that account. Then any of three things proves it covered:
+    An installation lives on exactly one GitHub account, so the one that can
+    cover the repository is the one on its owner. Then any of three things
+    proves it covered:
     the installation is on *all* that account's repositories; the repository
     is private, which an App's user token can read only where the App is
     installed; or the installation's selection lists it.
@@ -246,23 +300,31 @@ async def installation_repository(
         if repository is None:
             raise GithubUnavailableError()
 
-        listed = await _listed(http, access_token, installation_id)
-        choice = _choice(listed) if listed else None
+        reachable = await _reachable(http, access_token, installation_ids)
+        owner = repository.owner.lower()
+        choice = next(
+            (one for one in reachable if (one.account_login or "").lower() == owner),
+            None,
+        )
         if choice is None:
-            raise GithubInstallationUnreachableError()
+            raise GithubRepositoryNotInstalledError(
+                repository.full_name,
+                installed_on=tuple(
+                    one.account_login for one in reachable if one.account_login
+                ),
+                manage_url=reachable[0].manage_url,
+            )
         not_installed = GithubRepositoryNotInstalledError(
             repository.full_name,
             installed_on=choice.account_login,
             manage_url=choice.manage_url,
         )
-        if (choice.account_login or "").lower() != repository.owner.lower():
-            raise not_installed
         if choice.covers_every_repository or repository.private:
             return repository
         wanted = repository.full_name.lower()
         more = False
         async for page, more in _repository_pages(
-            http, access_token, installation_id, max_pages=_MAX_COVERAGE_PAGES
+            http, access_token, choice.installation_id, max_pages=_MAX_COVERAGE_PAGES
         ):
             if any(covered.full_name.lower() == wanted for covered in page):
                 return repository

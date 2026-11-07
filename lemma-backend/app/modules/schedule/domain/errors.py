@@ -54,6 +54,18 @@ class ScheduleRunNotRetryableError(ScheduleDomainError):
         )
 
 
+class ScheduleNotRunnableNowError(ScheduleDomainError):
+    """A schedule a person may not start by hand, now or in its present state.
+
+    422 when no manual run could ever start it (its kind needs an event to
+    carry); 409 when its state is in the way (paused, no target, full, at
+    its daily ceiling) and changing that state would let it run.
+    """
+
+    def __init__(self, message: str, *, code: str, status_code: int = 409):
+        super().__init__(message=message, code=code, status_code=status_code)
+
+
 class ScheduleAccessDeniedError(ScheduleDomainError):
     def __init__(self, message: str = "Access denied"):
         super().__init__(

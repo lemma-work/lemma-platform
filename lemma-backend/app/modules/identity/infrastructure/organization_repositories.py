@@ -430,7 +430,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
         await refuse_if_organization_full(self.uow, entity.organization_id)
         invitation = OrganizationInvitation(
             **entity.model_dump(
-                exclude={"organization_name", "pod_name", "pod_description"}
+                exclude={"organization_name", "pod_name", "pod_description", "note"}
             )
         )
         self.session.add(invitation)

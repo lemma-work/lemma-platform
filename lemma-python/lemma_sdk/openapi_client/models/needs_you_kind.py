@@ -6,6 +6,7 @@ class NeedsYouKind(str, Enum):
     CONTACT = "CONTACT"
     DECISION = "DECISION"
     FORM = "FORM"
+    MESSAGE = "MESSAGE"
     PERMISSION = "PERMISSION"
     QUESTION = "QUESTION"
 

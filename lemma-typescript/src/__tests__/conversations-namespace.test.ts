@@ -35,6 +35,18 @@ function setup() {
   };
 }
 
+describe("ConversationsNamespace.repositories", () => {
+  it("lists the repositories a conversation can open in, for the pod named or the client's own", async () => {
+    const { conversations, request } = setup();
+
+    await conversations.repositories();
+    await conversations.repositories({ pod_id: "pod-2" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "GET", "/pods/pod-1/conversations/repositories");
+    expect(request).toHaveBeenNthCalledWith(2, "GET", "/pods/pod-2/conversations/repositories");
+  });
+});
+
 describe("ConversationsNamespace.list", () => {
   it("omits agent_name when listing conversations across the pod", async () => {
     const { conversations, request } = setup();

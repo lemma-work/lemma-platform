@@ -41,6 +41,19 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.tests.e2e.lifecycle_helpers import opening_for
 from app.modules.apps.infrastructure.models import AppModel
 from app.modules.identity.infrastructure.models.user_models import User
+from app.modules.agent.infrastructure.models.agent import AgentModel
+from app.modules.agent.infrastructure.tools.messaging.tools import asked_question
+from app.modules.channels.contracts import (
+    Asker,
+    NewLine,
+    NewQuestion,
+    Principal,
+    QuestionKind,
+    Sender,
+    direct_channel,
+    post,
+)
+from app.modules.channels.infrastructure.question_models import ChannelQuestionModel
 from app.modules.channels.tests.e2e.channel_pod import contact_place
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
@@ -336,6 +349,48 @@ async def _contact_waiting(
     return source.channel_id
 
 
+async def _asked_in_line(
+    pod_id: str, user_id: str, conversation_id: UUID, *, ago: timedelta
+) -> tuple[UUID, UUID]:
+    """What ``channel_post`` with ``wants_answer`` and choices leaves: a line in
+    the member's own channel, and a question on it waiting on them."""
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        channel = await direct_channel(uow, pod_id=UUID(pod_id), user_id=UUID(user_id))
+        agent_id = await uow.session.scalar(
+            select(AgentModel.id).where(AgentModel.pod_id == UUID(pod_id)).limit(1)
+        )
+        assert agent_id is not None
+        line = await post(
+            uow,
+            channel_id=channel.id,
+            line=NewLine(
+                sender=Sender.agent(
+                    agent_id,
+                    on_behalf_of=Principal.member(UUID(user_id)),
+                    display_name="Support",
+                ),
+                text="Jonas has waited 21 hours.\n\nA draft for him: ...",
+                conversation_id=conversation_id,
+            ),
+            question=NewQuestion(
+                kind=QuestionKind.ASK,
+                ref=f"ov-line-{uuid4().hex}",
+                asker=Asker.message(conversation_id, uuid4().hex),
+                question=asked_question(
+                    "Jonas has waited 21 hours.", ["Send it", "Not mine"]
+                ),
+                awaits=Principal.member(UUID(user_id)),
+            ),
+        )
+        await uow.session.execute(
+            update(ChannelQuestionModel)
+            .where(ChannelQuestionModel.message_id == line.id)
+            .values(created_at=datetime.now(UTC) - ago)
+        )
+        await uow.commit()
+    return channel.id, line.id
+
+
 # -- Needs you ---------------------------------------------------------------------
 
 
@@ -378,6 +433,9 @@ async def test_needs_you_is_every_pods_waits_oldest_first(
         assignee=await _pod_member_id(scenario, second, owner["id"]),
         ago=timedelta(hours=1),
     )
+    line_channel, line = await _asked_in_line(
+        second, owner["id"], approving, ago=timedelta(minutes=50)
+    )
     channel = await _contact_waiting(scenario, db_session, first)
 
     url = f"/organizations/{scenario.org_id}/needs-you"
@@ -388,10 +446,11 @@ async def test_needs_you_is_every_pods_waits_oldest_first(
         f"conversation:{asked}",
         f"conversation:{approving}",
         f"wait:{wait}",
+        f"message:{line}",
         f"contact:{channel}",
     ]
     assert body["truncated"] is False
-    question, approval, form, contact = body["items"]
+    question, approval, form, asked_line, contact = body["items"]
     assert question["kind"] == "QUESTION" and question["pod_id"] == first
     assert question["title"] == "Which region should it cover?"
     assert question["detail"] == "Quarterly report"
@@ -401,6 +460,13 @@ async def test_needs_you_is_every_pods_waits_oldest_first(
     assert form["kind"] == "FORM" and form["workflow_run_id"] == str(run)
     assert (form["title"], form["detail"]) == ("Approve the refund", "refund-review")
     assert form["conversation_id"] is None
+    assert asked_line["kind"] == "MESSAGE" and asked_line["pod_id"] == second
+    assert asked_line["title"] == "Jonas has waited 21 hours."
+    assert (asked_line["channel_id"], asked_line["message_id"]) == (
+        str(line_channel),
+        str(line),
+    )
+    assert asked_line["choices"] == ["Send it", "Not mine"]
     assert contact["kind"] == "CONTACT" and contact["title"] == "Dana"
     assert contact["channel_id"] == str(channel)
     named = await scenario.owner_client.get(f"/pods/{first}")
