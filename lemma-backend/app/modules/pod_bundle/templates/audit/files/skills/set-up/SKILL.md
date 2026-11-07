@@ -13,6 +13,7 @@ Audit owns passing on its date, counted from `controls`, which already holds a l
 4. **Match evidence to controls.** For each document, run `lemma decisions run` with its title and opening as evidence and this schema, listing the controls as the choices:
    `{"type":"object","properties":{"control":{"type":"string","enum":["<each control>","none"],"description":"Which control is this evidence for?"},"current":{"type":"boolean","description":"Is it dated within the last 90 days?"}}}`
    Set `evidence_link` on each matched control, and `ready` when the evidence is current.
+   Judge them from one shell loop, eight at a time with `--priority background` (`xargs -P 8` over one evidence file each), not one tool call each, and say how many there are before you start.
 5. **Ask for owners.** For the controls with no owner, use `ask_user` a few at a time, offering the people in this pod and "someone else". Set `owner` and `due_on` on each row with `lemma records update`.
 6. **Name the people.** Say who owns most controls, and that adding them to Audit (⋯ › Add people) sends the Monday checks to them. You cannot add people yourself.
 

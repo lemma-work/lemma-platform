@@ -267,6 +267,11 @@ export function OutcomesShell() {
         [sampled, asked.data, waits.data, contacts, needs.data],
     );
     const queueLoading = sampled ? asked.isPending || waits.isPending : needs.isPending;
+    /* Live, the queue is this one read: with nothing read, an empty queue
+       is not "nothing waiting". */
+    const queueFailed = !sampled && needs.isError && needs.data === undefined;
+    const { refetch: refetchNeeds } = needs;
+    const retryQueue = useCallback(() => void refetchNeeds(), [refetchNeeds]);
     const { byPod: activity } = usePodActivity(list);
     /* The plan's lines are the file's; what a Lemma owns and its number are
        the Lemma's own, kept on the server, and shown over the file's. */
@@ -464,7 +469,7 @@ export function OutcomesShell() {
     } else if (!org || pods.isPending) {
         page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
     } else if (view.name === "today") {
-        page = <Today org={org} pods={withPeople} activity={activity} queue={queue} me={myName} go={go} onAsk={ask} />;
+        page = <Today org={org} pods={withPeople} activity={activity} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} />;
     } else if (view.name === "apps") {
         page = <AppsPage pods={withPeople} go={go} />;
     } else if (view.name === "connectors") {
@@ -472,7 +477,7 @@ export function OutcomesShell() {
     } else if (view.name === "outcomes") {
         page = <OutcomesList org={org} pods={withPeople} activity={activity} plans={plans} queue={queue} go={go} />;
     } else if (view.name === "needs") {
-        page = <NeedsYou pods={withPeople} queue={queue} loading={queueLoading} go={go} />;
+        page = <NeedsYou pods={withPeople} queue={queue} loading={queueLoading} failed={queueFailed} onRetry={retryQueue} go={go} />;
     } else if (view.name === "people") {
         page = <People pods={withPeople} go={go} />;
     } else if (view.name === "hire") {

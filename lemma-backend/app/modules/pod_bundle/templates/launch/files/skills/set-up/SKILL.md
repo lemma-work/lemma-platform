@@ -13,6 +13,7 @@ Launch owns shipping on its date, counted from `steps`, which already holds a ch
 4. **Match the tracker to the checklist.** For each tracker issue, run `lemma decisions run` with its title and description as evidence and this schema, listing the checklist's steps as the choices:
    `{"type":"object","properties":{"step":{"type":"string","enum":["<each step>","none"],"description":"Which launch step does this issue do?"},"done":{"type":"boolean","description":"Is it finished?"}}}`
    Mark a step done when its issues are, and add a step for work that matches none.
+   Judge them from one shell loop, eight at a time with `--priority background` (`xargs -P 8` over one evidence file each), not one tool call each, and say how many there are before you start.
 5. **Ask for owners and dates.** For the steps with no owner, use `ask_user` a few at a time, offering the people in this pod and "someone else". Set `owner` and `due_on` on each row with `lemma records update`.
 6. **Keep it true from now on.** If the tracker has a trigger for an issue changing (`lemma connectors triggers list <connector>`), create an automation on it with `lemma schedules create --connector <connector> --connector-trigger <trigger> --instruction "Keep steps true, following the run-the-launch skill."`.
 7. **Name the people.** Say who owns most steps, and that adding them to Launch (⋯ › Add people) sends the chases to them. You cannot add people yourself.

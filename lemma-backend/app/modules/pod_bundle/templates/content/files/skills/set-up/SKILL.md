@@ -13,6 +13,7 @@ Content owns "Two posts go out every week", counted from `posts`. That table sta
 4. **Keep only the team's posts.** For each item, run `lemma decisions run` with its title and opening as evidence and this schema:
    `{"type":"object","properties":{"is_post":{"type":"boolean","description":"Is this a post the team wrote for its audience? A reshare, a reply or an internal note is not."}}}`
    Leave out anything answered false or null.
+   Judge them from one shell loop, eight at a time with `--priority background` (`xargs -P 8` over one evidence file each), not one tool call each, and say how many there are before you start.
 5. **Write the rows.** One row per post in `posts`: `title`, `channel`, `link`, `status` (draft or published), `author`, and `published_at`. Write them all at once with `lemma records import posts <file>`.
 6. **Keep it true from now on.** List the service's triggers with `lemma connectors triggers list <connector>`. If one fires on a new post or page, create an automation on it with `lemma schedules create --connector <connector> --connector-trigger <trigger> --instruction "Keep posts true, following the keep-posts skill."`. If there is none, create a daily one with `--cron "0 8 * * *"` that reads what is new since the last row.
 7. **Show where they stand.** Count posts published in each of the four weeks with `lemma query run`, and show it as a small widget with `display_resource`: one bar per week, with the bar Content will hold drawn across it.

@@ -14,8 +14,16 @@ const KINDS: { kind: QueueKind; title: string; hint: string }[] = [
 
 /** Everything waiting on you, across every Lemma, oldest first. Each row
  *  says which Lemma it is for and how long it has waited, and is answered
- *  in place where it can be (see `NeedRow`). */
-export function NeedsYou({ pods, queue, loading, go }: { pods: readonly Pod[]; queue: readonly QueueItem[]; loading: boolean; go: Go }) {
+ *  in place where it can be (see `NeedRow`). A read that failed says so:
+ *  "nothing needs you" over it would send someone away from an approval. */
+export function NeedsYou({ pods, queue, loading, failed, onRetry, go }: {
+    pods: readonly Pod[];
+    queue: readonly QueueItem[];
+    loading: boolean;
+    failed: boolean;
+    onRetry: () => void;
+    go: Go;
+}) {
     const [now] = useState(() => Date.now());
     const [only, setOnly] = useState<QueueKind | "all">("all");
     const counts = Object.fromEntries(KINDS.map(({ kind }) => [kind, queue.filter((item) => item.kind === kind).length])) as Record<QueueKind, number>;
@@ -23,7 +31,7 @@ export function NeedsYou({ pods, queue, loading, go }: { pods: readonly Pod[]; q
     const outcomes = new Set(queue.map((item) => item.podId)).size;
     return (
         <div className="ox-page">
-            <h1 className="ox-title">{queue.length === 0 ? "Nothing needs you" : `${queue.length} ${queue.length === 1 ? "thing needs" : "things need"} you`}</h1>
+            <h1 className="ox-title">{queue.length === 0 ? (failed ? "Needs you" : "Nothing needs you") : `${queue.length} ${queue.length === 1 ? "thing needs" : "things need"} you`}</h1>
             <p className="ox-sub">{queue.length === 0 ? `Across ${pods.length} ${pods.length === 1 ? "Lemma" : "Lemmas"}. Anything new comes here, and to wherever you chat with them.` : `Across ${outcomes} of ${pods.length} Lemmas. Oldest first.`}</p>
             <div className="ox-chips" role="group" aria-label="Show">
                 <button type="button" className="ox-chip" aria-pressed={only === "all"} onClick={() => setOnly("all")}>All<span>{queue.length}</span></button>
@@ -31,7 +39,11 @@ export function NeedsYou({ pods, queue, loading, go }: { pods: readonly Pod[]; q
                     <button key={kind} type="button" className="ox-chip" aria-pressed={only === kind} onClick={() => setOnly(kind)} disabled={counts[kind] === 0}>{title}<span>{counts[kind]}</span></button>
                 ))}
             </div>
-            {loading && queue.length === 0 ? <p className="ox-loading">Gathering what’s waiting…</p> : shown.length === 0 ? (
+            {loading && queue.length === 0 ? <p className="ox-loading">Gathering what’s waiting…</p> : failed && queue.length === 0 ? (
+                <Empty title="Couldn’t read what’s waiting on you.">
+                    <button type="button" className="ox-btn" onClick={onRetry}>Try again</button>
+                </Empty>
+            ) : shown.length === 0 ? (
                 <Empty title="All clear here." />
             ) : (
                 <div className="ox-queue">

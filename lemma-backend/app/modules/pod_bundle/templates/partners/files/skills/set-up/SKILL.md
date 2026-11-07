@@ -13,6 +13,7 @@ Partners owns a number of design partners signed by a date, counted from `partne
 4. **Keep only design-partner conversations.** For each company, run `lemma decisions run` with what the record and the latest thread say as evidence and this schema:
    `{"type":"object","properties":{"is_partner_prospect":{"type":"boolean","description":"Is this a company we are asking to become a design partner?"},"stage":{"type":"string","enum":["talking","trial","signing","signed"],"description":"Where does it stand?"}}}`
    Leave out anything answered false or null on the first question.
+   Judge them from one shell loop, eight at a time with `--priority background` (`xargs -P 8` over one evidence file each), not one tool call each, and say how many there are before you start.
 5. **Write the rows.** One row per company in `partners`: `company`, `owner`, `stage`, `next_step`, `next_step_due`, and `signed`. Write them all at once with `lemma records import partners <file>`.
 6. **Keep it true from now on.** List the service's triggers with `lemma connectors triggers list <connector>`. If one fires when a deal or thread changes, create an automation on it with `lemma schedules create --connector <connector> --connector-trigger <trigger> --instruction "Keep partners true, following the keep-partners skill."`. If there is none, create a daily one with `--cron "0 8 * * 1-5"`.
 7. **Show where they stand.** Count signed partners and the ones in signing with `lemma query run`, and show it as a small widget with `display_resource` against the target and the date.
