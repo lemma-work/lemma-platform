@@ -32,7 +32,7 @@ export interface ConversationOrigin {
 }
 
 const PLATFORM: Record<string, string> = {
-    SLACK: "Slack", TEAMS: "Teams", WHATSAPP: "WhatsApp", TELEGRAM: "Telegram", RESEND: "Email",
+    SLACK: "Slack", TEAMS: "Teams", WHATSAPP: "WhatsApp", TELEGRAM: "Telegram", RESEND: "Email", EMAIL: "Email",
 };
 
 /** "Telegram" for TELEGRAM; a platform nobody named here keeps its own word. */

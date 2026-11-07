@@ -1,0 +1,151 @@
+{
+  "expo": {
+    "name": "Lemma",
+    "slug": "lemma-mobile",
+    "version": "0.1.0",
+    "scheme": "lemma",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#ffffff",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "work.lemma.mobile",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocalNetworkUsageDescription": "Lemma connects to a Lemma server on your local network when you choose one.",
+        "NSMicrophoneUsageDescription": "Lemma uses the microphone while you are on a voice call with a Lemma, and only then."
+      }
+    },
+    "android": {
+      "package": "work.lemma.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "softwareKeyboardLayoutMode": "resize",
+      "predictiveBackGestureEnabled": false,
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/invitations"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/import/github"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/remix"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/templates"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/t/"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/sign-in-to-site"
+            }
+          ]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "node_modules/@expo-google-fonts/albert-sans/400Regular/AlbertSans_400Regular.ttf",
+            "node_modules/@expo-google-fonts/albert-sans/500Medium/AlbertSans_500Medium.ttf",
+            "node_modules/@expo-google-fonts/inter/400Regular/Inter_400Regular.ttf",
+            "node_modules/@expo-google-fonts/inter/500Medium/Inter_500Medium.ttf"
+          ]
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "expo-web-browser",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#ffffff",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 96
+        }
+      ],
+      "./plugins/local-cleartext.js",
+      "expo-sharing",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Lemma shows your latest photos when you attach to a chat, and attaches the ones you choose.",
+          "savePhotosPermission": false,
+          "isAccessMediaLocationEnabled": false,
+          "granularPermissions": ["photo"]
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Lemma shows your latest photos when you attach to a chat, and attaches the ones you choose.",
+          "cameraPermission": "Lemma uses the camera when you take a photo to attach.",
+          "microphonePermission": "Lemma uses the microphone while you are on a voice call with a Lemma, and only then."
+        }
+      ],
+      "expo-document-picker",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": false,
+          "supportsPictureInPicture": false
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Lemma uses the microphone while you are on a voice call with a Lemma, and only then.",
+          "recordAudioAndroid": true,
+          "enableBackgroundPlayback": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false,
+      "tsconfigPaths": false
+    }
+  }
+}
