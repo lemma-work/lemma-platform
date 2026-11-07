@@ -259,25 +259,26 @@ def starter_plan(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
 
 
 def setup_request(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
-    """The person's first message to the new Lemma's agent."""
+    """The person's first message to the new Lemma's agent.
+
+    It is shown as theirs, so it says what they want in their words; how to
+    get there is the `lemma-setup` skill it names, not a list of steps here.
+    """
     start = f'Set yourself up to own this: "{outcome.sentence}".'
-    rest = (
-        " Fill in the plan in /plan.md as you go: how we work, who holds what, "
-        "and what you never do. Ask me whatever you need."
-    )
     if card is not None:
-        return (
-            f"{start} You start from the {card.name} template, which brings its "
-            "tables, a skill and schedules, and what you own is counted from its "
-            "tables. Check what is here, then ask me where this work happens and "
-            "connect it." + rest
+        middle = (
+            f" You start from the {card.name} template: its tables, a skill and "
+            "schedules are here, and the number is counted from those tables."
+        )
+    else:
+        middle = (
+            " Nothing is built yet, so build what holds the work and set how it "
+            "is counted with set_what_you_own."
         )
     return (
-        f"{start} Look at what is already connected here and build what it "
-        "takes: the tables that hold the work, an app if people need one, the "
-        "schedules that keep it moving. Then set how it is counted with "
-        "set_what_you_own, as one read-only query over those tables that answers "
-        "a single number." + rest
+        f"{start}{middle} Use the lemma-setup skill: ask me where this work "
+        "happens, bring in the last few weeks of it, and keep it coming in. "
+        "Ask me whatever you need."
     )
 
 

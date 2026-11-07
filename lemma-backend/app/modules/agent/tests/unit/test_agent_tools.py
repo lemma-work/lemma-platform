@@ -2007,8 +2007,8 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
     )
 
     # The shared resource map is the stable prefix for both agent kinds.
-    assert prompt.startswith("# The pod")
-    assert "You are the default AI agent for this Lemma pod" in prompt
+    assert prompt.startswith("# This Lemma")
+    assert "You are this Lemma's own agent" in prompt
     # Reply discipline is not keyed to a toolset: every agent replies, and the
     # reply is the one thing the person always sees. It rode in on the surface
     # fragment for a long time, which meant a run with no surface platform --
@@ -2146,8 +2146,8 @@ def test_pod_default_assistant_uses_rich_base_and_all_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("# The pod")
-    assert "You are the default AI agent for this Lemma pod" in prompt
+    assert prompt.startswith("# This Lemma")
+    assert "You are this Lemma's own agent" in prompt
     assert "## Lemma CLI" in prompt
     assert "## Skills" in prompt
     assert "## Web research" in prompt
@@ -2173,9 +2173,9 @@ def test_user_agent_uses_lean_base_and_only_its_toolset_fragments():
     )
 
     # Both agent kinds open on the same resource map, followed by their role.
-    assert prompt.startswith("# The pod")
-    assert "You are a named AI agent in a Lemma pod" in prompt
-    assert "You are the default AI agent" not in prompt
+    assert prompt.startswith("# This Lemma")
+    assert "You are a named agent working for this Lemma" in prompt
+    assert "this Lemma's own agent" not in prompt
     assert "## Lemma CLI" in prompt  # its one toolset's fragment
     assert "## Web research" not in prompt
     assert "## Skills" not in prompt
@@ -2197,8 +2197,8 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
         agent=agent, conversation=conversation, ctx=SimpleNamespace(run_toolsets=[])
     )
 
-    assert prompt.startswith("# The pod")
-    assert "You are a named AI agent in a Lemma pod" in prompt
+    assert prompt.startswith("# This Lemma")
+    assert "You are a named agent working for this Lemma" in prompt
     for fragment_marker in (
         "## Lemma CLI",
         "## Web research",

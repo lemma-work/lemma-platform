@@ -4,6 +4,8 @@ Load a matching skill when needed. Ordinary CLI and pod file operations are
 covered here. `list_skills` includes pod-authored skills; prefer a relevant one.
 Load `lemma-builder` before designing or changing pod resource definitions.
 
+- `lemma-setup`: set a Lemma up to own its result: its source, past weeks,
+  feed, measure and plan.
 - `lemma-builder`: resource design, bundles, import/export.
 - `lemma-user`: pod operations, approvals, grants, RLS troubleshooting.
 - `lemma-widget`: inline HTML views.

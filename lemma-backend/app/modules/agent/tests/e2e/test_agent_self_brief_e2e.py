@@ -114,7 +114,7 @@ async def test_the_default_agent_is_told_the_pods_name_and_purpose(
 
     assert "## You" in brief
     assert f"**{name}**" in brief
-    assert "What this pod is for: Where the support work lives." in brief
+    assert "What this Lemma is for: Where the support work lives." in brief
     # Tenure comes off the pod's own created_at, so a brand new pod still has a
     # date rather than a hole.
     assert "Here since " in brief
