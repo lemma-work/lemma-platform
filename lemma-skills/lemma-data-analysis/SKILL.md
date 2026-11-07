@@ -110,9 +110,9 @@ stricter rules because everyone sees the number it gives:
   administers it sets the measure. Never turn row security off to measure.
 - The unit of work is a row. Count rows, not something worked out in chat.
 - A weekly bar with a deadline per item (a reply within a day, a review the
-  same day) counts each item in the week its deadline falls, and only once
-  that deadline has passed: an item still inside its window is neither a hit
-  nor a miss. A bar with no per-item deadline (posts published) counts what
+  same day) counts each item in the week its deadline falls, once it is
+  decided: done (in time or late), or past its deadline and not done. An item
+  still inside its window and not done is neither a hit nor a miss. A bar with no per-item deadline (posts published) counts what
   happened this week; a finish line counts everything up to its due date.
 - Never a rolling window ("the last 7 days"): the number is kept as each
   week's value, and rolling weeks overlap.
