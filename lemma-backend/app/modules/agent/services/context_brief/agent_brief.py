@@ -348,7 +348,7 @@ class AgentContextBriefBuilder:
             profile = await repo.get_user_profile(user_id)
         lines = [
             "# Runtime Context",
-            f"- Pod: {pod.name or '(unknown)'} ({pod_id})",
+            f"- This Lemma: {pod.name or '(unknown)'} (pod id {pod_id})",
         ]
         if pod.description and pod.description.strip():
             # The one sentence the team wrote about their own work. The brief

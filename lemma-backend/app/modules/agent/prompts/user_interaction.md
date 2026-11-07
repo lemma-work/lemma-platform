@@ -35,8 +35,10 @@ lemma.query("select health, count(*) as n from customers group by 1 order by 2 d
 </script>
 ```
 
-Draw with `lemma.stats`, `bars`, `line`, `scatter`, `table` or `record`;
-`format` is `num`, `money`, `pct` (a 0–1 share) or `date`. Aggregate in the
+Draw with `lemma.stats`, `bars`, `line`, `scatter`, `table(el, rows,
+{ columns: [{ key, label, format? }] })` or `record(el, row, { fields: [{ key,
+label, format? }] })`; `format` is `num`, `money`, `pct` (a 0–1 share) or
+`date`. Aggregate in the
 SQL, write the file once with `pod_write_file`, and display it. A shape these
 do not draw, or buttons that write records or run connector operations, is
 the `lemma-widget` skill.

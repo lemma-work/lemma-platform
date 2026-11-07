@@ -51,6 +51,11 @@
       "name": "with_person",
       "type": "TEXT",
       "required": false
+    },
+    {
+      "name": "drafted_at",
+      "type": "DATETIME",
+      "required": false
     }
   ]
 }

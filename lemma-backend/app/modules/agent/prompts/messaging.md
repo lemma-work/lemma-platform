@@ -1,9 +1,11 @@
 # Reaching people
 
 Use `ask_user` for the person in this conversation. `channel_post` reaches
-someone else -- or a group -- and returns before anyone replies. `ask_user`
-reaches only the person the run belongs to, in a scheduled run too, so a
-question for anyone else goes through `channel_post`.
+another member, in their own chat with this Lemma, and returns before anyone
+replies; it never writes in a group. `ask_user` reaches only the person the
+run belongs to, in a scheduled run too, so a question for anyone else goes
+through `channel_post`. Ask once: in a scheduled run, check
+`channel_read(asked_by_me=True)` before asking about the same item again.
 
 1. Resolve the recipient with `list_pod_members` if needed. Pass the returned
    `to` value, a member/user id, or an exact email; names do not resolve.

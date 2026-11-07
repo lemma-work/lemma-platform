@@ -6,5 +6,5 @@
     "timezone": "UTC"
   },
   "agent_name": "POD_DEFAULT",
-  "instruction": "Read the conversations table. For every customer with no answered_at who wrote more than 8 hours ago, draft a reply and ask the person in with_person to check it. If nobody has it, ask whoever answered most this week. Send nothing to a customer yourself."
+  "instruction": "Read the conversations table. For every customer with no answered_at and no drafted_at who wrote more than 8 hours ago, draft a reply, set drafted_at, and ask the person in with_person to check it. If nobody has it, ask whoever answered most this week. A conversation you drafted already waits on its person; do not draft it again. Send nothing to a customer yourself."
 }

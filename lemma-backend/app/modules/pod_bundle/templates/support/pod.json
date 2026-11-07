@@ -27,7 +27,7 @@
     "kind": "week",
     "target": 90,
     "unit": "%",
-    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE answered_in_time) / nullif(count(*) FILTER (WHERE answered_at IS NOT NULL OR opened_at < now() - interval '1 day'), 0), 1) FROM conversations WHERE opened_at >= date_trunc('week', now())"
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE answered_in_time) / nullif(count(*) FILTER (WHERE answered_at IS NOT NULL OR opened_at < now() - interval '1 day'), 0), 1) FROM conversations WHERE opened_at + interval '1 day' >= date_trunc('week', now()) AND opened_at + interval '1 day' < date_trunc('week', now()) + interval '1 week'"
   },
   "variables": {}
 }

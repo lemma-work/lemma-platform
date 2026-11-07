@@ -10,4 +10,4 @@ Every step to the launch is a row in `steps`, and the number Launch owns is the 
 - Give every step an `owner` and a `due_on` before the launch week. Ask when either is missing.
 - Mark `done` only when the step is really done, and say so in the launch chat.
 - A step past its date and not done is behind: ask its owner what is in the way, once a day.
-- In a scheduled run, ask owners with `channel_post`: `ask_user` reaches only the person the run belongs to.
+- In a scheduled run, ask owners with `channel_post`: `ask_user` reaches only the person the run belongs to. Ask once per item: check `channel_read(asked_by_me=True)` before asking again.

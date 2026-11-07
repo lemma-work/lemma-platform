@@ -10,6 +10,7 @@ The number Support owns is counted from `conversations` by `opened_at` and `answ
 - A customer writes: add a row with `customer`, `about`, where they wrote in `channel`, `link` and `opened_at` (when they wrote).
 - Someone answers them: set `answered_at`, and set `answered_in_time` to true when that was within a day of `opened_at`, false when it was later.
 - Someone takes it: put their name in `with_person`.
+- You draft a reply: set `drafted_at`. A drafted conversation waits on its person; do not draft it again.
 
 Never mark a row answered because a draft exists. Only a reply the customer received counts.
 
