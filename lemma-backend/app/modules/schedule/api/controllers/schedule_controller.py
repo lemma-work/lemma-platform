@@ -302,6 +302,15 @@ async def list_schedule_skips(
     response_model=ScheduleRunResponse,
     status_code=status.HTTP_202_ACCEPTED,
     operation_id="schedule.run.create",
+    responses={
+        404: {"description": "No such schedule in this pod."},
+        409: {
+            "description": "The schedule is paused, has no target, is full, or has reached its daily ceiling."
+        },
+        422: {
+            "description": "A WEBHOOK or DATASTORE schedule, which has no event to carry."
+        },
+    },
 )
 async def create_schedule_run(
     pod_id: UUID,

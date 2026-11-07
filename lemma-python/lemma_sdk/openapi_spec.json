@@ -48459,6 +48459,26 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such schedule in this pod."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The schedule is paused, has no target, is full, or has reached its daily ceiling."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -48467,7 +48487,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "A WEBHOOK or DATASTORE schedule, which has no event to carry."
           }
         },
         "summary": "Create Schedule Run",

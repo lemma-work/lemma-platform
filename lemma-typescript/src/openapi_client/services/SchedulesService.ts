@@ -248,7 +248,9 @@ export class SchedulesService {
                 'schedule_id': scheduleId,
             },
             errors: {
-                422: `Validation Error`,
+                404: `No such schedule in this pod.`,
+                409: `The schedule is paused, has no target, is full, or has reached its daily ceiling.`,
+                422: `A WEBHOOK or DATASTORE schedule, which has no event to carry.`,
             },
         });
     }
