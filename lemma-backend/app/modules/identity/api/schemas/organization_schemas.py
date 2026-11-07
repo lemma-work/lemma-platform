@@ -78,7 +78,8 @@ class OrganizationInvitationRequest(BaseSchema):
         max_length=INVITATION_NOTE_CHARS,
         description=(
             "A few words from the inviter, quoted in the invitation email: why "
-            "they are being asked in. Sent once, with the email, and not kept."
+            "they are being asked in. The invitation record does not keep it; "
+            "it travels with the email until the email is sent."
         ),
     )
 

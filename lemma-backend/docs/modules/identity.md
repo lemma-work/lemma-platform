@@ -12,7 +12,7 @@ Pod membership is deliberately owned by the [pod module](pod.md).
 | Contribution | Behavior |
 | --- | --- |
 | API routers | `/users`, `/organizations`, `/auth` |
-| Work kinds | `identity.email` (invitation -- quoting the inviter's `note` when they wrote one, which rides the event and is never stored -- welcome and invitation-accepted emails), `identity.whatsapp_verification` and `identity.account_deleted` (`delivery`), written in the transaction that causes them; `UserMobileChanged` is a fact emitted with the number change, `AccountDeleted` one emitted with an account deletion |
+| Work kinds | `identity.email` (invitation -- quoting the inviter's `note` when they wrote one, which the invitation record does not keep: it rides the event into the email's work item and goes when that completes -- welcome and invitation-accepted emails), `identity.whatsapp_verification` and `identity.account_deleted` (`delivery`), written in the transaction that causes them; `UserMobileChanged` is a fact emitted with the number change, `AccountDeleted` one emitted with an account deletion |
 | API lifespan | Closes the Redis-backed user cache |
 | External systems | SuperTokens and SMTP/email adapter |
 

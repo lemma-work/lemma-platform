@@ -246,7 +246,9 @@ export function useSetup(podId: string): ImportStatusResponse | null {
         queryKey: ["lemma-setup", podId, importId],
         queryFn: () => lemma(podId).request<ImportStatusResponse>("GET", `/pods/${encodeURIComponent(podId)}/bundle/imports/${encodeURIComponent(importId as string)}`),
         enabled: Boolean(importId) && live(),
-        refetchInterval: (query) => (query.state.data && SETTLED.has(query.state.data.status) ? false : 1500),
+        /* Stops once the import settles, and on a read that failed: a gone
+           import answers the same every time, and the strip hides on it. */
+        refetchInterval: (query) => (query.state.status === "error" || (query.state.data && SETTLED.has(query.state.data.status)) ? false : 1500),
         retry: false,
     });
     const settled = status.data && SETTLED.has(status.data.status);

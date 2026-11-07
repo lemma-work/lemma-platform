@@ -667,8 +667,6 @@
               "items": {
                 "type": "string"
               },
-              "maxItems": 4,
-              "minItems": 2,
               "type": "array"
             },
             {

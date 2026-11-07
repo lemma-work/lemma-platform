@@ -8,6 +8,7 @@ import { kindOf, startLemma, useShelf } from "./data";
 import { chatView, ownName, sentenceFor, sharedLinkPath, shelfOf, type Go, type ShelfCard, type ShelfWork } from "./model";
 import { Empty, Icon } from "./parts";
 import { TeammateFace } from "@/space/teammate-face";
+import { publicSiteUrl } from "@/site/seo/site-url";
 
 /** A template's face, drawn the way a Lemma's is, so the one you pick is the
  *  one you get: starting it wears the same face. */
@@ -82,9 +83,11 @@ function SharedLink() {
     const [wrong, setWrong] = useState(false);
     const open = (event: FormEvent) => {
         event.preventDefault();
-        const path = sharedLinkPath(link);
-        setWrong(path === null);
-        if (path) window.location.assign(path);
+        const path = sharedLinkPath(link, [window.location.origin, new URL(publicSiteUrl()).origin]);
+        /* Only ever one of this app's own paths: one slash, then a word. */
+        const own = path !== null && path.startsWith("/") && !path.startsWith("//");
+        setWrong(!own);
+        if (own) window.location.assign(path);
     };
     return (
         <section className="ox-shelf__shared">
@@ -111,14 +114,18 @@ function WorkPage({ org, work, go, onBack }: { org: Org; work: ShelfWork; go: Go
     const start = async () => {
         setBusy(true);
         setError(null);
+        let started: { podId: string; conversationId: string };
         try {
-            const { podId, conversationId } = await startLemma({ organization_id: org.id, template: chosen.id, due: needsDate ? due : null }, chosen.face);
-            await queryClient.invalidateQueries({ queryKey: ["pods", org.id] });
-            go(chatView({ kind: "chat", podId, id: conversationId }));
+            started = await startLemma({ organization_id: org.id, template: chosen.id, due: needsDate ? due : null }, chosen.face);
         } catch (failure) {
             setError(failure instanceof Error ? failure.message : "Couldn’t start it");
             setBusy(false);
+            return;
         }
+        /* Started: a list that will not refresh is no reason to say otherwise,
+           and a second try would start a second Lemma. */
+        await queryClient.invalidateQueries({ queryKey: ["pods", org.id] }).catch(() => undefined);
+        go(chatView({ kind: "chat", podId: started.podId, id: started.conversationId }));
     };
 
     return (
@@ -198,18 +205,20 @@ function OwnWords({ org, go, onBack }: { org: Org; go: Go; onBack: () => void })
         if (!ready) return;
         setBusy(true);
         setError(null);
+        let started: { podId: string; conversationId: string };
         try {
-            const { podId, conversationId } = await startLemma({
+            started = await startLemma({
                 organization_id: org.id,
                 name: called.trim(),
                 outcome: { sentence: sentence.trim(), kind: kindOf(kind), due: kind === "date" ? due : null },
             }, null);
-            await queryClient.invalidateQueries({ queryKey: ["pods", org.id] });
-            go(chatView({ kind: "chat", podId, id: conversationId }));
         } catch (failure) {
             setError(failure instanceof Error ? failure.message : "Couldn’t start it");
             setBusy(false);
+            return;
         }
+        await queryClient.invalidateQueries({ queryKey: ["pods", org.id] }).catch(() => undefined);
+        go(chatView({ kind: "chat", podId: started.podId, id: started.conversationId }));
     };
 
     return (

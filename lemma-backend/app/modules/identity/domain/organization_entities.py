@@ -137,8 +137,9 @@ class OrganizationInvitationEntity(AggregateRoot):
     redirect_uri: str | None = None
     pod_name: str | None = None
     pod_description: str | None = None
-    #: What the inviter wrote to go with it. Carried by the invitation's email
-    #: and never stored: the email is the only place anybody reads it.
+    #: What the inviter wrote to go with it. Not a column: the email is the
+    #: only place anybody reads it, so it travels with the email's delivery
+    #: work and goes with it once the email is sent.
     note: str | None = None
     status: OrganizationInvitationStatus = OrganizationInvitationStatus.PENDING
     expires_at: datetime = Field(

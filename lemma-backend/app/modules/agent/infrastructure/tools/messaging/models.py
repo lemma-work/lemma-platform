@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.agent.infrastructure.tools.responses import BaseToolResponse
 
@@ -51,14 +51,32 @@ class ChannelPostRequest(BaseModel):
     )
     choices: list[str] | None = Field(
         default=None,
-        min_length=2,
-        max_length=4,
         description=(
             "Only with `wants_answer`: two to four short answers they can pick "
             "with one tap, like 'Send it' and 'Not mine'. They can always "
             "answer in their own words instead."
         ),
     )
+
+    @field_validator("choices")
+    @classmethod
+    def distinct_choices(cls, value: list[str] | None) -> list[str] | None:
+        """Two to four answers that are each something to tap: a blank one
+        would be an empty button, and a repeated one the same button twice.
+        Counted after both are dropped, so the bound is on what is shown."""
+        if value is None:
+            return None
+        kept: list[str] = []
+        for choice in value:
+            label = choice.strip()
+            if label and label not in kept:
+                kept.append(label)
+        if not 2 <= len(kept) <= 4:
+            raise ValueError(
+                "`choices` takes two to four different, non-blank answers; "
+                f"{len(kept)} remain once blanks and repeats are dropped."
+            )
+        return kept
 
 
 class ChannelPostResponse(BaseToolResponse):

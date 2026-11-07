@@ -281,10 +281,12 @@ export interface Owned {
     problem: string | null;
 }
 
-/** A target as a person reads it: "90%", "2 posts", "20". */
+/** A target as a person reads it: "90%", "2 posts", "99.95%". Exactly the
+ *  number kept, never rounded: it is what readings are compared against, and
+ *  what the plan editor writes back. */
 export function targetText(target: number | null, unit: string | null): string | null {
     if (target === null || !Number.isFinite(target)) return null;
-    const said = Number.isInteger(target) ? String(target) : String(Math.round(target * 10) / 10);
+    const said = String(target);
     if (unit === "%") return said + "%";
     return unit ? `${said} ${unit}` : said;
 }
@@ -1107,9 +1109,11 @@ export function refreshKept<P extends { id: string }>(kept: readonly KeptApp<P>[
 }
 
 /** Where a pasted link to something shared opens here: a GitHub repository
- *  opens its import, and a link this app made -- a share, a remix, an import
- *  -- opens at its own path. Null for anything else. */
-export function sharedLinkPath(text: string): string | null {
+ *  opens its import, and a link this deployment made -- a share, a remix, an
+ *  import, from one of `ownOrigins` -- opens at its own path. Null for
+ *  anything else, including another site's link that happens to have a path
+ *  like one of these. */
+export function sharedLinkPath(text: string, ownOrigins: readonly string[]): string | null {
     const said = text.trim();
     if (!said) return null;
     let url: URL;
@@ -1126,7 +1130,7 @@ export function sharedLinkPath(text: string): string | null {
         return owner && repo ? `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo.replace(/\.git$/, ""))}` : null;
     }
     const [head] = segments;
-    if (!head || !SHARED_HEADS.has(head)) return null;
+    if (!ownOrigins.includes(url.origin) || !head || !SHARED_HEADS.has(head)) return null;
     /* Rebuilt from its parts, each encoded, rather than passed on as typed: a
        link is somebody else's text, and what this navigates to is only ever
        one of this app's own paths. */

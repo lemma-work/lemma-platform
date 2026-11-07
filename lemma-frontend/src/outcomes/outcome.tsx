@@ -539,8 +539,10 @@ function PlanEditor({ plan: lines, owned, busy, me, onChange, onOwn, file }: {
     const [meta, setMeta] = useState<{ outcome: string; kind: string; target: string; unit: string; due: string; measure: string }>(() => metaOf(shown));
     /* Filled from the plan as it is now each time the form opens, so a save
        never writes back values a later read replaced. */
+    const [metaProblem, setMetaProblem] = useState<string | null>(null);
     const toggleMeasure = () => {
         if (!measureOpen) setMeta(metaOf(shown));
+        setMetaProblem(null);
         setMeasureOpen(!measureOpen);
     };
 
@@ -572,12 +574,26 @@ function PlanEditor({ plan: lines, owned, busy, me, onChange, onOwn, file }: {
     };
     const saveMeta = () => {
         if (onOwn) {
-            const target = Number.parseFloat(meta.target);
+            const said = meta.target.trim();
+            const target = said ? Number.parseFloat(said) : null;
+            const unit = meta.unit.trim() || null;
+            /* Said back rather than dropped: a target the server would keep as
+               nothing, or a % against a unit picked as a count, is a mistake
+               the person can fix here, not one to save over the last target. */
+            if (target !== null && !Number.isFinite(target)) {
+                setMetaProblem("The target needs a number, like 90 or 90%.");
+                return;
+            }
+            if (/%\s*$/.test(said) && unit !== "%") {
+                setMetaProblem("The target says % but the unit is a count. Pick “A share (%)”, or drop the %.");
+                return;
+            }
+            setMetaProblem(null);
             void onOwn({
                 sentence: meta.outcome.trim(),
                 kind: meta.kind === "date" ? "date" : "week",
-                target: Number.isFinite(target) ? target : null,
-                unit: meta.unit.trim() || (/%\s*$/.test(meta.target) ? "%" : null),
+                target,
+                unit,
                 due: meta.kind === "date" ? meta.due.trim() || null : null,
                 measure: meta.measure.trim() || null,
                 value: null,
@@ -647,6 +663,7 @@ function PlanEditor({ plan: lines, owned, busy, me, onChange, onOwn, file }: {
                         {meta.kind === "date" && <label>Due<input type="date" value={meta.due} onChange={(event) => setMeta({ ...meta, due: event.target.value })} /></label>}
                     </div>
                     <label>Measure, one read-only SQL query that answers a single number<textarea rows={4} value={meta.measure} onChange={(event) => setMeta({ ...meta, measure: event.target.value })} placeholder="SELECT round(100.0 * avg(CASE WHEN replied_within_hours <= 24 THEN 1 ELSE 0 END)) FROM conversations WHERE created_at > now() - interval '7 days'" /></label>
+                    {metaProblem && <p className="ox-note" role="alert">{metaProblem}</p>}
                     <div className="ox-plan__acts"><button type="button" className="ox-btn ox-btn--primary" onClick={saveMeta} disabled={busy}>Save</button><button type="button" className="ox-btn" onClick={() => setMeasureOpen(false)}>Cancel</button></div>
                 </div>
             )}

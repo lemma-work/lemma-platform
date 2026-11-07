@@ -31,7 +31,7 @@
    "tool:lemma_listen@83948b9e46d7",
    "tool:lemma_say@be82bc762982",
    "tool:lemma_list_voices@456c8a6b28c8",
-   "tool:lemma_channel_post@4f7bbcdd8832",
+   "tool:lemma_channel_post@9759b3c46574",
    "tool:lemma_channel_read@99f3d2a17a48",
    "tool:lemma_channel_search@1ace0332f580",
    "tool:lemma_channel_list@5893c565b547",
@@ -78,7 +78,7 @@
    "tool:lemma_list_skills@eece34b30247",
    "tool:lemma_load_skill@7d76de13ed50",
    "tool:lemma_wait_for@ad14962cd087",
-   "tool:lemma_channel_post@4f7bbcdd8832",
+   "tool:lemma_channel_post@9759b3c46574",
    "tool:lemma_channel_read@99f3d2a17a48",
    "tool:lemma_channel_search@1ace0332f580",
    "tool:lemma_channel_list@5893c565b547",
@@ -124,7 +124,7 @@
    "tool:lemma_list_skills@eece34b30247",
    "tool:lemma_load_skill@7d76de13ed50",
    "tool:lemma_wait_for@ad14962cd087",
-   "tool:lemma_channel_post@4f7bbcdd8832",
+   "tool:lemma_channel_post@9759b3c46574",
    "tool:lemma_channel_read@99f3d2a17a48",
    "tool:lemma_channel_search@1ace0332f580",
    "tool:lemma_channel_list@5893c565b547",
@@ -182,7 +182,7 @@
    "tool:lemma_listen@83948b9e46d7",
    "tool:lemma_say@be82bc762982",
    "tool:lemma_list_voices@456c8a6b28c8",
-   "tool:lemma_channel_post@4f7bbcdd8832",
+   "tool:lemma_channel_post@9759b3c46574",
    "tool:lemma_channel_read@99f3d2a17a48",
    "tool:lemma_channel_search@1ace0332f580",
    "tool:lemma_channel_list@5893c565b547",
@@ -225,7 +225,7 @@
    "tool:lemma_listen@83948b9e46d7",
    "tool:lemma_say@be82bc762982",
    "tool:lemma_list_voices@456c8a6b28c8",
-   "tool:lemma_channel_post@4f7bbcdd8832",
+   "tool:lemma_channel_post@9759b3c46574",
    "tool:lemma_channel_read@99f3d2a17a48",
    "tool:lemma_channel_search@1ace0332f580",
    "tool:lemma_channel_list@5893c565b547",
@@ -311,7 +311,7 @@
     "tool:listen@c7db4bf7e5d1",
     "tool:say@6188a01eb966",
     "tool:list_voices@d94982302171",
-    "tool:channel_post@3fd5ee76f18f",
+    "tool:channel_post@67e239e1afc2",
     "tool:channel_read@dc33f06f8a44",
     "tool:channel_search@c2d5cdeb27a1",
     "tool:channel_list@bb071f8c1829",
@@ -421,7 +421,7 @@
     "tool:list_skills@30784cfcaef3",
     "tool:load_skill@9bf1ccea2858",
     "tool:wait_for@484f29078c62",
-    "tool:channel_post@526db26b375e",
+    "tool:channel_post@2e6077b8761d",
     "tool:channel_read@02e1baf246ff",
     "tool:channel_search@75fbf066b971",
     "tool:channel_list@19531b7be4d1",
@@ -523,7 +523,7 @@
     "tool:list_skills@30784cfcaef3",
     "tool:load_skill@9bf1ccea2858",
     "tool:wait_for@484f29078c62",
-    "tool:channel_post@526db26b375e",
+    "tool:channel_post@2e6077b8761d",
     "tool:channel_read@02e1baf246ff",
     "tool:channel_search@75fbf066b971",
     "tool:channel_list@19531b7be4d1",
@@ -635,7 +635,7 @@
     "tool:listen@c7db4bf7e5d1",
     "tool:say@6188a01eb966",
     "tool:list_voices@d94982302171",
-    "tool:channel_post@3fd5ee76f18f",
+    "tool:channel_post@67e239e1afc2",
     "tool:channel_read@dc33f06f8a44",
     "tool:channel_search@c2d5cdeb27a1",
     "tool:channel_list@bb071f8c1829",
@@ -724,7 +724,7 @@
     "tool:listen@c7db4bf7e5d1",
     "tool:say@6188a01eb966",
     "tool:list_voices@d94982302171",
-    "tool:channel_post@3fd5ee76f18f",
+    "tool:channel_post@67e239e1afc2",
     "tool:channel_read@dc33f06f8a44",
     "tool:channel_search@c2d5cdeb27a1",
     "tool:channel_list@bb071f8c1829",
@@ -801,7 +801,7 @@
     "tool:list_skills@30784cfcaef3",
     "tool:load_skill@9bf1ccea2858",
     "tool:wait_for@484f29078c62",
-    "tool:channel_post@526db26b375e",
+    "tool:channel_post@2e6077b8761d",
     "tool:channel_read@02e1baf246ff",
     "tool:channel_search@75fbf066b971",
     "tool:channel_list@19531b7be4d1",
@@ -1440,85 +1440,7 @@
    "unless_tool_kind": null,
    "with_native": "tool_search"
   },
-  "tool:channel_post@3fd5ee76f18f": {
-   "defer_loading": true,
-   "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and they are told where\nthey are. With `channel_id`, a line in the channel of the person you work\nfor -- never a group: it would speak for them in front of the others, and\nit is not carried to the chat a group mirrors. It does **not**\npause your turn, and an answer never comes back as a tool result. When you\nneed answers, set `wants_answer` on each (only with `to`), send them all,\nthen **finish your turn**: you get a fresh one here once the last person\nanswers, and `channel_read(asked_by_me=True)` shows what they said. When\nthe answer is one of a few, offer them as `choices`: they show as buttons\nin the person's chat and in what waits on them.\n\nTo answer the person you are already talking to, just reply.",
-   "include_return_schema": null,
-   "kind": "function",
-   "metadata": null,
-   "name": "channel_post",
-   "outer_typed_dict_key": null,
-   "parameters_json_schema": {
-    "properties": {
-     "channel_id": {
-      "anyOf": [
-       {
-        "format": "uuid",
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "default": null,
-      "description": "Instead, a channel to write in, from channel_list: the one of the person you work for (DIRECT). Not a group or a contact's."
-     },
-     "choices": {
-      "anyOf": [
-       {
-        "items": {
-         "type": "string"
-        },
-        "maxItems": 4,
-        "minItems": 2,
-        "type": "array"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "default": null,
-      "description": "Only with `wants_answer`: two to four short answers they can pick with one tap, like 'Send it' and 'Not mine'. They can always answer in their own words instead."
-     },
-     "text": {
-      "description": "Markdown -- every surface renders it. Write it to them, not about them.",
-      "type": "string"
-     },
-     "to": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "default": null,
-      "description": "A pod member id, user id, or email address: it goes to their own channel in Lemma, and they are told where they are. Use list_pod_members to find someone by name."
-     },
-     "wants_answer": {
-      "default": false,
-      "description": "Only with `to`: whether you need their answer. It then waits on them in their inbox, and you get a fresh turn here once everyone you asked has answered.",
-      "type": "boolean"
-     }
-    },
-    "required": [
-     "text"
-    ],
-    "title": "ChannelPostRequest",
-    "type": "object"
-   },
-   "return_schema": null,
-   "sequential": false,
-   "strict": null,
-   "timeout": null,
-   "tool_kind": null,
-   "toolset_id": null,
-   "unless_native": null,
-   "unless_tool_kind": null,
-   "with_native": "tool_search"
-  },
-  "tool:channel_post@526db26b375e": {
+  "tool:channel_post@2e6077b8761d": {
    "defer_loading": false,
    "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and they are told where\nthey are. With `channel_id`, a line in the channel of the person you work\nfor -- never a group: it would speak for them in front of the others, and\nit is not carried to the chat a group mirrors. It does **not**\npause your turn, and an answer never comes back as a tool result. When you\nneed answers, set `wants_answer` on each (only with `to`), send them all,\nthen **finish your turn**: you get a fresh one here once the last person\nanswers, and `channel_read(asked_by_me=True)` shows what they said. When\nthe answer is one of a few, offer them as `choices`: they show as buttons\nin the person's chat and in what waits on them.\n\nTo answer the person you are already talking to, just reply.",
    "include_return_schema": null,
@@ -1547,8 +1469,6 @@
         "items": {
          "type": "string"
         },
-        "maxItems": 4,
-        "minItems": 2,
         "type": "array"
        },
        {
@@ -1595,6 +1515,82 @@
    "unless_native": null,
    "unless_tool_kind": null,
    "with_native": null
+  },
+  "tool:channel_post@67e239e1afc2": {
+   "defer_loading": true,
+   "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and they are told where\nthey are. With `channel_id`, a line in the channel of the person you work\nfor -- never a group: it would speak for them in front of the others, and\nit is not carried to the chat a group mirrors. It does **not**\npause your turn, and an answer never comes back as a tool result. When you\nneed answers, set `wants_answer` on each (only with `to`), send them all,\nthen **finish your turn**: you get a fresh one here once the last person\nanswers, and `channel_read(asked_by_me=True)` shows what they said. When\nthe answer is one of a few, offer them as `choices`: they show as buttons\nin the person's chat and in what waits on them.\n\nTo answer the person you are already talking to, just reply.",
+   "include_return_schema": null,
+   "kind": "function",
+   "metadata": null,
+   "name": "channel_post",
+   "outer_typed_dict_key": null,
+   "parameters_json_schema": {
+    "properties": {
+     "channel_id": {
+      "anyOf": [
+       {
+        "format": "uuid",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Instead, a channel to write in, from channel_list: the one of the person you work for (DIRECT). Not a group or a contact's."
+     },
+     "choices": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Only with `wants_answer`: two to four short answers they can pick with one tap, like 'Send it' and 'Not mine'. They can always answer in their own words instead."
+     },
+     "text": {
+      "description": "Markdown -- every surface renders it. Write it to them, not about them.",
+      "type": "string"
+     },
+     "to": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "A pod member id, user id, or email address: it goes to their own channel in Lemma, and they are told where they are. Use list_pod_members to find someone by name."
+     },
+     "wants_answer": {
+      "default": false,
+      "description": "Only with `to`: whether you need their answer. It then waits on them in their inbox, and you get a fresh turn here once everyone you asked has answered.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "title": "ChannelPostRequest",
+    "type": "object"
+   },
+   "return_schema": null,
+   "sequential": false,
+   "strict": null,
+   "timeout": null,
+   "tool_kind": null,
+   "toolset_id": null,
+   "unless_native": null,
+   "unless_tool_kind": null,
+   "with_native": "tool_search"
   },
   "tool:channel_read@02e1baf246ff": {
    "defer_loading": false,
@@ -2995,7 +2991,7 @@
    },
    "name": "lemma_channel_list"
   },
-  "tool:lemma_channel_post@4f7bbcdd8832": {
+  "tool:lemma_channel_post@9759b3c46574": {
    "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and they are told where\nthey are. With `channel_id`, a line in the channel of the person you work\nfor -- never a group: it would speak for them in front of the others, and\nit is not carried to the chat a group mirrors. It does **not**\npause your turn, and an answer never comes back as a tool result. When you\nneed answers, set `wants_answer` on each (only with `to`), send them all,\nthen **finish your turn**: you get a fresh one here once the last person\nanswers, and `channel_read(asked_by_me=True)` shows what they said. When\nthe answer is one of a few, offer them as `choices`: they show as buttons\nin the person's chat and in what waits on them.\n\nTo answer the person you are already talking to, just reply.",
    "input_schema": {
     "properties": {
@@ -3018,8 +3014,6 @@
         "items": {
          "type": "string"
         },
-        "maxItems": 4,
-        "minItems": 2,
         "type": "array"
        },
        {

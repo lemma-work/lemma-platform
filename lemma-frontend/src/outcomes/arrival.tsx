@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { ArrivalView } from "@/org/arrival-view";
 import { defaultOrgKind, personalNameFor, teamNameFor } from "@/org/arrival";
@@ -26,6 +26,7 @@ export function FrameArrival({ email, name, onEntered }: {
     /** Where they landed: the Lemma an invitation named, or null for the shelf. */
     onEntered: (podId: string | null) => void;
 }) {
+    const queryClient = useQueryClient();
     const invitations = useQuery({ queryKey: ["my-invitations"], queryFn: () => source.myInvitations() });
     const suggested = useQuery({ queryKey: ["suggested-orgs"], queryFn: () => source.suggestedOrgs() });
     const [door, setDoor] = useState(false);
@@ -53,10 +54,16 @@ export function FrameArrival({ email, name, onEntered }: {
                 captureEvent("onboarding.arrived", { route: "new_org" });
                 onEntered(null);
             } catch {
+                /* Some invitations may already be accepted: the door has to
+                   show what is still waiting, not what was waiting at first. */
+                await Promise.all([
+                    queryClient.invalidateQueries({ queryKey: ["my-invitations"] }),
+                    queryClient.invalidateQueries({ queryKey: ["orgs"] }),
+                ]).catch(() => undefined);
                 setDoor(true);
             }
         })();
-    }, [ready, choice, invitations.data, email, name, onEntered]);
+    }, [ready, choice, invitations.data, email, name, onEntered, queryClient]);
 
     if (door || choice) return <ArrivalView email={email} name={name} onEntered={onEntered} />;
     return <WorkspaceLoading />;

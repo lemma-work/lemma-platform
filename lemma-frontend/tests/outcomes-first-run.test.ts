@@ -73,7 +73,8 @@ test("what the Lemma keeps it owns is shown over its plan file, and never writte
     assert.equal(withOwned(undefined, owned)?.outcome, owned.sentence, "and one with no plan file still shows what it owns");
 });
 
-test("a target reads as a person writes it", () => {
+test("a target reads as a person writes it, exactly as kept", () => {
+    assert.equal(targetText(99.95, "%"), "99.95%", "never rounded: readings are compared against it");
     assert.equal(targetText(90, "%"), "90%");
     assert.equal(targetText(2, "posts"), "2 posts");
     assert.equal(targetText(20, null), "20");
@@ -127,16 +128,18 @@ test("a form is matched to its wait, which carries the form to fill in here", ()
 });
 
 test("a pasted link opens where this app installs it, and only such links", () => {
-    assert.equal(sharedLinkPath("https://github.com/acme/support-lemma"), "/import/github/acme/support-lemma");
-    assert.equal(sharedLinkPath("github.com/acme/support-lemma.git"), "/import/github/acme/support-lemma");
-    assert.equal(sharedLinkPath("https://lemma.work/s/app/abc"), "/s/app/abc");
-    assert.equal(sharedLinkPath("https://lemma.work/remix?source=x"), "/remix?source=x");
-    assert.equal(sharedLinkPath("https://example.com/whatever"), null);
-    assert.equal(sharedLinkPath("github.com/acme"), null);
-    assert.equal(sharedLinkPath("not a link at all"), null);
-    assert.equal(sharedLinkPath("https://lemma.work/s/a%20b/<x>?q=<y>"), "/s/a%20b/%3Cx%3E?q=%3Cy%3E", "every part is encoded again");
-    assert.equal(sharedLinkPath("https://lemma.work/s/%E0%A4%A"), null, "broken percent-encoding opens nothing");
-    assert.equal(sharedLinkPath("javascript:alert(1)"), null);
+    const own = ["https://lemma.work"];
+    assert.equal(sharedLinkPath("https://github.com/acme/support-lemma", own), "/import/github/acme/support-lemma");
+    assert.equal(sharedLinkPath("github.com/acme/support-lemma.git", own), "/import/github/acme/support-lemma");
+    assert.equal(sharedLinkPath("https://lemma.work/s/app/abc", own), "/s/app/abc");
+    assert.equal(sharedLinkPath("https://lemma.work/remix?source=x", own), "/remix?source=x");
+    assert.equal(sharedLinkPath("https://example.com/s/app/abc", own), null, "another site's path that looks like a share opens nothing");
+    assert.equal(sharedLinkPath("https://example.com/whatever", own), null);
+    assert.equal(sharedLinkPath("github.com/acme", own), null);
+    assert.equal(sharedLinkPath("not a link at all", own), null);
+    assert.equal(sharedLinkPath("https://lemma.work/s/a%20b/<x>?q=<y>", own), "/s/a%20b/%3Cx%3E?q=%3Cy%3E", "every part is encoded again");
+    assert.equal(sharedLinkPath("https://lemma.work/s/%E0%A4%A", own), null, "broken percent-encoding opens nothing");
+    assert.equal(sharedLinkPath("javascript:alert(1)", own), null);
 });
 
 test("what a template brings is counted as a person would count it", () => {

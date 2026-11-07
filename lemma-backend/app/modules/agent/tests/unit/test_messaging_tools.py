@@ -340,6 +340,19 @@ def test_a_question_offers_two_to_four_choices():
         ChannelPostRequest(text="?", to="x", wants_answer=True, choices=list("abcde"))
 
 
+def test_choices_are_counted_after_blanks_and_repeats_are_dropped():
+    """A blank would be an empty button and a repeat the same button twice, so
+    neither counts toward the two the question must offer."""
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Yes", " "])
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Yes", "Yes"])
+    asked = ChannelPostRequest(
+        text="?", to="x", wants_answer=True, choices=[" Send it", "Not mine", "Send it"]
+    )
+    assert asked.choices == ["Send it", "Not mine"]
+
+
 async def test_outside_a_pod_nothing_is_posted(monkeypatch):
     _no_database(monkeypatch)
 

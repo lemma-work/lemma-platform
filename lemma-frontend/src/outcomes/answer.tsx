@@ -133,8 +133,8 @@ function LineHere({ pod, line }: { pod: Pod; line: NonNullable<QueueItem["line"]
         <div className="ox-lineask">
             {line.choices.length > 0 && (
                 <div className="ox-lineask__acts">
-                    {line.choices.map((choice) => (
-                        <button key={choice} type="button" className="ox-btn ox-btn--small" disabled={busy} onClick={() => void send({ choice }, choice)}>{choice}</button>
+                    {line.choices.map((choice, index) => (
+                        <button key={`${index}:${choice}`} type="button" className="ox-btn ox-btn--small" disabled={busy} onClick={() => void send({ choice }, choice)}>{choice}</button>
                     ))}
                 </div>
             )}
