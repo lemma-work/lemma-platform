@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { lemma } from "@/session/client";
 import { InteractionCard, type Resolve } from "@/thread/interaction-card";
+import { Prose } from "@/thread/markdown";
 import { buildTurns, openInteraction } from "@/thread/turns";
 import { CONVERSATION_ASKS } from "@/thread/waiting-on-you";
 import { WaitForm } from "@/workflow/form";
@@ -131,6 +132,9 @@ function LineHere({ pod, line }: { pod: Pod; line: NonNullable<QueueItem["line"]
     if (said) return <p className="ox-vs">Answered: {said}. {pod.name} reads it next.</p>;
     return (
         <div className="ox-lineask">
+            {/* The row's title is the question's first line; what is answered
+                here is the whole of it, as the chat showed it. */}
+            {line.prompt && <div className="ox-lineask__q"><Prose text={line.prompt} /></div>}
             {line.choices.length > 0 && (
                 <div className="ox-lineask__acts">
                     {line.choices.map((choice, index) => (

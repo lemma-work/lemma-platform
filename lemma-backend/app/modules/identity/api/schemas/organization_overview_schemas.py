@@ -51,7 +51,7 @@ class NeedsYouItemResponse(BaseSchema):
         description=(
             "Where it is. The conversation's title when `title` is the "
             "question; the workflow's name; or why the contact asked for a "
-            "person."
+            "person. MESSAGE: the whole question, when `title` had to cut it."
         ),
     )
     since: datetime = Field(description="When it started waiting.")

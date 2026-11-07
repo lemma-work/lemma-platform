@@ -35,7 +35,7 @@ class NeedsYouItemResponse:
                 `{text}`, is always allowed too.
             conversation_id (None | Unset | UUID):
             detail (None | str | Unset): Where it is. The conversation's title when `title` is the question; the workflow's
-                name; or why the contact asked for a person.
+                name; or why the contact asked for a person. MESSAGE: the whole question, when `title` had to cut it.
             message_id (None | Unset | UUID): MESSAGE: the line it was asked on. Answer it with `POST
                 /pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer`.
             title (None | str | Unset): What is asked. QUESTION/APPROVAL/PERMISSION: the question or what the agent wants to

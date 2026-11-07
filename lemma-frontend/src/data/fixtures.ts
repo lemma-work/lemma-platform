@@ -3605,6 +3605,12 @@ export const fixtureSource: PodSource = {
             completed_at: null,
         };
         runs.unshift(started);
+        /* The sample has no worker: the run finishes on its own a moment
+           later, so the history's next read shows it done, not running. */
+        setTimeout(() => {
+            const at = new Date().toISOString();
+            Object.assign(started, { status: "COMPLETED", attempts: 1, started_at: at, completed_at: at });
+        }, 1500);
         return readRun(started);
     },
     async createSchedule(_podId: string, draft: ScheduleDraft) {

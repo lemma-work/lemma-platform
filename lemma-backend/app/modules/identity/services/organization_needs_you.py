@@ -198,6 +198,9 @@ def contact_items(
 #: A line's question is shown as one line of a list; its whole text is on the
 #: line it was asked on.
 _TITLE_CHARS = 160
+#: ...and whole where it is answered, so nobody answers half a question; one
+#: longer than this is finished in its chat.
+_WHOLE_CHARS = 4000
 
 
 def _first_line(text: str | None) -> str | None:
@@ -209,24 +212,37 @@ def _first_line(text: str | None) -> str | None:
     return first[: _TITLE_CHARS - 1].rstrip() + "…"
 
 
+def _whole(text: str | None, title: str | None) -> str | None:
+    """The question as it was asked, when its title had to cut it."""
+    whole = (text or "").strip()
+    if not whole or whole == title:
+        return None
+    if len(whole) <= _WHOLE_CHARS:
+        return whole
+    return whole[: _WHOLE_CHARS - 1].rstrip() + "…"
+
+
 def line_items(
     asked: Sequence[AskedInALine], pod_names: dict[UUID, str]
 ) -> list[NeedsYouItem]:
-    return [
-        NeedsYouItem(
-            key=f"message:{question.message_id}",
-            kind=NeedsYouKind.MESSAGE,
-            pod_id=question.pod_id,
-            pod_name=pod_names.get(question.pod_id, ""),
-            title=_first_line(question.prompt),
-            detail=None,
-            since=question.since,
-            channel_id=question.channel_id,
-            message_id=question.message_id,
-            choices=question.choices,
+    items: list[NeedsYouItem] = []
+    for question in asked:
+        title = _first_line(question.prompt)
+        items.append(
+            NeedsYouItem(
+                key=f"message:{question.message_id}",
+                kind=NeedsYouKind.MESSAGE,
+                pod_id=question.pod_id,
+                pod_name=pod_names.get(question.pod_id, ""),
+                title=title,
+                detail=_whole(question.prompt, title),
+                since=question.since,
+                channel_id=question.channel_id,
+                message_id=question.message_id,
+                choices=question.choices,
+            )
         )
-        for question in asked
-    ]
+    return items
 
 
 def oldest_first(items: Sequence[NeedsYouItem], *, limit: int) -> list[NeedsYouItem]:

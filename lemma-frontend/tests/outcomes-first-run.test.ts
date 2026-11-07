@@ -101,7 +101,7 @@ test("the organization's list becomes the queue, each answered where it can be",
     const queue = queueFromNeeds([
         need({ key: "conversation:c1", since: "2026-11-06T09:00:00Z" }),
         need({ key: "conversation:c2", kind: "APPROVAL", conversationId: "c2", since: "2026-11-06T08:00:00Z" }),
-        need({ key: "message:m1", kind: "MESSAGE", conversationId: null, channelId: "ch1", messageId: "m1", choices: ["Send it", "Not mine"], title: "Jonas has waited 21 hours." }),
+        need({ key: "message:m1", kind: "MESSAGE", conversationId: null, channelId: "ch1", messageId: "m1", choices: ["Send it", "Not mine"], title: "Jonas has waited 21 hours.", detail: "Jonas has waited 21 hours.\n\nA draft: ..." }),
         need({ key: "contact:ch2", kind: "CONTACT", conversationId: null, channelId: "ch2", title: "Dana", detail: null }),
         need({ key: "wait:w9", kind: "DECISION", conversationId: null, workflowRunId: "r9" }),
     ], []);
@@ -109,7 +109,8 @@ test("the organization's list becomes the queue, each answered where it can be",
     const [approval, question, line, contact, decision] = queue;
     assert.equal(approval.kind, "decide");
     assert.equal(question.kind, "answer");
-    assert.deepEqual(line.line, { channelId: "ch1", messageId: "m1", choices: ["Send it", "Not mine"] });
+    assert.deepEqual(line.line, { channelId: "ch1", messageId: "m1", choices: ["Send it", "Not mine"], prompt: "Jonas has waited 21 hours.\n\nA draft: ..." });
+    assert.equal(line.detail, null, "the whole question is the answer panel's, not the row's");
     assert.deepEqual(viewOfItem(line), { name: "chats", open: { kind: "shared", podId: "p1", id: "ch1" } }, "a line question opens the chat it was asked in");
     assert.equal(contact.title, "Reply to Dana");
     assert.equal(contact.contactId, "ch2");

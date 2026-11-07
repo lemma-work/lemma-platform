@@ -2039,6 +2039,13 @@ a.ox-piece:hover .ox-piece__t {
     gap: 8px;
 }
 
+/* A long question scrolls in place, so its answers stay in view. */
+.ox-lineask__q {
+    max-height: 240px;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+}
+
 /* ── a Lemma's weeks against what it owns ────────────────────────────── */
 
 .ox-weeks {

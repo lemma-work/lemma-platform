@@ -19,7 +19,7 @@ export type NeedsYouItemResponse = {
     choices?: Array<string>;
     conversation_id?: (string | null);
     /**
-     * Where it is. The conversation's title when `title` is the question; the workflow's name; or why the contact asked for a person.
+     * Where it is. The conversation's title when `title` is the question; the workflow's name; or why the contact asked for a person. MESSAGE: the whole question, when `title` had to cut it.
      */
     detail?: (string | null);
     /**

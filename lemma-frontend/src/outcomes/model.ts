@@ -598,7 +598,8 @@ export interface QueueItem {
     wait: WaitingRow["wait"] | null;
     /** A question a Lemma asked in your chat with it, answered by a choice
      *  it offered or in words. */
-    line: { channelId: string; messageId: string; choices: string[] } | null;
+    /** `prompt` is the whole question when the title is only its first line. */
+    line: { channelId: string; messageId: string; choices: string[]; prompt: string | null } | null;
 }
 
 /** Where a row is answered: in place, from its own card ("ask") or its
@@ -739,7 +740,7 @@ export function queueFromNeeds(needs: readonly NeedsItem[], waits: readonly Wait
                 if (need.channelId) items.push({ ...base, key: "contact:" + need.channelId, kind: "answer", title: `Reply to ${need.title ?? "someone waiting"}`, detail: need.detail ?? "Waiting on a person", contactId: need.channelId });
                 break;
             case "MESSAGE":
-                if (need.channelId && need.messageId) items.push({ ...base, key: need.key, kind: "answer", title: need.title ?? "A question for you", detail: null, line: { channelId: need.channelId, messageId: need.messageId, choices: [...need.choices] } });
+                if (need.channelId && need.messageId) items.push({ ...base, key: need.key, kind: "answer", title: need.title ?? "A question for you", detail: null, line: { channelId: need.channelId, messageId: need.messageId, choices: [...need.choices], prompt: need.detail } });
                 break;
         }
     }

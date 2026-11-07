@@ -186,14 +186,21 @@ def test_a_line_question_opens_its_line_and_offers_its_choices():
     assert (item.channel_id, item.message_id) == (asked.channel_id, asked.message_id)
     assert item.key == f"message:{asked.message_id}"
     assert item.choices == ("Send it", "Not mine")
+    assert item.detail == "Jonas has waited 21 hours.\n\nA draft: ..."
 
 
-def test_a_long_line_question_is_cut_to_one_line_of_a_list():
+def test_a_long_line_question_is_cut_to_one_line_of_a_list_and_kept_whole():
     [item] = line_items([_asked("word " * 100)], NAMES)
     assert item.title is not None and len(item.title) <= 160
     assert item.title.endswith("…")
+    assert item.detail == ("word " * 100).strip()
+    [short] = line_items([_asked("Send it?")], NAMES)
+    assert (short.title, short.detail) == ("Send it?", None)
+    [huge] = line_items([_asked("word " * 2000)], NAMES)
+    assert huge.detail is not None and len(huge.detail) <= 4000
+    assert huge.detail.endswith("…")
     [empty] = line_items([_asked(None)], NAMES)
-    assert empty.title is None
+    assert (empty.title, empty.detail) == (None, None)
 
 
 def test_choices_are_read_from_the_shape_ask_user_keeps_them_in():
