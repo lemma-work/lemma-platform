@@ -28,6 +28,14 @@ def _humanize_pod_name(value: str) -> str:
     return " ".join(words)
 
 
+def invitation_note(inviter_name: str, note: str | None) -> tuple[str, ...]:
+    """The inviter's own words, as the paragraph after the invite itself: they
+    say why this person is being asked in, which nothing else in it can. None
+    when they wrote nothing."""
+    said = (note or "").strip()
+    return (f"{inviter_name} wrote: \u201c{said}\u201d",) if said else ()
+
+
 class SmtpIdentityEmailAdapter(IdentityEmailPort):
     """SMTP adapter for identity notification emails."""
 
@@ -102,26 +110,32 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         accept_url: str,
         pod_name: str | None = None,
         pod_description: str | None = None,
+        note: str | None = None,
     ) -> bool:
         del role
         display_organization_name = humanize_name(organization_name)
         display_pod_name = _humanize_pod_name(pod_name) if pod_name else pod_name
         inviter_name = self._display_name_from_email(inviter_email)
+        said = invitation_note(inviter_name, note)
 
         if pod_name:
-            target_label = f"pod {display_pod_name}"
-            preheader = f"You have been invited to use {display_pod_name} on Lemma."
-            eyebrow = "Pod invitation"
-            heading = f"Use {display_pod_name}."
+            target_label = display_pod_name
+            preheader = (
+                f"{inviter_name} invited you to {display_pod_name}, a Lemma at "
+                f"{display_organization_name}."
+            )
+            eyebrow = "Invitation"
+            heading = f"Work with {display_pod_name}."
             body = (
                 (
-                    f"{inviter_name} invited you to access {display_pod_name} "
-                    f"in {display_organization_name}."
+                    f"{inviter_name} invited you to {display_pod_name}, a Lemma "
+                    f"at {display_organization_name}."
                 ),
+                *said,
             )
             action_label = f"Open {display_pod_name}"
             details = (
-                EmailDetail("Pod", display_pod_name or ""),
+                EmailDetail("Lemma", display_pod_name or ""),
                 EmailDetail("Workspace", display_organization_name),
                 EmailDetail(
                     "About",
@@ -139,6 +153,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             heading = f"Join {display_organization_name} on Lemma."
             body = (
                 f"{inviter_name} invited you to the {display_organization_name} workspace.",
+                *said,
                 (
                     "Accept the invitation to work with the team's agents, data, "
                     "automations, and apps in one place."

@@ -153,6 +153,18 @@ class ScheduleRunRepository:
         )
         return found is not None
 
+    async def get_for_event(
+        self, *, schedule_id: UUID, source_event_id: str
+    ) -> ScheduleRunEntity | None:
+        """The run this event became, whatever became of it."""
+        model = await self.session.scalar(
+            select(ScheduleRun).where(
+                ScheduleRun.schedule_id == schedule_id,
+                ScheduleRun.source_event_id == source_event_id,
+            )
+        )
+        return model.to_entity() if model is not None else None
+
     async def lock_admission(self, schedule_id: UUID) -> None:
         """Serialize admission to one schedule until this transaction ends.
 

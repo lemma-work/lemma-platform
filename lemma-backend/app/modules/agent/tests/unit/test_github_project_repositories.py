@@ -79,11 +79,28 @@ def _github() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(_answer))
 
 
-def _repositories(answer, client: httpx.AsyncClient | None = None):
+def _held(*installations: str):
+    """The installations ``connector_installations`` binds to the organization."""
+
+    async def _organization_installations(uow, ctx):
+        del uow
+        assert (ctx.user_id, ctx.pod_id) == (_PERSON, _POD)
+        return installations
+
+    return _organization_installations
+
+
+def _repositories(
+    answer,
+    client: httpx.AsyncClient | None = None,
+    *,
+    held: tuple[str, ...] = ("7",),
+):
     return GithubProjectRepositories(
         _uow_factory(),
         person_context=_person,
         credential_as=_connector(answer),
+        organization_installations=_held(*held),
         client=client,
     )
 
@@ -185,13 +202,72 @@ async def test_an_account_with_no_token_is_asked_to_reconnect():
 
 
 @pytest.mark.asyncio
-async def test_an_account_bound_to_no_installation_is_asked_to_install():
+async def test_an_organization_holding_no_installation_is_asked_to_install():
     credential = _GithubCredential(access_token="ghu_person", login=None, email=None)
 
     with pytest.raises(GithubInstallationRequiredError) as refused:
-        await _repositories(credential).reachable(pod_id=_POD, user_id=_PERSON)
+        await _repositories(credential, held=()).reachable(pod_id=_POD, user_id=_PERSON)
 
     assert refused.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_an_accounts_installation_the_organization_does_not_hold_reaches_nothing():
+    """The account names it, and the organization never bound it: not a way in."""
+    credential = _GithubCredential(
+        access_token="ghu_person", login="octo", email=None, installation_id="9"
+    )
+
+    with pytest.raises(GithubInstallationRequiredError):
+        await _repositories(credential, held=()).reachable(pod_id=_POD, user_id=_PERSON)
+
+
+@pytest.mark.asyncio
+async def test_the_picker_lists_every_installation_the_organization_holds():
+    """The account's own installation first, then the others it holds."""
+    credential = _GithubCredential(
+        access_token="ghu_person", login="octo", email=None, installation_id="8"
+    )
+    installations = {
+        "7": {"login": "acme", "type": "Organization", "repo": "web"},
+        "8": {"login": "octo", "type": "User", "repo": "dotfiles"},
+    }
+
+    def _answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/installations":
+            return httpx.Response(
+                200,
+                json={
+                    "installations": [
+                        {
+                            "id": int(identifier),
+                            "account": {"login": one["login"], "type": one["type"]},
+                            "repository_selection": "all",
+                        }
+                        for identifier, one in installations.items()
+                    ]
+                },
+            )
+        identifier = request.url.path.split("/")[3]
+        one = installations[identifier]
+        return httpx.Response(
+            200,
+            json={
+                "repositories": [
+                    {"owner": {"login": one["login"]}, "name": one["repo"]}
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_answer)) as client:
+        listing = await _repositories(credential, client, held=("7", "8")).reachable(
+            pod_id=_POD, user_id=_PERSON
+        )
+
+    assert [choice.repo.full_name for choice in listing.choices] == [
+        "octo/dotfiles",
+        "acme/web",
+    ]
 
 
 @pytest.mark.asyncio
@@ -201,6 +277,8 @@ async def test_the_picker_lists_the_repositories_with_their_checkouts():
     )
 
     def _listed(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/installations":
+            return _github_installation()
         assert request.url.path == "/user/installations/7/repositories"
         return httpx.Response(
             200,

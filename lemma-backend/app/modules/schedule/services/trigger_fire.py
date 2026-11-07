@@ -1,10 +1,12 @@
 """One fire, for any trigger source, in the caller's transaction.
 
-TIME occurrences, webhook deliveries, table changes and filter verdicts all
-end here, so every source gets the same rules in the same order:
+TIME occurrences, webhook deliveries, table changes, filter verdicts and runs
+a person starts by hand all end here, so every source gets the same rules in
+the same order:
 
 1. a schedule with an LLM filter gets a ``schedule.filter`` item instead
-   (the filter job comes back through ``start_after_filter``);
+   (the filter job comes back through ``start_after_filter``) -- unless a
+   person started the fire, who is the decision the filter would make;
 2. the daily ceiling (``fire_cap``) -- past it the trigger pauses itself;
 3. ``max_concurrent_runs`` -- a full schedule records the fire as skipped;
 4. the run is reserved, unique on ``(schedule_id, source_event_id)``, so a
@@ -69,6 +71,10 @@ class TriggerEvent:
     #: The person who owns the changed row, for a table change that has one.
     row_owner_user_id: UUID | None = None
     source_occurred_at: datetime | None = None
+    #: The person who started this fire by hand. It runs as them, never as
+    #: the owner, and its filter is not asked: the person is the decision the
+    #: filter would make, and whoever may start a run may also edit the filter.
+    started_by_user_id: UUID | None = None
 
 
 def run_person(schedule: ScheduleEntity, row_owner_user_id: UUID | None) -> UUID | None:
@@ -154,7 +160,7 @@ async def _fire_trigger(
     writer = work or WorkWriter.of(uow)
     if not schedule.is_active:
         return FireOutcome.INACTIVE
-    if schedule.filter_instruction:
+    if schedule.filter_instruction and event.started_by_user_id is None:
         await writer.add(
             SCHEDULE_FILTER,
             schedule_namespace(schedule.pod_id),
@@ -176,7 +182,7 @@ async def _fire_trigger(
             uow, schedule, source_event_id=event.source_event_id, work=writer
         )
         return FireOutcome.FIRE_CAP
-    person = run_person(schedule, event.row_owner_user_id)
+    person = event.started_by_user_id or run_person(schedule, event.row_owner_user_id)
     if not await admit_fire(
         uow,
         schedule,

@@ -9,6 +9,7 @@ from ..openapi_client.api.schedules import (
     schedule_event_list,
     schedule_get,
     schedule_list,
+    schedule_run_create,
     schedule_run_list,
     schedule_run_retry,
     schedule_skip_list,
@@ -153,6 +154,18 @@ class PodSchedules(BoundResource):
             self._schedule_id(schedule_id),
             limit=limit,
             page_token=page_token if page_token is not None else UNSET,
+        )
+
+    def run_now(self, schedule_id: str) -> ScheduleRunResponse:
+        """Start one run of a TIME schedule now, outside its timing, as you.
+
+        Answers the run, ``PROCESSING`` until its target is handed over. Held
+        to the schedule's daily ceiling and ``max_concurrent_runs`` like any
+        firing. A WEBHOOK or DATASTORE schedule is refused (422), as is a
+        paused one (409).
+        """
+        return self._call(
+            schedule_run_create, self._pod_uuid(), self._schedule_id(schedule_id)
         )
 
     def retry_run(self, schedule_id: str, run_id: str) -> ScheduleRunResponse:

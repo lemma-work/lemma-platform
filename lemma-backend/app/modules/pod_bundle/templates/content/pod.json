@@ -4,6 +4,7 @@
   "description": "Keeps two posts going out every week.",
   "lemma": {
     "position": 4,
+    "function": "marketing",
     "face": "wave",
     "place": "Notion",
     "brings": [

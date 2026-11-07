@@ -4,6 +4,7 @@
   "description": "Signs design partners by a date, and chases every conversation that goes quiet.",
   "lemma": {
     "position": 6,
+    "function": "sales",
     "face": "peak",
     "place": "HubSpot",
     "brings": [

@@ -111,6 +111,34 @@ async def bound_organization(
     )
 
 
+#: Installations one organization is read for. One per GitHub account its
+#: people work in -- their own, their GitHub organizations -- which is a
+#: handful; the bound keeps a picker from walking past what anyone uses.
+_MAX_BOUND_INSTALLATIONS = 50
+
+
+async def bound_installations(
+    session: AsyncSession, organization_id: UUID
+) -> tuple[str, ...]:
+    """Every installation bound to this organization, oldest binding first.
+
+    What a person in it may open a conversation in is drawn from these: an
+    organization connected through more than one GitHub account -- someone's
+    own, and the GitHub organization they work in -- reaches the repositories
+    of each, and never an installation another Lemma organization holds.
+    """
+    rows = await session.scalars(
+        select(ConnectorInstallation.external_id)
+        .where(
+            ConnectorInstallation.connector_id == GITHUB,
+            ConnectorInstallation.organization_id == organization_id,
+        )
+        .order_by(ConnectorInstallation.created_at, ConnectorInstallation.id)
+        .limit(_MAX_BOUND_INSTALLATIONS)
+    )
+    return tuple(str(one) for one in rows.all())
+
+
 async def held_proven_by(
     session: AsyncSession, installation_id: str, organization_id: UUID
 ) -> bool:
@@ -389,6 +417,7 @@ async def routable_external_ref(
 
 __all__ = [
     "InstallationBindings",
+    "bound_installations",
     "bound_organization",
     "claim_for_account",
     "claim_installation",

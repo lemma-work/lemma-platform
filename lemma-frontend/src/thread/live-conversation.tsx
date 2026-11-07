@@ -22,6 +22,7 @@ import { splitQueued, withdrawFailure, withoutSent } from "./queued";
 import { composerSend, sendToConversation, steerConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
+import { RepositoryChip } from "./repository-chip";
 import { needsAiModel, pointsAtModels, runFailure } from "./model-setup";
 import { RECONNECTED_EVENT, isTransportFailure } from "@/shell/connection";
 import { STUCK_AFTER_MS, TRANSPORT_RELOAD_MS, runLooksStuck } from "./stuck-run";
@@ -324,6 +325,9 @@ export function LiveConversation({
        stored until there is a conversation, so it waits here and goes up with
        the one the first send creates. */
     const [pickedModel, setPickedModel] = useState<Choice | null>(null);
+    /* Likewise the GitHub repository it works in, which can only be chosen
+       before it exists: the conversation's worktree is cut when it is made. */
+    const [pickedRepository, setPickedRepository] = useState<string | null>(null);
     /* The sentence for an upload that failed, kept for the note under the box:
        the send that was carrying it fails too, and "that did not send" is the
        wrong half of what happened. */
@@ -720,6 +724,7 @@ export function LiveConversation({
                             ...(pickedModel
                                 ? { agent_runtime: { profile_id: pickedModel.runtimeId, model_name: pickedModel.model || null } }
                                 : {}),
+                            ...(pickedRepository ? { repository: pickedRepository } : {}),
                         } as Parameters<typeof client.conversations.create>[0]);
                         /* A folder chosen while composing is parked in the
                            desktop shell. Adopted here, before the session
@@ -811,7 +816,7 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, folderChosen, running, steer, createWith, reply.sendWith],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, folderChosen, running, steer, createWith, pickedRepository, reply.sendWith],
     );
 
     /* A refused message, sent again as a new one, or taken back into the box
@@ -1042,6 +1047,11 @@ export function LiveConversation({
                 answerWith={answerWith}
             />
             <FolderChip folder={folder} />
+            {/* Only while the conversation is still a draft, and not when the
+                box it was asked from already named one. */}
+            {!session.conversationId && typeof createWith?.repository !== "string" && (
+                <RepositoryChip podId={pod.id} picked={pickedRepository} onPick={setPickedRepository} />
+            )}
             <Composer
                 placeholder={waitingOn?.kind === "question"
                     ? "Or answer in your own words…"

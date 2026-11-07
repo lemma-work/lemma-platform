@@ -40,6 +40,8 @@ export {
     UploadSimple as UploadIcon, Compass as TourIcon, BookOpenText as DocsIcon,
     // The parts of a teammate's About page that had no mark of their own:
     // channels, skills, other teammates, the default model, and MCP.
+    // A GitHub repository a new chat works in.
+    GitBranch as BranchIcon,
     Broadcast as ReachIcon, GraduationCap as TaughtIcon, Handshake as AskIcon, Cpu as ModelIcon, Plug as PlugIcon,
 } from "@phosphor-icons/react";
 

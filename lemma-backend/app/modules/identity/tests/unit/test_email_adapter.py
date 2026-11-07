@@ -2,8 +2,10 @@ import pytest
 
 from app.modules.identity.domain.organization_entities import OrganizationRole
 from app.modules.identity.infrastructure.adapters import email_adapter
+from app.core.email.transactional import render_transactional_email
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
+    invitation_note,
 )
 from app.modules.identity.services.email_policy import (
     EmailPolicyError,
@@ -64,9 +66,10 @@ async def test_pod_invitation_email_uses_pod_layout(monkeypatch):
 
     html = sent["html_content"]
     assert result is True
-    assert sent["subject"] == "Invitation to join pod Acme Support AI"
-    assert "Pod invitation" in html
-    assert "Use Acme Support AI." in html
+    assert sent["subject"] == "Invitation to join Acme Support AI"
+    assert "Work with Acme Support AI." in html
+    assert "a Lemma at Acme" in html
+    assert "pod" not in sent["subject"].lower() and "Pod invitation" not in html
     assert "lemma" in html.lower()
     assert "Open Acme Support AI" in html
     assert "Ask product questions" in html
@@ -94,12 +97,29 @@ async def test_pod_invitation_humanizes_partially_formatted_stored_name(monkeypa
         pod_name="Email-test_pod Pod",
     )
 
-    assert sent["subject"] == "Invitation to join pod Email Test Pod"
-    assert "Use Email Test Pod." in sent["html_content"]
+    assert sent["subject"] == "Invitation to join Email Test Pod"
+    assert "Work with Email Test Pod." in sent["html_content"]
     assert "Open Email Test Pod" in sent["html_content"]
     assert "Email-test_pod" not in sent["html_content"]
     assert "Email-test_pod" not in sent["text_content"]
     assert "Pod Pod" not in sent["html_content"]
+
+
+def test_an_invitation_quotes_the_inviters_note_and_escapes_it():
+    """The note is the inviter's own words: quoted after the invite, escaped
+    where the email draws it, and left out when it says nothing."""
+    said = invitation_note("Ada", "  You answered most of these <b>customers</b>. ")
+    assert said == (
+        "Ada wrote: \u201cYou answered most of these <b>customers</b>.\u201d",
+    )
+    rendered = render_transactional_email(
+        preheader="p", eyebrow="e", heading="h", body=("Invited.", *said)
+    )
+    assert "You answered most of these" in rendered.text
+    assert "&lt;b&gt;customers&lt;/b&gt;" in rendered.html
+    assert "<b>customers</b>" not in rendered.html
+    assert invitation_note("Ada", "   ") == ()
+    assert invitation_note("Ada", None) == ()
 
 
 @pytest.mark.asyncio

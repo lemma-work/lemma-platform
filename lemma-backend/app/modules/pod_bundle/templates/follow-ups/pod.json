@@ -4,6 +4,7 @@
   "description": "Makes sure every lead hears from you within two days.",
   "lemma": {
     "position": 2,
+    "function": "sales",
     "face": "loop",
     "place": "HubSpot",
     "brings": [
