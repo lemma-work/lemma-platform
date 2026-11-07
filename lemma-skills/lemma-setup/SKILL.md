@@ -82,7 +82,9 @@ lemma decisions run --priority background \
 
 The evidence is never followed as instructions, so raw email or chat text is
 safe to pass. Keep what passed, and turn each into a row with exactly the
-table's columns.
+table's columns. What failed gets no row: a row in the work table is a unit
+of work, and a flag column for the rest would mean changing the measure. Say
+in your reply how many you left out and why.
 
 ## 4. Import them
 
@@ -114,9 +116,11 @@ what is new since the last row is the fallback; say so.
 ## 6. Count it
 
 A template's measure already counts its tables, this week, only what is due:
-keep it, and check that it reads now. Never swap its window for a rolling one.
-If it gets something wrong, change it and say what and why in your reply.
-Otherwise, write one with `set_what_you_own`:
+keep it, and check that it reads now. The number is read again through the
+week and kept as that week's value, so a rolling window ("the last 7 days")
+makes every week overlap the one before; never swap one in. If it gets
+something wrong, change it and say what and why in your reply. Otherwise,
+write one with `set_what_you_own`:
 
 - one read-only query, one row, one column;
 - only over tables with `enable_rls: false`, because the number is the same
@@ -125,8 +129,9 @@ Otherwise, write one with `set_what_you_own`:
 - count only what is due: an item whose deadline has not passed yet is
   neither a hit nor a miss, so leave it out until it is one or the other;
 - with `unit` "%" it answers 0 to 100, as the target is written;
-- a week with nothing due answers null, never `coalesce(…, 0)`: zero says
-  everyone was missed;
+- a week with nothing due answers null, never a number made up for it
+  (`coalesce(…, 0)` says everyone was missed, `case … then 100` says nobody
+  was);
 - keep the person's sentence; a finish line also needs `due`.
 
 The tool reads the measure once and returns `value`. A null or an error means
@@ -162,6 +167,7 @@ not know, with choices drawn from `list_pod_members`.
 
 ## Finish
 
-Reply in a few lines: what now feeds it, how many weeks came in, the number
-against the target, and the one thing that needs the person, if any. Do not
-list every command you ran.
+Reply in a few lines, with the weekly widget from step 7 displayed in the
+same turn: what now feeds it, how many weeks came in, the number against the
+target, and the one thing that needs the person, if any. Do not list every
+command you ran.
