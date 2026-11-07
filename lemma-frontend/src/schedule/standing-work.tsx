@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Member } from "@/data";
 import { ProblemLine } from "@/connect/connection-problem";
@@ -10,7 +10,7 @@ import { isForbidden } from "@/session/auth-state";
 import { isPodDefaultAgent } from "@/data/agent-names";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshIcon } from "@/ui/icons";
 import {
-    useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules, useServerEvents,
+    useCreateSchedule, useRetryRun, useRunNow, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules, useServerEvents,
 } from "./queries";
 import {
     CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, WHENS, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may, serverGroups,
@@ -130,6 +130,9 @@ export function StandingWork({ podId, teammate, members = [], onOpenRun, onOpenC
 
 /* ── one standing job ───────────────────────────────────────────────── */
 
+/** How long Run now says "Started" before it can be pressed again. */
+const STARTED_SHOWN_MS = 4000;
+
 function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversation }: {
     podId: string;
     job: StandingJob;
@@ -143,6 +146,19 @@ function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversat
        one schedule does not put every other row's button into its pending
        state. */
     const active = useScheduleActive(podId);
+    const runNow = useRunNow(podId, job.id);
+    /* Only a time schedule can be run by hand: a webhook's or a table's run
+       carries the event that fired it, and there is none to give it here. */
+    const runnable = mine && job.kind === "TIME" && job.active;
+    /* "Started" is said once, then the button is Run now again: the run is
+       the row's "fired just now", and it may have finished long before the
+       page is left. */
+    const { isSuccess: started, reset: resetRunNow } = runNow;
+    useEffect(() => {
+        if (!started) return;
+        const timer = window.setTimeout(resetRunNow, STARTED_SHOWN_MS);
+        return () => window.clearTimeout(timer);
+    }, [started, resetRunNow]);
 
     if (job.broken) {
         return (
@@ -214,6 +230,16 @@ function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversat
                 {mine ? (
                     <>
                         {job.kind !== "DATASTORE" && <ShareToggle podId={podId} job={job} />}
+                        {runnable && (
+                            <button
+                                className="btn"
+                                disabled={!may(job, SCHEDULE_EDIT) || runNow.isPending || started}
+                                title={may(job, SCHEDULE_EDIT) ? "Run it once now, outside its timing" : "You may read this schedule, not change it."}
+                                onClick={() => runNow.mutate()}
+                            >
+                                {runNow.isPending ? "Starting…" : started ? "Started" : "Run now"}
+                            </button>
+                        )}
                         <button
                             className="btn"
                             disabled={!may(job, SCHEDULE_EDIT) || active.isPending}
@@ -228,6 +254,11 @@ function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversat
                 )}
             </div>
 
+            {runNow.isError && (
+                <p className="sched-row__problem" role="alert">
+                    {runNow.error instanceof Error ? runNow.error.message : "Couldn’t start a run."}
+                </p>
+            )}
             {active.isError && (
                 <p className="sched-row__problem" role="alert">
                     {active.error instanceof Error ? active.error.message : "Couldn’t update this schedule."}

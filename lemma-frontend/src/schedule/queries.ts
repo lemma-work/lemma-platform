@@ -76,6 +76,19 @@ export function useRetryRun(podId: string, scheduleId: string) {
     });
 }
 
+/** Start one run of a time schedule now. Its ledger and the row's last
+ *  firing redraw from what the server recorded. */
+export function useRunNow(podId: string, scheduleId: string) {
+    const cache = useQueryClient();
+    return useMutation({
+        mutationFn: () => source.runScheduleNow(podId, scheduleId),
+        onSuccess: () => {
+            void cache.invalidateQueries({ queryKey: [SCHEDULES, podId, scheduleId, "runs"] });
+            void cache.invalidateQueries({ queryKey: [SCHEDULES, podId] });
+        },
+    });
+}
+
 export function useCreateSchedule(podId: string) {
     const cache = useQueryClient();
     return useMutation({

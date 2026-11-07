@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 5 |
 | `manual` | 24 |
-| `planned` | 35 |
+| `planned` | 36 |
 | `withdrawn` | 0 |
-| **total** | **240** |
+| **total** | **241** |
 
 Scenario tests declaring a promise: 454.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 259 | 415 |
+| OpenAPI operations | 259 | 416 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -233,6 +233,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-001` A person schedules work for a time or a repeat | `covered` | `test_a_repeating_schedule_is_created`, `test_unusable_timing_is_refused`, `test_an_outsider_cannot_touch_schedules` |
 | `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_stopped_schedule_can_be_restarted`, `test_a_schedule_can_be_paused_and_resumed`, `test_a_paused_schedule_does_not_fire` |
 | `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire`, `test_the_schedule_outlives_its_deleted_target` |
+| `PS-SCHED-004` A person can run a timed schedule now, without waiting for it | `planned` | — |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
 | `PS-SCHED-013` Work starts on an event from a server a person connected | `planned` | — |

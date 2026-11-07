@@ -4,6 +4,7 @@
   "description": "Answers customers, and makes sure nobody waits more than a day for an answer.",
   "lemma": {
     "position": 1,
+    "function": "support",
     "face": "bloom",
     "place": "Intercom",
     "brings": [

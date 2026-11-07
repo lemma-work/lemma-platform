@@ -383,6 +383,7 @@ lemma schedules list [--type TIME|DATASTORE|WEBHOOK] [--agent X] [--workflow Y] 
 lemma schedules get <id-or-name>
 lemma schedules pause <id-or-name>      # stop firing without deleting
 lemma schedules resume <id-or-name>
+lemma schedules run <id-or-name>        # one run now, outside its timing (TIME only)
 lemma schedules update <id> --data '{"filter_instruction": "..."}'
 lemma schedules delete <id> --yes
 ```
@@ -445,9 +446,9 @@ suspended execution — invisible in `schedules`, resolves exactly once, and cap
 lemma schedules get <name>                  # active? right target? right config?
                                             # TIME: next_fire_at (UTC) / next_fire_at_local
 
-# TIME: don't wait for a fire — run the target once directly instead
-lemma workflows run <workflow> --data '{}'  # or do the agent's instruction yourself
-lemma workflows runs list <workflow>        # after a real fire: lemma schedules runs list <name>
+# TIME: don't wait for a fire — run it once now, as you, through the same path
+lemma schedules run <name>                  # 409 if paused; counts toward its limits
+lemma schedules runs list <name>            # PROCESSING → DISPATCHED, then the outcome
 
 # DATASTORE: create a test row, confirm a run started with the row in start.payload
 lemma records create tickets --data '{"title":"smoke","status":"new"}'

@@ -5,9 +5,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { lemma } from "@/session/client";
 import { InteractionCard, type Resolve } from "@/thread/interaction-card";
+import { Prose } from "@/thread/markdown";
 import { buildTurns, openInteraction } from "@/thread/turns";
 import { CONVERSATION_ASKS } from "@/thread/waiting-on-you";
 import { WaitForm } from "@/workflow/form";
+import { answerLine } from "./data";
 import { ageOf, answersHere, verbOf, viewOfItem, type Go, type QueueItem } from "./model";
 import { to } from "./parts";
 
@@ -53,7 +55,9 @@ export function NeedRow({ item, pods, now, go, showLemma = true }: {
             </div>
             {open && pod && (
                 <div className="ox-need__panel">
-                    {here === "form" && item.wait && item.runId ? (
+                    {here === "line" && item.line ? (
+                        <LineHere pod={pod} line={item.line} />
+                    ) : here === "form" && item.wait && item.runId ? (
                         <FormHere pod={pod} runId={item.runId} wait={item.wait} />
                     ) : (
                         <AskHere pod={pod} conversationId={item.conversationId as string} />
@@ -92,9 +96,58 @@ function AskHere({ pod, conversationId }: { pod: Pod; conversationId: string }) 
 /** The form a workflow run is stopped on, filled in here. */
 function FormHere({ pod, runId, wait }: { pod: Pod; runId: string; wait: NonNullable<QueueItem["wait"]> }) {
     const cache = useQueryClient();
+    const done = () => {
+        void cache.invalidateQueries({ queryKey: ["workflow-waiting"] });
+        void cache.invalidateQueries({ queryKey: [CONVERSATION_ASKS] });
+    };
     return (
         <div className="wf-wait__form">
-            <WaitForm podId={pod.id} runId={runId} wait={wait} onDone={() => void cache.invalidateQueries({ queryKey: ["workflow-waiting"] })} />
+            <WaitForm podId={pod.id} runId={runId} wait={wait} onDone={done} />
+        </div>
+    );
+}
+
+/** A question a Lemma asked in your chat with it, answered here with one of
+ *  the answers it offered, or in words. The Lemma reads the answer when it
+ *  next looks, as it would one given in the chat. */
+function LineHere({ pod, line }: { pod: Pod; line: NonNullable<QueueItem["line"]> }) {
+    const cache = useQueryClient();
+    const [words, setWords] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [said, setSaid] = useState<string | null>(null);
+    const [failed, setFailed] = useState(false);
+    const send = async (answer: { choice: string } | { text: string }, shown: string) => {
+        setBusy(true);
+        setFailed(false);
+        try {
+            await answerLine(pod.id, line, answer);
+            setSaid(shown);
+            void cache.invalidateQueries({ queryKey: [CONVERSATION_ASKS] });
+        } catch {
+            setFailed(true);
+        } finally {
+            setBusy(false);
+        }
+    };
+    if (said) return <p className="ox-vs">Answered: {said}. {pod.name} reads it next.</p>;
+    return (
+        <div className="ox-lineask">
+            {/* The row's title is the question's first line; what is answered
+                here is the whole of it, as the chat showed it. */}
+            {line.prompt && <div className="ox-lineask__q"><Prose text={line.prompt} /></div>}
+            {line.choices.length > 0 && (
+                <div className="ox-lineask__acts">
+                    {line.choices.map((choice, index) => (
+                        <button key={`${index}:${choice}`} type="button" className="ox-btn ox-btn--small" disabled={busy} onClick={() => void send({ choice }, choice)}>{choice}</button>
+                    ))}
+                </div>
+            )}
+            <form className="ox-own" onSubmit={(event) => { event.preventDefault(); const text = words.trim(); if (text) void send({ text }, text); }}>
+                <label htmlFor={`line-${line.messageId}`}>{line.choices.length > 0 ? "Or say" : "Answer"}</label>
+                <input id={`line-${line.messageId}`} value={words} onChange={(event) => setWords(event.target.value)} disabled={busy} />
+                <button type="submit" className="ox-btn ox-btn--small" disabled={busy || !words.trim()}>Send</button>
+            </form>
+            {failed && <p className="ox-note" role="alert">That answer didn’t go through. Its chat has the question too.</p>}
         </div>
     );
 }

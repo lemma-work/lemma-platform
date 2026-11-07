@@ -61,6 +61,30 @@ about it when it eventually cannot.
 
 **Contracts:** `schedule.delete`, `pod.delete`
 
+### PS-SCHED-004 — A person can run a timed schedule now, without waiting for it
+**Status:** planned
+
+- When a person runs a timed schedule now, the system shall start its work once,
+  straight away.
+- When a person runs a timed schedule now, the system shall leave its next
+  occurrence where it was.
+- The system shall run work started this way as the person who started it, not
+  as the schedule's owner.
+- The system shall hold work started this way to the same limits as the
+  schedule's own firings, and shall count it toward them.
+- The system shall show work started this way in the schedule's history, saying
+  who started it.
+- If a person runs a paused schedule now, then the system shall refuse and say
+  it is paused.
+- If a person runs a schedule that starts on an event now, then the system shall
+  refuse, because there is no event for the work to act on.
+- If a person who may not change the schedule, or may not run what it starts,
+  runs it now, then the system shall refuse.
+- If the schedule already has as many runs going as it allows, then the system
+  shall refuse and record the run as skipped.
+
+**Contracts:** `schedule.run.create`, `schedule.run.list`
+
 ---
 
 ## Capability: React to something happening

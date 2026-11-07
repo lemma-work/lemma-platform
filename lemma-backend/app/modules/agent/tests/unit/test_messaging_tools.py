@@ -28,6 +28,7 @@ from app.modules.agent.infrastructure.tools.messaging.models import (
 )
 from app.modules.agent.infrastructure.tools.messaging.tools import (
     SPECS,
+    asked_question,
     channel_list,
     channel_post,
     channel_read,
@@ -300,6 +301,56 @@ async def test_a_question_in_a_channel_is_refused_not_dropped(monkeypatch):
 
     assert result.success is False
     assert "`to`" in (result.error or "")
+
+
+async def test_choices_without_a_question_are_refused(monkeypatch):
+    """Choices are answers: offered on a line nobody waits on, they would be
+    buttons that wake nobody."""
+    _no_database(monkeypatch)
+
+    result = await channel_post(
+        _ctx(),
+        ChannelPostRequest(text="Ship it?", to=str(PRIYA), choices=["Yes", "No"]),
+    )
+
+    assert result.success is False
+    assert "`wants_answer`" in (result.error or "")
+
+
+def test_a_question_keeps_its_choices_as_ask_user_does():
+    """The chat and the overview read offered answers from one shape, the one
+    ``ask_user`` keeps, so a line's question draws as buttons in both."""
+    assert asked_question("Ship it?", None) == {"tool": "message", "prompt": "Ship it?"}
+    assert asked_question("Ship it?", ["Yes", " ", "Not yet"]) == {
+        "tool": "message",
+        "prompt": "Ship it?",
+        "questions": [
+            {
+                "question": "Ship it?",
+                "options": [{"label": "Yes"}, {"label": "Not yet"}],
+            }
+        ],
+    }
+
+
+def test_a_question_offers_two_to_four_choices():
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Only one"])
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=list("abcde"))
+
+
+def test_choices_are_counted_after_blanks_and_repeats_are_dropped():
+    """A blank would be an empty button and a repeat the same button twice, so
+    neither counts toward the two the question must offer."""
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Yes", " "])
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Yes", "Yes"])
+    asked = ChannelPostRequest(
+        text="?", to="x", wants_answer=True, choices=[" Send it", "Not mine", "Send it"]
+    )
+    assert asked.choices == ["Send it", "Not mine"]
 
 
 async def test_outside_a_pod_nothing_is_posted(monkeypatch):
