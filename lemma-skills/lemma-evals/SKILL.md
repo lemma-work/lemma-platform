@@ -111,6 +111,9 @@ Run read-only and deterministic cases first. For side-effecting cases:
 
 - use an isolated pod, sandbox connector, draft-only path, or uniquely namespaced
   fixture whenever possible;
+- run code-executing cases on a `restricted` pod machine made for the evaluation,
+  not on a person's own machine, and clear finished runs afterwards
+  (`lemma machine reset pod:<name> -s runs`);
 - take a before-state snapshot and declare the exact allowed delta;
 - reset state between baseline, candidate, and repetitions, or prove the operation is
   idempotent;
@@ -274,8 +277,8 @@ Create an append-only result folder such as
 - a short report with the gate decision, deltas, critical failures, variance,
   infrastructure errors, and recommended action.
 
-Upload local artifacts with `lemma files upload`; do not leave the only copy in a
-temporary workspace. Redact secrets and unnecessary personal content, but retain
+Upload local artifacts with `lemma files upload`; do not leave the only copy on a
+machine. Redact secrets and unnecessary personal content, but retain
 stable ids and hashes. State whether the candidate passes the predeclared gate,
 passes with accepted risk, or fails. Never claim statistical confidence that the
 sample size does not support.

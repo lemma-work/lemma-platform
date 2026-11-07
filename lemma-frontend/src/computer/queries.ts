@@ -11,7 +11,7 @@ export function useWorkspaceStatus(enabled: boolean) {
     const cache = useQueryClient();
     const result = useQuery({
         queryKey: ["computer", "status"],
-        queryFn: () => lemma().workspace.status(),
+        queryFn: () => lemma().machines.startup("me"),
         enabled: live() && enabled,
         refetchInterval: (query) => startupProgress(query.state.data) ? 3_000 : 15_000,
         refetchOnWindowFocus: true,
@@ -31,9 +31,10 @@ export function useWorkspaceStatus(enabled: boolean) {
 
 /** Reading the computer without starting it.
  *
- *  The installed SDK has no namespace for these, so the paths are written out
- *  once here rather than at each call site — the same arrangement the usage
- *  calls are in, for the same reason.
+ *  Everything here is the person's own default machine, `me`, under
+ *  `/machines/me`. The paths are written out once here rather than through the
+ *  SDK's `machines` namespace because these hooks want the raw shapes in
+ *  `machine.ts` and, for file bodies, the whole `Response`.
  *
  *  One rule runs through the whole file and it is a cost rule, not a
  *  correctness one: **looking must not start a machine.** A paused sandbox is
@@ -64,7 +65,7 @@ export function useFiles(path: string | null, wake: boolean, enabled = true) {
     return useInfiniteQuery({
         queryKey: ["computer", "files", path ?? "", wake],
         initialPageParam: undefined as string | undefined,
-        queryFn: ({ pageParam }) => lemma().request<Listing>("GET", "/workspace/files", {
+        queryFn: ({ pageParam }) => lemma().request<Listing>("GET", "/machines/me/files", {
             params: { path: path ?? undefined, wake: wake || undefined, after: pageParam },
         }),
         /* The server's cursor, in the server's order. The view sorts folders
@@ -87,7 +88,7 @@ export function useBrowser(enabled: boolean) {
         queryKey: ["computer", "browser"],
         queryFn: async () => {
             const found = await lemma().request<{ state?: string; detail?: string | null }>(
-                "GET", "/workspace/browser/status",
+                "GET", "/machines/me/browser",
             );
             return (found?.state ?? "unavailable") as BrowserState;
         },
@@ -122,7 +123,7 @@ async function slice(path: string, options: { length?: number }): Promise<Blob> 
 /** The same read, with the status it came back with — which is how a ranged
  *  read knows it got the slice it asked for. See `whole-file.ts`. */
 async function sliceWithStatus(path: string, options: { length?: number; range?: { start: number; end: number } }): Promise<Slice> {
-    const response = await lemma().streamResponse("/workspace/files:content", {
+    const response = await lemma().streamResponse("/machines/me/files:content", {
         method: "GET",
         params: { path, length: options.length },
         headers: options.range ? { Range: `bytes=${options.range.start}-${options.range.end}` } : undefined,
@@ -175,7 +176,7 @@ export function useFileStat(path: string | null) {
     return useQuery({
         queryKey: ["computer", "stat", path ?? ""],
         queryFn: () => lemma().request<{ size_bytes: number }>(
-            "GET", "/workspace/files:stat", { params: { path: path! } },
+            "GET", "/machines/me/files:stat", { params: { path: path! } },
         ),
         enabled: live() && Boolean(path),
         staleTime: 30_000,
@@ -201,7 +202,7 @@ export function wholeFile(path: string, sizeBytes = 0): Promise<Blob> {
 export function useBrowserAccess() {
     return useMutation({
         mutationFn: () => lemma().request<{ url: string; expires_at: string }>(
-            "POST", "/workspace/apps/browser/access", { body: { ttl_seconds: 1800 } },
+            "POST", "/machines/me/browser:access", { body: { ttl_seconds: 1800 } },
         ),
     });
 }
@@ -242,7 +243,7 @@ export function useOpenBrowserTab() {
 export function useBrowserResize() {
     return useMutation({
         mutationFn: (size: { width: number; height: number }) =>
-            lemma().request<{ size: string | null }>("POST", "/workspace/browser/display-size", { body: size }),
+            lemma().request<{ size: string | null }>("POST", "/machines/me/browser:display", { body: size }),
     });
 }
 
@@ -258,7 +259,7 @@ export function useCurrentPage(origin: string | null, enabled: boolean) {
         queryKey: ["computer", "page", origin ?? ""],
         queryFn: async () => {
             const found = await lemma().request<{ url: string | null }>(
-                "GET", "/workspace/browser/current-page-url", { params: { origin: origin! } },
+                "GET", "/machines/me/browser/current-page-url", { params: { origin: origin! } },
             );
             return found?.url ?? null;
         },

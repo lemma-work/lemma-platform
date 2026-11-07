@@ -423,7 +423,7 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
         (user_id, f"{WORKSPACE_ROOT}"),
     ]
 
-    # A container recreate keeps the disk, and /workspace IS the disk -- so the
+    # A container recreate keeps the disk, and /home/user IS the disk -- so the
     # directory is still there and must not be remade. Same allocation, new
     # epoch, same storage generation.
     sandbox.infos[user_id] = _sandbox_info(

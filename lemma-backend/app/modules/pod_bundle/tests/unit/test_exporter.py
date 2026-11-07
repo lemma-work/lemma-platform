@@ -41,6 +41,8 @@ class _Named:
     # Export filters the pod's own assistant out by kind, so the stand-in
     # carries one. Defaulting to USER keeps every existing case exporting.
     kind: AgentKind = AgentKind.USER
+    #: An agent's `machine:` ref, when the case pins it to one.
+    machine: str | None = None
 
 
 _DATASTORE = "app.modules.datastore.contracts.provisioning"
@@ -151,6 +153,7 @@ _AGENTS = "app.modules.agent.contracts.provisioning"
 _WORKFLOWS = "app.modules.workflow.contracts.provisioning"
 _SCHEDULES = "app.modules.schedule.contracts.provisioning"
 _APPS = "app.modules.apps.contracts.provisioning"
+_MACHINES = "app.modules.workspace.contracts.pod_machines"
 
 
 class _FakeNamedResource:
@@ -171,6 +174,10 @@ async def _no_names(uow, *, pod_id, user_id=None, ctx=None):
 
 
 async def _no_schedules(uow, *, pod_id, ctx=None):
+    return []
+
+
+async def _no_machines(uow, *, pod_id):
     return []
 
 
@@ -272,6 +279,7 @@ def patched_exporter(monkeypatch):
     monkeypatch.setattr(f"{_CONNECTORS}.exported_pod_connectors", _pod_connectors)
     monkeypatch.setattr(f"{_WORKFLOWS}.list_workflow_names", _no_names)
     monkeypatch.setattr(f"{_SCHEDULES}.list_schedules", _no_schedules)
+    monkeypatch.setattr(f"{_MACHINES}.list_pod_machines", _no_machines)
     _FakeAppOperations([]).patch(monkeypatch)
 
     # Pod fetch: PodRepository(uow).get(pod_id) -> object with name.
@@ -324,6 +332,7 @@ def patched_exporter(monkeypatch):
             "name": agent.name,
             "description": "an agent",
             "instruction": "You are helpful.",
+            **({"machine": agent.machine} if agent.machine else {}),
         },
     )
     return BundleExporter()
@@ -1030,3 +1039,130 @@ async def test_one_unserializable_surface_warns_and_the_rest_still_export(
     assert not (tmp_path / "surfaces" / "sales_bot").exists()
     assert len(warnings) == 1
     assert "sales_bot" in warnings[0]
+
+
+# --- machines round-trip -------------------------------------------------------
+
+
+async def test_a_machine_and_the_agent_on_it_round_trip_through_a_bundle(
+    patched_exporter, tmp_path, monkeypatch
+):
+    """Export a pod machine and an agent pinned to it, then plan and apply the
+    bundle into another pod.
+
+    The agent's ref names the *source* pod, which means nothing in the target,
+    so the bundle carries it as `pod:<name>`; the machine is planned before the
+    agent and before the grants that name it, so both resolve when they run.
+    """
+    from app.modules.pod_bundle.domain.state import StepKind
+    from app.modules.pod_bundle.infrastructure.applier import BundleApplier
+    from app.modules.pod_bundle.infrastructure.grants import grants_from_payload
+    from app.modules.pod_bundle.infrastructure.plan_builder import PlanBuilder
+    from app.modules.workspace.contracts.pod_machines import PodMachineSpec
+
+    from lemma_pod_bundle import load_resource_payload
+
+    from .test_plan_builder import FakeExisting
+
+    source_pod = uuid4()
+
+    async def _machines(uow, *, pod_id):
+        assert pod_id == source_pod
+        return [
+            PodMachineSpec(
+                name="builder",
+                display_name="builder",
+                template="workspace-docker",
+                size="4x8",
+                visibility="restricted",
+                run_slots=2,
+            )
+        ]
+
+    monkeypatch.setattr(f"{_MACHINES}.list_pod_machines", _machines)
+    pinned = _FakeNamedResource(
+        [_Named("assistant", machine=f"pod:{source_pod}/builder")]
+    )
+    monkeypatch.setattr(f"{_AGENTS}.require_agent", pinned.require)
+
+    async def _grants(session, *, pod_id, grantee_type, grantee_id):
+        from app.core.authorization import ResourceType
+
+        return {(ResourceType.MACHINE, "builder"): ["machine.use"]}
+
+    monkeypatch.setattr(
+        "app.core.authorization.grants.list_grantee_resource_grants", _grants
+    )
+
+    async def on_progress(done, total):
+        return None
+
+    _name, zip_bytes, warnings = await patched_exporter.export(
+        pod_id=source_pod,
+        user_id=uuid4(),
+        include=["machines", "agents"],
+        ctx=object(),
+        uow=SimpleNamespace(session=object()),
+        on_progress=on_progress,
+    )
+    assert warnings == []
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+
+    machine = json.loads((root / "machines" / "builder" / "builder.json").read_text())
+    assert machine == {
+        "name": "builder",
+        "template": "workspace-docker",
+        "size": "4x8",
+        "visibility": "restricted",
+        "run_slots": 2,
+    }
+    agent = load_resource_payload(
+        root / "agents" / "assistant", "assistant", resource_type="agents"
+    )
+    assert agent["machine"] == "pod:builder"
+    [grant] = grants_from_payload(agent)
+    assert (grant.resource_type.value, grant.resource_name) == ("machine", "builder")
+
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    order = [step.kind for step in plan.steps]
+    assert order.index(StepKind.MACHINE) < order.index(StepKind.AGENT)
+    assert order.index(StepKind.MACHINE) < order.index(StepKind.AGENT_GRANTS)
+
+    target_pod = uuid4()
+    upserted: dict[str, Any] = {}
+    created: dict[str, Any] = {}
+
+    async def _upsert(uow, **kwargs):
+        upserted.update(kwargs)
+        return True
+
+    async def _no_agent(uow, *, pod_id, name, ctx=None):
+        return None
+
+    async def _create_agent(uow, **kwargs):
+        created.update(kwargs)
+        return SimpleNamespace(id=uuid4(), name=kwargs["name"])
+
+    monkeypatch.setattr(f"{_MACHINES}.upsert_pod_machine", _upsert)
+    monkeypatch.setattr(f"{_AGENTS}.get_agent", _no_agent)
+    monkeypatch.setattr(f"{_AGENTS}.create_agent", _create_agent)
+    applier = BundleApplier(
+        uow=object(),
+        ctx=object(),
+        pod_id=target_pod,
+        user_id=uuid4(),
+        bundle_root=root,
+    )
+    for step in plan.steps:
+        if step.kind in (StepKind.MACHINE, StepKind.AGENT):
+            await applier.apply_step(step)
+
+    assert upserted["pod_id"] == target_pod
+    assert {k: upserted[k] for k in ("name", "template", "size", "visibility")} == {
+        "name": "builder",
+        "template": "workspace-docker",
+        "size": "4x8",
+        "visibility": "restricted",
+    }
+    assert upserted["run_slots"] == 2
+    assert created["machine"] == "pod:builder"

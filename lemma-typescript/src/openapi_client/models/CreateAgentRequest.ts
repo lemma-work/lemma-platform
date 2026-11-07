@@ -12,6 +12,10 @@ export type CreateAgentRequest = {
     icon_url?: (string | null);
     input_schema?: (Record<string, any> | null);
     instruction: string;
+    /**
+     * Where this agent's commands run: a machine ref such as `pod:<name>` for one of the pod's machines. Unset runs on the default machine of whoever the run acts for.
+     */
+    machine?: (string | null);
     metadata?: (Record<string, any> | null);
     name: string;
     output_schema?: (Record<string, any> | null);

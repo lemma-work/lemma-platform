@@ -345,7 +345,7 @@ class WorkspaceDirectoryEnsureMixin:
         """Identity for "this directory exists", which is the disk's, not the
         container's.
 
-        ``/workspace`` is the mounted volume, so whether the directory is there
+        ``/home/user`` is the mounted volume, so whether the directory is there
         is a property of the storage rather than of whichever container is
         currently attached to it. Keyed by the allocation epoch, a container
         recreate invalidated a directory that had never gone away -- paying a

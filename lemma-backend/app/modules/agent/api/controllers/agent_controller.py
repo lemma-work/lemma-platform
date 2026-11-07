@@ -107,6 +107,7 @@ async def create_agent(
         output_schema=data.output_schema,
         visibility=data.visibility,
         metadata=data.metadata,
+        machine=data.machine,
         ctx=ctx,
     )
     agent = await service.get_agent_by_name(

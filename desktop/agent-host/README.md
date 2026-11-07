@@ -373,17 +373,18 @@ an isolated scratch directory under the Agent Host data directory.
 ## Durable local state
 
 New conversations use the cwd saved by the backend at conversation creation.
-Agent Host maps `/workspace/c/<date>/<slug>` to `~/lemma/c/<date>/<slug>` and
+Agent Host maps `/home/user/lemma/c/<date>/<slug>` (the path on the person's
+Lemma machine) to `~/lemma/c/<date>/<slug>` and
 passes that absolute directory to both ACP `session/new` and `session/load`,
 for Claude Code, Codex, OpenCode, and other ACP harnesses. The native path and
 provider session ID are reported before the prompt is dispatched and stored in
 conversation metadata. Parent conversations and their children share the saved
-cwd. Lemma MCP sandbox tools still use `/workspace`; this mapping does not mount
+cwd. Lemma MCP machine tools still use the machine's `/home/user/lemma`; this mapping does not mount
 or synchronize the two filesystems.
 
 Existing conversations with an old scratch directory keep it across upgrades,
 preserving files and provider session indexes. Older backends that omit
-`workspace_cwd` retain that compatibility layout. A path outside `/workspace`,
+`workspace_cwd` retain that compatibility layout. A path outside `/home/user/lemma/`,
 traversal, symlink components, unclaimed existing files, or a directory already
 claimed by another paired workspace fails with an actionable run error.
 The ownership registry under `~/lemma/.lemma` prevents accidental directory

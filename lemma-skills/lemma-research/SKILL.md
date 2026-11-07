@@ -1,6 +1,6 @@
 ---
 name: lemma-research
-description: "Run rigorous, source-backed research in an existing Lemma pod. Use for investigations, literature or market scans, policy and product research, fact-checking, comparisons, current-information questions, and updates to prior research that require pod files, workspace material, or web sources; exact citations; explicit freshness and conflict handling; and a durable memo, evidence ledger, or source pack published to /me or an authorized shared pod folder."
+description: "Run rigorous, source-backed research in an existing Lemma pod. Use for investigations, literature or market scans, policy and product research, fact-checking, comparisons, current-information questions, and updates to prior research that require pod files, material on the agent's machine, or web sources; exact citations; explicit freshness and conflict handling; and a durable memo, evidence ledger, or source pack published to /me or an authorized shared pod folder."
 ---
 
 # Lemma Research
@@ -79,7 +79,7 @@ Use this order where relevant:
 
 1. Inspect user-provided and pod sources for the user's facts, prior decisions,
    terminology, and internal state.
-2. Inspect in-scope workspace files for implementation truth, datasets, logs, and
+2. Inspect in-scope files on your machine for implementation truth, datasets, logs, and
    authored material.
 3. Search the web for current or external facts, beginning with original records,
    official documentation, first-party data, standards, filings, or research.
@@ -131,7 +131,7 @@ that search found everything. `NOT_REQUIRED` means the file was never eligible;
 `PENDING`/`PROCESSING` means retry shortly; `FAILED_PERMANENT` means retrying
 will never help and the document has to be read another way.
 
-### Workspace files
+### Files on your machine
 
 Inventory before reading broadly:
 
@@ -142,7 +142,7 @@ rg -n "target term" ./path/to/in-scope-material
 
 Use repository files, schemas, tests, logs, and history as direct evidence only for
 what they actually establish. Record an absolute or repository-relative path plus
-line, symbol, revision, or timestamp. Do not upload private workspace material to
+line, symbol, revision, or timestamp. Do not upload private material from your machine to
 a shared pod folder unless the task authorizes that audience.
 
 ### Web sources
@@ -158,14 +158,14 @@ which command depends on what you have:
 
 - With the `WEB_SEARCH` toolset, `web_fetch` is the direct route and needs no
   shell. It takes a **list** of up to 5 URLs in one call, writes each page to
-  `out_dir` in the workspace, and returns the file paths and a short preview
+  `out_dir` on your machine, and returns the file paths and a short preview
   rather than the page text. `formats` defaults to `["markdown"]`; add `pdf`,
   `jpeg` or `png` when the layout is the evidence (a chart, a table, a signed
   page) and view the result with the image-viewing capability. Set `render: true`
   for pages that build their content with JavaScript, or when a plain fetch came
   back near-empty. Pages reported as not attempted should be re-requested on
   their own, not by repeating the whole list.
-- With a workspace shell, `save-webpage` does the same through the agent browser:
+- With a shell on your machine, `save-webpage` does the same through the agent browser:
 
 ```bash
 save-webpage https://example.com/source --formats markdown,pdf --out research
@@ -202,7 +202,7 @@ Write claims narrowly enough to prove or disprove. Mark each as `supported`,
 
 - Place citations immediately after the claim they support.
 - Cite exact locators: page, section, table, line, timestamp, record, or revision.
-- Use direct web links for web claims and stable source IDs plus pod/workspace
+- Use direct web links for web claims and stable source IDs plus pod/machine
   locators for non-web claims.
 - Label calculations, synthesis, and forecasts as analysis or inference. Cite their
   inputs and show the material assumptions.

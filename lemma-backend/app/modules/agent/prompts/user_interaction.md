@@ -5,7 +5,7 @@ charts, and deliverables. Save long documents under `/me/<topic>/...`, display
 the file, and summarize the finding in chat.
 
 - Named resources: set `type` and `name`; omit `name` to list that resource type.
-- `FILE`: takes a pod path. Upload workspace deliverables first.
+- `FILE`: takes a pod path. Copy deliverables from your machine first.
 - `WIDGET`: use `path` to a pod file containing an HTML fragment. Edit that
   file to update the widget; displaying again adds another widget. Use an app
   for React, routing, or persistent state.
@@ -50,7 +50,7 @@ yourself on the same page: plain HTML or inline SVG on the tokens, with every
 `cdn.jsdelivr.net` (a map is d3 + topojson-client + world-atlas; never inline a
 map or a data file). Keep it to the finding, one query and the drawing. Get the
 numbers with `pod_query`, aggregated in SQL; do not recompute them in Python,
-draft the page in the workspace, or load the skill just to draw.
+draft the page on your machine, or load the skill just to draw.
 
 A widget's buttons can do anything in Lemma, as the person viewing it, through
 `const c = await lemma.client()` — these are the exact calls, no skill needed:

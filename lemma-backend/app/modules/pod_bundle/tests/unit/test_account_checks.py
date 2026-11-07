@@ -62,6 +62,9 @@ class _NoResources:
     async def surface_names(self):
         return set()
 
+    async def machine_names(self):
+        return set()
+
 
 def _write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

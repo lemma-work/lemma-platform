@@ -118,7 +118,7 @@ async def test_finishing_somebody_elses_request_is_refused(world) -> None:
 
 @scenario("Watching a browser does not start a computer that is asleep")
 @proves("PS-BROWSER-030")
-@covers("workspace.browser.status")
+@covers("machine.browser.status")
 async def test_asking_whether_a_browser_can_be_watched_starts_nothing(world) -> None:
     """A panel rendering must not be what provisions a sandbox.
 
@@ -126,5 +126,5 @@ async def test_asking_whether_a_browser_can_be_watched_starts_nothing(world) -> 
     getting it must not cost them a container.
     """
     alice = await world.person("priya")
-    status = await alice.api.get("/workspace/browser/status")
+    status = await alice.api.get("/machines/me/browser")
     assert status["state"] in {"asleep", "stopped", "unavailable", "unsupported"}

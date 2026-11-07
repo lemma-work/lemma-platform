@@ -368,6 +368,11 @@ def _org_route_path(template: str, org_id: str) -> str:
         "profile_id": str(uuid4()),
         "trigger_name": "missing",
         "member_id": str(uuid4()),
+        # The viewer's own machine: refused for want of their consent, which
+        # is the handler deciding, not the pin.
+        "ref": "me",
+        "process_id": str(uuid4()),
+        "preview_id": str(uuid4()),
     }
     return template.format(**values)
 

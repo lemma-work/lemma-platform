@@ -136,6 +136,18 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
         SURFACE_PLATFORM_HELP,
         False,
     ),
+    "machine": (
+        f"{_CMD}.machine",
+        "app",
+        "Run commands, copy files and share ports on your machines and your pods'.",
+        False,
+    ),
+    "machines": (
+        f"{_CMD}.machine",
+        "app",
+        "Run commands, copy files and share ports on your machines and your pods'.",
+        False,
+    ),
     # Named for the browser: `lemma auth login` already means "sign in to
     # Lemma", and these are the site logins saved in the *agent's browser*.
     "browser-logins": (

@@ -28,6 +28,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | Document | What it covers |
 |---|---|
 | [Platform architecture](../ARCHITECTURE.md) | The map: components, state, how work moves, the invariants |
+| [Machines](architecture/machines.md) | What a machine is: default, pod and connected machines, refs, who may use which, previews, reset scopes, compute units and protected logins |
 | [Sandbox fabric](architecture/sandbox/README.md) | The provider-neutral sandbox model, and the doc set below it |
 | [Desktop architecture](architecture/desktop.md) | Process ownership, lifecycle protocol, ports, and local state |
 | [Desktop security](architecture/desktop-security.md) | Who counts as the person at this Mac, sharing and signup modes, sandbox hardening, and the Tauri origin rule |

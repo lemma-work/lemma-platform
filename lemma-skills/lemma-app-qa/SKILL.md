@@ -163,6 +163,12 @@ artifact.
   make a test pass unless the user asked for a fix.
 - Verify negative cases server-side. Hiding a button is useful UX, but it is not
   authorization enforcement.
+- For an app that runs code (`client.machines`), walk the consent path as a new
+  viewer: the first call must fail with `MACHINE_CONSENT_REQUIRED`, the app must
+  open the Lemma consent page rather than a page of its own, and the call must
+  succeed after the viewer agrees and fail again after they revoke it in
+  Settings. Expect browser, login and `home`-reset calls from the app to be
+  refused even with consent.
 
 ## Cover product states and surfaces
 

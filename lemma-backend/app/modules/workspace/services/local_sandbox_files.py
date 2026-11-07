@@ -35,7 +35,7 @@ class LocalPythonSessionRef:
     again. It is not enough for E2B, which has no resident interpreter: every
     execution is a fresh ``python3``, so the cwd has to arrive with the
     execution or that process starts wherever the sandbox image happens to put
-    it. It used to, and `execute_python` ran in `/workspace` while
+    it. It used to, and `execute_python` ran in the image's default directory while
     `exec_command` ran in the conversation's directory -- one tool could not see
     the other's files.
     """

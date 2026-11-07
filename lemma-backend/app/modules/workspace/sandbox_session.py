@@ -457,6 +457,11 @@ class SandboxWorkspaceSession(SandboxFileOperationsMixin):
     async def __aexit__(self, *_args: object) -> None:
         await self.close()
 
+    @property
+    def cwd(self) -> str:
+        """Where this session's commands start."""
+        return self._cwd
+
     def _python_session_key(self) -> tuple[UUID, UUID, int] | None:
         if self._allocation_epoch is None:
             return None

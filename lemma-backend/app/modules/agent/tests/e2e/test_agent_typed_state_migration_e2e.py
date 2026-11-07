@@ -201,7 +201,7 @@ def _seed(plain_url: str) -> _Ids:
             {
                 "source": "WORKFLOW_RUN",
                 "workflow_run_id": str(ids["workflow_run"]),
-                "cwd": "/workspace/repos/acme/web",
+                "cwd": "/home/user/lemma/repos/acme/web",
                 "repo": {"owner": "acme", "repo": "web"},
                 "todos": [{"content": "Ship it", "done": False}],
             },
@@ -213,7 +213,7 @@ def _seed(plain_url: str) -> _Ids:
             {
                 "call": {"call_id": str(ids["coordinator"]), "role": "coordinator"},
                 "subagents_out": True,
-                "workspace": {"id": "ws-1", "cwd": "/workspace/w"},
+                "workspace": {"id": "ws-1", "cwd": "/home/user/lemma/w"},
                 "workspace_name": "main",
             },
             {},
@@ -607,7 +607,7 @@ def _assert_conversations(rows: dict[UUID, dict], ids: _Ids) -> None:
     assert rows[ids["bad_workflow"]]["schedule_type"] is None
     workflow = rows[ids["workflow"]]
     assert workflow["workflow_run_id"] == ids["workflow_run"]
-    assert workflow["cwd"] == "/workspace/repos/acme/web"
+    assert workflow["cwd"] == "/home/user/lemma/repos/acme/web"
     assert workflow["repo"] == {"owner": "acme", "repo": "web"}
     assert workflow["todos"] == [{"content": "Ship it", "done": False}]
     assert rows[ids["bad_workflow"]]["workflow_run_id"] is None
@@ -622,7 +622,7 @@ def _assert_conversations(rows: dict[UUID, dict], ids: _Ids) -> None:
         "role": "coordinator",
     }
     assert coordinator["delegations_out"] is True
-    assert coordinator["cwd"] == "/workspace/w"
+    assert coordinator["cwd"] == "/home/user/lemma/w"
     assert coordinator["workspace_id"] == "ws-1"
     assert coordinator["workspace_name"] == "main"
 

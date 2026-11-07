@@ -145,6 +145,75 @@ class WorkspaceSettings(BaseSettings):
             "purpose — this is a leak guard, not a command budget."
         ),
     )
+    machines_api_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MACHINES_API_ENABLED"),
+        description=(
+            "Serve `/machines`. Off answers every machine route with 404, for "
+            "a deployment rolling the frontend before the API."
+        ),
+    )
+    pod_machines_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("POD_MACHINES_ENABLED"),
+        description="Let pod editors create machines their pod's agents share.",
+    )
+    compute_billing_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("COMPUTE_BILLING_ENABLED"),
+        description=(
+            "Enforce compute allowances: warn at 80% and 95%, refuse new work "
+            "at 100% and release running machines after a grace period. "
+            "Metering is always on; this only decides whether it stops "
+            "anything."
+        ),
+    )
+    machine_preview_domain: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MACHINE_PREVIEW_DOMAIN"),
+        description=(
+            "The domain previews are served under, as `p-<id>.<domain>` "
+            "(e.g. `machines.lemma.work`). Needs wildcard DNS and a wildcard "
+            "certificate pointing at the API. Unset turns previews off."
+        ),
+    )
+    machine_preview_scheme: str = Field(
+        default="https",
+        validation_alias=AliasChoices("MACHINE_PREVIEW_SCHEME"),
+        description="`https`, or `http` for a local stack on `*.localhost`.",
+    )
+    machine_preview_max_ttl_seconds: int = Field(
+        default=24 * 3600,
+        ge=60,
+        validation_alias=AliasChoices("MACHINE_PREVIEW_MAX_TTL_SECONDS"),
+        description="The longest a `link` preview may live before it stops answering.",
+    )
+    machine_size_migration_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MACHINE_SIZE_MIGRATION_ENABLED"),
+        description=(
+            "Move default machines still at the legacy 1x2 size to the plan's "
+            "default size on their next idle release, carrying their home and "
+            "logins. Turn on only once login backups are live."
+        ),
+    )
+    machine_disk_prune_fraction: float = Field(
+        default=0.75,
+        ge=0.1,
+        le=1.0,
+        validation_alias=AliasChoices("MACHINE_DISK_PRUNE_FRACTION"),
+        description=(
+            "Disk use at which the janitor prunes a shared machine: finished "
+            "runs first, then Docker images and build cache."
+        ),
+    )
+    machine_disk_refuse_fraction: float = Field(
+        default=0.9,
+        ge=0.1,
+        le=1.0,
+        validation_alias=AliasChoices("MACHINE_DISK_REFUSE_FRACTION"),
+        description="Disk use at which a shared machine refuses new runs.",
+    )
     idle_release_seconds: int = Field(
         default=900,
         validation_alias=AliasChoices("WORKSPACE_IDLE_RELEASE_SECONDS"),
@@ -275,10 +344,28 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("E2B_WORKSPACE_SIZE_TEMPLATES"),
         description=(
             "Workspace templates by size, as JSON keyed `{cpu}x{memory_mb}`, "
-            'e.g. {"2x4096": "lemma-workspace-2x4096"}. E2B fixes CPU and '
+            'e.g. {"2x4096": "lemma-workspace-2x4"}. E2B fixes CPU and '
             "memory when a template is built, so a deployment whose plans sell "
             "sizes builds one template per size and names them here. A size "
             "with no entry is served from E2B_WORKSPACE_TEMPLATE."
+        ),
+    )
+    e2b_docker_template: str = Field(
+        default="lemma-workspace-docker",
+        validation_alias=AliasChoices("E2B_DOCKER_TEMPLATE"),
+        description=(
+            "E2B template backing `workspace-docker` machines: the workspace "
+            "with dockerd, compose and buildx. Pod machines that run a stack "
+            "are built from it."
+        ),
+    )
+    e2b_docker_size_templates: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("E2B_DOCKER_SIZE_TEMPLATES"),
+        description=(
+            "`workspace-docker` templates by size, as JSON keyed "
+            '`{cpu}x{memory_mb}`, e.g. {"8x16384": "lemma-workspace-docker-8x16"}. '
+            "A size with no entry is served from E2B_DOCKER_TEMPLATE."
         ),
     )
     e2b_domain: Optional[str] = Field(

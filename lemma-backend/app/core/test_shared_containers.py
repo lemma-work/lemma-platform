@@ -11,6 +11,8 @@ import hashlib
 import os
 import subprocess
 from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Generator
 
 import psycopg
@@ -35,31 +37,60 @@ from app.core.test_utils import (
     get_kreuzberg_url,
     get_postgres_container,
     get_redis_container,
+    invocation_owner,
     postgres_server_command,
     remove_named_container,
 )
 
 
-def _session_scoped_container_name(base_name: str, basetemp_parent) -> str:
-    """Make a shared-container name unique to THIS pytest invocation.
+@dataclass(frozen=True)
+class SharedSlot:
+    """One shared container's bookkeeping, for one pytest invocation.
 
-    Under xdist, ``tmp_path_factory.getbasetemp()`` for a worker is a
-    ``popen-gwN`` subdirectory of a per-invocation, monotonically-numbered
-    ``pytest-<N>`` root -- so ``.parent`` (what callers pass in as
-    ``basetemp_parent``) is stable across all workers of ONE invocation but
-    different for every separate invocation (confirmed empirically: two
-    `pytest` runs in a row get `pytest-355` and `pytest-356`; xdist workers
-    of one run share the same parent). A bare fixed name here would instead
-    be the same across completely unrelated invocations -- e.g. two
-    developers running the suite at once, or two worktrees sharing a Docker
-    daemon -- and the second invocation's ``docker rm -f <name>`` would rip
-    out the first invocation's still-live container out from under it,
-    independent of (and invisible to) the first invocation's own refcount.
-    Observed exactly this: a concurrent worktree's run corrupted another's
-    containers mid-test with connection-refused errors.
+    Keyed by the temp root *and* the invocation's owner (`invocation_owner`):
+    the root alone is shared by every session given the same ``--basetemp``,
+    and then whichever session finished last by its own count stopped a
+    Postgres another session was still using. The owner is what makes "last
+    worker out" mean the last of *this* run's workers.
     """
-    digest = hashlib.sha256(str(basetemp_parent).encode()).hexdigest()[:10]
-    return f"{base_name}-{digest}"
+
+    name: str
+    lock: Path
+    refs: Path
+    url: Path
+
+
+def shared_slot(
+    root: Path, role: str, base_name: str, *, owner: str | None = None
+) -> SharedSlot:
+    owner = owner or invocation_owner()
+    digest = hashlib.sha256(f"{root}|{owner}".encode()).hexdigest()[:10]
+    return SharedSlot(
+        name=f"{base_name}-{digest}",
+        lock=root / f"{role}-{owner}.lock",
+        refs=root / f"{role}-{owner}_refs.txt",
+        url=root / f"{role}-{owner}_url.txt",
+    )
+
+
+def enter_slot(slot: SharedSlot) -> bool:
+    """Count one more user in. True for the first, who starts the container.
+    Call under ``FileLock(slot.lock)``."""
+    refs = int(slot.refs.read_text()) if slot.refs.exists() else 0
+    slot.refs.write_text(str(refs + 1))
+    return refs == 0
+
+
+def leave_slot(slot: SharedSlot) -> bool:
+    """Count one user out. True for the last, who removes the container.
+    Call under ``FileLock(slot.lock)``."""
+    refs = (int(slot.refs.read_text()) if slot.refs.exists() else 1) - 1
+    if refs > 0:
+        slot.refs.write_text(str(refs))
+        return False
+    slot.refs.unlink(missing_ok=True)
+    slot.url.unlink(missing_ok=True)
+    return True
 
 
 def start_shared_kreuzberg(name: str) -> str:
@@ -104,35 +135,22 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
             yield get_kreuzberg_url(kb)
         return
 
-    from pathlib import Path
-
     from filelock import FileLock
 
-    root = Path(basetemp_parent)
-    name = _session_scoped_container_name(SHARED_KREUZBERG_NAME, basetemp_parent)
-    lock = FileLock(str(root / "kreuzberg.lock"))
-    url_file = root / "kreuzberg_url.txt"
-    refs_file = root / "kreuzberg_refs.txt"
+    slot = shared_slot(Path(basetemp_parent), "kreuzberg", SHARED_KREUZBERG_NAME)
+    lock = FileLock(str(slot.lock))
 
     with lock:
-        if url_file.exists():
-            url = url_file.read_text().strip()
-        else:
-            url = start_shared_kreuzberg(name)
-            url_file.write_text(url)
-        refs = int(refs_file.read_text()) if refs_file.exists() else 0
-        refs_file.write_text(str(refs + 1))
+        if enter_slot(slot) or not slot.url.exists():
+            slot.url.write_text(start_shared_kreuzberg(slot.name))
+        url = slot.url.read_text().strip()
 
     try:
         yield url
     finally:
         with lock:
-            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
-            refs_file.write_text(str(refs))
-            if refs <= 0:
-                remove_named_container(name)
-                url_file.unlink(missing_ok=True)
-                refs_file.unlink(missing_ok=True)
+            if leave_slot(slot):
+                remove_named_container(slot.name)
 
 
 #: Opt-in, local only: keep Postgres, Redis and SuperTokens running between
@@ -337,33 +355,24 @@ def shared_postgres(
             yield postgres
         return
 
-    from pathlib import Path
-
     from filelock import FileLock
 
-    root = Path(basetemp_parent)
-    name = _session_scoped_container_name(SHARED_POSTGRES_NAME, basetemp_parent)
-    lock = FileLock(str(root / "postgres.lock"))
-    refs_file = root / "postgres_refs.txt"
+    slot = shared_slot(Path(basetemp_parent), "postgres", SHARED_POSTGRES_NAME)
+    lock = FileLock(str(slot.lock))
 
     with lock:
-        refs = int(refs_file.read_text()) if refs_file.exists() else 0
-        if refs == 0:
-            start_shared_postgres(name)
-        refs_file.write_text(str(refs + 1))
+        if enter_slot(slot):
+            start_shared_postgres(slot.name)
 
     container = LemmaPostgresContainer()
-    container.container_id = name
+    container.container_id = slot.name
 
     try:
         yield container
     finally:
         with lock:
-            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
-            refs_file.write_text(str(refs))
-            if refs <= 0:
-                remove_named_container(name)
-                refs_file.unlink(missing_ok=True)
+            if leave_slot(slot):
+                remove_named_container(slot.name)
                 # SHARED_E2E_NETWORK_NAME is NOT removed here: it is one fixed,
                 # permanent resource reused by every invocation on this
                 # machine, not owned by this one -- see its own comment.
@@ -418,30 +427,21 @@ def shared_redis(
             yield redis
         return
 
-    from pathlib import Path
-
     from filelock import FileLock
 
-    root = Path(basetemp_parent)
-    name = _session_scoped_container_name(SHARED_REDIS_NAME, basetemp_parent)
-    lock = FileLock(str(root / "redis.lock"))
-    refs_file = root / "redis_refs.txt"
+    slot = shared_slot(Path(basetemp_parent), "redis", SHARED_REDIS_NAME)
+    lock = FileLock(str(slot.lock))
 
     with lock:
-        refs = int(refs_file.read_text()) if refs_file.exists() else 0
-        if refs == 0:
-            start_shared_redis(name)
-        refs_file.write_text(str(refs + 1))
+        if enter_slot(slot):
+            start_shared_redis(slot.name)
 
     container = LemmaDockerContainer(REDIS_IMAGE, 6379)
-    container.container_id = name
+    container.container_id = slot.name
 
     try:
         yield container
     finally:
         with lock:
-            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
-            refs_file.write_text(str(refs))
-            if refs <= 0:
-                remove_named_container(name)
-                refs_file.unlink(missing_ok=True)
+            if leave_slot(slot):
+                remove_named_container(slot.name)

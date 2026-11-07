@@ -199,18 +199,25 @@ own code; GitHub not answering is a 503, never a pass, and a selection too long
 to walk is `GITHUB_REPOSITORY_UNCHECKED`, not "not installed". The listing
 shows at most a picker's worth and says `complete: false` past it.
 The repository is stored as GitHub spells it, and the conversation's directory
-is a worktree of it of its own, `/workspace/worktrees/{owner}/{repo}/{slug}` on
+is a worktree of it of its own, `~/lemma/worktrees/{owner}/{repo}/{slug}` on
 branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
 sub-agent inherits its parent's worktree; a run a webhook started, which is not
 stamped at creation, gets one keyed by its conversation id.
 
 Before the agent's first shell or Python call, the sandbox clones the
-repository once per person, at `/workspace/repos/{owner}/{repo}`, with the
+repository once per person, at `~/lemma/repos/{owner}/{repo}`, with the
 person's token -- or fetches it if it is already there -- and then adds this
 conversation's worktree from `origin/<ref>` or `origin/HEAD`
 (`tools/workspace_cli/github_project`). A worktree whose directory was lost is
 made again on its surviving branch. A failed clone, a failed worktree and a
 failed fetch each tell the agent once.
+
+A pull request (`pull/123/head`) is fetched by name into
+`origin/pull/123/head`, since a clone does not fetch `refs/pull`, and checked
+out from there. A run on a shared pod machine already starts in a directory of
+its own (`~/lemma/runs/{agent}/{run}`), and the project goes there instead: a
+detached worktree of the same clone, cleared with the run directory by the
+machine rather than by the sweep below.
 
 So the clone's objects and `origin/*` are shared, and nothing else is: no
 conversation works in another's tree or on another's branch. Conversations from

@@ -141,6 +141,7 @@ class WorkspaceToolRuntime:
         scope_key: str | None = None,
         env_vars: dict[str, str] | None = None,
         conversation_id: UUID | None = None,
+        machine_id: UUID | None = None,
     ) -> IWorkspaceSession:
         cache_key = self._get_cache_key(
             user_id=user_id,
@@ -169,6 +170,7 @@ class WorkspaceToolRuntime:
                     workload_name=workload_name,
                     scope=scope,
                     env_vars=cached_env_vars,
+                    machine_id=machine_id,
                 )
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code not in {401, 403}:
@@ -187,6 +189,7 @@ class WorkspaceToolRuntime:
             workload_name=workload_name,
             scope=scope,
             conversation_id=conversation_id,
+            machine_id=machine_id,
         )
         if session.env_vars:
             await self.env_cache.set(

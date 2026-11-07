@@ -58,6 +58,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
+from sandbox_runtime.paths import HOME_ROOT
 from sandbox_runtime.protocol import (
     ByteRange,
     CreatePythonSessionRequest,
@@ -237,7 +238,7 @@ class Workspace:
                 operation_id=uuid4(),
                 shell_command=command,
                 argv=None,
-                cwd="/workspace",
+                cwd=HOME_ROOT,
                 environment=(EnvironmentVariable(name="LEMMA_TEST", value="1"),),
                 tty=None,
                 output_limit_bytes=OUTPUT_LIMIT_BYTES,
@@ -402,7 +403,7 @@ async def test_a_long_running_process_can_be_listed_and_terminated(workspace) ->
             operation_id=uuid4(),
             shell_command="sleep 120",
             argv=None,
-            cwd="/workspace",
+            cwd=HOME_ROOT,
             environment=(),
             tty=None,
             output_limit_bytes=OUTPUT_LIMIT_BYTES,
@@ -446,7 +447,7 @@ async def test_python_keeps_state_across_executions(workspace) -> None:
         workspace.instance,
         CreatePythonSessionRequest(
             session_id=session_id,
-            cwd="/workspace",
+            cwd=HOME_ROOT,
             environment_keys=(),
             deadline_at=_deadline(120),
         ),
@@ -487,7 +488,7 @@ async def test_python_reports_user_code_failure_as_a_result(workspace) -> None:
         workspace.instance,
         CreatePythonSessionRequest(
             session_id=session_id,
-            cwd="/workspace",
+            cwd=HOME_ROOT,
             environment_keys=(),
             deadline_at=_deadline(120),
         ),
@@ -513,14 +514,14 @@ async def test_python_reports_user_code_failure_as_a_result(workspace) -> None:
 async def test_python_and_the_shell_share_one_filesystem(workspace) -> None:
     """The two halves of a task have to meet somewhere, and it is the disk."""
     marker = f"shared-{uuid4().hex[:8]}"
-    await workspace.shell(f"printf '{marker}' > /workspace/shared.txt")
+    await workspace.shell(f"printf '{marker}' > {HOME_ROOT}/shared.txt")
 
     session_id = uuid4()
     await workspace.provider.ensure_python_session(
         workspace.instance,
         CreatePythonSessionRequest(
             session_id=session_id,
-            cwd="/workspace",
+            cwd=HOME_ROOT,
             environment_keys=(),
             deadline_at=_deadline(120),
         ),
@@ -530,7 +531,7 @@ async def test_python_and_the_shell_share_one_filesystem(workspace) -> None:
         _session_ref(session_id),
         ExecutePythonRequest(
             operation_id=uuid4(),
-            code="print(open('/workspace/shared.txt').read())",
+            code=f"print(open('{HOME_ROOT}/shared.txt').read())",
             environment=(),
             output_limit_bytes=OUTPUT_LIMIT_BYTES,
             deadline_at=_deadline(120),
@@ -674,7 +675,7 @@ async def test_files_written_to_a_workspace_outlive_its_container(
     name = naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 1)
     volume_name = naming.volume_name(sandbox_id, 1)
     marker = f"persisted-{uuid4().hex}"
-    path = "/workspace/persistence-check.txt"
+    path = f"{HOME_ROOT}/persistence-check.txt"
 
     instance = await guest_provider.create(
         _spec(sandbox_id, name=name, volume_name=volume_name)
@@ -760,7 +761,7 @@ async def test_a_rebuilt_workspace_keeps_its_files_across_an_epoch_change(
 
         await guest_provider.write_file(
             instance,
-            path="/workspace/rebuild-check.txt",
+            path=f"{HOME_ROOT}/rebuild-check.txt",
             data=chunks(),
             expected_sha256=None,
             deadline_at=_deadline(120),
@@ -785,7 +786,7 @@ async def test_a_rebuilt_workspace_keeps_its_files_across_an_epoch_change(
                 chunk
                 async for chunk in guest_provider.open_file(
                     rebuilt,
-                    path="/workspace/rebuild-check.txt",
+                    path=f"{HOME_ROOT}/rebuild-check.txt",
                     byte_range=ByteRange(offset=0, length=None),
                     deadline_at=_deadline(120),
                 )
@@ -809,7 +810,7 @@ async def test_a_workspace_volume_is_not_shared_between_sandboxes(
     ordinary reuse, not like a leak.
     """
     secret = f"private-{uuid4().hex}"
-    await workspace.shell(f"printf '{secret}' > /workspace/private.txt")
+    await workspace.shell(f"printf '{secret}' > {HOME_ROOT}/private.txt")
 
     other_id = uuid4()
     other_name = naming.container_name(other_id, SandboxKind.WORKSPACE, 1)
@@ -824,9 +825,9 @@ async def test_a_workspace_volume_is_not_shared_between_sandboxes(
             other,
             StartProcessRequest(
                 operation_id=uuid4(),
-                shell_command="cat /workspace/private.txt || echo absent",
+                shell_command=f"cat {HOME_ROOT}/private.txt || echo absent",
                 argv=None,
-                cwd="/workspace",
+                cwd=HOME_ROOT,
                 environment=(),
                 tty=None,
                 output_limit_bytes=OUTPUT_LIMIT_BYTES,

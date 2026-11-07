@@ -22,14 +22,14 @@ re-reading a payload shape.
 
 Config lives in `~/.lemma/config.json` (active server, token, default org/pod). Resolution precedence for org/pod: CLI flags (`--org`, `--pod`) → env vars → project `.lemma.<server>.env` → project `.lemma.env` → stored defaults → interactive selection.
 
-Environment variables (pre-set inside Lemma workspaces/sandboxes — use them, don't bootstrap):
+Environment variables (pre-set on Lemma machines — use them, don't bootstrap):
 `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`, `LEMMA_POD_ID`, `LEMMA_SERVER`.
 
 **Develop once, deploy to any server/pod.** A project's server and pod change together (local stack vs. cloud), so the CLI reads committed `.lemma.<server>.env` files keyed by the active server (Vite's `.env.<mode>` model). `lemma app init` and `lemma pods create --with-starter` write them; you can also hand-edit:
 - `.lemma.env` — base; may set the folder's default `LEMMA_SERVER`.
 - `.lemma.<server>.env` — per-server binding (`LEMMA_POD_ID`, optional `LEMMA_ORG_ID`).
 
-Then `lemma pods describe` uses the folder's default server while `lemma --server lemma-cloud apps deploy` targets cloud — same repo, no global switching. The CLI loads the nearest anchor walking up (ceiling: git root / `$HOME`); active server resolves as `--server` → `LEMMA_SERVER` → base file → config `active_server`. Gitignored `.lemma.<server>.env.local` overrides per-machine; real env always wins (a real `LEMMA_TOKEN`, e.g. inside a workspace sandbox, skips the files). A command that needs a pod on an unbound server fails with `No pod bound for server '<server>'`. `lemma config show` reports the resolved server + applied files. No secrets in these files.
+Then `lemma pods describe` uses the folder's default server while `lemma --server lemma-cloud apps deploy` targets cloud — same repo, no global switching. The CLI loads the nearest anchor walking up (ceiling: git root / `$HOME`); active server resolves as `--server` → `LEMMA_SERVER` → base file → config `active_server`. Gitignored `.lemma.<server>.env.local` overrides per-machine; real env always wins (a real `LEMMA_TOKEN`, e.g. on a Lemma machine, skips the files). A command that needs a pod on an unbound server fails with `No pod bound for server '<server>'`. `lemma config show` reports the resolved server + applied files. No secrets in these files.
 
 Scripting conventions:
 
@@ -55,6 +55,7 @@ my-pod/
   workflows/<name>/<name>.json
   schedules/<name>/<name>.json
   surfaces/<name>/<name>.json     # name defaults to the lowercased platform: surfaces/slack/slack.json
+  machines/<name>/<name>.json     # a shared pod machine
   apps/<name>/<name>.json
   apps/<name>/source/            # Vite app project (built on import/deploy), OR a
                                  #   no-build site (index.html, no package.json)
@@ -126,6 +127,13 @@ Rules:
   "required": false,                                // PER_MEMBER: members are asked to connect
   "purpose": "The team mailbox the triage agent answers from." }
 // optional: "visibility": "RESTRICTED" (default POD)
+// machines/builder/builder.json — a machine the pod's agents share. Billed to the
+// org, and it outlives whoever created it. Only `name` and `template` are required.
+{ "name": "builder", "display_name": "Builder",
+  "template": "workspace-docker",   // workspace | workspace-docker (has Docker)
+  "size": "4x8",                    // vCPU x GB; omit for the plan's default
+  "visibility": "pod",              // pod: every pod agent may use it | restricted: only with a machine.use grant
+  "run_slots": 2 }                  // runs at once; later runs queue
 
 // apps/ops-app/ops-app.json
 { "name": "ops-app", "description": "...", "public_slug": "ops-app" }

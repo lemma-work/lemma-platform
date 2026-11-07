@@ -48,6 +48,17 @@ CONTACT_RUN = "contact_run"
 OUTSIDER_RUN = "outsider_run"
 OUTSIDE_AUDIENCE_SOURCES: tuple[str, ...] = (CONTACT_RUN, OUTSIDER_RUN)
 
+#: A person's own machine's compute: their windows, and their organization's
+#: when it has one.
+MACHINE_COMPUTE = "machine"
+#: A pod machine's compute. The organization's alone -- the machine outlives
+#: whoever created it, and its runs are the pod's work, so it never fills a
+#: member's personal allowance.
+POD_MACHINE_COMPUTE = "pod_machine"
+#: Recorded with a user id because the ledger needs one, and never counted in
+#: that user's windows.
+ORG_ONLY_SOURCES: tuple[str, ...] = (*OUTSIDE_AUDIENCE_SOURCES, POD_MACHINE_COMPUTE)
+
 
 class TokenCounts(BaseModel):
     model_config = ConfigDict(frozen=True)

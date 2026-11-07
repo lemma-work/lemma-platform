@@ -115,7 +115,7 @@ fn old_conversation_files_survive_reopening_and_other_conversations() {
         "agent_run_id": uuid::Uuid::new_v4(), "conversation_id": conversation,
         "harness_id": uuid::Uuid::new_v4(), "profile_revision": "test",
         "system_prompt": "test", "prompt": [],
-        "workspace_cwd": "/workspace/c/2026-09-07/new-layout",
+        "workspace_cwd": "/home/user/lemma/c/2026-09-07/new-layout",
         "resume_session_id": "existing-provider-session",
         "run_deadline": chrono::Utc::now(),
     }))
@@ -159,7 +159,7 @@ fn a_folder_bound_on_this_computer_is_the_working_directory() {
         "agent_run_id": uuid::Uuid::new_v4(), "conversation_id": conversation,
         "harness_id": uuid::Uuid::new_v4(), "profile_revision": "test",
         "system_prompt": "test", "prompt": [],
-        "workspace_cwd": "/workspace/c/2026-09-10/somewhere-else",
+        "workspace_cwd": "/home/user/lemma/c/2026-09-10/somewhere-else",
         "run_deadline": chrono::Utc::now(),
     }))
     .unwrap();
@@ -192,11 +192,11 @@ fn native_directory_instruction_encodes_paths_without_inventing_a_mount() {
         assert!(prompt.contains("not an access grant"));
         // The mount this must not invent is a literal one. Naming a container
         // root here told an agent whose native tools run on the host that
-        // `/workspace` was somewhere it could `cd` -- and it tried, and the
+        // the container root was somewhere it could `cd` -- and it tried, and the
         // command failed. The sandbox path belongs to the run that was given
         // one, not to a sentence written months earlier.
         assert!(
-            !prompt.contains("/workspace"),
+            !prompt.contains("/home/user"),
             "the native instruction must not name a container root: {prompt}"
         );
     }

@@ -280,7 +280,7 @@ interface answers there. The core ports inside the guest are a separate rule,
 
 With [host execution](desktop-host-execution.md) a user's agent starts
 `npm run dev` on their Mac, where it listens on `127.0.0.1:3000`, and checks the
-result with a browser that runs in that user's workspace sandbox in the guest.
+result with a browser that runs on that user's default machine in the guest.
 The loopback relay is how that browser reaches the Mac's loopback:
 
 ```
@@ -355,7 +355,7 @@ Chrome ─proxy─► host_fallback ─unix─► guestd ─vsock 42413─► le
   vsock streams and locald's socket (`run/host-loopback.sock`, mode 0600).
 
 **What it does not cover.** While the switch is on, anything in the paired
-user's workspace sandbox can reach a server the agent started on the Mac's
+user's default machine can reach a server the agent started on the Mac's
 loopback: the socket is mounted for the sandbox, not for Chrome alone (every
 process there runs as the same user, so there is no browser-only uid to give
 it to). Every run in that user's workspace shares that sandbox, including a

@@ -74,15 +74,12 @@ def _ws_closed() -> type[Exception]:
     return websockets.exceptions.ConnectionClosed
 
 
-router = APIRouter(tags=["Workspace"])
+router = APIRouter(tags=["Machine Browser"])
 
 #: Where a grant's URL points. Under `/public/`, because the browser it is handed
 #: to has no Lemma session and never will: the signed grant in the path is the
 #: whole credential, and the handlers verify it.
-PORT_PROXY_PREFIX = "/public/workspace-ports"
-#: The old path, for grants minted before the move; see `LEGACY_ALIASES` in
-#: `app.core.auth_exemptions`. Every route is registered on both until it goes.
-_LEGACY_PORT_PROXY_PREFIX = "/workspace-ports"
+PORT_PROXY_PREFIX = "/public/machine-ports"
 _PROXIED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
@@ -243,10 +240,6 @@ async def _resolve_target(token: str) -> SandboxEndpoint | None:
         return None
 
 
-@router.websocket(PORT_PROXY_PREFIX + "/{token}")
-@router.websocket(PORT_PROXY_PREFIX + "/{token}/{path:path}")
-@router.websocket(_LEGACY_PORT_PROXY_PREFIX + "/{token}")
-@router.websocket(_LEGACY_PORT_PROXY_PREFIX + "/{token}/{path:path}")
 async def proxy_sandbox_websocket(
     websocket: WebSocket, token: str, path: str = ""
 ) -> None:
@@ -297,26 +290,6 @@ async def proxy_sandbox_websocket(
 # Two paths, one handler. The grant's own URL ends at the token with a trailing
 # slash and no path at all — `/{token}/{path:path}` does not match that, so the
 # very URL this proxy hands out 404'd while every deeper path worked.
-@router.api_route(
-    PORT_PROXY_PREFIX + "/{token}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
-@router.api_route(
-    PORT_PROXY_PREFIX + "/{token}/{path:path}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
-@router.api_route(
-    _LEGACY_PORT_PROXY_PREFIX + "/{token}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
-@router.api_route(
-    _LEGACY_PORT_PROXY_PREFIX + "/{token}/{path:path}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
 async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Response:
     key = workspace_settings.runtime_credential_key
     if not key:
@@ -424,3 +397,18 @@ async def _relay(proxied: httpx.Response) -> AsyncIterator[bytes]:
         # Also closed by the background task; this covers a generator that is
         # abandoned mid-stream. `aclose` is idempotent.
         await proxied.aclose()
+
+
+# Two paths, one handler: the grant's own URL ends at the token with a trailing
+# slash and no path at all, which `/{token}/{path:path}` does not match.
+for _path in (
+    PORT_PROXY_PREFIX + "/{token}",
+    PORT_PROXY_PREFIX + "/{token}/{path:path}",
+):
+    router.add_api_websocket_route(_path, proxy_sandbox_websocket)
+    router.add_api_route(
+        _path,
+        proxy_sandbox_port,
+        methods=_PROXIED_METHODS,
+        include_in_schema=False,
+    )

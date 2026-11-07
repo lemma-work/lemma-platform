@@ -317,7 +317,7 @@ function PodImage({ podId, path, name }: { podId: string; path: string; name: st
 /** A workspace image, as bytes.
  *
  *  The sandbox mints no signed URLs, so this goes through `useFileBody` — which
- *  streams `/workspace/files:content` and hands back a blob — and therefore
+ *  streams `/machines/me/files:content` and hands back a blob — and therefore
  *  owns an object URL and revokes it, the pattern `computer-view.tsx` uses on
  *  the same hook.
  *
@@ -350,9 +350,9 @@ function WorkspaceImage({ path, name }: { path: string; name: string }) {
  *
  *  A relative `workspace_file_path` means two different files depending on who
  *  reads it. The agent's own manager joins it onto the conversation's working
- *  directory — `/workspace/c/{date}/{slug}` — which
+ *  directory — `~/lemma/c/{date}/{slug}` — which
  *  `test_workspace_path_resolution.py` pins; this app's route joins the same
- *  string onto `/workspace` (`files_controller._workspace_path`). So
+ *  string onto the machine's workspace root (`machine_files_controller._machine_path`). So
  *  `images/output.png` fetched as written is either a 404 or, worse, somebody
  *  else's `images/output.png`.
  *

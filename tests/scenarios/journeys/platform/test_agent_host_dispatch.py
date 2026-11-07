@@ -172,7 +172,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
     conversation = await alice.starts_a_conversation(in_pod=pod, with_agent=agent["name"])
     saved_cwd = conversation["metadata"]["cwd"]
     # `/home/user/lemma` is `sandbox_runtime.paths.WORKSPACE_ROOT`, and
-    # `RUNTIME_FILESYSTEM_ROOTS` is `("/home/user", "/tmp")` -- `/workspace` is
+    # `RUNTIME_FILESYSTEM_ROOTS` is `("/home/user", "/tmp")` -- the old project root is
     # not a runtime root at all any more. This asserted the old one and had been
     # red, so the scenario read `covered` while its proof failed. Spelled out
     # rather than imported because the suite is its own uv project and cannot

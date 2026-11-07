@@ -5,10 +5,12 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 from .apply_fields import (
     GRANT_HOLDER_DIRS,
+    MACHINE_APPLY_FIELDS,
     BundleConnector,
     read_bundle_connector,
     without_time_schedule_filter,
@@ -60,12 +62,12 @@ def _attach_permissions_payload(
     }
 
 
-# Structured-contract fields an agent bundle declares wholesale: a bundle that
-# omits them means "no schema". On update we send an explicit null so a stale
-# schema on the existing agent is cleared rather than silently retained (the
-# backend leaves omitted fields untouched). agent_runtime is deliberately NOT in
-# this set — templates strip it to preserve the target's pinned runtime.
-_AGENT_CLEARABLE_SCHEMA_FIELDS = ("output_schema", "input_schema")
+# Fields an agent bundle declares wholesale: a bundle that omits them means "no
+# schema" / "no machine of its own". On update we send an explicit null so a
+# stale value on the existing agent is cleared rather than silently retained
+# (the backend leaves omitted fields untouched). agent_runtime is deliberately
+# NOT in this set — templates strip it to preserve the target's pinned runtime.
+_AGENT_CLEARABLE_SCHEMA_FIELDS = ("output_schema", "input_schema", "machine")
 
 
 def _normalize_pod_payload(
@@ -196,14 +198,96 @@ def _sanitize_agent_payload_for_import(payload: dict[str, Any]) -> dict[str, Any
     return _strip_keys(payload, set(_AGENT_SERVER_FIELDS))
 
 
-def _normalize_agent_payload(agent: dict[str, Any]) -> dict[str, Any]:
+def portable_machine_ref(ref: str | None, pod_id: str | None) -> str | None:
+    """An agent's machine ref as it should read in another pod.
+
+    ``pod:<this pod>/<name>`` becomes ``pod:<name>``: the importing pod's
+    machine of that name, which the same bundle carries. Any other ref -- a
+    person's own machine, another pod's -- is left as written.
+    """
+    if not ref or not pod_id:
+        return ref
+    for separator in ("/", ":"):
+        prefix = f"pod:{pod_id}{separator}"
+        if ref.startswith(prefix):
+            return f"pod:{ref[len(prefix) :]}"
+    return ref
+
+
+def _normalize_agent_payload(
+    agent: dict[str, Any], *, pod_id: str | None = None
+) -> dict[str, Any]:
     payload = _strip_keys(agent, set(_AGENT_SERVER_FIELDS))
+    if payload.get("machine"):
+        payload["machine"] = portable_machine_ref(str(payload["machine"]), pod_id)
     # Make the structured-contract fields explicit in the bundle (as null when
     # unset) so the declarative intent is visible and a re-import faithfully
     # clears a schema the source agent no longer defines.
     for field in _AGENT_CLEARABLE_SCHEMA_FIELDS:
         payload.setdefault(field, None)
     return payload
+
+
+_MACHINE_TEMPLATES = ("workspace", "workspace-docker")
+_MACHINE_VISIBILITIES = ("pod", "restricted")
+_MACHINE_SIZE = re.compile(r"^[1-9][0-9]*x[1-9][0-9]*$")
+
+
+def _normalize_machine_payload(machine: dict[str, Any]) -> dict[str, Any]:
+    """A pod machine as a definition: what it is, not how it is running.
+
+    ``display_name`` is written only when it says something the name does not;
+    the server makes the name the display name when none is given.
+    """
+    payload = {
+        key: machine.get(key)
+        for key in sorted(MACHINE_APPLY_FIELDS)
+        if machine.get(key) is not None
+    }
+    if payload.get("display_name") == payload.get("name"):
+        payload.pop("display_name", None)
+    return payload
+
+
+def _validate_machine_payload(
+    resource_dir: Path, resource_name: str, payload: dict[str, Any]
+) -> list[BundleValidationIssue]:
+    path = str(resource_dir / f"{resource_name}.json")
+    issues: list[BundleValidationIssue] = []
+
+    def issue(message: str) -> None:
+        issues.append(BundleValidationIssue(path=path, message=message))
+
+    unknown = sorted(set(payload) - MACHINE_APPLY_FIELDS)
+    if unknown:
+        issue(
+            f"Unrecognized field(s) on machine '{resource_name}': "
+            f"{', '.join(unknown)}. A machine takes "
+            f"{', '.join(sorted(MACHINE_APPLY_FIELDS))}."
+        )
+    if payload.get("template") not in _MACHINE_TEMPLATES:
+        issue(
+            f"Machine '{resource_name}' needs a template: "
+            f"{' or '.join(_MACHINE_TEMPLATES)}."
+        )
+    if payload.get("visibility") not in _MACHINE_VISIBILITIES:
+        issue(
+            f"Machine '{resource_name}' needs a visibility: "
+            f"{' or '.join(_MACHINE_VISIBILITIES)}."
+        )
+    size = payload.get("size")
+    if size is not None and not (
+        isinstance(size, str) and _MACHINE_SIZE.match(size.strip().lower())
+    ):
+        issue(
+            f"Machine '{resource_name}' size '{size}' is not <vcpu>x<memory GB>, like 2x4."
+        )
+    run_slots = payload.get("run_slots")
+    if run_slots is not None and (
+        isinstance(run_slots, bool) or not isinstance(run_slots, int) or run_slots < 1
+    ):
+        issue(f"Machine '{resource_name}' run_slots must be a whole number, 1 or more.")
+    return issues
 
 
 def _normalize_workflow_payload(workflow: dict[str, Any]) -> dict[str, Any]:

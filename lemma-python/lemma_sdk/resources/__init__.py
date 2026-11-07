@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 _NAME_TO_MODULE = {
     "AgentHosts": "agent_hosts",
     "WebLogins": "web_logins",
+    "Machines": "machines",
     "PodAgents": "agents",
     "PodCalls": "calls",
     "PodConversations": "conversations",
@@ -47,6 +48,7 @@ _NAME_TO_MODULE = {
 if TYPE_CHECKING:
     from .agent_hosts import AgentHosts
     from .web_logins import WebLogins
+    from .machines import Machines
     from .agents import PodAgents
     from .calls import PodCalls
     from .conversations import PodConversations
@@ -88,6 +90,7 @@ def __dir__() -> list[str]:
 __all__ = [
     "AgentHosts",
     "WebLogins",
+    "Machines",
     "BoundConnectors",
     "PodCalls",
     "BoundOrg",

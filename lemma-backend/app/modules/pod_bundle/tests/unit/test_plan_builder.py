@@ -23,6 +23,7 @@ class FakeExisting:
         schedules=None,
         apps=None,
         surfaces=None,
+        machines=None,
     ):
         self._tables = set(tables or [])
         self._table_manifests = table_manifests or {}
@@ -32,6 +33,7 @@ class FakeExisting:
         self._schedules = set(schedules or [])
         self._apps = set(apps or [])
         self._surfaces = set(surfaces or [])
+        self._machines = set(machines or [])
 
     async def table_names(self):
         return self._tables
@@ -56,6 +58,9 @@ class FakeExisting:
 
     async def surface_names(self):
         return self._surfaces
+
+    async def machine_names(self):
+        return self._machines
 
 
 def _write(path: Path, payload: dict) -> None:
