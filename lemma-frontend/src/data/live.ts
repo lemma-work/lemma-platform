@@ -76,6 +76,7 @@ import type {
     SlackAppWorkspaces,
     LinkShare,
     PodLink,
+    ChatRepositories,
     Conversation,
     ConversationPage,
     ConversationRef,
@@ -1002,6 +1003,14 @@ export const liveSource: PodSource = {
                 : { default_runtime: null, default_profile_id: null },
         } as Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]);
         forgetPod(podId);
+    },
+
+    async listChatRepositories(podId: string): Promise<ChatRepositories> {
+        const listed = await lemma(podId).conversations.repositories({ pod_id: podId });
+        return {
+            items: listed.items.map((repo) => ({ fullName: repo.full_name, private: Boolean(repo.private) })),
+            complete: listed.complete !== false,
+        };
     },
 
     async getConversationRuntime(podId: string, conversationId: string): Promise<Choice | null> {
