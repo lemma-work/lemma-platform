@@ -150,7 +150,12 @@ since the step 3 read started), skipping items whose `link` is already in the
 table, so nothing that arrived during setup falls between the two. `link`
 is unique, so when the feed and the catch-up reach the same item at once, the
 second write is refused: a refusal for a duplicate `link` means the row is
-already there, so skip it rather than retry. When the service
+already there, so skip it rather than retry. A work table made before `link`
+was unique has no such guard (`lemma tables get <work-table>` shows
+`"unique": true` on the column when it has one; a column cannot be made unique
+in place). There, once the catch-up read is done, look for repeats with
+`select link, count(*) from <work-table> group by 1 having count(*) > 1` and
+delete the extra rows, keeping the oldest of each. When the service
 has no trigger, a timed schedule that reads only what is new since the last
 row is the fallback; say so.
 
