@@ -39,10 +39,11 @@ timed schedules. It does not have a source: nothing fills that table yet.
 A Lemma started from its own words has none of it. Make the work table now,
 one row per unit of work, with the columns its number needs (when the item
 came in, when it was done or answered, whether that was in time, who holds
-it), shared so the number can count every row:
+it), a unique `link` for the item's id at its source, and shared so the
+number can count every row:
 
 ```bash
-lemma tables create <work-table> --data '{"columns":[...],"enable_rls":false}'
+lemma tables create <work-table> --data '{"columns":[{"name":"link","type":"TEXT","unique":true}, ...],"enable_rls":false}'
 ```
 
 ## 1. Ask where the work happens
@@ -146,7 +147,10 @@ lemma schedules create --name new-work --agent POD_DEFAULT \
 nothing. Once the feed is on, read the source once more for anything newer
 than the last item you imported (or, when nothing was imported, anything
 since the step 3 read started), skipping items whose `link` is already in the
-table, so nothing that arrived during setup falls between the two. When the service
+table, so nothing that arrived during setup falls between the two. `link`
+is unique, so when the feed and the catch-up reach the same item at once, the
+second write is refused: a refusal for a duplicate `link` means the row is
+already there, so skip it rather than retry. When the service
 has no trigger, a timed schedule that reads only what is new since the last
 row is the fallback; say so.
 
