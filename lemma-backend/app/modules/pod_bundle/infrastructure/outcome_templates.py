@@ -78,6 +78,13 @@ class OutcomeTemplateCard(BaseModel):
     description: str | None = None
     sentence: str = Field(description="What it owns. A finish line's carries {due}.")
     kind: OutcomeKind
+    function: str | None = Field(
+        default=None,
+        description=(
+            "The kind of work it does, as a shelf groups it: support, sales, "
+            "engineering, marketing or ops."
+        ),
+    )
     face: str | None = Field(
         default=None, description="Which character's face it wears."
     )
@@ -108,6 +115,7 @@ def read_card(name: str, *, root: Path = TEMPLATES_ROOT) -> OutcomeTemplateCard 
             description=manifest.get("description"),
             sentence=outcome.sentence,
             kind=outcome.kind,
+            function=lemma.get("function"),
             face=lemma.get("face"),
             place=lemma.get("place"),
             brings=[str(item) for item in lemma.get("brings") or []][:3],

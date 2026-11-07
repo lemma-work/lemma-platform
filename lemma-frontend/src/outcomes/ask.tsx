@@ -12,6 +12,7 @@ import { AttachedFiles } from "@/thread/attached";
 import { ModelPicker } from "@/thread/model-picker";
 import { useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
+import { RepositoryChip } from "@/thread/repository-chip";
 import { TeammateFace } from "@/space/teammate-face";
 import type { Ask, Go } from "./model";
 import { Icon, to } from "./parts";
@@ -22,6 +23,13 @@ const ASK_IN_KEY = key("outcomes-ask-in");
 /** The model a new chat runs on, as the conversation is made with it. */
 function runtimeOf(model: Choice | null): Record<string, unknown> | undefined {
     return model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined;
+}
+
+/** What the chat a box starts is created with: the model picked under it,
+ *  and the GitHub repository it works in. */
+function createWithOf(model: Choice | null, repository: string | null): Record<string, unknown> | undefined {
+    const made = { ...runtimeOf(model), ...(repository ? { repository } : {}) };
+    return Object.keys(made).length > 0 ? made : undefined;
 }
 
 /** The one box to ask a Lemma something, with which Lemma at its foot.
@@ -44,6 +52,7 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
     const [refused, setRefused] = useState<string | null>(null);
     const [over, setOver] = useState(false);
     const [model, setModel] = useState<Choice | null>(null);
+    const [repository, setRepository] = useState<string | null>(null);
     const picker = useRef<HTMLInputElement>(null);
     /* A folder on this computer for the chat to work in: the desktop app's,
        on a local install, and nothing anywhere else. Parked until the chat
@@ -59,8 +68,9 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
     const target = pods.find((pod) => pod.id === (podId ?? chosen)) ?? pods[0] ?? null;
     const pick = (id: string) => {
         /* A model is one of a Lemma's own; another Lemma starts on its own
-           default. */
+           default. So is a repository: its GitHub connector decides them. */
         setModel(null);
+        setRepository(null);
         if (onPod) onPod(id);
         else setChosen(id);
     };
@@ -80,8 +90,9 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
         setText("");
         setHeld([]);
         setRefused(null);
-        onAsk(target.id, said, { files, createWith: runtimeOf(model), folder: folder.folder ? folder.pendingId : undefined });
+        onAsk(target.id, said, { files, createWith: createWithOf(model, repository), folder: folder.folder ? folder.pendingId : undefined });
         setModel(null);
+        setRepository(null);
     };
     return (
         <form
@@ -155,6 +166,9 @@ export function AskBox({ pods, podId, onPod, onAsk, autoFocus = false, placehold
                     </label>
                 )}
                 <FolderChip folder={folder} />
+                {target && source.label === "live" && (
+                    <RepositoryChip key={target.id} podId={target.id} picked={repository} onPick={setRepository} className="ox-askbox__in" chevron={<Icon name="chevron" size={12} />} />
+                )}
                 {refused && <span className="ox-askbox__note">{refused}</span>}
                 <span className="ox-askbox__model">
                     {target && source.label === "live" && <ModelPicker key={target.id} podId={target.id} orgId={target.orgId} conversationId={null} picked={model} onPicked={setModel} />}

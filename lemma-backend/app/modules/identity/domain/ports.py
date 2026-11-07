@@ -188,6 +188,7 @@ class IdentityEmailPort(Protocol):
         accept_url: str,
         pod_name: str | None = None,
         pod_description: str | None = None,
+        note: str | None = None,
     ) -> bool: ...
 
     async def send_signup_welcome_email(

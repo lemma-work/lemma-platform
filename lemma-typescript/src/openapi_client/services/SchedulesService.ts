@@ -220,6 +220,41 @@ export class SchedulesService {
         });
     }
     /**
+     * Create Schedule Run
+     * Start one run of a TIME schedule now, outside its timing.
+     *
+     * Takes no body. The run carries what the schedule's own firing would, is
+     * held to the same daily ceiling and `max_concurrent_runs`, and its target
+     * is started by the same job, so the run answers `PROCESSING` until it is
+     * handed over. It runs as the person asking, who must be able to change the
+     * schedule and run its target; its metadata says `manual: true` and who
+     * started it. Refused with 422 for a WEBHOOK or DATASTORE schedule, which
+     * has no event to carry, and with 409 while the schedule is paused, has no
+     * target, is full, or has reached its daily ceiling.
+     * @param podId
+     * @param scheduleId
+     * @returns ScheduleRunResponse Successful Response
+     * @throws ApiError
+     */
+    public static scheduleRunCreate(
+        podId: string,
+        scheduleId: string,
+    ): CancelablePromise<ScheduleRunResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/schedules/{schedule_id}/runs',
+            path: {
+                'pod_id': podId,
+                'schedule_id': scheduleId,
+            },
+            errors: {
+                404: `No such schedule in this pod.`,
+                409: `The schedule is paused, has no target, is full, or has reached its daily ceiling.`,
+                422: `A WEBHOOK or DATASTORE schedule, which has no event to carry.`,
+            },
+        });
+    }
+    /**
      * Retry Schedule Run
      * @param podId
      * @param scheduleId

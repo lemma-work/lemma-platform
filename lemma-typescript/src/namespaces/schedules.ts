@@ -93,6 +93,18 @@ export class SchedulesNamespace {
     );
   }
 
+  /**
+   * Start one run of a TIME schedule now, outside its timing, as the caller;
+   * answers the run (`PROCESSING` until its target is handed over). Held to the
+   * schedule's daily ceiling and `max_concurrent_runs` like any firing. A
+   * WEBHOOK or DATASTORE schedule is refused (422), as is a paused one (409).
+   */
+  runNow(scheduleId: string) {
+    return this.client.request(() =>
+      SchedulesService.scheduleRunCreate(this.podId(), scheduleId),
+    );
+  }
+
   /** Run a failed or dead-lettered run again with the same event; answers the new run. */
   retryRun(scheduleId: string, runId: string) {
     return this.client.request(() =>

@@ -12,4 +12,5 @@ export enum NeedsYouKind {
     FORM = 'FORM',
     DECISION = 'DECISION',
     CONTACT = 'CONTACT',
+    MESSAGE = 'MESSAGE',
 }

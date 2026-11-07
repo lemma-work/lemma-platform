@@ -777,3 +777,35 @@ async def test_controlling_it_on_github_is_not_enough_to_install_it_for_the_org(
     assert claimed.status_code == 200, claimed.text
     assert claimed.json()["install_state"] == "PENDING_APPROVAL"
     assert await _held_by(db_session, installation_id) is None
+
+
+async def test_an_organization_reads_back_every_installation_it_holds_and_no_other(
+    scenario, db_session, github
+):
+    """What a conversation may open is drawn from these: a person's own GitHub
+    account and their GitHub organization, both held here, both listed, oldest
+    first; an installation another organization holds, never."""
+    from app.modules.connectors.services.auth.github_bindings import (
+        bound_installations,
+        claim_installation,
+    )
+
+    owner, _, org_id, _ = await _org_with_github(scenario, db_session, "h4-both")
+    other, _, other_org_id, _ = await _org_with_github(scenario, db_session, "h4-other")
+    own, organization, elsewhere = (_installation_id() for _ in range(3))
+    for installation_id, holder, person in (
+        (own, org_id, owner),
+        (organization, org_id, owner),
+        (elsewhere, other_org_id, other),
+    ):
+        await claim_installation(
+            db_session,
+            installation_id=installation_id,
+            organization_id=UUID(holder),
+            user_id=UUID(person["id"]),
+            administered=True,
+        )
+        await db_session.commit()
+
+    assert await bound_installations(db_session, UUID(org_id)) == (own, organization)
+    assert await bound_installations(db_session, UUID(other_org_id)) == (elsewhere,)

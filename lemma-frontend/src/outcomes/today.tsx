@@ -27,12 +27,15 @@ function greeting(now: number): string {
 /** Home is a new chat: a greeting, or what needs the reader said once; the
  *  box, with who is asked at its foot; a few of the things waiting; and the
  *  chats to pick up again, across every Lemma -- the sidebar folds each
- *  Lemma to its name, so this is where the latest of them are. */
-export function Today({ org, pods, activity, queue, me, go, onAsk }: {
+ *  Lemma to its name, so this is where the latest of them are. A failed
+ *  read of what waits says so, rather than greeting over it. */
+export function Today({ org, pods, activity, queue, queueFailed, onRetryQueue, me, go, onAsk }: {
     org: Org;
     pods: readonly Pod[];
     activity: Map<string, ConversationRef[]>;
     queue: readonly QueueItem[];
+    queueFailed: boolean;
+    onRetryQueue: () => void;
     me: string;
     go: Go;
     onAsk: Ask;
@@ -55,7 +58,7 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
             <div className="ox-page ox-home">
                 <Empty title={`No Lemmas at ${org.name} yet.`}>
                     <p>Give one something to own, and it builds and runs what it takes.</p>
-                    <a className="ox-btn ox-btn--primary" {...to({ name: "outcomes" }, go)}>Start a Lemma</a>
+                    <a className="ox-btn ox-btn--primary" {...to({ name: "hire" }, go)}>Start a Lemma</a>
                 </Empty>
             </div>
         );
@@ -66,6 +69,14 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
             {feeds}
             <h1 className="ox-home__t">{headline}</h1>
             <AskBox pods={pods} onAsk={onAsk} autoFocus />
+            {queueFailed && queue.length === 0 && (
+                <section aria-label="Needs you">
+                    <div className="ox-sec"><h2>Needs you</h2></div>
+                    <p className="ox-note" role="alert">
+                        Couldn’t read what’s waiting on you. <button type="button" className="ox-textbtn" onClick={onRetryQueue}>Try again</button>
+                    </p>
+                </section>
+            )}
             {queue.length > 0 && (
                 <section aria-label="Needs you">
                     <div className="ox-sec">

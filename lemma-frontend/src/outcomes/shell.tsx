@@ -15,12 +15,10 @@ import { isAboutSection, settingsSectionOf } from "@/space/about-sections";
 import { acknowledge, readComposeRequest } from "@/thread/compose-bridge";
 import { gather } from "@/workflow/waiting-inbox";
 import { useConversationAsks } from "@/thread/use-conversation-asks";
-import { byAge } from "@/thread/waiting-on-you";
+import { byAge, CONVERSATION_ASKS } from "@/thread/waiting-on-you";
 import { channelTitle } from "@/channels/model";
 import { SettingsModal, type SettingsSection } from "@/settings/settings-modal";
 import { NewOrgDialog } from "@/org/new-org-dialog";
-import { ArrivalView } from "@/org/arrival-view";
-import { HiringView } from "@/stage/hiring";
 import { ReachSheet } from "@/shell/reach";
 import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
 import { AddPeople } from "@/shell/add-people";
@@ -31,10 +29,12 @@ import { FirstProfileStep } from "@/session/first-profile-step";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import {
     NEW_CHAT,
-    HOME, chatOpenOfView, chatView, outcomeView, podOfView, queueItems, readTrialView, readView, refreshKept, viewOfAddress, writeView,
+    HOME, chatOpenOfView, chatView, outcomeView, podOfView, queueFromNeeds, queueItems, readTrialView, readView, refreshKept, viewOfAddress, withOwned, writeView,
     type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type KeptApp, type View,
 } from "./model";
-import { usePlans, usePodActivity, usePodDetails } from "./data";
+import { useNeedsYou, useOwned, usePlans, usePodActivity, usePodDetails } from "./data";
+import { FrameArrival } from "./arrival";
+import { Shelf } from "./shelf";
 import { Bars, Icon, Empty } from "./parts";
 import { Sidebar } from "./sidebar";
 import { Today } from "./today";
@@ -236,10 +236,21 @@ export function OutcomesShell() {
         enabled: list.length > 0,
         staleTime: 60_000,
     });
-    const asked = useConversationAsks(list);
+    /* What waits on you is the organization's one list (#1045's needs-you):
+       pauses, forms, decisions, contacts and the questions a Lemma asked in
+       your chat with it, in one read. The sample source has no such read, so
+       it keeps the per-Lemma ones. */
+    const sampled = source.label !== "live";
+    const needs = useNeedsYou(sampled ? null : orgId);
+    const asked = useConversationAsks(list, { enabled: sampled });
     /* People outside a Lemma who wrote in and wait on a person: answered
-       from Needs you like any other question, not listed in the sidebar. */
+       from Needs you like any other question, not listed in the sidebar.
+       Their live feeds are still what notices one arriving first. */
     const [contactsWaiting, contactFeeds] = useContactsWaiting(list);
+    const contactsSaid = useMemo(() => [...contactsWaiting.values()].flat().map((channel) => channel.id).sort().join(","), [contactsWaiting]);
+    useEffect(() => {
+        if (!sampled) void queryClient.invalidateQueries({ queryKey: [CONVERSATION_ASKS, "organization"] });
+    }, [contactsSaid, sampled, queryClient]);
     const contacts = useMemo<ContactWaiting[]>(() => list.flatMap((pod) => (contactsWaiting.get(pod.id) ?? []).map((channel) => {
         const at = Date.parse(channel.attention?.since ?? channel.lastMessageAt ?? channel.createdAt);
         return {
@@ -251,9 +262,22 @@ export function OutcomesShell() {
             sinceMs: Number.isNaN(at) ? Date.now() : at,
         };
     })), [list, contactsWaiting]);
-    const queue = useMemo(() => queueItems(byAge(asked.data ?? []).fresh, waits.data?.rows ?? [], contacts), [asked.data, waits.data, contacts]);
+    const queue = useMemo(
+        () => (sampled ? queueItems(byAge(asked.data ?? []).fresh, waits.data?.rows ?? [], contacts) : queueFromNeeds(needs.data ?? [], waits.data?.rows ?? [])),
+        [sampled, asked.data, waits.data, contacts, needs.data],
+    );
+    const queueLoading = sampled ? asked.isPending || waits.isPending : needs.isPending;
+    /* Live, the queue is this one read: with nothing read, an empty queue
+       is not "nothing waiting". */
+    const queueFailed = !sampled && needs.isError && needs.data === undefined;
+    const { refetch: refetchNeeds } = needs;
+    const retryQueue = useCallback(() => void refetchNeeds(), [refetchNeeds]);
     const { byPod: activity } = usePodActivity(list);
-    const plans = usePlans(list);
+    /* The plan's lines are the file's; what a Lemma owns and its number are
+       the Lemma's own, kept on the server, and shown over the file's. */
+    const planFiles = usePlans(list);
+    const owned = useOwned(list);
+    const plans = useMemo(() => new Map(list.map((pod) => [pod.id, withOwned(planFiles.get(pod.id), owned.get(pod.id))])), [list, planFiles, owned]);
 
     /* Asking -- from Home, ⌘K or an outcome -- starts a chat in the outcome
        named and opens it. The pane that shows it sends the words, so the
@@ -412,14 +436,15 @@ export function OutcomesShell() {
     }, [elsewhere]);
     const stranger = unlisted && linked.isError && isForbidden(linked.error) ? unlisted : null;
 
-    /* Somebody who belongs nowhere yet: the workspace's own way in, with
-       their invitations, the organizations they could join, or a new one. */
+    /* Somebody who belongs nowhere yet: in, without a decision they cannot
+       make well yet -- an invitation accepted, or an organization made for
+       them -- landing on what they were invited to, or the shelf. */
     if (orgs.isSuccess && orgs.data.length === 0) {
         return (
-            <ArrivalView
+            <FrameArrival
                 email={me.data?.email ?? null}
                 name={[me.data?.first_name, me.data?.last_name].filter(Boolean).join(" ") || null}
-                onEntered={(podId) => { void queryClient.invalidateQueries({ queryKey: ["orgs"] }); if (podId) go(outcomeView(podId)); }}
+                onEntered={(podId) => { void queryClient.invalidateQueries({ queryKey: ["orgs"] }); go(podId ? outcomeView(podId) : { name: "hire" }); }}
             />
         );
     }
@@ -444,7 +469,7 @@ export function OutcomesShell() {
     } else if (!org || pods.isPending) {
         page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
     } else if (view.name === "today") {
-        page = <Today org={org} pods={withPeople} activity={activity} queue={queue} me={myName} go={go} onAsk={ask} />;
+        page = <Today org={org} pods={withPeople} activity={activity} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} />;
     } else if (view.name === "apps") {
         page = <AppsPage pods={withPeople} go={go} />;
     } else if (view.name === "connectors") {
@@ -452,30 +477,11 @@ export function OutcomesShell() {
     } else if (view.name === "outcomes") {
         page = <OutcomesList org={org} pods={withPeople} activity={activity} plans={plans} queue={queue} go={go} />;
     } else if (view.name === "needs") {
-        page = <NeedsYou pods={withPeople} queue={queue} loading={asked.isPending || waits.isPending} go={go} />;
+        page = <NeedsYou pods={withPeople} queue={queue} loading={queueLoading} failed={queueFailed} onRetry={retryQueue} go={go} />;
     } else if (view.name === "people") {
         page = <People pods={withPeople} go={go} />;
     } else if (view.name === "hire") {
-        page = (
-            <div className="settings-view ox-hire">
-                <HiringView
-                    orgId={org.id}
-                    orgName={org.name}
-                    onClose={() => go({ name: "outcomes" })}
-                    onHired={(id, move) => {
-                        void queryClient.invalidateQueries({ queryKey: ["pods", org.id] });
-                        /* What the reveal offered as a first move: words for
-                           a first chat, left for them to send, or the sheet
-                           that gives the new Lemma a way to be reached or
-                           its people. */
-                        if (move && "say" in move) return prompt(id, move.say);
-                        go(outcomeView(id));
-                        if (move?.open === "reach") setReaching(id);
-                        else if (move?.open === "people") setAddingPeople(id);
-                    }}
-                />
-            </div>
-        );
+        page = <Shelf org={org} go={go} />;
     } else if (stranger) {
         page = (
             <div className="settings-view ox-hire">

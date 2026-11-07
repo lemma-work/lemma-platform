@@ -121,6 +121,10 @@ class OrganizationMemberEntity(AggregateRoot):
         self.role = new_role
 
 
+#: An invitation's note is a line or two, quoted in an email.
+INVITATION_NOTE_CHARS = 500
+
+
 class OrganizationInvitationEntity(AggregateRoot):
     """Organization invitation aggregate root."""
 
@@ -133,6 +137,10 @@ class OrganizationInvitationEntity(AggregateRoot):
     redirect_uri: str | None = None
     pod_name: str | None = None
     pod_description: str | None = None
+    #: What the inviter wrote to go with it. Not a column: the email is the
+    #: only place anybody reads it, so it travels with the email's delivery
+    #: work and goes with it once the email is sent.
+    note: str | None = None
     status: OrganizationInvitationStatus = OrganizationInvitationStatus.PENDING
     expires_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc) + timedelta(days=7)
@@ -164,6 +172,7 @@ class OrganizationInvitationEntity(AggregateRoot):
         accept_url: str,
         pod_name: str | None = None,
         pod_description: str | None = None,
+        note: str | None = None,
     ) -> None:
         from app.modules.identity.domain.events import (
             OrganizationInvitationCreatedEvent,
@@ -181,6 +190,7 @@ class OrganizationInvitationEntity(AggregateRoot):
                 accept_url=accept_url,
                 pod_name=pod_name,
                 pod_description=pod_description,
+                note=note,
             )
         )
 

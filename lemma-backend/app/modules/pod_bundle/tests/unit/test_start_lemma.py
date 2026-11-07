@@ -111,6 +111,7 @@ def test_the_first_message_asks_the_agent_to_set_itself_up():
     )
     said = setup_request(started, card)
     assert "Launch template" in said and "November 18" in said
+    assert "set-up skill" in said
 
 
 def _planned(**plan: object) -> ImportState:

@@ -6,8 +6,11 @@ the pod ``github`` connector's account before the agent's first command
 (``tools/workspace_cli/github_project``). So the question at opening is not
 "does this repository exist" but "will that clone work" -- asked of the very
 account the clone will use (``github_credential_as``), for the person opening
-the conversation, and answered by the organization's installation rather than
-by the token alone (``connectors.contracts.github``).
+the conversation, and answered by the organization's installations rather
+than by the token alone (``connectors.contracts.github``): every GitHub
+installation bound to the pod's organization that the person can see, so
+someone whose organization connected both their own GitHub account and their
+GitHub organization picks from both.
 
 No database connection is held while GitHub is asked: the account is resolved
 in a short unit of work of its own, which has closed before the first request.
@@ -45,6 +48,7 @@ from app.modules.agent.infrastructure.tools.workspace_cli.github_credential impo
 from app.modules.connectors.contracts.github import (
     GithubInstallationRequiredError,
     InstallationRepository,
+    bound_installations,
     installation_repositories,
     installation_repository,
 )
@@ -53,6 +57,11 @@ from app.modules.connectors.contracts.github import (
 PersonContext = Callable[[SqlAlchemyUnitOfWork, UUID, UUID], Awaitable[Context]]
 #: ``github_credential_as``'s shape, so a test can answer for the connector.
 CredentialAs = Callable[..., Awaitable[_GithubCredential | GithubRefusal | None]]
+#: The installations bound to the context's organization, so a test can answer
+#: for ``connector_installations``.
+OrganizationInstallations = Callable[
+    [SqlAlchemyUnitOfWork, Context], Awaitable[tuple[str, ...]]
+]
 
 
 async def _person_context(
@@ -63,12 +72,21 @@ async def _person_context(
     )
 
 
+async def _organization_installations(
+    uow: SqlAlchemyUnitOfWork, ctx: Context
+) -> tuple[str, ...]:
+    if ctx.organization_id is None:
+        return ()
+    return await bound_installations(uow.session, ctx.organization_id)
+
+
 @dataclass(frozen=True, slots=True)
 class _Reach:
-    """A person's way into the organization's installation."""
+    """A person's way into the organization's installations."""
 
     access_token: str
-    installation_id: str
+    #: The account's own installation first, so its repositories lead.
+    installation_ids: tuple[str, ...]
 
 
 def _project_repo(
@@ -93,6 +111,7 @@ class GithubProjectRepositories:
         *,
         person_context: PersonContext | None = None,
         credential_as: CredentialAs | None = None,
+        organization_installations: OrganizationInstallations | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         # Every collaborator is an argument so a test answers for the connector
@@ -101,6 +120,9 @@ class GithubProjectRepositories:
         self._uow_factory = uow_factory or SessionUnitOfWorkFactory(async_session_maker)
         self._person_context = person_context or _person_context
         self._credential_as = credential_as or github_credential_as
+        self._organization_installations = (
+            organization_installations or _organization_installations
+        )
         self._client = client
 
     async def checked(
@@ -109,7 +131,7 @@ class GithubProjectRepositories:
         reach = await self._reach(pod_id=pod_id, user_id=user_id)
         found = await installation_repository(
             reach.access_token,
-            reach.installation_id,
+            reach.installation_ids,
             owner=repo.owner,
             name=repo.repo,
             client=self._client,
@@ -130,7 +152,7 @@ class GithubProjectRepositories:
     async def reachable(self, *, pod_id: UUID, user_id: UUID) -> RepositoryChoices:
         reach = await self._reach(pod_id=pod_id, user_id=user_id)
         listing = await installation_repositories(
-            reach.access_token, reach.installation_id, client=self._client
+            reach.access_token, reach.installation_ids, client=self._client
         )
         choices: list[RepositoryChoice] = []
         for repository in listing.repositories:
@@ -153,6 +175,7 @@ class GithubProjectRepositories:
                 credential = await self._credential_as(
                     uow, ctx, pod_id=pod_id, user_id=user_id
                 )
+                bound = await self._organization_installations(uow, ctx)
         if isinstance(credential, GithubRefusal):
             raise ProjectRepositoryUnavailableError(
                 credential.message,
@@ -167,9 +190,13 @@ class GithubProjectRepositories:
                 code="GITHUB_TOKEN_MISSING",
                 status_code=409,
             )
-        if not credential.installation_id:
-            raise GithubInstallationRequiredError()
-        return _Reach(
-            access_token=credential.access_token,
-            installation_id=credential.installation_id,
+        # Only installations this organization holds: the token reaches
+        # others', and an account naming an installation the organization does
+        # not hold is not a way into it.
+        own = credential.installation_id
+        ordered = ((own,) if own in bound else ()) + tuple(
+            one for one in bound if one != own
         )
+        if not ordered:
+            raise GithubInstallationRequiredError()
+        return _Reach(access_token=credential.access_token, installation_ids=ordered)

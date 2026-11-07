@@ -180,7 +180,9 @@ async def channel_post(
     pause your turn, and an answer never comes back as a tool result. When you
     need answers, set `wants_answer` on each (only with `to`), send them all,
     then **finish your turn**: you get a fresh one here once the last person
-    answers, and `channel_read(asked_by_me=True)` shows what they said.
+    answers, and `channel_read(asked_by_me=True)` shows what they said. When
+    the answer is one of a few, offer them as `choices`: they show as buttons
+    in the person's chat and in what waits on them.
 
     To answer the person you are already talking to, just reply.
     """
@@ -190,6 +192,11 @@ async def channel_post(
     if (request.to is None) == (request.channel_id is None):
         return ChannelPostResponse(
             success=False, error="Give exactly one of `to` or `channel_id`."
+        )
+    if request.choices is not None and not request.wants_answer:
+        return ChannelPostResponse(
+            success=False,
+            error="`choices` are answers to a question: set `wants_answer` with them.",
         )
     if request.channel_id is not None:
         if request.wants_answer:
@@ -202,6 +209,19 @@ async def channel_post(
             )
         return await _post_in_channel(ctx, request.channel_id, request.text)
     return await _post_to_member(ctx, request)
+
+
+def asked_question(text: str, choices: list[str] | None) -> dict[str, object]:
+    """What a line's question keeps: the words, and any answers it offers in
+    the shape ``ask_user`` keeps them, so the chat and the overview draw them
+    as buttons the same way."""
+    question: dict[str, object] = {"tool": "message", "prompt": text}
+    offered = [choice.strip() for choice in choices or () if choice.strip()]
+    if offered:
+        question["questions"] = [
+            {"question": text, "options": [{"label": label} for label in offered]}
+        ]
+    return question
 
 
 async def _post_to_member(
@@ -227,7 +247,7 @@ async def _post_to_member(
             kind=QuestionKind.ASK,
             ref=message_ref(deps.conversation_id, call),
             asker=Asker.message(deps.conversation_id, call),
-            question={"tool": "message", "prompt": request.text},
+            question=asked_question(request.text, request.choices),
             awaits=Principal.member(recipient),
             batch_id=batch_of(deps.agent_run_id),
             expires_at=datetime.now(UTC) + ASK_EXPIRES_AFTER,
