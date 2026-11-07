@@ -107,14 +107,16 @@ what is new since the last row is the fallback; say so.
 
 ## 6. Count it
 
-A template's measure already counts its tables: check that it reads now,
-and change it only when the person asks. Otherwise, write one with
-`set_what_you_own`:
+A template's measure already counts its tables: check that it reads now.
+Change it only to fix something it gets wrong, and say what and why in your
+reply. Otherwise, write one with `set_what_you_own`:
 
 - one read-only query, one row, one column;
 - only over tables with `enable_rls: false`, because the number is the same
   for everyone and it may only count rows you can read in full;
 - a bar every week counts this week: `WHERE opened_at >= date_trunc('week', now())`;
+- count only what is due: an item whose deadline has not passed yet is
+  neither a hit nor a miss, so leave it out until it is one or the other;
 - with `unit` "%" it answers 0 to 100, as the target is written;
 - keep the person's sentence; a finish line also needs `due`.
 
@@ -143,7 +145,9 @@ Give it a `fallback` line with the numbers.
 
 Edit `/plan.md` with `pod_edit_file`. Keep its four sections. Each line is one
 thing that is true or done, and ends with who said it and when:
-`- Refunds over $300 go to Priya — Priya, Nov 7`. Write only lines about
+`- Refunds over $300 go to Priya — Priya, Nov 7`. Sign with the person's
+first name, or the Lemma's name for a line you decided; never an email
+address or a role. Write only lines about
 things that exist here or that you just set up. Ask who holds what if you do
 not know, with choices drawn from `list_pod_members`.
 
