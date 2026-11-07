@@ -1,6 +1,6 @@
 ---
 name: lemma-app-design
-description: "Design, redesign, and visually refine Lemma pod apps into distinctive, production-quality interfaces grounded in the pod's real users, domain, data, files, agents, workflows, and assets. Use when defining information architecture or DESIGN.md, choosing interaction and visual direction, improving interface copy, specifying loading/empty/error/permission states, making an app responsive and accessible, critiquing screenshots, or polishing an existing HTML or Vite app. Pair with lemma-builder for LemmaClient, scaffolding, implementation, permissions, and deployment mechanics; use lemma-app-qa for exhaustive functional QA."
+description: "Design, redesign, and visually refine Lemma pod apps into production-quality interfaces (dense working tools for daily work, distinctive pages for one-off or showcase use) grounded in the pod's real users, domain, data, files, agents, workflows, and assets. Use when defining information architecture or DESIGN.md, choosing interaction and visual direction, improving interface copy, specifying loading/empty/error/permission states, making an app responsive and accessible, critiquing screenshots, or polishing an existing HTML or Vite app. Pair with lemma-builder for LemmaClient, scaffolding, implementation, permissions, and deployment mechanics; use lemma-app-qa for exhaustive functional QA."
 ---
 
 # Lemma App Design
@@ -26,6 +26,30 @@ specific to its subject; do not ship a generic dashboard wearing the pod's name.
 - Preserve the user's requested mode. For a design discussion or audit, stop at
   findings and a design specification. Implement only when the request includes
   building or changing the app.
+
+## Build The Apps A Lemma Needs
+
+A Lemma owns one result, said as one sentence: a bar held every week or a finish
+line by a date. Its agent works on shared tables; its apps are where people see,
+review, approve, and correct that work. Three apps carry most of it:
+
+- **The number it owns.** The sentence, this week's value against the target,
+  and recent weeks. Read `GET /pods/{pod_id}/outcome/standing` (`outcome` with
+  `sentence`, `target`, `unit`, `due`; `value`; `problem`) and
+  `GET /pods/{pod_id}/outcome/history?weeks=` (oldest first, null for a week
+  never read) through `client.request` — the SDK has no method for either.
+  Every number opens to its rows: the measure answers one number, so write the
+  matching row query with `datastore.query` or a `records.list` filter. The
+  number counts every row; the list shows only what the viewer can read, so say
+  so. Show `problem` in words, never as a zero.
+- **A review queue.** Rows waiting on a person — drafts to approve, items to
+  correct — from `records.list` filtered on the work table's status, oldest
+  first, with the action on the row through `records.update`. Build it to
+  shrink: empty is the finished state.
+- **What needs you.** `conversations.pendingInteractions()` lists the asks and
+  approvals waiting on the viewer, longest first; answer in place with
+  `conversations.approvals.resolve(conversation_id, tool_call_id, …)`. It is
+  the viewer's list, never the team's.
 
 ## Follow The Design Loop
 
@@ -99,6 +123,15 @@ copy its surface styling or answer from a vague recollection.
 
 ### 4. Choose A Subject-Specific Direction
 
+**Working apps look like working tools.** An app people open every day to do
+work gets dense product UI: tables and lists over cards, compact type,
+keyboard shortcuts for the main actions, one accent colour on a neutral base,
+and no hero art, illustration, or decorative motion. Its distinctiveness comes from the domain's
+real data and actions, not decoration; one that reads like a poster or an
+editorial spread has failed, however well made. Use the rest of this step in
+full for one-off, public, or showcase pages; for a working app, use it only to
+choose the accent, type roles, and density.
+
 Derive the visual language from the subject's own world: its artifacts, materials,
 instruments, notation, rhythms, constraints, and vocabulary. Privately explore two
 or three credible directions, then select one with a clear rationale.
@@ -113,8 +146,9 @@ Specify:
 - restrained motion that clarifies change, sequence, or causality.
 
 Apply the **subject-swap test**: if the same layout, palette, copy, and signature
-could be relabeled for an unrelated pod, revise it. Avoid habitual AI-design
-defaults: interchangeable KPI cards, gratuitous bento grids, gradient blobs,
+could be relabeled for an unrelated pod, revise it. A working app passes on its
+content (columns, statuses, actions) and may share its shell. Avoid habitual
+AI-design defaults: interchangeable KPI cards, gratuitous bento grids, gradient blobs,
 glass panels, pill-shaped everything, random charts, oversized greetings, and
 decoration that encodes nothing. Treat “premium” as precision, coherence, and
 restraint—not as a fixed palette or luxury aesthetic.
@@ -136,7 +170,11 @@ for secondary metadata and controls without hiding essential context.
 Write interface copy as design material:
 
 - Use plain, specific, active language and sentence case.
-- Name an action by its outcome: “Approve request,” not “Submit.”
+- Name an action by what it does: “Approve request,” not “Submit.”
+- Use the product's words. The product is “a Lemma”; humans are “people”; what
+  a Lemma owns is said as its own sentence (“Every customer hears back within a
+  day”), never “the outcome” or “the goal.” Keep “pod,” “channel,” “surface,”
+  and “teammate” out of interface text.
 - Keep the verb stable from button to pending state, success message, and history.
 - Make empty states explain what is absent and offer the next valid action.
 - Make errors name what failed, preserve the user's work, and offer recovery.
@@ -214,7 +252,8 @@ Before handing off, confirm:
 
 - `DESIGN.md` names real pod resources and matches the implemented experience.
 - The default screen communicates the job and next action without explanation.
-- The visual direction and signature belong to this subject.
+- The visual direction belongs to this subject, and a working app reads as a
+  working tool.
 - Every prominent datum and action has a real Lemma contract.
 - Core loading, empty, error, permission, and pending states are designed.
 
