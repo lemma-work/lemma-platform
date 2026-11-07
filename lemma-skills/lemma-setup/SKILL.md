@@ -142,7 +142,7 @@ lemma schedules create --name new-work --agent POD_DEFAULT \
   --webhook-source composio --connector intercom \
   --connector-trigger <the trigger id from the list> \
   --filter "A customer asking us for something, not spam or our own reply." \
-  --instruction "Add this to <work-table>, one row, the way the setup did, unless its link is already there."
+  --instruction "Add this to <work-table>, one row, the way the setup did, or update its row when its link is already there."
 ```
 
 `--filter` decides whether the run happens at all, so routine noise costs
@@ -154,6 +154,14 @@ is unique, so when the feed and the catch-up reach the same item at once, the
 second write is refused: a refusal for a duplicate `link` means the row is
 already there, so skip it rather than retry.
 
+The number counts work done as well as work arriving, so a row has to change
+when its item is answered or finished, not only appear. Listen for that too:
+one schedule per trigger (a new conversation, a reply to one), each told to
+update the row when its `link` is already there. When the service has no
+trigger for one of them, a timed schedule that reads only what is new or done
+since its last run is the fallback; say so, and how far behind the number can
+be.
+
 A work table made before `link` was unique has no such guard (`lemma tables
 get <work-table>` shows `"unique": true` on the column when it has one), and
 a column cannot be made unique in place. Give it one before the feed is on,
@@ -164,9 +172,7 @@ so a late write is refused whenever it lands rather than cleaned up after:
 2. `lemma tables add-column <work-table> source_key --unique`, and copy each
    row's `link` into `source_key`.
 3. Every import and the feed's instruction then write `source_key` with
-   `link`; a refusal for a duplicate `source_key` means the row is there. When the service
-has no trigger, a timed schedule that reads only what is new since the last
-row is the fallback; say so.
+   `link`; a refusal for a duplicate `source_key` means the row is there.
 
 ## 6. Count it
 
