@@ -21,7 +21,7 @@ class OrganizationInvitationRequest:
         email (str):
         role (OrganizationRole): Roles for organization membership.
         note (None | str | Unset): A few words from the inviter, quoted in the invitation email: why they are being
-            asked in. Sent once, with the email, and not kept.
+            asked in. The invitation record does not keep it; it travels with the email until the email is sent.
         pod_id (None | Unset | UUID):
         pod_role (None | str | Unset):
         redirect_uri (None | str | Unset):
