@@ -73,6 +73,41 @@
               "scheme": "https",
               "host": "lemma.work",
               "pathPrefix": "/sign-in-to-site"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/l/"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/home"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/needs"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/apps"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/chats"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/people"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/connectors"
             }
           ]
         }

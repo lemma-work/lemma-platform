@@ -6,9 +6,24 @@
  *  in the web's grammar needs only its host dropped: `https://lemma.work/
  *  invitations/<id>/accept` and `lemma://invitations/<id>/accept` both open
  *  `/invitations/<id>/accept`. The few the phone keeps elsewhere are said
- *  here: a Lemma is `/lemma/<id>` on the phone and `/t/<id>` on the web. */
+ *  here. An address inside the app (`/home`, `/chats`, `/l/<id>/…`, and the
+ *  older `/t/…` ones) is read by the web's own grammar
+ *  (`@web/outcomes/address`, and the workspace's through
+ *  `@web/shell/address`), and the place it names opens at the phone's own
+ *  path for it (`phonePathOf`): a chat opens the chat, a table the table. */
 
+import { routes } from "../../data/routes";
 import { PRESETS } from "../../session/server";
+import { adminRoutes } from "../admin/routes";
+import { chatsRoutes } from "../chats/routes";
+import { filesRoutes } from "../files/routes";
+import { lemmaTab } from "../paths";
+import { tablesRoutes } from "../tables/routes";
+import { RUNS_VIEWS, workRoutes, type RunsView } from "../work/routes";
+import { moreRoutes } from "./routes";
+import { readTrialView, readView, type View } from "@web/outcomes/address";
+import { viewOfAddress } from "@web/outcomes/model";
+import { readAddress } from "@web/shell/address";
 
 /** The web hosts whose links the app opens: lemma.work's and those of the
  *  servers the build names (`android.intentFilters`, app.json and
@@ -47,16 +62,67 @@ export function appPathOf(url: string): string | null {
     if (head === "templates") return "/templates";
     if (head === "sign-in-to-site" && one && two && SAFE.test(one) && SAFE.test(two) && parts.length === 3) return `/sign-in-to-site/${one}/${two}`;
     if (head === "join" && one && SAFE.test(one) && parts.length === 2) return `/join/${one}`;
-    /* A Lemma, and anything inside it: the phone opens the Lemma. */
-    if (head === "t" && one && SAFE.test(one)) return `/lemma/${one}`;
-    if (head === "t" || head === "o") return "/";
-    return null;
+    const view = viewOfLink(bare, head);
+    return view ? phonePathOf(view) : null;
+}
+
+/** The place an address inside the app names, by the web's grammar: its
+ *  own (`/home`, `/l/<id>/chats/<chat>`), the frame's first under `/t` and
+ *  `/o`, and the workspace's (`/t/<pod>/conversation/<id>`, or the same
+ *  under `/l`). */
+function viewOfLink(bare: string, head: string | undefined): View | null {
+    const view = readView(bare) ?? readTrialView(bare);
+    if (view) return view;
+    if (head !== "t" && head !== "l") return null;
+    const address = readAddress(bare);
+    if (!address.podId) return null;
+    return viewOfAddress(address) ?? { name: "outcome", podId: address.podId, tab: "home" };
+}
+
+/** Where the phone keeps the place a web address names. */
+export function phonePathOf(view: View): string {
+    switch (view.name) {
+        case "today": return routes.home;
+        case "outcomes": return routes.lemmas;
+        case "needs": return routes.needs;
+        case "apps": return routes.apps;
+        case "connectors": return adminRoutes.section("connectors");
+        case "people": return adminRoutes.section("people");
+        case "hire": return moreRoutes.newLemma;
+        case "chats": {
+            const open = view.open;
+            if (open.kind === "chat") return routes.chat(open.podId, open.id);
+            if (open.kind === "shared") return chatsRoutes.shared(open.podId, open.id);
+            if (open.kind === "contact") return chatsRoutes.contact(open.podId, open.id);
+            return chatsRoutes.all;
+        }
+        case "outcome": {
+            const { podId, section } = view;
+            switch (view.tab) {
+                case "home": return routes.lemma(podId);
+                case "contacts": return chatsRoutes.contacts(podId);
+                case "automations": return workRoutes.runs(podId, RUNS_VIEWS.includes(section as RunsView) ? section as RunsView : undefined);
+                case "settings": return adminRoutes.lemma(podId);
+                /* What it made: its files, with its tables a tab away. */
+                case "made": return lemmaTab(podId, "files");
+                default: return lemmaTab(podId, view.tab);
+            }
+        }
+        case "run": return workRoutes.run(view.podId, view.runId);
+        case "app": return routes.app(view.podId, view.app);
+        case "file": return filesRoutes.file(view.podId, view.path);
+        case "table": return tablesRoutes.table(view.podId, view.table);
+        case "record": return tablesRoutes.record(view.podId, view.table, view.recordId);
+        case "workflow": return workRoutes.workflow(view.podId, view.workflow);
+        case "agent": return workRoutes.agent(view.podId, view.agent);
+        case "computer": return moreRoutes.computer({ podId: view.podId, conversationId: view.conversationId });
+    }
 }
 
 /** Whether a path is one a person reaches by a link, and so one worth
  *  keeping across a sign-in. */
 export function isLinkPath(path: string): boolean {
-    return /^\/(invitations|import|remix|templates|sign-in-to-site|lemma|join)(\/|\?|$)/.test(path);
+    return /^\/(invitations|import|remix|templates|sign-in-to-site|lemma|lemmas|join|chat|chats|shared|app|apps|needs|settings|computer|new-lemma)(\/|\?|$)/.test(path);
 }
 
 /* ── a link that arrived while signed out ─────────────────────────────── */
