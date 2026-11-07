@@ -1,4 +1,4 @@
-"""Which repositories an organization's GitHub installation covers, for one person.
+"""Which repositories an organization's GitHub installations cover, for one person.
 
 GitHub is a `MockTransport` handed to the functions as their client, so these
 exercise the real requests and the real decisions on GitHub's answers.
@@ -41,10 +41,14 @@ def _repo(owner: str, name: str, *, private: bool = True) -> dict[str, object]:
 
 
 def _installation(
-    login: str = "acme", *, selection: str = "all", kind: str = "Organization"
+    login: str = "acme",
+    *,
+    selection: str = "all",
+    kind: str = "Organization",
+    identifier: str = _INSTALLATION,
 ) -> dict[str, object]:
     return {
-        "id": int(_INSTALLATION),
+        "id": int(identifier),
         "account": {"login": login, "type": kind},
         "repository_selection": selection,
     }
@@ -59,12 +63,14 @@ class _GitHub:
         repo: httpx.Response | None = None,
         installations: list[dict[str, object]] | None = None,
         listed: list[dict[str, object]] | None = None,
+        elsewhere: dict[str, list[dict[str, object]]] | None = None,
     ) -> None:
         self.repo = repo or httpx.Response(200, json=_repo("acme", "web"))
         self.installations = (
             [_installation()] if installations is None else installations
         )
-        self.listed = listed or []
+        #: Each installation's repositories, by id; `listed` is the first one's.
+        self.listings = {_INSTALLATION: listed or [], **(elsewhere or {})}
         self.paths: list[str] = []
 
     def client(self) -> httpx.AsyncClient:
@@ -78,12 +84,14 @@ class _GitHub:
             return self.repo
         if path == "/user/installations":
             return httpx.Response(200, json={"installations": self.installations})
-        if path == f"/user/installations/{_INSTALLATION}/repositories":
+        installation = path.removeprefix("/user/installations/").partition("/")
+        if installation[2] == "repositories" and installation[0] in self.listings:
+            listed = self.listings[installation[0]]
             page = int(request.url.params.get("page", "1"))
             per_page = int(request.url.params["per_page"])
-            chunk = self.listed[(page - 1) * per_page : page * per_page]
+            chunk = listed[(page - 1) * per_page : page * per_page]
             return httpx.Response(
-                200, json={"total_count": len(self.listed), "repositories": chunk}
+                200, json={"total_count": len(listed), "repositories": chunk}
             )
         return httpx.Response(404)
 
@@ -91,7 +99,7 @@ class _GitHub:
 async def _covered(github: _GitHub, owner: str = "acme", name: str = "web"):
     async with github.client() as client:
         return await installation_repository(
-            _TOKEN, _INSTALLATION, owner=owner, name=name, client=client
+            _TOKEN, [_INSTALLATION], owner=owner, name=name, client=client
         )
 
 
@@ -269,7 +277,7 @@ async def test_github_failing_to_answer_decides_nothing():
     async with httpx.AsyncClient(transport=httpx.MockTransport(_down)) as client:
         with pytest.raises(GithubUnavailableError):
             await installation_repository(
-                _TOKEN, _INSTALLATION, owner="acme", name="web", client=client
+                _TOKEN, [_INSTALLATION], owner="acme", name="web", client=client
             )
 
 
@@ -279,7 +287,9 @@ async def test_listing_pages_through_the_installation_and_stops_at_its_bound():
     github = _GitHub(listed=listed)
 
     async with github.client() as client:
-        listing = await installation_repositories(_TOKEN, _INSTALLATION, client=client)
+        listing = await installation_repositories(
+            _TOKEN, [_INSTALLATION], client=client
+        )
 
     # Five pages of a hundred, then it stops rather than walking all of them,
     # and says it did.
@@ -296,7 +306,9 @@ async def test_a_list_ending_exactly_on_the_bound_is_complete():
     github = _GitHub(listed=[_repo("acme", f"repo-{n}") for n in range(500)])
 
     async with github.client() as client:
-        listing = await installation_repositories(_TOKEN, _INSTALLATION, client=client)
+        listing = await installation_repositories(
+            _TOKEN, [_INSTALLATION], client=client
+        )
 
     assert len(listing.repositories) == 500
     assert listing.complete is True
@@ -321,7 +333,9 @@ async def test_listing_a_small_installation_is_complete():
     github = _GitHub(listed=[_repo("acme", "web"), _repo("acme", "docs")])
 
     async with github.client() as client:
-        listing = await installation_repositories(_TOKEN, _INSTALLATION, client=client)
+        listing = await installation_repositories(
+            _TOKEN, [_INSTALLATION], client=client
+        )
 
     assert listing == RepositoryListing(
         repositories=(
@@ -339,4 +353,115 @@ async def test_listing_an_installation_the_token_cannot_see_is_unreachable():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(_gone)) as client:
         with pytest.raises(GithubInstallationUnreachableError):
-            await installation_repositories(_TOKEN, _INSTALLATION, client=client)
+            await installation_repositories(_TOKEN, [_INSTALLATION], client=client)
+
+
+_PERSONAL = "8"
+#: Visible to the same token, and held by another Lemma organization.
+_SOMEONE_ELSES = "9"
+
+
+def _three_installations(**kwargs: object) -> _GitHub:
+    """The person's own account, their GitHub organization, and one their
+    token sees that this organization does not hold."""
+    return _GitHub(
+        installations=[
+            _installation("acme"),
+            _installation("octo", kind="User", identifier=_PERSONAL),
+            _installation("rival", identifier=_SOMEONE_ELSES),
+        ],
+        elsewhere={
+            _PERSONAL: [_repo("octo", "dotfiles")],
+            _SOMEONE_ELSES: [_repo("rival", "secret")],
+        },
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.asyncio
+async def test_listing_reads_every_installation_named_in_the_order_named():
+    github = _three_installations(listed=[_repo("acme", "web")])
+
+    async with github.client() as client:
+        listing = await installation_repositories(
+            _TOKEN, [_PERSONAL, _INSTALLATION], client=client
+        )
+
+    assert [one.full_name for one in listing.repositories] == [
+        "octo/dotfiles",
+        "acme/web",
+    ]
+    assert listing.complete is True
+    # The installation this organization does not hold is never read.
+    assert f"/user/installations/{_SOMEONE_ELSES}/repositories" not in github.paths
+    # One read of the person's installations, not one per installation.
+    assert github.paths.count("/user/installations") == 1
+
+
+@pytest.mark.asyncio
+async def test_an_installation_named_and_not_visible_to_the_person_is_skipped():
+    """Bound to the organization by somebody else, on a GitHub organization
+    this person is not in: the rest are still listed."""
+    github = _GitHub(listed=[_repo("acme", "web")])
+
+    async with github.client() as client:
+        listing = await installation_repositories(
+            _TOKEN, ["404", _INSTALLATION], client=client
+        )
+
+    assert [one.full_name for one in listing.repositories] == ["acme/web"]
+
+
+@pytest.mark.asyncio
+async def test_listing_is_incomplete_when_any_installation_was_cut_short():
+    github = _three_installations(
+        listed=[_repo("acme", f"repo-{n}") for n in range(600)]
+    )
+
+    async with github.client() as client:
+        listing = await installation_repositories(
+            _TOKEN, [_PERSONAL, _INSTALLATION], client=client
+        )
+
+    assert len(listing.repositories) == 501
+    assert listing.complete is False
+
+
+@pytest.mark.asyncio
+async def test_a_repository_is_covered_by_the_installation_on_its_owner():
+    github = _three_installations(
+        repo=httpx.Response(200, json=_repo("octo", "dotfiles"))
+    )
+
+    async with github.client() as client:
+        found = await installation_repository(
+            _TOKEN,
+            [_INSTALLATION, _PERSONAL],
+            owner="octo",
+            name="dotfiles",
+            client=client,
+        )
+
+    assert found.full_name == "octo/dotfiles"
+
+
+@pytest.mark.asyncio
+async def test_a_repository_under_an_installation_held_elsewhere_is_refused():
+    """The token reads it; this organization holds no installation on it."""
+    github = _three_installations(
+        repo=httpx.Response(200, json=_repo("rival", "secret"))
+    )
+
+    with pytest.raises(GithubRepositoryNotInstalledError) as refused:
+        async with github.client() as client:
+            await installation_repository(
+                _TOKEN,
+                [_INSTALLATION, _PERSONAL],
+                owner="rival",
+                name="secret",
+                client=client,
+            )
+
+    assert refused.value.details["installed_on"] == "acme, octo"
+    assert "installations are on 'acme', 'octo'" in refused.value.message
+    assert "Install the Lemma app on 'rival'" in refused.value.message

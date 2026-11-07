@@ -5,6 +5,7 @@ import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/A
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
 import type { AgentRunStartResponse } from "../openapi_client/models/AgentRunStartResponse.js";
 import type { ConversationListResponse } from "../openapi_client/models/ConversationListResponse.js";
+import type { ConversationRepositoryListResponse } from "../openapi_client/models/ConversationRepositoryListResponse.js";
 import type { ConversationStatus } from "../openapi_client/models/ConversationStatus.js";
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
@@ -300,6 +301,14 @@ export class ConversationsNamespace {
       ...payload,
       agent_name: agentName,
     });
+  }
+
+  /** The GitHub repositories a conversation can be opened in, in this pod:
+   *  what `create({ repository })` accepts. `complete` is false when the
+   *  installation covers more than are listed; create still takes those. */
+  repositories(options: { pod_id?: string | null } = {}): Promise<ConversationRepositoryListResponse> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<ConversationRepositoryListResponse>("GET", `/pods/${podId}/conversations/repositories`);
   }
 
   get(conversationId: string, options: { pod_id?: string | null } = {}): Promise<Conversation> {

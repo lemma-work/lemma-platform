@@ -5,8 +5,9 @@ App auth service, and every importer of any other contract would pay for that
 import. The budget gate says so out loud.
 
 `installation_repository` and `installation_repositories` answer which
-repositories an organization's installation covers for one person, asked with
+repositories an organization's installations cover for one person, asked with
 that person's token; they raise the refusals exported beside them.
+`bound_installations` names those installations.
 """
 
 from app.modules.connectors.config import connector_settings
@@ -18,6 +19,7 @@ from app.modules.connectors.domain.github_installation_errors import (
     GithubRepositoryUncheckedError,
     GithubUnavailableError,
 )
+from app.modules.connectors.services.auth.github_bindings import bound_installations
 from app.modules.connectors.services.auth.github_installation import (
     InstallState,
     install_url as github_install_url,
@@ -57,6 +59,7 @@ __all__ = [
     "InstallState",
     "InstallationRepository",
     "RepositoryListing",
+    "bound_installations",
     "connector_settings",
     "github_install_url",
     "install_state_for",

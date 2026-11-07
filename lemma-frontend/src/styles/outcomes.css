@@ -2336,6 +2336,8 @@ a.ox-piece:hover .ox-piece__t {
 
 .ox-askbox__in select {
     appearance: none;
+    /* Shrinks, ellipsised, when the bar is too narrow for it, as on a phone. */
+    min-width: 0;
     max-width: 240px;
     height: 30px;
     padding: 0 16px 0 0;
@@ -2349,6 +2351,10 @@ a.ox-piece:hover .ox-piece__t {
     outline: none;
     /* As wide as the name picked, not the longest one in the list. */
     field-sizing: content;
+}
+
+.ox-askbox__in > svg {
+    flex: none;
 }
 
 .ox-askbox__in:focus-within {
