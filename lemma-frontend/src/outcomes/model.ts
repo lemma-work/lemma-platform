@@ -6,6 +6,7 @@
 
 import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
+import type { Owned, OwnedInput } from "@/data/owned";
 import type { ChatItem, ChatKind } from "@/channels/chat-list";
 import type { Channel } from "@/channels/model";
 import { readableName } from "@/library/reading";
@@ -259,10 +260,59 @@ export interface Plan {
     /** The file's text as it was read, when it was: a save edits that text
      *  rather than replacing it, and refuses when the file has moved on. */
     file?: string;
+    /** True when what it owns came from the Lemma itself rather than the
+     *  file's front matter; `value` and `problem` are then its last reading. */
+    owned?: boolean;
+    value?: number | null;
+    problem?: string | null;
 }
 
 export function emptyPlan(outcome = ""): Plan {
     return { outcome, kind: null, target: null, due: null, measure: null, unit: null, sections: { must: [], how: [], who: [], never: [] } };
+}
+
+/** The plan as people read it: the file's prose, with what the Lemma owns
+ *  taken from the Lemma itself. Front matter is only read for a pod that owns
+ *  nothing there, written before what a pod owns was kept on the pod. */
+export function withOwned(plan: Plan | null, owned: Owned | null): Plan | null {
+    if (!owned) return plan;
+    const base = plan ?? emptyPlan();
+    const target = owned.target === null ? null : owned.unit === "%" ? `${owned.target}%` : owned.unit ? `${owned.target} ${owned.unit}` : String(owned.target);
+    return {
+        ...base,
+        outcome: owned.sentence,
+        kind: owned.kind,
+        target,
+        unit: owned.unit,
+        due: owned.due,
+        measure: owned.measure,
+        owned: true,
+        value: owned.value,
+        problem: owned.problem,
+    };
+}
+
+/** What a plan says it owns, as the Lemma keeps it, or null when it says too
+ *  little to keep: no sentence, no kind, or a finish line with no date. */
+export function ownedInput(plan: Plan): OwnedInput | null {
+    const sentence = plan.outcome.trim();
+    if (!sentence || !plan.kind || (plan.kind === "date" && !plan.due)) return null;
+    const written = plan.target?.trim() ?? "";
+    const target = written ? Number.parseFloat(written) : Number.NaN;
+    return {
+        sentence,
+        kind: plan.kind,
+        target: Number.isFinite(target) ? target : null,
+        unit: plan.unit ?? (written.endsWith("%") ? "%" : null),
+        due: plan.kind === "date" ? plan.due : null,
+        measure: plan.measure?.trim() || null,
+    };
+}
+
+/** The plan as its file keeps it once the Lemma keeps what it owns: prose
+ *  only, so the two never disagree. */
+export function withoutOwned(plan: Plan): Plan {
+    return { ...plan, outcome: "", kind: null, target: null, due: null, measure: null, unit: null };
 }
 
 function sectionOf(heading: string): PlanSection | null {
@@ -408,6 +458,8 @@ function mergedHead(plan: Plan, before: Plan, head: string, front: string | null
         if (meta[key]) kept[key] = meta[key];
         else delete kept[key];
     }
+    /* Nothing left once what it owns moved onto the Lemma: no empty block. */
+    if (!Object.keys(kept).length) return "";
     return "---\n" + dump(kept, { lineWidth: -1 }) + "---";
 }
 
@@ -467,7 +519,9 @@ function mergePlan(plan: Plan, onto: string): string {
         while (out.length && !out[out.length - 1].trim()) out.pop();
         out.push("", `## ${SECTION_TITLES[section]}`, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`), "");
     }
-    return mergedHead(plan, before, head, front) + out.join("\n");
+    const top = mergedHead(plan, before, head, front);
+    /* A block that was taken away leaves the blank line after it behind. */
+    return top || !head ? top + out.join("\n") : out.join("\n").replace(/^\n+/, "");
 }
 
 export interface DraftInput {

@@ -2558,6 +2558,14 @@ export const fixtureSource: PodSource = {
     /* The sample datastore answers every query with the same two rows. It is
        a shape to look at, not a result to believe, which is what the sample
        source is for. */
+    /* Sample pods keep what they own in their plan file, as an API from
+       before a pod kept it would. */
+    async getOwned() {
+        return null;
+    },
+    async setOwned() {
+        return null;
+    },
     async runQuery() {
         await wait(60);
         return { items: [

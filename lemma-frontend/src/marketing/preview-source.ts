@@ -255,6 +255,8 @@ export const previewSource: PodSource = {
     async tableShapes(id) { return (spaceOf(id)?.tables ?? []).map(sampleShape); },
     async referencing(id, table, column, recordId, limit) { return (sampleTableIn(id, table)?.rows() ?? []).filter(row => String(row[column]) === recordId).slice(0, limit); },
     async runQuery(id) { return { items: spaceOf(id)?.query() ?? [], truncated: false }; },
+    async getOwned() { return null; },
+    async setOwned() { return null; },
     async listAgents() { return []; },
     async listSchedules(id) { return readSchedules(spaceOf(id)?.schedules ?? []); },
 };

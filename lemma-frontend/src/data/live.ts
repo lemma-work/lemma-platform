@@ -8,6 +8,8 @@ import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
+import { readOwned, type OwnedInput } from "./owned";
+import { isMissing } from "@/session/auth-state";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import { PodAccountVisibility } from "lemma-sdk";
 import type { AgentPermissionsReplaceRequest, PodAccountCreateRequest, PodAccountUpdateRequest, PodConnectorCreateRequest, PodConnectorUpdateRequest } from "lemma-sdk";
@@ -630,6 +632,27 @@ export const liveSource: PodSource = {
     async runQuery(podId: string, sql: string) {
         const answer = await lemma(podId).datastore.query(sql);
         return { items: (answer.items ?? []) as Record<string, unknown>[], truncated: answer.truncated === true };
+    },
+    /* No SDK method for either yet; the generated client has only the raw
+       services. A 404 is an API from before a pod kept what it owns. */
+    async getOwned(podId: string) {
+        try {
+            return readOwned(await lemma().request("GET", `/pods/${encodeURIComponent(podId)}/outcome/standing`));
+        } catch (error) {
+            if (isMissing(error)) return null;
+            throw error;
+        }
+    },
+    async setOwned(podId: string, input: OwnedInput) {
+        try {
+            const kept = await lemma().request<{ outcome?: Record<string, unknown> | null; value?: unknown }>(
+                "PUT", `/pods/${encodeURIComponent(podId)}/outcome`, { body: input },
+            );
+            return readOwned({ outcome: kept.outcome, value: kept.value, problem: null });
+        } catch (error) {
+            if (isMissing(error)) return null;
+            throw error;
+        }
     },
 
     async listTabs(podId: string): Promise<Tab[]> {

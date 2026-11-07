@@ -8,6 +8,7 @@ import type { AccountUsage, Grantee, InstallationImpact, PodAccount, PodAccountP
 import type { Install } from "@/connect/install";
 import type { AgentDetail, AgentDraft, AgentGrant, AgentRow } from "./agents";
 import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
+import type { Owned, OwnedInput } from "./owned";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
 import type { ScheduleDraft, ScheduleRun, ServerEvent, StandingJob, TargetChoice } from "@/schedule/schedules";
 
@@ -485,6 +486,12 @@ export interface PodSource {
      *  saying so anywhere in the rows themselves, and a capped answer read as
      *  a complete one is a wrong number said out loud. */
     runQuery(podId: string, sql: string): Promise<{ items: Record<string, unknown>[]; truncated: boolean }>;
+    /** What the pod owns and where its number stands; null when it owns
+     *  nothing, or on an API that does not keep what a pod owns. */
+    getOwned(podId: string): Promise<Owned | null>;
+    /** Keep what the pod owns, reading a new measure once as the caller.
+     *  Null on an API that does not keep what a pod owns. */
+    setOwned(podId: string, input: OwnedInput): Promise<Owned | null>;
     listOrgs(): Promise<Org[]>;
     /** Invitations addressed to the person signed in, still open. */
     myInvitations(): Promise<Invitation[]>;

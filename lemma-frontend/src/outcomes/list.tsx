@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { source, type ConversationRef, type Org, type Pod } from "@/data";
 import { chatView, emptyPlan, outcomeView, type Go, type Plan, type QueueItem } from "./model";
-import { askIn, planRequest, savePlan } from "./data";
+import { askIn, savePlan, setupRequest } from "./data";
 import { to } from "./parts";
 import { Board } from "./board";
 
@@ -70,7 +70,7 @@ export function OutcomesList({ org, pods, activity, plans, queue, go }: {
             const pod = await source.createPod(org.id, freeName(name, new Set(pods.map((one) => one.name.toLowerCase()))), outcome);
             const plan = { ...emptyPlan(outcome), kind, sections: { must: [{ text: outcome }], how: [], who: [], never: [] } };
             await savePlan(pod.id, plan, false).catch(() => undefined);
-            const setup = await askIn(pod.id, `Set yourself up to own this: "${outcome}". Look at what is already connected, build the tables, app and schedules it needs, then ${planRequest(outcome).charAt(0).toLowerCase()}${planRequest(outcome).slice(1)}`).catch(() => null);
+            const setup = await askIn(pod.id, setupRequest(outcome)).catch(() => null);
             await queryClient.invalidateQueries({ queryKey: ["pods", org.id] });
             go(setup ? chatView({ kind: "chat", podId: pod.id, id: setup }) : outcomeView(pod.id));
         } catch (failure) {

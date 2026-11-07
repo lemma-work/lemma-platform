@@ -34,6 +34,9 @@ import {
     verbOf,
     viewOfItem,
     workSince,
+    withOwned,
+    withoutOwned,
+    ownedInput,
     writeView,
     type Plan,
     type View,
@@ -261,6 +264,62 @@ test("a plan survives being written and read back", () => {
 
 test("saving an unchanged plan onto its file writes the file back as it was", () => {
     assert.equal(serializePlan(parsePlan(WRITTEN), WRITTEN), WRITTEN);
+});
+
+const KEPT = {
+    sentence: "Every customer hears back within a day.",
+    kind: "week" as const,
+    target: 90,
+    unit: "%",
+    due: null,
+    measure: "SELECT 62.5",
+    value: 62.5,
+    problem: null,
+};
+
+test("what the Lemma keeps wins over the file's front matter, and the file's lines stay", () => {
+    const plan = withOwned(parsePlan(WRITTEN), KEPT);
+    assert.ok(plan);
+    assert.equal(plan.outcome, "Every customer hears back within a day.");
+    assert.equal(plan.target, "90%");
+    assert.equal(plan.measure, "SELECT 62.5");
+    assert.equal(plan.owned, true);
+    assert.equal(plan.value, 62.5);
+    assert.equal(standingOf(plan, plan.value), "behind");
+    assert.equal(plan.sections.how.length, 2);
+    // A Lemma with no file yet still has what it owns.
+    assert.equal(withOwned(null, KEPT)?.outcome, KEPT.sentence);
+    // Owning nothing on the Lemma leaves the file as it reads.
+    assert.equal(withOwned(parsePlan(WRITTEN), null)?.measure, "SELECT 70 AS share");
+});
+
+test("a plan says what it owns as the Lemma keeps it, or nothing when it says too little", () => {
+    assert.deepEqual(ownedInput(parsePlan(WRITTEN)), {
+        sentence: "Every customer hears back within a day",
+        kind: "week",
+        target: 90,
+        unit: "%",
+        due: null,
+        measure: "SELECT 70 AS share",
+    });
+    const plan = parsePlan(WRITTEN);
+    assert.equal(ownedInput({ ...plan, kind: null }), null);
+    assert.equal(ownedInput({ ...plan, kind: "date", due: null }), null);
+    assert.equal(ownedInput({ ...plan, outcome: " " }), null);
+    assert.equal(ownedInput({ ...plan, target: "22 steps", unit: null })?.target, 22);
+});
+
+test("once the Lemma keeps what it owns, saving takes it out of the file and keeps every line", () => {
+    const plan = withOwned(parsePlan(WRITTEN), KEPT);
+    assert.ok(plan);
+    const saved = serializePlan(withoutOwned(plan), WRITTEN);
+    assert.ok(!saved.startsWith("---"), saved);
+    assert.ok(!saved.includes("measure:"), saved);
+    assert.ok(saved.startsWith("## What must be true"), saved);
+    const back = parsePlan(saved);
+    assert.equal(back.measure, null);
+    assert.equal(back.target, null);
+    assert.deepEqual(back.sections, plan.sections);
 });
 
 test("editing a line keeps what the parser does not read, and changes only that line", () => {
