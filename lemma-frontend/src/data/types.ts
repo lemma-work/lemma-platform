@@ -394,6 +394,21 @@ export interface Conversation {
 /** A standing arrangement: something this teammate does without being asked
  *  each time. It is the closest thing an agent has to a job, so the profile
  *  lists them where a person would list positions held. */
+/** A GitHub repository a new chat can work in: the pod's `github` connector
+ *  reaches it as you, and the organization's installation covers it. */
+export interface ChatRepository {
+    /** "owner/name", the value a new conversation is created with. */
+    fullName: string;
+    private: boolean;
+}
+
+/** The repositories a new chat can open in. `complete` is false when the
+ *  installation covers more than are listed. */
+export interface ChatRepositories {
+    items: ChatRepository[];
+    complete: boolean;
+}
+
 export interface Commitment {
     id: string;
     title: string;
@@ -650,6 +665,9 @@ export interface PodSource {
      *  whatever the teammate and the organization resolve. Stored on the
      *  conversation's own `agent_runtime`, which is the runtime a run copies. */
     getConversationRuntime(podId: string, conversationId: string): Promise<Choice | null>;
+    /** The GitHub repositories a new chat in this pod can work in. Refused
+     *  when the pod has no `github` connector your sandbox may use. */
+    listChatRepositories(podId: string): Promise<ChatRepositories>;
     /** Pin this conversation to one model; `null` hands it back to the
      *  default. Nothing else about the conversation changes. */
     setConversationRuntime(podId: string, conversationId: string, choice: Choice | null): Promise<void>;

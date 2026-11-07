@@ -97,6 +97,54 @@
     .folder-chip__clear { width: 44px; }
 }
 
+/* The GitHub repository a new chat works in: the folder chip's row and
+   pill, holding a native list rather than a button. */
+.repo-chip {
+    display: flex;
+    align-items: center;
+    width: min(100%, calc(var(--reading-w) + var(--gutter) * 2));
+    padding: 0 var(--gutter) 6px;
+    font-size: var(--t-meta);
+}
+.repo-chip__pick {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 320px;
+    min-height: 28px;
+    padding: 3px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+.repo-chip__pick:hover { background: var(--chrome); color: var(--ink); }
+/* GitHub connected and not usable yet: the step that is missing, as a link
+   to Connectors rather than a list. */
+.repo-chip--fix { color: var(--ink-3); text-decoration: none; }
+.repo-chip--fix span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-chip__pick:focus-within { box-shadow: 0 0 0 1.5px var(--ink-2); }
+.repo-chip__pick select {
+    appearance: none;
+    min-width: 0;
+    padding: 0 14px 0 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    outline: none;
+    /* As wide as the repository picked, not the longest one listed. */
+    field-sizing: content;
+}
+.repo-chip__pick > svg:last-child { position: absolute; right: 10px; pointer-events: none; }
+@media (max-width: 767px) {
+    .repo-chip { padding-inline: 10px; }
+    .repo-chip__pick { min-height: 44px; }
+}
+
 /* An app that has to open in its own window, standing where its frame
    would be. */
 .app-window {

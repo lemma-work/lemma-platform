@@ -12039,6 +12039,13 @@ var LemmaClient = (() => {
         agent_name: agentName
       });
     }
+    /** The GitHub repositories a conversation can be opened in, in this pod:
+     *  what `create({ repository })` accepts. `complete` is false when the
+     *  installation covers more than are listed; create still takes those. */
+    repositories(options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request("GET", `/pods/${podId}/conversations/repositories`);
+    }
     get(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations/${conversationId}`).then(normalizeConversation);

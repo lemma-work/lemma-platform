@@ -2966,6 +2966,12 @@ export const fixtureSource: PodSource = {
         RUNTIMES = RUNTIMES.map((raw) =>
             (raw as { id?: string }).id === runtimeId ? { ...(raw as object), status: "ACTIVE" } : raw);
     },
+    async listChatRepositories() {
+        /* The sample has no GitHub installation, and its chats are not
+           created with a repository, so it offers none. */
+        await wait(60);
+        return { items: [], complete: true };
+    },
     async getConversationRuntime(podId: string, conversationId: string) {
         await wait(60);
         return readChoice(CONVERSATION_RUNTIME[conversationKey(podId, conversationId)]);
