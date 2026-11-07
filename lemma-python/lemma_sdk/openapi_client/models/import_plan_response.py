@@ -10,6 +10,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.connector_plan import ConnectorPlan
+    from ..models.import_plan_outcome import ImportPlanOutcome
     from ..models.plan_step_response import PlanStepResponse
     from ..models.variable_spec_response import VariableSpecResponse
 
@@ -28,6 +29,9 @@ class ImportPlanResponse:
             share. NEEDS_INSTALLATION and CONFLICT block the apply until resolved; NEEDS_ACCOUNT imports, waiting for an
             account.
         has_destructive_steps (bool | Unset):  Default: False.
+        outcome (ImportPlanOutcome | None | Unset): What the bundle's pod owned (`pod.json -> outcome`) and whether the
+            import sets it on this pod, which it does only when the pod owns nothing yet. Null when the bundle's pod owned
+            nothing, when its block is invalid (said in `warnings`), or for a template import, whose start sets it.
         steps (list[PlanStepResponse] | Unset):
         variables (list[VariableSpecResponse] | Unset):
         warnings (list[str] | Unset):
@@ -37,12 +41,15 @@ class ImportPlanResponse:
     bundle_name: None | str | Unset = UNSET
     connectors: list[ConnectorPlan] | Unset = UNSET
     has_destructive_steps: bool | Unset = False
+    outcome: ImportPlanOutcome | None | Unset = UNSET
     steps: list[PlanStepResponse] | Unset = UNSET
     variables: list[VariableSpecResponse] | Unset = UNSET
     warnings: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.import_plan_outcome import ImportPlanOutcome
+
         format_version = self.format_version
 
         bundle_name: None | str | Unset
@@ -59,6 +66,14 @@ class ImportPlanResponse:
                 connectors.append(connectors_item)
 
         has_destructive_steps = self.has_destructive_steps
+
+        outcome: dict[str, Any] | None | Unset
+        if isinstance(self.outcome, Unset):
+            outcome = UNSET
+        elif isinstance(self.outcome, ImportPlanOutcome):
+            outcome = self.outcome.to_dict()
+        else:
+            outcome = self.outcome
 
         steps: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.steps, Unset):
@@ -91,6 +106,8 @@ class ImportPlanResponse:
             field_dict["connectors"] = connectors
         if has_destructive_steps is not UNSET:
             field_dict["has_destructive_steps"] = has_destructive_steps
+        if outcome is not UNSET:
+            field_dict["outcome"] = outcome
         if steps is not UNSET:
             field_dict["steps"] = steps
         if variables is not UNSET:
@@ -103,6 +120,7 @@ class ImportPlanResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.connector_plan import ConnectorPlan
+        from ..models.import_plan_outcome import ImportPlanOutcome
         from ..models.plan_step_response import PlanStepResponse
         from ..models.variable_spec_response import VariableSpecResponse
 
@@ -129,6 +147,23 @@ class ImportPlanResponse:
 
         has_destructive_steps = d.pop("has_destructive_steps", UNSET)
 
+        def _parse_outcome(data: object) -> ImportPlanOutcome | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                outcome_type_0 = ImportPlanOutcome.from_dict(data)
+
+                return outcome_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(ImportPlanOutcome | None | Unset, data)
+
+        outcome = _parse_outcome(d.pop("outcome", UNSET))
+
         _steps = d.pop("steps", UNSET)
         steps: list[PlanStepResponse] | Unset = UNSET
         if _steps is not UNSET:
@@ -154,6 +189,7 @@ class ImportPlanResponse:
             bundle_name=bundle_name,
             connectors=connectors,
             has_destructive_steps=has_destructive_steps,
+            outcome=outcome,
             steps=steps,
             variables=variables,
             warnings=warnings,
