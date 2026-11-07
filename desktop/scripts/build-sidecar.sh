@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build the durable control daemon and platform runtime helpers. The native
+# TEMPORARY (drop before merge): touched only so this PR starts the launch smoke and the codesign steps.
 # backend/frontend and managed guest are verified release artifacts installed
 # on demand, so no frozen Python compatibility supervisor is shipped.
 #

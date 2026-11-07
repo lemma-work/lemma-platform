@@ -1494,7 +1494,7 @@ jobs:
     timeout-minutes: 60
     needs: changes
     if: >-
-      github.event_name == 'push' &&
+      github.event_name != 'merge_group' &&
       (needs.changes.outputs.desktop_contract == 'true' ||
        needs.changes.outputs.desktop == 'true')
     runs-on: macos-15
