@@ -41,17 +41,28 @@ step 5 and say rows will come from people telling you, or from a form
 
 ## 2. Connect it
 
-Call `run_connector_operation` with the service's catalog id and a read
-operation (`search_connector_operations` finds one). When it is not connected
-yet, it answers `CONNECTION_REQUIRED` with a `connect_url`: give the person that
-link as it is, end your turn, and run the call again when they say it is done.
+Run a read operation through the CLI, by catalog id and what you want:
+
+```bash
+lemma connectors run intercom "list conversations" --dry-run   # the operation and its input
+```
+
+Nothing has to be added first. When it is not connected yet, it answers
+`CONNECTION_REQUIRED` with a `connect_url`: give the person that link as it
+is, end your turn, and run it again when they say it is done. (An agent with
+the connector tools in view can use `run_connector_operation` the same way.)
+
+When the service is not in the catalog (`lemma connectors list`), say so in
+one line and ask how the work can reach you instead: an export file they
+upload, an MCP server for it, another place it already lands (a Gmail inbox
+it forwards to), or people telling you. Then carry on with that.
 
 ## 3. Bring in the last four weeks
 
-Use the connected account to list the last four weeks of the work (the
-conversations, the leads, the pull requests). Page through all of it. Save
-the raw items to a workspace file; do not carry hundreds of them in your
-context.
+Use the connected account, or the file, to get the last four weeks of the
+work (the conversations, the leads, the pull requests). Page through all of
+it. Save the raw items to a workspace file; do not carry hundreds of them in
+your context.
 
 Not every item is work. Sort them with the Decisions API: closed questions,
 one item per call, nothing stored. Write the questions once, as a flat JSON

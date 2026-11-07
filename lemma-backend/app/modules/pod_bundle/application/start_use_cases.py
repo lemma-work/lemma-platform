@@ -264,7 +264,9 @@ def setup_request(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
     It is shown as theirs, so it says what they want in their words; how to
     get there is the `lemma-setup` skill it names, not a list of steps here.
     """
-    start = f'Set yourself up to own this: "{outcome.sentence}".'
+    sentence = outcome.sentence.strip()
+    stop = "" if sentence.endswith((".", "!", "?")) else "."
+    start = f'Set yourself up to own this: "{sentence}{stop}"'
     if card is not None:
         middle = (
             f" You start from the {card.name} template: its tables, a skill and "
