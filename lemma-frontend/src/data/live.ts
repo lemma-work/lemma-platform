@@ -8,10 +8,8 @@ import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
-import { readOwned, type OwnedInput } from "./owned";
-import { isMissing } from "@/session/auth-state";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
-import { OutcomeKind, PodAccountVisibility } from "lemma-sdk";
+import { PodAccountVisibility } from "lemma-sdk";
 import type { AgentPermissionsReplaceRequest, PodAccountCreateRequest, PodAccountUpdateRequest, PodConnectorCreateRequest, PodConnectorUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
@@ -633,26 +631,6 @@ export const liveSource: PodSource = {
     async runQuery(podId: string, sql: string) {
         const answer = await lemma(podId).datastore.query(sql);
         return { items: (answer.items ?? []) as Record<string, unknown>[], truncated: answer.truncated === true };
-    },
-    /* Read through `readOwned` all the same: it is the one place that says what
-       a usable answer is. A 404 is an API from before a pod kept what it owns. */
-    async getOwned(podId: string) {
-        try {
-            return readOwned(await lemma().pods.outcomeStanding(podId));
-        } catch (error) {
-            if (isMissing(error)) return null;
-            throw error;
-        }
-    },
-    async setOwned(podId: string, input: OwnedInput) {
-        try {
-            const kind = input.kind === "date" ? OutcomeKind.DATE : OutcomeKind.WEEK;
-            const kept = await lemma().pods.setOutcome(podId, { ...input, kind });
-            return readOwned({ outcome: kept.outcome, value: kept.value, problem: null });
-        } catch (error) {
-            if (isMissing(error)) return null;
-            throw error;
-        }
     },
 
     async listTabs(podId: string): Promise<Tab[]> {
@@ -1932,6 +1910,12 @@ export const liveSource: PodSource = {
             "POST",
             `/pods/${podId}/schedules/${scheduleId}/runs/${runId}/retry`,
         ));
+    },
+
+    async runScheduleNow(podId: string, scheduleId: string): Promise<ScheduleRun> {
+        /* 202 with the run it reserved; its target is started by the job a
+           timer's firing uses, so it reads PROCESSING until handed over. */
+        return readRun(await lemma(podId).schedules.runNow(scheduleId));
     },
 
     async createSchedule(podId: string, draft: ScheduleDraft): Promise<StandingJob> {

@@ -111,6 +111,8 @@ def test_the_first_message_asks_the_agent_to_set_itself_up():
     )
     said = setup_request(started, card)
     assert "Launch template" in said and "November 18" in said
+    assert "set-up skill" in said
+    assert "lemma-setup" in setup_request(own, None)
     # The sentence keeps its own full stop; the quote does not add a second.
     assert '.".' not in said and '."' in said
 

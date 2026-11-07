@@ -4,6 +4,7 @@
   "description": "Gets every control ready with its evidence before the audit date.",
   "lemma": {
     "position": 7,
+    "function": "ops",
     "face": "ring",
     "place": "Notion",
     "brings": [

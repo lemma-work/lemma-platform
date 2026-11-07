@@ -237,6 +237,7 @@ lemma schedules list
 lemma schedules create --name daily-digest --agent POD_DEFAULT --cron "0 9 * * 1-5" \
   --timezone Europe/Berlin --instruction "..."                   # cron is UTC without --timezone
 lemma schedules pause <id> ; lemma schedules resume <id>          # resume resets the failure count
+lemma schedules run <name>                                        # one run now, outside its timing (TIME schedules), as you
 lemma schedules delete <name> --yes
 ```
 

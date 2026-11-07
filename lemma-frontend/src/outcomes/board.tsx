@@ -7,13 +7,14 @@ import { ageOf, dailyActivity, formatMeasure, isRunning, outcomeView, readMeasur
 import { ActivityChart, to } from "./parts";
 import { TeammateFace } from "@/space/teammate-face";
 
-/** Each plan's measure, answered: the number on every lane that has one. A
- *  Lemma that keeps what it owns brought its reading with the plan. */
+/** Each plan's measure, answered: the number on every lane that has one --
+ *  the server's reading when the Lemma keeps what it owns, else the query
+ *  its plan file carries, run here. */
 function useMeasures(pods: readonly Pod[], plans: Map<string, Plan | null | undefined>): Map<string, number | null> {
     const results = useQueries({
         queries: pods.map((pod) => {
             const plan = plans.get(pod.id);
-            const sql = plan?.owned ? null : (plan?.measure ?? null);
+            const sql = plan?.owned ? null : plan?.measure ?? null;
             return {
                 queryKey: ["outcome-measure", pod.id, sql],
                 queryFn: async () => readMeasure((await source.runQuery(pod.id, sql as string)).items),
@@ -24,8 +25,8 @@ function useMeasures(pods: readonly Pod[], plans: Map<string, Plan | null | unde
         }),
     });
     return new Map(pods.map((pod, index) => {
-        const plan = plans.get(pod.id);
-        return [pod.id, plan?.owned ? (plan.value ?? null) : (results[index]?.data ?? null)];
+        const owned = plans.get(pod.id)?.owned;
+        return [pod.id, owned ? owned.value : results[index]?.data ?? null];
     }));
 }
 

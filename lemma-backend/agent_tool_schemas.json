@@ -624,7 +624,7 @@
   {
     "tool_name": "channel_post",
     "toolset": "MESSAGING",
-    "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and they are told where\nthey are. With `channel_id`, a line in the channel of the person you work\nfor -- never a group: it would speak for them in front of the others, and\nit is not carried to the chat a group mirrors. It does **not**\npause your turn, and an answer never comes back as a tool result. When you\nneed answers, set `wants_answer` on each (only with `to`), send them all,\nthen **finish your turn**: you get a fresh one here once the last person\nanswers, and `channel_read(asked_by_me=True)` shows what they said.\n\nTo answer the person you are already talking to, just reply.",
+    "description": "Write to a member of the pod who is not in this conversation, or in a\nchannel.\n\nWith `to`, it goes to their own channel in Lemma, and they are told where\nthey are. With `channel_id`, a line in the channel of the person you work\nfor -- never a group: it would speak for them in front of the others, and\nit is not carried to the chat a group mirrors. It does **not**\npause your turn, and an answer never comes back as a tool result. When you\nneed answers, set `wants_answer` on each (only with `to`), send them all,\nthen **finish your turn**: you get a fresh one here once the last person\nanswers, and `channel_read(asked_by_me=True)` shows what they said. When\nthe answer is one of a few, offer them as `choices`: they show as buttons\nin the person's chat and in what waits on them.\n\nTo answer the person you are already talking to, just reply.",
     "input_schema": {
       "properties": {
         "text": {
@@ -660,6 +660,21 @@
           "default": false,
           "description": "Only with `to`: whether you need their answer. It then waits on them in their inbox, and you get a fresh turn here once everyone you asked has answered.",
           "type": "boolean"
+        },
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only with `wants_answer`: two to four short answers they can pick with one tap, like 'Send it' and 'Not mine'. They can always answer in their own words instead."
         }
       },
       "required": [

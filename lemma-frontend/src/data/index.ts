@@ -64,5 +64,4 @@ export * from "./pod-accounts";
 export * from "./runtimes";
 export * from "./joining";
 export * from "./trouble";
-export * from "./owned";
 export * from "./pod-roles";

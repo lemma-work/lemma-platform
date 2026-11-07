@@ -6,7 +6,6 @@
 
 import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
-import type { Owned, OwnedInput } from "@/data/owned";
 import type { ChatItem, ChatKind } from "@/channels/chat-list";
 import type { Channel } from "@/channels/model";
 import { readableName } from "@/library/reading";
@@ -21,7 +20,8 @@ import { chatView, outcomeView, writeView, type ChatOpen, type View } from "./ad
 
 /** Where something waiting on you opens, inside the frame: its conversation,
  *  or the workflow run whose form it is. */
-export function viewOfItem(item: Pick<QueueItem, "podId" | "conversationId" | "runId" | "contactId">): View {
+export function viewOfItem(item: Pick<QueueItem, "podId" | "conversationId" | "runId" | "contactId"> & { line?: QueueItem["line"] }): View {
+    if (item.line) return chatView({ kind: "shared", podId: item.podId, id: item.line.channelId });
     if (item.contactId) return chatView({ kind: "contact", podId: item.podId, id: item.contactId });
     if (item.conversationId) return chatView({ kind: "chat", podId: item.podId, id: item.conversationId });
     if (item.runId) return { name: "run", podId: item.podId, runId: item.runId };
@@ -260,59 +260,57 @@ export interface Plan {
     /** The file's text as it was read, when it was: a save edits that text
      *  rather than replacing it, and refuses when the file has moved on. */
     file?: string;
-    /** True when what it owns came from the Lemma itself rather than the
-     *  file's front matter; `value` and `problem` are then its last reading. */
-    owned?: boolean;
-    value?: number | null;
-    problem?: string | null;
+    /** What the Lemma itself keeps it owns, with the number its measure
+     *  answers now -- shown in place of the file's front matter, which only
+     *  Lemmas from before it was kept on the Lemma still carry. */
+    owned?: Owned;
 }
 
-export function emptyPlan(outcome = ""): Plan {
-    return { outcome, kind: null, target: null, due: null, measure: null, unit: null, sections: { must: [], how: [], who: [], never: [] } };
+/** What a Lemma owns as the server keeps it (`GET .../outcome/standing`),
+ *  and what its measure answers now: one number, the same for everyone. */
+export interface Owned {
+    sentence: string;
+    kind: "week" | "date";
+    target: number | null;
+    unit: string | null;
+    /** `YYYY-MM-DD`, for a finish line. */
+    due: string | null;
+    measure: string | null;
+    value: number | null;
+    /** Why the measure could not be read, when it could not. */
+    problem: string | null;
 }
 
-/** The plan as people read it: the file's prose, with what the Lemma owns
- *  taken from the Lemma itself. Front matter is only read for a pod that owns
- *  nothing there, written before what a pod owns was kept on the pod. */
-export function withOwned(plan: Plan | null, owned: Owned | null): Plan | null {
+/** A target as a person reads it: "90%", "2 posts", "99.95%". Exactly the
+ *  number kept, never rounded: it is what readings are compared against, and
+ *  what the plan editor writes back. */
+export function targetText(target: number | null, unit: string | null): string | null {
+    if (target === null || !Number.isFinite(target)) return null;
+    const said = String(target);
+    if (unit === "%") return said + "%";
+    return unit ? `${said} ${unit}` : said;
+}
+
+/** The plan as the frame shows it: the file's lines, with what the Lemma
+ *  owns taken from the Lemma when it keeps one. The file itself is never
+ *  given these fields, so saving its lines does not write them back into it. */
+export function withOwned(plan: Plan | null | undefined, owned: Owned | null | undefined): Plan | null | undefined {
     if (!owned) return plan;
     const base = plan ?? emptyPlan();
-    const target = owned.target === null ? null : owned.unit === "%" ? `${owned.target}%` : owned.unit ? `${owned.target} ${owned.unit}` : String(owned.target);
     return {
         ...base,
         outcome: owned.sentence,
         kind: owned.kind,
-        target,
-        unit: owned.unit,
+        target: targetText(owned.target, owned.unit),
         due: owned.due,
+        unit: owned.unit,
         measure: owned.measure,
-        owned: true,
-        value: owned.value,
-        problem: owned.problem,
+        owned,
     };
 }
 
-/** What a plan says it owns, as the Lemma keeps it, or null when it says too
- *  little to keep: no sentence, no kind, or a finish line with no date. */
-export function ownedInput(plan: Plan): OwnedInput | null {
-    const sentence = plan.outcome.trim();
-    if (!sentence || !plan.kind || (plan.kind === "date" && !plan.due)) return null;
-    const written = plan.target?.trim() ?? "";
-    const target = written ? Number.parseFloat(written) : Number.NaN;
-    return {
-        sentence,
-        kind: plan.kind,
-        target: Number.isFinite(target) ? target : null,
-        unit: plan.unit ?? (written.endsWith("%") ? "%" : null),
-        due: plan.kind === "date" ? plan.due : null,
-        measure: plan.measure?.trim() || null,
-    };
-}
-
-/** The plan as its file keeps it once the Lemma keeps what it owns: prose
- *  only, so the two never disagree. */
-export function withoutOwned(plan: Plan): Plan {
-    return { ...plan, outcome: "", kind: null, target: null, due: null, measure: null, unit: null };
+export function emptyPlan(outcome = ""): Plan {
+    return { outcome, kind: null, target: null, due: null, measure: null, unit: null, sections: { must: [], how: [], who: [], never: [] } };
 }
 
 function sectionOf(heading: string): PlanSection | null {
@@ -602,6 +600,10 @@ export interface QueueItem {
     contactId: string | null;
     /** The workflow wait itself, when the row is one: it carries its form. */
     wait: WaitingRow["wait"] | null;
+    /** A question a Lemma asked in your chat with it, answered by a choice
+     *  it offered or in words. */
+    /** `prompt` is the whole question when the title is only its first line. */
+    line: { channelId: string; messageId: string; choices: string[]; prompt: string | null } | null;
 }
 
 /** Where a row is answered: in place, from its own card ("ask") or its
@@ -609,7 +611,8 @@ export interface QueueItem {
  *  approval is answered with the card the chat would dock, and a form wait
  *  with the form the run would show. A contact wants a written reply, and
  *  a workflow decision has no form to submit, so both open where they are. */
-export function answersHere(item: Pick<QueueItem, "contactId" | "wait" | "conversationId" | "runId">): "ask" | "form" | null {
+export function answersHere(item: Pick<QueueItem, "contactId" | "wait" | "conversationId" | "runId"> & { line?: QueueItem["line"] }): "ask" | "form" | "line" | null {
+    if (item.line) return "line";
     if (item.contactId) return null;
     if (item.wait) return item.wait.type === "HUMAN" ? "form" : null;
     if (item.runId) return null;
@@ -617,8 +620,9 @@ export function answersHere(item: Pick<QueueItem, "contactId" | "wait" | "conver
 }
 
 /** The row's button: what doing it is called. */
-export function verbOf(item: Pick<QueueItem, "kind" | "contactId" | "wait" | "conversationId" | "runId">): string {
+export function verbOf(item: Pick<QueueItem, "kind" | "contactId" | "wait" | "conversationId" | "runId"> & { line?: QueueItem["line"] }): string {
     const here = answersHere(item);
+    if (here === "line") return "Answer";
     if (here === "form") return "Fill in";
     if (here === "ask") return item.kind === "decide" ? "Decide" : "Answer";
     return item.contactId ? "Reply" : "Open";
@@ -653,6 +657,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             runId: null,
             contactId: null,
             wait: null,
+            line: null,
         });
     }
     for (const row of waits) {
@@ -669,6 +674,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             runId: row.run.id,
             contactId: null,
             wait: row.wait,
+            line: null,
         });
     }
     for (const row of contacts) {
@@ -684,9 +690,130 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             runId: null,
             contactId: row.channelId,
             wait: null,
+            line: null,
         });
     }
     return items.sort((a, b) => a.sinceMs - b.sinceMs);
+}
+
+/** One thing waiting on you as the organization's overview lists it
+ *  (`GET /organizations/{id}/needs-you`), in this frame's names. */
+export interface NeedsItem {
+    key: string;
+    kind: "QUESTION" | "APPROVAL" | "PERMISSION" | "FORM" | "DECISION" | "CONTACT" | "MESSAGE";
+    podId: string;
+    podName: string;
+    title: string | null;
+    detail: string | null;
+    /** ISO time it started waiting. */
+    since: string;
+    conversationId: string | null;
+    workflowRunId: string | null;
+    channelId: string | null;
+    messageId: string | null;
+    choices: readonly string[];
+}
+
+/** Everything waiting on you, from the organization's one list, oldest
+ *  first. A workflow form is matched to its wait, which carries the form to
+ *  fill in here; one whose wait has not been read yet opens its run. */
+export function queueFromNeeds(needs: readonly NeedsItem[], waits: readonly WaitingRow[]): QueueItem[] {
+    const byRun = new Map(waits.map((row) => [row.run.id, row]));
+    const items: QueueItem[] = [];
+    for (const need of needs) {
+        const since = Date.parse(need.since);
+        const sinceMs = Number.isNaN(since) ? Date.now() : since;
+        const base = { podId: need.podId, podName: need.podName, sinceMs, conversationId: null, runId: null, contactId: null, wait: null, line: null };
+        switch (need.kind) {
+            case "QUESTION":
+            case "APPROVAL":
+            case "PERMISSION":
+                if (!need.conversationId) break;
+                items.push({ ...base, key: "ask:" + need.conversationId, kind: need.kind === "QUESTION" ? "answer" : "decide", title: need.title ?? "A question for you", detail: need.detail, conversationId: need.conversationId });
+                break;
+            case "FORM": {
+                const row = need.workflowRunId ? byRun.get(need.workflowRunId) : undefined;
+                if (row) items.push({ ...base, key: "wait:" + row.wait.id, kind: "do", title: row.wait.question ?? need.title ?? `Fill in the ${row.workflowName} form`, detail: row.workflowName, conversationId: row.wait.externalRef, runId: row.run.id, wait: row.wait });
+                else if (need.workflowRunId) items.push({ ...base, key: need.key, kind: "do", title: need.title ?? "A form to fill in", detail: need.detail, runId: need.workflowRunId });
+                break;
+            }
+            case "DECISION":
+                if (need.workflowRunId) items.push({ ...base, key: need.key, kind: "decide", title: need.title ?? "A decision for you", detail: need.detail, runId: need.workflowRunId });
+                break;
+            case "CONTACT":
+                if (need.channelId) items.push({ ...base, key: "contact:" + need.channelId, kind: "answer", title: `Reply to ${need.title ?? "someone waiting"}`, detail: need.detail ?? "Waiting on a person", contactId: need.channelId });
+                break;
+            case "MESSAGE":
+                if (need.channelId && need.messageId) items.push({ ...base, key: need.key, kind: "answer", title: need.title ?? "A question for you", detail: null, line: { channelId: need.channelId, messageId: need.messageId, choices: [...need.choices], prompt: need.detail } });
+                break;
+        }
+    }
+    return items.sort((a, b) => a.sinceMs - b.sinceMs);
+}
+
+/* ── the shelf: what a new Lemma can start from ─────────────────────── */
+
+/** A template as the shelf shows it (`GET /pods/bundle/templates`). */
+export interface ShelfCard {
+    id: string;
+    name: string;
+    /** What it owns. A finish line's carries `{due}` until a date is picked. */
+    sentence: string;
+    kind: "week" | "date";
+    /** The kind of work it does: support, sales, engineering… */
+    work: string | null;
+    face: string | null;
+    /** Where its work usually happens, as a label. */
+    place: string | null;
+    brings: readonly string[];
+    never: readonly string[];
+}
+
+/** The templates of one kind of work, as one card on the first shelf. */
+export interface ShelfWork {
+    id: string;
+    label: string;
+    cards: ShelfCard[];
+    /** Where its templates' work usually happens, once each. */
+    places: string[];
+    face: string | null;
+}
+
+/** "support" → "Support"; templates that say no kind of work sit together
+ *  under "More". */
+export function workLabel(id: string): string {
+    return id === "more" ? "More" : id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** The shelf's first view: the templates grouped by the work they do, in
+ *  the order the server ships them -- a group sits where its first template
+ *  does. Nothing here names a kind of work the templates do not. */
+export function shelfOf(cards: readonly ShelfCard[]): ShelfWork[] {
+    const groups = new Map<string, ShelfWork>();
+    for (const card of cards) {
+        const id = card.work?.trim().toLowerCase() || "more";
+        const group = groups.get(id) ?? { id, label: workLabel(id), cards: [], places: [], face: card.face };
+        group.cards.push(card);
+        if (card.place && !group.places.includes(card.place)) group.places.push(card.place);
+        groups.set(id, group);
+    }
+    return [...groups.values()];
+}
+
+/** What a finish line says before and after its date is picked. */
+export function sentenceFor(card: Pick<ShelfCard, "sentence">, due: string | null): string {
+    if (!card.sentence.includes("{due}")) return card.sentence;
+    if (!due) return card.sentence.replace("{due}", "a date you pick");
+    const at = new Date(due + "T12:00:00Z");
+    return Number.isNaN(at.getTime()) ? card.sentence.replace("{due}", due) : card.sentence.replace("{due}", at.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" }));
+}
+
+/** A short name for a Lemma started from its owner's own words: the first
+ *  word that says what it is about. */
+export function ownName(text: string): string {
+    const words = text.replace(/[^A-Za-z0-9 ]+/g, " ").trim().split(/\s+/).filter(Boolean);
+    const pick = words.find((word) => word.length > 4 && !/^(every|within|before|after|their|there)$/i.test(word)) ?? words[0] ?? "Lemma";
+    return pick.charAt(0).toUpperCase() + pick.slice(1).toLowerCase();
 }
 
 /** "40 min", "26 h", "3 d". */
@@ -984,4 +1111,77 @@ export function refreshKept<P extends { id: string }>(kept: readonly KeptApp<P>[
         return [];
     });
     return changed ? next : kept;
+}
+
+/** Where a pasted link to something shared opens here: a GitHub repository
+ *  opens its import, and a link this deployment made -- a share, a remix, an
+ *  import, from one of `ownOrigins` -- opens at its own path. Null for
+ *  anything else, including another site's link that happens to have a path
+ *  like one of these. */
+export function sharedLinkPath(text: string, ownOrigins: readonly string[]): string | null {
+    const said = text.trim();
+    if (!said) return null;
+    let url: URL;
+    try {
+        url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(said) ? said : "https://" + said);
+    } catch {
+        return null;
+    }
+    const parts = url.pathname.split("/").filter(Boolean).map(decodedSegment);
+    if (parts.some((part) => part === null)) return null;
+    const segments = parts as string[];
+    if (url.hostname === "github.com" || url.hostname === "www.github.com") {
+        const [owner, repo] = segments;
+        return owner && repo ? `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo.replace(/\.git$/, ""))}` : null;
+    }
+    const [head] = segments;
+    if (!ownOrigins.includes(url.origin) || !head || !SHARED_HEADS.has(head)) return null;
+    /* Rebuilt from its parts, each encoded, rather than passed on as typed: a
+       link is somebody else's text, and what this navigates to is only ever
+       one of this app's own paths. */
+    const path = "/" + segments.map(encodeURIComponent).join("/");
+    const query = [...url.searchParams].map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join("&");
+    return query ? `${path}?${query}` : path;
+}
+
+/** The first words of the paths a shared link of this app's opens at. */
+const SHARED_HEADS: ReadonlySet<string> = new Set(["s", "d", "remix", "import"]);
+
+/** One path segment as written, or null for one that is not valid percent-encoding. */
+function decodedSegment(segment: string): string | null {
+    try {
+        return decodeURIComponent(segment);
+    } catch {
+        return null;
+    }
+}
+
+/** What one step of a template's import adds, said as a person would count
+ *  it: a skill is its SKILL.md, and a folder made on the way is nothing. */
+function broughtKind(step: { kind: string; name: string }): [string, string] | null {
+    const kind = step.kind.toUpperCase();
+    if (kind === "TABLE") return ["table", "tables"];
+    if (kind === "SCHEDULE" || kind === "WORKFLOW") return ["automation", "automations"];
+    if (kind === "AGENT") return ["agent", "agents"];
+    if (kind === "APP") return ["app", "apps"];
+    if (kind === "FILE") {
+        const last = step.name.split("/").pop() ?? "";
+        if (last === "SKILL.md") return ["skill", "skills"];
+        return last.includes(".") ? ["file", "files"] : null;
+    }
+    return null;
+}
+
+/** "1 table, 2 automations and 2 skills": what a template's import brings,
+ *  counted by kind, in the order it brings them. */
+export function broughtSaid(steps: readonly { kind: string; name: string }[]): string {
+    const counts = new Map<string, { one: string; many: string; count: number }>();
+    for (const step of steps) {
+        const said = broughtKind(step);
+        if (!said) continue;
+        const now = counts.get(said[1]) ?? { one: said[0], many: said[1], count: 0 };
+        counts.set(said[1], { ...now, count: now.count + 1 });
+    }
+    const parts = [...counts.values()].map(({ one, many, count }) => `${count} ${count === 1 ? one : many}`);
+    return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }

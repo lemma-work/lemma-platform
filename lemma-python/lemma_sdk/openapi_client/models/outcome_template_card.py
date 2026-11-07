@@ -37,6 +37,8 @@ class OutcomeTemplateCard:
         brings (list[str] | Unset):
         description (None | str | Unset):
         face (None | str | Unset): Which character's face it wears.
+        function (None | str | Unset): The kind of work it does, as a shelf groups it: support, sales, engineering,
+            marketing or ops.
         place (None | str | Unset): Where its work usually happens.
         plan (TemplatePlan | Unset): The first lines of the plan a Lemma made from this template starts with.
         position (int | Unset):  Default: 100.
@@ -50,6 +52,7 @@ class OutcomeTemplateCard:
     brings: list[str] | Unset = UNSET
     description: None | str | Unset = UNSET
     face: None | str | Unset = UNSET
+    function: None | str | Unset = UNSET
     place: None | str | Unset = UNSET
     plan: TemplatePlan | Unset = UNSET
     position: int | Unset = 100
@@ -82,6 +85,12 @@ class OutcomeTemplateCard:
         else:
             face = self.face
 
+        function: None | str | Unset
+        if isinstance(self.function, Unset):
+            function = UNSET
+        else:
+            function = self.function
+
         place: None | str | Unset
         if isinstance(self.place, Unset):
             place = UNSET
@@ -111,6 +120,8 @@ class OutcomeTemplateCard:
             field_dict["description"] = description
         if face is not UNSET:
             field_dict["face"] = face
+        if function is not UNSET:
+            field_dict["function"] = function
         if place is not UNSET:
             field_dict["place"] = place
         if plan is not UNSET:
@@ -156,6 +167,15 @@ class OutcomeTemplateCard:
 
         face = _parse_face(d.pop("face", UNSET))
 
+        def _parse_function(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        function = _parse_function(d.pop("function", UNSET))
+
         def _parse_place(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -183,6 +203,7 @@ class OutcomeTemplateCard:
             brings=brings,
             description=description,
             face=face,
+            function=function,
             place=place,
             plan=plan,
             position=position,

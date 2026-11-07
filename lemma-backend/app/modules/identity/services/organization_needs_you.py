@@ -1,21 +1,24 @@
 """Everything waiting on one member across an organization's pods, as one list.
 
-Three things wait on a person, each kept by the module that owns it:
+Four things wait on a person, each kept by the module that owns it:
 
 - a conversation paused on them -- an ``ask_user`` question, a
   ``request_approval``, or an Agent Host permission request (agent);
 - a workflow form or decision assigned to them (workflow);
+- a question an agent asked them in their line, by ``channel_post``
+  (channels);
 - a contact waiting on a person, in a pod where they may see contacts
   (channels).
 
-Each was a request per pod, so a member of a dozen pods paid three dozen
+Each was a request per pod, so a member of a dozen pods paid four dozen
 requests to learn that nothing was waiting. Here each is one statement for
-every pod the member may open, and the three are merged oldest first: what has
+every pod the member may open, and the four are merged oldest first: what has
 waited longest is what to do first.
 
 **Every source keeps its own rule.** The pods come from ``load_member_scope``,
 the pauses are the member's own conversations, a wait is theirs by being
-assigned to their membership, and contacts are read only in pods where their
+assigned to their membership, a line's question waits on them by name, and
+contacts are read only in pods where their
 own context holds ``channel.read`` and ``contact.read`` -- the two the pod's
 contact list asks for. Nothing here decides access a second way.
 """
@@ -35,6 +38,10 @@ from app.modules.agent.contracts.conversation_summaries import (
     PendingInteractionKind,
     PodPendingInteraction,
     list_pending_interactions_in_pods,
+)
+from app.modules.channels.contracts.asked_in_a_line import (
+    AskedInALine,
+    asked_in_a_line,
 )
 from app.modules.channels.contracts.contacts_waiting import (
     ContactWaiting,
@@ -69,6 +76,8 @@ class NeedsYouKind(str, Enum):
     DECISION = "DECISION"
     #: A contact waits on a person, and nobody holds them.
     CONTACT = "CONTACT"
+    #: An agent asked them in their line, and waits for their reply.
+    MESSAGE = "MESSAGE"
 
 
 _PAUSE_KINDS: dict[PendingInteractionKind, NeedsYouKind] = {
@@ -82,8 +91,8 @@ _PAUSE_KINDS: dict[PendingInteractionKind, NeedsYouKind] = {
 class NeedsYouItem:
     """One thing waiting on the member, and where to answer it."""
 
-    #: Stable across reads: ``conversation:<id>``, ``wait:<id>`` or
-    #: ``contact:<channel id>``.
+    #: Stable across reads: ``conversation:<id>``, ``wait:<id>``,
+    #: ``contact:<channel id>`` or ``message:<line id>``.
     key: str
     kind: NeedsYouKind
     pod_id: UUID
@@ -99,6 +108,10 @@ class NeedsYouItem:
     tool_call_id: str | None = None
     workflow_run_id: UUID | None = None
     channel_id: UUID | None = None
+    #: The line a MESSAGE question was asked on, to answer it by.
+    message_id: UUID | None = None
+    #: The answers a MESSAGE question offered; words are always allowed too.
+    choices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +195,56 @@ def contact_items(
     ]
 
 
+#: A line's question is shown as one line of a list; its whole text is on the
+#: line it was asked on.
+_TITLE_CHARS = 160
+#: ...and whole where it is answered, so nobody answers half a question; one
+#: longer than this is finished in its chat.
+_WHOLE_CHARS = 4000
+
+
+def _first_line(text: str | None) -> str | None:
+    if not text:
+        return None
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if len(first) <= _TITLE_CHARS:
+        return first or None
+    return first[: _TITLE_CHARS - 1].rstrip() + "…"
+
+
+def _whole(text: str | None, title: str | None) -> str | None:
+    """The question as it was asked, when its title had to cut it."""
+    whole = (text or "").strip()
+    if not whole or whole == title:
+        return None
+    if len(whole) <= _WHOLE_CHARS:
+        return whole
+    return whole[: _WHOLE_CHARS - 1].rstrip() + "…"
+
+
+def line_items(
+    asked: Sequence[AskedInALine], pod_names: dict[UUID, str]
+) -> list[NeedsYouItem]:
+    items: list[NeedsYouItem] = []
+    for question in asked:
+        title = _first_line(question.prompt)
+        items.append(
+            NeedsYouItem(
+                key=f"message:{question.message_id}",
+                kind=NeedsYouKind.MESSAGE,
+                pod_id=question.pod_id,
+                pod_name=pod_names.get(question.pod_id, ""),
+                title=title,
+                detail=_whole(question.prompt, title),
+                since=question.since,
+                channel_id=question.channel_id,
+                message_id=question.message_id,
+                choices=question.choices,
+            )
+        )
+    return items
+
+
 def oldest_first(items: Sequence[NeedsYouItem], *, limit: int) -> list[NeedsYouItem]:
     """The ``limit`` longest-waiting, oldest first; the key breaks a tie, so
     two reads of the same state list it in the same order."""
@@ -218,7 +281,7 @@ async def load_needs_you(
     """What waits on the member across the organization. None for a non-member.
 
     Each source is asked for up to ``limit`` of its own oldest, so the merged
-    list is the oldest across all three, and ``truncated`` says when any of
+    list is the oldest across all four, and ``truncated`` says when any of
     them had more than it gave.
 
     A fixed number of queries whatever the pod count, but for one narrow,
@@ -238,6 +301,9 @@ async def load_needs_you(
     waits, more_waits = await list_waits_assigned_to(
         uow.session, pod_member_ids=scope.pod_member_ids, limit=limit
     )
+    lines, more_lines = await asked_in_a_line(
+        uow, user_id=user_id, pod_ids=scope.pod_ids, limit=limit
+    )
     contacts, more_contacts = await contacts_waiting_on_a_person(
         uow, pod_ids=await _pods_seeing_contacts(uow, scope), limit=limit
     )
@@ -245,9 +311,14 @@ async def load_needs_you(
     waiting = [
         *pause_items(pauses, names),
         *wait_items(waits, names),
+        *line_items(lines, names),
         *contact_items(contacts, names),
     ]
     return NeedsYou(
         items=oldest_first(waiting, limit=limit),
-        truncated=more_pauses or more_waits or more_contacts or len(waiting) > limit,
+        truncated=more_pauses
+        or more_waits
+        or more_lines
+        or more_contacts
+        or len(waiting) > limit,
     )

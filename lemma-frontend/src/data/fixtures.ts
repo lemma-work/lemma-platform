@@ -2558,14 +2558,6 @@ export const fixtureSource: PodSource = {
     /* The sample datastore answers every query with the same two rows. It is
        a shape to look at, not a result to believe, which is what the sample
        source is for. */
-    /* Sample pods keep what they own in their plan file, as an API from
-       before a pod kept it would. */
-    async getOwned() {
-        return null;
-    },
-    async setOwned() {
-        return null;
-    },
     async runQuery() {
         await wait(60);
         return { items: [
@@ -3598,6 +3590,28 @@ export const fixtureSource: PodSource = {
         };
         runs.unshift(redrive);
         return readRun(redrive);
+    },
+    async runScheduleNow(_podId: string, scheduleId: string) {
+        await wait(420);
+        const runs = (SCHEDULE_RUNS[scheduleId] ??= []);
+        const started = {
+            id: "manual-" + Date.now(),
+            schedule_id: scheduleId,
+            status: "PROCESSING",
+            attempts: 0,
+            source_event_id: "manual:" + Date.now(),
+            created_at: new Date().toISOString(),
+            started_at: null,
+            completed_at: null,
+        };
+        runs.unshift(started);
+        /* The sample has no worker: the run finishes on its own a moment
+           later, so the history's next read shows it done, not running. */
+        setTimeout(() => {
+            const at = new Date().toISOString();
+            Object.assign(started, { status: "COMPLETED", attempts: 1, started_at: at, completed_at: at });
+        }, 1500);
+        return readRun(started);
     },
     async createSchedule(_podId: string, draft: ScheduleDraft) {
         await wait(520);

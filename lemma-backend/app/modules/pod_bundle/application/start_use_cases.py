@@ -262,25 +262,28 @@ def setup_request(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
     """The person's first message to the new Lemma's agent.
 
     It is shown as theirs, so it says what they want in their words; how to
-    get there is the `lemma-setup` skill it names, not a list of steps here.
+    get there is the skill it names (a template's own set-up skill, or
+    `lemma-setup`), not a list of steps here.
     """
     sentence = outcome.sentence.strip()
     stop = "" if sentence.endswith((".", "!", "?")) else "."
     start = f'Set yourself up to own this: "{sentence}{stop}"'
+    rest = (
+        " Fill in the plan in /plan.md as you go: how we work, who holds what, "
+        "and what you never do. Ask me whatever you need."
+    )
     if card is not None:
-        middle = (
-            f" You start from the {card.name} template: its tables, a skill and "
-            "schedules are here, and the number is counted from those tables."
-        )
-    else:
-        middle = (
-            " Nothing is built yet, so build what holds the work and set how it "
-            "is counted with set_what_you_own."
+        return (
+            f"{start} You start from the {card.name} template, which brings its "
+            "tables, skills and schedules, and what you own is counted from its "
+            "tables. Follow its set-up skill: ask me where this work happens, "
+            "connect it, fill your tables from what is already there, keep them "
+            "filling, then show me where we stand and ask me for the bar." + rest
         )
     return (
-        f"{start}{middle} Use the lemma-setup skill: ask me where this work "
-        "happens, bring in the last few weeks of it, and keep it coming in. "
-        "Ask me whatever you need."
+        f"{start} Nothing is built yet. Use the lemma-setup skill: ask me where "
+        "this work happens, build what holds it, bring in the last few weeks of "
+        "it, keep it coming in, and set how it is counted with set_what_you_own." + rest
     )
 
 

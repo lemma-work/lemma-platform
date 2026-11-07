@@ -16102,6 +16102,318 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/PodBundleService.ts
+  var PodBundleService = class {
+    /**
+     * Download A Bundle Archive
+     * Stream a bundle archive (application/zip) by signed token. Requires an authenticated lemma user AND a valid token; not pod-scoped, so a share link works for any signed-in user. 410 if the token is invalid/expired or the archive was swept.
+     * @param token Signed download token.
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static podBundleDownload(token) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/bundle/download",
+        query: {
+          "token": token
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Templates to start a Lemma from
+     * The templates that ship with this server, one card each: what a Lemma made from it owns and how that is counted, its face, where its work happens, what it brings and the first lines of its plan. Start one with POST /pods/start.
+     * @returns OutcomeTemplateCard Successful Response
+     * @throws ApiError
+     */
+    static podBundleTemplates() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/bundle/templates"
+      });
+    }
+    /**
+     * Start a Lemma
+     * Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.
+     * @param requestBody
+     * @returns StartLemmaResponse Successful Response
+     * @throws ApiError
+     */
+    static podStart(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/start",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Pod Export
+     * Enqueue a pod export. Returns 202 with an export_id; poll the status endpoint until READY, then fetch the signed download_url.
+     * @param podId
+     * @param requestBody
+     * @returns ExportStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleExportStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/exports",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Pod Export Status
+     * Poll the status of a pod export (Redis-only; 410 when expired). When READY, includes the signed download_url, its expires_at, and any data-cap warnings.
+     * @param podId
+     * @param exportId
+     * @returns ExportStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleExportGet(podId, exportId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/bundle/exports/{export_id}",
+        path: {
+          "pod_id": podId,
+          "export_id": exportId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Pod Import
+     * Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
+     * @param podId
+     * @param requestBody
+     * @returns ImportStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleImportStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/imports",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Cancel Pod Import
+     * Abort a running import and delete its state + staged archive.
+     * @param podId
+     * @param importId
+     * @returns ImportStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleImportCancel(podId, importId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/bundle/imports/{import_id}",
+        path: {
+          "pod_id": podId,
+          "import_id": importId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Pod Import Status
+     * Poll the status + plan of a pod import (Redis-only; 410 when expired).
+     * @param podId
+     * @param importId
+     * @returns ImportStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleImportGet(podId, importId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/bundle/imports/{import_id}",
+        path: {
+          "pod_id": podId,
+          "import_id": importId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Apply Pod Import
+     * Apply a planned import. Requires confirm_destructive when the plan drops or alters columns, and resolved values for any required variables. Returns 202; poll the status endpoint for per-step progress.
+     * @param podId
+     * @param importId
+     * @param requestBody
+     * @returns ImportStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleImportApply(podId, importId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/imports/{import_id}/apply",
+        path: {
+          "pod_id": podId,
+          "import_id": importId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Stream Pod Import Progress
+     * Server-Sent Events for an import. The first frame is a full state snapshot; subsequent frames are live status/step/progress updates. The stream closes when the import reaches a terminal state or expires.
+     * @param podId
+     * @param importId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static podBundleImportEvents(podId, importId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/bundle/imports/{import_id}/events",
+        path: {
+          "pod_id": podId,
+          "import_id": importId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Re-plan Pod Import
+     * Re-run planning against the still-staged bundle (410 if swept).
+     * @param podId
+     * @param importId
+     * @returns ImportStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleImportReplan(podId, importId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/imports/{import_id}/replan",
+        path: {
+          "pod_id": podId,
+          "import_id": importId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Publish Pod To GitHub
+     * Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll the status endpoint for the repo URL.
+     * @param podId
+     * @param requestBody
+     * @returns PublishStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundlePublishStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/publishes",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Pod Publish Status
+     * Poll the status of a pod publish (Redis-only; 410 when expired).
+     * @param podId
+     * @param publishId
+     * @returns PublishStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundlePublishGet(podId, publishId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/bundle/publishes/{publish_id}",
+        path: {
+          "pod_id": podId,
+          "publish_id": publishId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Stream Pod Publish Progress
+     * Server-Sent Events for a publish (snapshot then live frames).
+     * @param podId
+     * @param publishId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static podBundlePublishEvents(podId, publishId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/bundle/publishes/{publish_id}/events",
+        path: {
+          "pod_id": podId,
+          "publish_id": publishId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Stage A Local Bundle Upload
+     * Upload a local .zip bundle and receive a signed lemma download URL to pass to POST …/bundle/imports as kind=URL. The only multipart endpoint; it stages bytes and mints a URL, nothing more.
+     * @param podId
+     * @param formData
+     * @returns UploadResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleUpload(podId, formData) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/uploads",
+        path: {
+          "pod_id": podId
+        },
+        formData,
+        mediaType: "multipart/form-data",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
   // src/openapi_client/services/PodsService.ts
   var PodsService = class {
     /**
@@ -16346,6 +16658,17 @@ var LemmaClient = (() => {
     constructor(client, http) {
       __publicField(this, "client", client);
       __publicField(this, "http", http);
+      /** What a pod owns, and where it stands against it. */
+      __publicField(this, "outcome", {
+        /** The number now, read the same for every member. */
+        standing: (podId) => this.client.request(() => QueryService.outcomeStanding(podId)),
+        /** The last `weeks` weeks, each on its last reading; null where unread. */
+        history: (podId, weeks = 8) => this.client.request(() => QueryService.outcomeHistory(podId, weeks)),
+        /** Set what the pod owns. A new or changed measure is read once first. */
+        set: (podId, payload) => this.client.request(() => PodsService.outcomeSet(podId, payload)),
+        /** Let what the pod owns go. */
+        clear: (podId) => this.client.request(() => PodsService.outcomeClear(podId))
+      });
     }
     list(options = {}) {
       var _a;
@@ -16385,29 +16708,22 @@ var LemmaClient = (() => {
       return this.client.request(() => PodsService.podJoin(podId));
     }
     /**
-     * What the pod owns and where its measure stands now. `outcome` is null when
-     * it owns nothing; a measure that cannot be read comes back as `problem`.
+     * The templates a Lemma can start from, one card each: what it owns and how
+     * that is counted, the kind of work it does (`function`), its face, where
+     * its work usually happens, what it brings and the first lines of its plan.
      */
-    outcomeStanding(podId) {
-      return this.client.request(() => QueryService.outcomeStanding(podId));
-    }
-    /** The measure's weekly readings, the most recent `weeks` of them (default 8). */
-    outcomeHistory(podId, options = {}) {
-      return this.client.request(() => {
-        var _a;
-        return QueryService.outcomeHistory(podId, (_a = options.weeks) != null ? _a : 8);
-      });
+    templates() {
+      return this.client.request(() => PodBundleService.podBundleTemplates());
     }
     /**
-     * Set what the pod owns, replacing what it had. A new or changed measure is
-     * read once first, and refused when the caller cannot read every row it counts.
+     * Start a Lemma: a pod that owns something, from a template (`template`,
+     * with `due` for a finish line) or from your own words (`outcome` and
+     * `name`). Answers the pod, the setup chat its agent sets itself up in
+     * (`conversation_id`), and for a template the import bringing its tables,
+     * skills and schedules (`import_id`).
      */
-    setOutcome(podId, input) {
-      return this.client.request(() => PodsService.outcomeSet(podId, input));
-    }
-    /** Let go of what the pod owns. */
-    clearOutcome(podId) {
-      return this.client.request(() => PodsService.outcomeClear(podId));
+    start(payload) {
+      return this.client.request(() => PodBundleService.podStart(payload));
     }
   };
 
@@ -20564,6 +20880,38 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Create Schedule Run
+     * Start one run of a TIME schedule now, outside its timing.
+     *
+     * Takes no body. The run carries what the schedule's own firing would, is
+     * held to the same daily ceiling and `max_concurrent_runs`, and its target
+     * is started by the same job, so the run answers `PROCESSING` until it is
+     * handed over. It runs as the person asking, who must be able to change the
+     * schedule and run its target; its metadata says `manual: true` and who
+     * started it. Refused with 422 for a WEBHOOK or DATASTORE schedule, which
+     * has no event to carry, and with 409 while the schedule is paused, has no
+     * target, is full, or has reached its daily ceiling.
+     * @param podId
+     * @param scheduleId
+     * @returns ScheduleRunResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleRunCreate(podId, scheduleId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/runs",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId
+        },
+        errors: {
+          404: `No such schedule in this pod.`,
+          409: `The schedule is paused, has no target, is full, or has reached its daily ceiling.`,
+          422: `A WEBHOOK or DATASTORE schedule, which has no event to carry.`
+        }
+      });
+    }
+    /**
      * Retry Schedule Run
      * @param podId
      * @param scheduleId
@@ -20686,6 +21034,17 @@ var LemmaClient = (() => {
             (_b = options.pageToken) != null ? _b : void 0
           );
         }
+      );
+    }
+    /**
+     * Start one run of a TIME schedule now, outside its timing, as the caller;
+     * answers the run (`PROCESSING` until its target is handed over). Held to the
+     * schedule's daily ceiling and `max_concurrent_runs` like any firing. A
+     * WEBHOOK or DATASTORE schedule is refused (422), as is a paused one (409).
+     */
+    runNow(scheduleId) {
+      return this.client.request(
+        () => SchedulesService.scheduleRunCreate(this.podId(), scheduleId)
       );
     }
     /** Run a failed or dead-lettered run again with the same event; answers the new run. */

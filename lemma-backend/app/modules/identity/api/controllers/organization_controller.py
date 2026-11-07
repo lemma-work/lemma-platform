@@ -350,6 +350,7 @@ async def invite_member(
         pod_id=data.pod_id,
         pod_role=data.pod_role,
         redirect_uri=data.redirect_uri,
+        note=data.note,
     )
 
     invitation = await org_service.create_invitation(

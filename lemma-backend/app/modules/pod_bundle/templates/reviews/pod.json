@@ -4,6 +4,7 @@
   "description": "Gets every pull request a review on the day it is opened.",
   "lemma": {
     "position": 3,
+    "function": "engineering",
     "face": "cube",
     "place": "GitHub",
     "brings": [

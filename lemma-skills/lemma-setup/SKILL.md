@@ -1,6 +1,6 @@
 ---
 name: lemma-setup
-description: "Set a Lemma up to own its result: find where the work happens, connect it, bring in the last few weeks, keep new work coming in, count the number with set_what_you_own, and fill in /plan.md. Use in a Lemma's setup chat (\"Set yourself up to own this\"), when someone agrees to let a Lemma own something, or when a Lemma's number reads zero because nothing feeds its tables. Do not use to design a new pod's resources from scratch (lemma-builder) or for day-to-day work in a Lemma that is already set up (lemma-user)."
+description: "Set a Lemma up to own its result: find where the work happens, connect it, bring in the last few weeks, keep new work coming in, count the number with set_what_you_own, and fill in /plan.md. Use in the setup chat of a Lemma started from its own words (\"Set yourself up to own this\"), when someone agrees to let a Lemma own something, or when a Lemma's number reads zero because nothing feeds its tables. Do not use to design a new pod's resources from scratch (lemma-builder) or for day-to-day work in a Lemma that is already set up (lemma-user)."
 ---
 
 # Set up a Lemma
@@ -34,7 +34,9 @@ Read what is already here, in one turn:
 - `lemma connectors pod-list` and `lemma schedules list`.
 
 A Lemma started from a template already has its work table, a measure and
-timed schedules. It does not have a source: nothing fills that table yet.
+timed schedules, and a `set-up` skill written for that work: follow it, and
+come back here only for what it leaves out. It does not have a source:
+nothing fills that table yet.
 
 A Lemma started from its own words has none of it. Make the work table now,
 one row per unit of work, with the columns its number needs (when the item

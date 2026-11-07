@@ -3,6 +3,8 @@ import type { HttpClient } from "../http.js";
 import type { OutcomeInput } from "../openapi_client/models/OutcomeInput.js";
 import type { PodCreateRequest } from "../openapi_client/models/PodCreateRequest.js";
 import type { PodUpdateRequest } from "../openapi_client/models/PodUpdateRequest.js";
+import type { StartLemmaRequest } from "../openapi_client/models/StartLemmaRequest.js";
+import { PodBundleService } from "../openapi_client/services/PodBundleService.js";
 import { PodsService } from "../openapi_client/services/PodsService.js";
 import { QueryService } from "../openapi_client/services/QueryService.js";
 
@@ -57,28 +59,41 @@ export class PodsNamespace {
   }
 
   /**
-   * What the pod owns and where its measure stands now. `outcome` is null when
-   * it owns nothing; a measure that cannot be read comes back as `problem`.
+   * The templates a Lemma can start from, one card each: what it owns and how
+   * that is counted, the kind of work it does (`function`), its face, where
+   * its work usually happens, what it brings and the first lines of its plan.
    */
-  outcomeStanding(podId: string) {
-    return this.client.request(() => QueryService.outcomeStanding(podId));
-  }
-
-  /** The measure's weekly readings, the most recent `weeks` of them (default 8). */
-  outcomeHistory(podId: string, options: { weeks?: number } = {}) {
-    return this.client.request(() => QueryService.outcomeHistory(podId, options.weeks ?? 8));
+  templates() {
+    return this.client.request(() => PodBundleService.podBundleTemplates());
   }
 
   /**
-   * Set what the pod owns, replacing what it had. A new or changed measure is
-   * read once first, and refused when the caller cannot read every row it counts.
+   * Start a Lemma: a pod that owns something, from a template (`template`,
+   * with `due` for a finish line) or from your own words (`outcome` and
+   * `name`). Answers the pod, the setup chat its agent sets itself up in
+   * (`conversation_id`), and for a template the import bringing its tables,
+   * skills and schedules (`import_id`).
    */
-  setOutcome(podId: string, input: OutcomeInput) {
-    return this.client.request(() => PodsService.outcomeSet(podId, input));
+  start(payload: StartLemmaRequest) {
+    return this.client.request(() => PodBundleService.podStart(payload));
   }
 
-  /** Let go of what the pod owns. */
-  clearOutcome(podId: string) {
-    return this.client.request(() => PodsService.outcomeClear(podId));
-  }
+  /** What a pod owns, and where it stands against it. */
+  readonly outcome = {
+    /** The number now, read the same for every member. */
+    standing: (podId: string) =>
+      this.client.request(() => QueryService.outcomeStanding(podId)),
+
+    /** The last `weeks` weeks, each on its last reading; null where unread. */
+    history: (podId: string, weeks = 8) =>
+      this.client.request(() => QueryService.outcomeHistory(podId, weeks)),
+
+    /** Set what the pod owns. A new or changed measure is read once first. */
+    set: (podId: string, payload: OutcomeInput) =>
+      this.client.request(() => PodsService.outcomeSet(podId, payload)),
+
+    /** Let what the pod owns go. */
+    clear: (podId: string) =>
+      this.client.request(() => PodsService.outcomeClear(podId)),
+  };
 }

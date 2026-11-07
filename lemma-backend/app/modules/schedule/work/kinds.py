@@ -6,6 +6,7 @@ filter decides, so the event rides in the payload until it is claimed.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -94,6 +95,16 @@ def fire_dedup_key(schedule_id: UUID, fire_at: datetime) -> str:
 def time_source_event_id(schedule_id: UUID, fire_at: datetime) -> str:
     """The run's source key for a TIME occurrence; unchanged from the poller's."""
     return f"cron:{schedule_id}:{fire_at.astimezone(timezone.utc).isoformat()}"
+
+
+def time_event_payload(config: Mapping[str, object] | None) -> dict[str, JsonValue]:
+    """What a TIME schedule's run carries to its target: its config's ``payload``.
+
+    One definition for the timer and for a run started by hand, so the two
+    cannot hand the target different things.
+    """
+    payload = (config or {}).get("payload")
+    return dict(payload) if isinstance(payload, dict) else {}
 
 
 def schedule_key(schedule_id: UUID) -> str:
