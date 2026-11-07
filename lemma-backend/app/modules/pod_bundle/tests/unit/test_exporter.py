@@ -457,6 +457,75 @@ async def test_a_bundle_without_connectors_is_written_as_format_3(
     assert json.loads((root / "pod.json").read_text())["format_version"] == 3
 
 
+#: The real adapter, before ``patched_exporter`` swaps it for a plain dict.
+_POD_RESPONSE_DICT = exporter_mod._pod_response_dict
+
+
+def _pod_owning(outcome):
+    from datetime import date, datetime, timezone
+
+    from app.modules.pod.domain.pod_entities import PodConfig
+
+    now = datetime.now(timezone.utc)
+    return SimpleNamespace(
+        id=uuid4(),
+        user_id=uuid4(),
+        organization_id=uuid4(),
+        name="My CRM Pod",
+        description=None,
+        icon_url=None,
+        config=PodConfig(
+            outcome=(
+                None
+                if outcome is None
+                else {**outcome, "since": date(2026, 10, 5), "row_security_checked": []}
+            )
+        ),
+        created_at=now,
+        updated_at=now,
+    )
+
+
+async def test_what_the_pod_owns_is_exported_as_a_template_writes_it(
+    patched_exporter, monkeypatch, tmp_path
+):
+    """The keys a shipped template carries, and nothing that belongs to the
+    pod that took it on: when, and which tables its measure was checked on."""
+    owned = {
+        "sentence": "Every lead hears back within two days.",
+        "kind": "week",
+        "target": 90,
+        "unit": "%",
+        "measure": "SELECT 100.0 * count(*) FILTER (WHERE answered) / count(*) FROM leads",
+    }
+    monkeypatch.setattr(
+        exporter_mod,
+        "_pod_response_dict",
+        lambda pod: _POD_RESPONSE_DICT(_pod_owning(owned)),
+    )
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+
+    assert json.loads((root / "pod.json").read_text())["outcome"] == {
+        **owned,
+        "target": 90.0,
+    }
+
+
+async def test_a_pod_that_owns_nothing_exports_no_outcome(
+    patched_exporter, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        exporter_mod,
+        "_pod_response_dict",
+        lambda pod: _POD_RESPONSE_DICT(_pod_owning(None)),
+    )
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+
+    assert "outcome" not in json.loads((root / "pod.json").read_text())
+
+
 async def test_each_pod_connector_exports_without_its_installation_or_account(
     patched_exporter, tmp_path
 ):
