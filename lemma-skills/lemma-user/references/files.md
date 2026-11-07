@@ -28,7 +28,7 @@ are ranked passages with page numbers, ready for `cat --pages N`.
 for documents), `text` (raw bytes; binary is flagged, not dumped) or `markdown`
 (errors if the file is not a document). Output is capped at about 50,000
 characters, the same as the in-process tool. Widen with `--max-chars 0`
-(unlimited), `--max-lines N`, `--max-tokens N` or `--full`; narrow with
+(unlimited) or `--full`; `--max-lines N` and `--max-tokens N` only cap it further; narrow with
 `--pages` (1-based, over the converted markdown) or `--lines` (1-based, over raw
 text). The payload reports `page_count`, the range returned and a `truncated`
 flag, so you know when to page.

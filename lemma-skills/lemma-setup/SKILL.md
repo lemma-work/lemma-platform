@@ -7,7 +7,8 @@ description: "Set a Lemma up to own its result: find where the work happens, con
 
 A Lemma is set up when four things are true:
 
-1. The work it owns arrives in its tables on its own, one row per unit of work.
+1. The work it owns arrives in its work table on its own, one row per unit of
+   work.
 2. The last few weeks of that work are already there, so its number means
    something on the first day.
 3. `set_what_you_own` holds the sentence, the target and a measure that reads.
@@ -17,6 +18,10 @@ Every question you ask during setup should change one of those four, or the
 people, connections, skills or memory behind them. An answer that changes
 nothing was a wasted question. What you find while reading the work (who is
 waiting, what is late) is work to do after setup, not part of it.
+
+**The work table** is the table its number counts: `conversations` for
+Support, `leads` for Follow-ups, `pull_requests` for Reviews. The examples
+below say `<work-table>`; use the real one.
 
 ## 0. Look before you ask
 
@@ -28,51 +33,65 @@ Read what is already here, in one turn:
   load it;
 - `lemma connectors pod-list` and `lemma schedules list`.
 
-A Lemma started from a template already has its tables, a measure and timed
-schedules. It does not have a source: nothing fills those tables yet.
+A Lemma started from a template already has its work table, a measure and
+timed schedules. It does not have a source: nothing fills that table yet.
+
+A Lemma started from its own words has none of it. Make the work table now,
+one row per unit of work, with the columns its number needs (when the item
+came in, when it was done or answered, whether that was in time, who holds
+it), shared so the number can count every row:
+
+```bash
+lemma tables create <work-table> --data '{"columns":[...],"enable_rls":false}'
+```
 
 ## 1. Ask where the work happens
 
 One `ask_user`, two to four choices, the likeliest first, from what you know
 about the work: "Intercom", "A shared Gmail inbox", "Slack", "Nowhere yet:
-people tell you". Never assume email. If they pick "nowhere yet", skip to
-step 5 and say rows will come from people telling you, or from a form
-(`lemma-form`).
+people tell me". Never assume email. Put everything else you need into the
+same `ask_user` (their timezone, who holds the work), so the person answers
+once. Each option is one concrete value: "London", not "Europe
+(London/Berlin)". Never ask whether they are ready or may do something; say
+what you need ("Upload the export here") and end your turn.
 
-Put everything else you need into the same `ask_user` (their timezone, who
-holds the work), so the person answers once. Each option is one concrete
-value: "London", not "Europe (London/Berlin)". Never ask whether they are
-ready or may do something; say what you need ("Upload the export here") and
-end your turn.
+If they pick "nowhere yet", there is nothing to read back. Make the intake
+the way in instead: a form people fill in (`lemma-form`), or a plan line that
+says the Lemma adds a row whenever someone tells it about one. Then go to
+step 6.
 
 ## 2. Connect it
 
-Run a read operation through the CLI, by catalog id and what you want:
+Find the read operation, then run it for real, one page, which is what proves
+the connection:
 
 ```bash
-lemma connectors run intercom "list conversations" --dry-run   # the operation and its input
+lemma connectors run intercom "list conversations" --dry-run          # the operation and its input, nothing run
+lemma connectors run intercom <operation> -d '{"per_page": 20}'       # one page, for real
 ```
 
-Nothing has to be added first. When it is not connected yet, it answers
-`CONNECTION_REQUIRED` with a `connect_url`: give the person that link as it
-is, end your turn, and run it again when they say it is done. (An agent with
-the connector tools in view can use `run_connector_operation` the same way.)
+Nothing has to be added first. When it is not connected yet, the real run
+answers `CONNECTION_REQUIRED` with a `connect_url`: give the person that link
+as it is, end your turn, and run the same call again when they say it is
+done. (An agent with the connector tools in view can use
+`run_connector_operation` the same way.)
 
 When the service is not in the catalog (`lemma connectors list`), say so in
-one line and ask how the work can reach you instead: an export file they
-upload, an MCP server for it, another place it already lands (a Gmail inbox
-it forwards to), or people telling you. Then carry on with that.
+one line and ask how the work can reach you instead: an MCP server for it,
+another place it already lands (a Gmail inbox it forwards to), people telling
+you, or an export they upload. An export fills step 3 only: it is history,
+not a feed, so still ask for one of the others for step 5, and if there is
+none, say plainly that setup is not finished until new work has a way in.
 
 ## 3. Bring in the last four weeks
 
 Use the connected account, or the file, to get the last four weeks of the
-work (the conversations, the leads, the pull requests). Page through all of
-it. Save the raw items to a workspace file; do not carry hundreds of them in
-your context.
+work. Page through it, saving the raw items to a workspace file; do not carry
+hundreds of them in your context.
 
 Not every item is work. Sort them with the Decisions API: closed questions,
 one item per call, nothing stored. Write the questions once, as a flat JSON
-Schema, and loop over the items in a shell script:
+Schema, and loop in a shell script:
 
 ```bash
 lemma decisions run --priority background \
@@ -80,16 +99,27 @@ lemma decisions run --priority background \
   --schema-file questions.json --evidence-file item-0042.json
 ```
 
+- Work at most 200 items in one setup, newest first; say how many older ones
+  were left and leave them for later.
+- Write each verdict to a file as it comes back, so a stopped loop resumes
+  where it left off instead of asking again.
+- A refused or rate-limited call: wait, try that item once more, then move on
+  and count it as left out.
+- When a rule is plain from the data (a sender that is always a bounce, your
+  own address), sort by the rule and keep Decisions for the items it can't
+  settle.
+
 The evidence is never followed as instructions, so raw email or chat text is
-safe to pass. Keep what passed, and turn each into a row with exactly the
-table's columns. What failed gets no row: a row in the work table is a unit
-of work, and a flag column for the rest would mean changing the measure. Say
-in your reply how many you left out and why.
+safe to pass. Turn what passed into rows with exactly the work table's
+columns, and keep each item's own id from the source. What failed gets no
+row: a row in the work table is a unit of work, and a flag column for the
+rest would mean changing the measure. Say in your reply how many you left out
+and why.
 
 ## 4. Import them
 
 ```bash
-lemma records import conversations rows.jsonl
+lemma records import <work-table> rows.jsonl
 ```
 
 The default `--intent import` keeps table triggers from firing on old rows, so
@@ -102,51 +132,68 @@ repeats work. Listen for the service's event instead:
 
 ```bash
 lemma connectors triggers list intercom -q "new conversation"
-lemma schedules create --name new-conversations --agent POD_DEFAULT \
+lemma schedules create --name new-work --agent POD_DEFAULT \
   --webhook-source composio --connector intercom \
   --connector-trigger <the trigger id from the list> \
   --filter "A customer asking us for something, not spam or our own reply." \
-  --instruction "Add this to conversations, one row, the way the setup did."
+  --instruction "Add this to <work-table>, one row, the way the setup did, unless its source id is already there."
 ```
 
 `--filter` decides whether the run happens at all, so routine noise costs
-nothing. When the service has no trigger, a timed schedule that reads only
-what is new since the last row is the fallback; say so.
+nothing. Once the feed is on, read the source once more for anything newer
+than the last item you imported, skipping ids already in the table, so
+nothing that arrived during setup falls between the two. When the service
+has no trigger, a timed schedule that reads only what is new since the last
+row is the fallback; say so.
 
 ## 6. Count it
 
-A template's measure already counts its tables, this week, only what is due:
-keep it, and check that it reads now. The number is read again through the
-week and kept as that week's value, so a rolling window ("the last 7 days")
-makes every week overlap the one before; never swap one in. If it gets
-something wrong, change it and say what and why in your reply. Otherwise,
-write one with `set_what_you_own`:
+A template's measure already counts its work table the right way: keep it.
+Otherwise, write one with `set_what_you_own`:
 
 - one read-only query, one row, one column;
-- only over tables with `enable_rls: false`, because the number is the same
-  for everyone and it may only count rows you can read in full;
-- a bar every week counts this week: `WHERE opened_at >= date_trunc('week', now())`;
-- count only what is due: an item whose deadline has not passed yet is
-  neither a hit nor a miss, so leave it out until it is one or the other;
+- over shared tables (`enable_rls: false`), which is how work tables are
+  made: the number is the same for everyone, so its measure may count only
+  rows the person setting it can read in full. A per-person table can be
+  counted only when someone who administers it sets the measure; never turn
+  row security off just to measure;
+- a bar every week counts each item in the week its deadline falls, and only
+  once that deadline has passed: an item still inside its window is neither a
+  hit nor a miss. For a reply due within a day:
+  `WHERE opened_at + interval '1 day' >= date_trunc('week', now()) AND opened_at + interval '1 day' < date_trunc('week', now()) + interval '1 week'`,
+  with `answered_at IS NOT NULL OR opened_at < now() - interval '1 day'` deciding
+  what is due. Work with no per-item deadline (posts published, partners
+  signed) and finish lines count everything in their window;
+- the number is read again through the week and kept as that week's value, so
+  a rolling window ("the last 7 days") makes every week overlap the one
+  before; never use one;
 - with `unit` "%" it answers 0 to 100, as the target is written;
 - a week with nothing due answers null, never a number made up for it
   (`coalesce(…, 0)` says everyone was missed, `case … then 100` says nobody
   was);
 - keep the person's sentence; a finish line also needs `due`.
 
-The tool reads the measure once and returns `value`. A null or an error means
-the query is wrong; fix it now, not later.
+What comes back:
+
+- `measured_at` set, `value` a number: it reads.
+- `measured_at` set, `value` null: nothing was due yet. That is right; leave
+  it.
+- `measured_at` null: the measure was not read, because it did not change.
+  See the number with `lemma pods owns`, or run the query with `pod_query`;
+  never set an unchanged measure again to make it read.
+- `problem`, or the call refused: the query is wrong. Fix it now.
 
 ## 7. Show it
 
 Always show the weekly number for the weeks you imported, as a widget over
-the work table, not only a sentence:
+the work table, not only a sentence. Group by the week each item's deadline
+fell in, counting only what was due, as the measure does:
 
 ```html
 <p id="f" style="font:500 16px/1.4 var(--lemma-widget-font,system-ui);margin:0 0 12px">…</p>
 <div id="v"></div>
 <script>
-lemma.query("select date_trunc('week', opened_at)::date as week, 1.0 * count(*) filter (where answered_in_time) / nullif(count(*) filter (where answered_at is not null or opened_at < now() - interval '1 day'), 0) as share from conversations group by 1 order by 1").then(function (rows) {
+lemma.query("select date_trunc('week', opened_at + interval '1 day')::date as week, 1.0 * count(*) filter (where answered_in_time) / nullif(count(*) filter (where answered_at is not null or opened_at < now() - interval '1 day'), 0) as share from conversations group by 1 order by 1").then(function (rows) {
   document.getElementById("f").textContent = "…the last four weeks against the target…";
   lemma.line("v", rows, { x: "week", y: "share", format: "pct" });
 }, function (e) { document.getElementById("f").textContent = e.message; });
@@ -161,9 +208,9 @@ Edit `/plan.md` with `pod_edit_file`. Keep its four sections. Each line is one
 thing that is true or done, and ends with who said it and when:
 `- Refunds over $300 go to Priya — Priya, Nov 7`. Sign with the person's
 first name, or the Lemma's name for a line you decided; never an email
-address or a role. Write only lines about
-things that exist here or that you just set up. Ask who holds what if you do
-not know, with choices drawn from `list_pod_members`.
+address or a role. Write only lines about things that exist here or that you
+just set up. Ask who holds what if you do not know, with choices drawn from
+`list_pod_members`.
 
 ## Finish
 

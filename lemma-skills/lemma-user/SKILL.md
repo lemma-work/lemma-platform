@@ -6,8 +6,8 @@ description: "Operate an existing Lemma (a pod in the CLI) as a person or agent:
 # Lemma User
 
 Inside a Lemma, reach tables and files through the `pod_*` tools: they return
-structured results, page through large ones, and nothing is cut off by a
-`| head`. The CLI commands here are for what those tools do not cover, and for
+structured results, and nothing is cut off by a `| head`; a folder of more
+than 500 entries is listed with `lemma files ls` instead. The CLI commands here are for what those tools do not cover, and for
 agents outside a Lemma (Claude Code, Codex) that only have the CLI. You are
 operating a Lemma that exists; changing its structure is the `lemma-builder`
 skill. In code and in the CLI a Lemma is a pod.
@@ -129,7 +129,8 @@ conversation; name the id whenever you mean one.
 
 The CLI has no Lemma-wide list. To see everything waiting on you across your
 conversations, longest-waiting first, use `pod.conversations.pending_interactions()`
-or `GET /pods/{pod_id}/conversations/pending-interactions`. Each item has the
+or `GET /pods/{pod_id}/conversations/pending-interactions` (50 at a time:
+follow `next_page_token` for the rest). Each item has the
 `conversation_id`, a `kind` (`QUESTION`, `APPROVAL`, `PERMISSION`), a one-line
 `summary`, and a `tool_call_id`, which is the approval id `approve` takes
 (`POST /pods/{pod_id}/conversations/{conversation_id}/approvals/{tool_call_id}/decision`

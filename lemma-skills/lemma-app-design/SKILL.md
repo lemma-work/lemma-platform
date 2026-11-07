@@ -46,10 +46,14 @@ review, approve, and correct that work. Three apps carry most of it:
   correct — from `records.list` filtered on the work table's status, oldest
   first, with the action on the row through `records.update`. Build it to
   shrink: empty is the finished state.
-- **What needs you.** `conversations.pendingInteractions()` lists the asks and
-  approvals waiting on the viewer, longest first; answer in place with
-  `conversations.approvals.resolve(conversation_id, tool_call_id, …)`. It is
-  the viewer's list, never the team's.
+- **What needs you.** Three sources, all the viewer's own, never the team's:
+  `conversations.pendingInteractions()` for questions and approvals in a chat
+  with an agent (answer in place with
+  `conversations.approvals.resolve(conversation_id, tool_call_id, …)`);
+  `channels.inbox(podId)` for questions an agent or a scheduled run asked them
+  in their own chat; and `workflows.runs.waitingAssignedToMe()` for workflow
+  forms parked on them. Showing only the first misses what scheduled runs
+  ask.
 
 ## Follow The Design Loop
 

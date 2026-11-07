@@ -104,20 +104,27 @@ read again on a regular sweep into its weekly history. It is the same analysis, 
 stricter rules because everyone sees the number it gives:
 
 - One read-only query that answers one row and one column.
-- Only shared tables (`enable_rls: false`). It is read for everyone alike, and
-  `set_what_you_own` refuses a measure over rows you cannot read in full.
+- Over shared tables (`enable_rls: false`). It is read for everyone alike, so
+  `set_what_you_own` refuses a measure over rows the person setting it cannot
+  read in full; a per-person table can be counted only when someone who
+  administers it sets the measure. Never turn row security off to measure.
 - The unit of work is a row. Count rows, not something worked out in chat.
-- A weekly bar counts this week (`>= date_trunc('week', now())`); a finish line
-  counts everything up to its due date.
-- Count only what is due: an item whose deadline has not passed is neither a
-  hit nor a miss yet.
+- A weekly bar with a deadline per item (a reply within a day, a review the
+  same day) counts each item in the week its deadline falls, and only once
+  that deadline has passed: an item still inside its window is neither a hit
+  nor a miss. A bar with no per-item deadline (posts published) counts what
+  happened this week; a finish line counts everything up to its due date.
+- Never a rolling window ("the last 7 days"): the number is kept as each
+  week's value, and rolling weeks overlap.
 - A share with `unit` "%" answers 0 to 100, as the target is written.
-- A week with nothing due answers null, never `coalesce(…, 0)`: zero says
-  everyone was missed.
+- A week with nothing due answers null, never `coalesce(…, 0)` (everyone
+  missed) or `case … then 100` (nobody missed).
 
 Before setting it, run the query with `pod_query` over each of the last few
-weeks and check the numbers against the rows. The tool reads it once and
-returns `value`; a null means the query is wrong.
+weeks and check the numbers against the rows. When `set_what_you_own` answers,
+`measured_at` null means it did not read the measure, because it did not
+change; `measured_at` set with `value` null means nothing was due; a
+`problem` means the query is wrong.
 
 ## Apply non-negotiable quality gates
 
