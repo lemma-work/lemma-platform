@@ -8,14 +8,14 @@
     "place": "Intercom",
     "brings": [
       "A table of every customer waiting",
-      "Drafts for the oldest, every weekday morning",
+      "Drafts for anyone waiting, twice a day",
       "The week's number in Pages, every Friday"
     ],
     "plan": {
       "how": [
         "Every customer who writes is a row in conversations, with when they wrote",
         "A reply counts once the customer has it, not when it is drafted",
-        "Anyone waiting 20 hours gets a draft for whoever holds them, every weekday morning"
+        "Anyone waiting 8 hours gets a draft for whoever holds them, at 9:00 and 17:00 every day, so nobody passes a day unseen"
       ],
       "never": [
         "Send anything to a customer without a person checking it first"
