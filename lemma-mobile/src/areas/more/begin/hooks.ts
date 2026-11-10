@@ -26,6 +26,8 @@ const setups = new Map<string, string>();
 
 /** How a start finished. */
 export interface Started extends StartedLemma {
+    /** The template's face (a cast name), or null for one started from words. */
+    face: string | null;
     /** False when the template's face could not be stored, so it kept its own. */
     faceSaved: boolean;
     needsModel: boolean;
@@ -59,7 +61,7 @@ export function useStartLemma(orgId: string | null) {
                 }
             }
             if (started.importId) setups.set(started.standsIn?.id ?? started.id, started.importId);
-            return { ...started, faceSaved, needsModel: await model };
+            return { ...started, face, faceSaved, needsModel: await model };
         },
         onSettled: () => {
             if (orgId) void cache.invalidateQueries({ queryKey: [key, "lemmas", orgId] });

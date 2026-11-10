@@ -79,7 +79,7 @@ export function NewLemmaScreen({ top }: {
                     lead mounts one here. */}
                 {top}
 
-                <Group label="What do you do?" foot="Pick your work. Each comes with what a Lemma can own there, and works with the tools you already use.">
+                <Group label="What do you do?" foot={shelf.isError ? undefined : "Pick your work. Each comes with what a Lemma can own there, and works with the tools you already use."}>
                     {shelf.isPending ? <Loading label="Reading what a Lemma can start from" /> : shelf.isError && isMissing(shelf.error) ? (
                         /* A server from before the shelf (#1194) has no templates and no one-call start. */
                         <View style={{ gap: 12, paddingVertical: 8 }}>
@@ -300,7 +300,7 @@ function Ending({ started }: { started: Started }) {
     const standIn = started.standsIn ?? null;
     return (
         <View style={{ gap: 14 }}>
-            <LemmaFace id={standIn?.id ?? started.id} icon={null} size={88} />
+            <LemmaFace id={standIn?.id ?? started.id} icon={started.faceSaved ? castIcon(started.face) : null} size={88} />
             <View style={{ gap: 6 }}>
                 <Text accessibilityRole="header" size={24} weight="medium" style={{ letterSpacing: -0.24, lineHeight: 29 }}>
                     {started.needsModel ? `${started.name} needs an AI model before it can reply.` : `${started.name} is setting itself up`}
@@ -325,7 +325,7 @@ function Part({ label, note, children }: { label: string; note?: string; childre
     return (
         <View style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
-                <Text size={13} tone={color.ink3} style={{ letterSpacing: 0.3 }}>{label.toUpperCase()}</Text>
+                <Text size={13} tone={color.ink3}>{label}</Text>
                 {note ? <Text size={12.5} tone={color.ink3} style={{ flex: 1 }} numberOfLines={1}>{note}</Text> : null}
             </View>
             {children}
