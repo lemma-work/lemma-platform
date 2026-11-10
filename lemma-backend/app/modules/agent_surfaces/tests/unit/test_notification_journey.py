@@ -63,6 +63,7 @@ from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
 )
+from app.modules.agent_surfaces.domain.external_accounts import account_of
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.member_pushes import MemberPushes, Push
 from app.modules.agent_surfaces.services.notification_delivery import Delivered
@@ -178,6 +179,7 @@ class AgentSide:
         metadata=None,
         channel_id=None,
         contact_id=None,
+        platform=None,
         **_,
     ):
         conversation = self.open(agent_name=agent_name, user_id=user_id, title=title)
@@ -185,6 +187,7 @@ class AgentSide:
             self.seats.seat(
                 conversation.id,
                 channel_id=channel_id,
+                platform=platform,
                 pod_id=pod_id,
                 agent_id=conversation.agent_id,
                 person=contact_id or user_id,
@@ -386,7 +389,7 @@ class World:
         channel_id = self.seats.channels.setdefault(
             ("DIRECT", pod_id, self.recipient_user_id), uuid4()
         )
-        self.seats.add(
+        chat = self.seats.add(
             Source(
                 id=uuid4(),
                 channel_id=channel_id,
@@ -398,11 +401,14 @@ class World:
                 external_user_id=_CHAT,
                 last_inbound_at=moment,
                 updated_at=moment,
-            )
+            ),
+            # In the surface's account, so their reply is heard at this place.
+            account=account_of(self.surface),
         )
         self.seats.seat(
             conversation.id,
             channel_id=channel_id,
+            platform=chat.platform,
             pod_id=pod_id,
             agent_id=agent_id,
             person=self.recipient_user_id,

@@ -181,10 +181,12 @@ async def open_surface_conversation(
     require_execute_grant: bool = True,
     contact_id: UUID | None = None,
     channel_id: UUID | None = None,
+    platform: str | None = None,
     for_notification: bool = False,
     started_on: str | None = None,
 ) -> SurfaceConversation:
-    """Start the conversation behind a surface thread.
+    """Start the conversation behind a surface thread, kept on ``platform``
+    in ``channel_id``.
 
     ``for_notification`` opens a thread the recipient owns, unchecked for
     permission to run the agent writing to them. ``contact_id`` opens a
@@ -201,6 +203,7 @@ async def open_surface_conversation(
         require_execute_grant=require_execute_grant,
         contact_id=contact_id,
         channel_id=channel_id,
+        platform=platform,
         origin=surface_origin(contact_id=contact_id, for_notification=for_notification),
         started_on=started_on,
     )
@@ -413,10 +416,14 @@ async def conversation_in_channel(
     agent_id: UUID | None,
     user_id: UUID,
     contact_id: UUID | None,
+    platform: str | None,
 ) -> UUID | None:
-    """The person's live conversation with this agent in the channel, if any.
+    """The person's live conversation with this agent on this platform, if any.
 
-    The person is the contact when ``contact_id`` is set -- whoever looks after
+    ``platform`` is the one they wrote on -- WhatsApp, email, Slack -- and
+    None their conversation kept in Lemma itself: each is a conversation of
+    its own, so nothing said on one is read or answered on another. The
+    person is the contact when ``contact_id`` is set -- whoever looks after
     them -- and otherwise the member ``user_id`` names. An archived
     conversation, or a sub-agent's, is never continued.
     """
@@ -425,6 +432,7 @@ async def conversation_in_channel(
         pod_id=pod_id,
         agent_id=agent_id,
         person_id=contact_id if contact_id is not None else user_id,
+        platform=platform,
     )
 
 
@@ -435,21 +443,30 @@ async def lock_person_in_channel(
     pod_id: UUID,
     agent_id: UUID | None,
     person_id: UUID,
+    platform: str | None,
 ) -> None:
-    """Serialise finding-or-opening one person's conversation in a channel
-    until this transaction ends: two first messages open one. The unique index
-    behind it is the backstop, not the plan."""
+    """Serialise finding-or-opening one person's conversation on a platform
+    of a channel until this transaction ends: two first messages open one. The
+    unique index behind it is the backstop, not the plan."""
     await ChannelConversations(uow).lock_person(
-        channel_id=channel_id, pod_id=pod_id, agent_id=agent_id, person_id=person_id
+        channel_id=channel_id,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        person_id=person_id,
+        platform=platform,
     )
 
 
 async def place_in_channel(
-    uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, channel_id: UUID
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    channel_id: UUID,
+    platform: str | None,
 ) -> None:
-    """Put a conversation that has no channel yet in this one."""
+    """Put a conversation that has no channel yet on this platform of one."""
     await ChannelConversations(uow).place(
-        conversation_id=conversation_id, channel_id=channel_id
+        conversation_id=conversation_id, channel_id=channel_id, platform=platform
     )
 
 

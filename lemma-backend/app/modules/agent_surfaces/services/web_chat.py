@@ -235,20 +235,11 @@ class WebChat:
         *,
         owner: UUID,
     ) -> tuple[UUID, UUID]:
-        """The visitor's conversation, found or opened on their first word, and
-        their contact.
-
-        The contact's one conversation with the widget's agent, in their
-        channel -- the one they may already have from another session, or from
-        a chat on another platform -- kept by the member looking after the
-        widget. Opened under the same lock, and in the same order, as an
-        inbound message opens one (``ConversationBinder``): authorized first,
-        since that commits, then locked, looked for again, and opened.
-
-        The session's own conversation is continued while it is in the
-        channel. One that lost its seat when this contact was merged into
-        another is not: the survivor's conversation there is the one to
-        continue, and the session's is placed again only when there is none.
+        """The visitor's conversation and contact: their web chat with the
+        widget's agent, across sessions, kept by the widget's member; opened as
+        an inbound message opens one (``ConversationBinder``). The session's own
+        is continued while in the channel; one a contact merge unseated is not:
+        the survivor's is, and the session's is placed again only if none.
         """
         contact_id = await _visitor_contact_id(uow, session)
         kept = session.conversation_id
@@ -297,6 +288,7 @@ class WebChat:
             agent_id=widget.agent_id,
             user_id=owner,
             contact_id=contact_id,
+            platform=place.platform,
         )
 
     async def _start_visitor_turn(
@@ -371,7 +363,10 @@ class WebChat:
             async def opening() -> UUID:
                 if kept is not None:
                     await agent_channels.place_in_channel(
-                        uow, conversation_id=kept, channel_id=place.channel_id
+                        uow,
+                        conversation_id=kept,
+                        channel_id=place.channel_id,
+                        platform=place.platform,
                     )
                     return kept
                 conversation = await agent_conversations.open_surface_conversation(
@@ -382,6 +377,7 @@ class WebChat:
                     title=f"{widget.name}: {name or 'visitor'}"[:255],
                     contact_id=contact_id,
                     channel_id=place.channel_id,
+                    platform=place.platform,
                     require_execute_grant=False,
                     started_on="web_widget",
                 )
@@ -393,6 +389,7 @@ class WebChat:
             return await find_or_open(
                 ChannelSeatsInDatabase(uow),
                 channel_id=place.channel_id,
+                platform=place.platform,
                 pod_id=widget.pod_id,
                 agent_id=widget.agent_id,
                 user_id=owner,

@@ -48,6 +48,7 @@ from app.modules.agent_surfaces.services.notification_delivery import (
 from app.modules.channels.contracts import (
     MembersHome,
     Place,
+    Source,
     SourceKind,
 )
 
@@ -153,10 +154,10 @@ class NotificationEgress:
     ) -> PlatformSent | None:
         """First contact by email, then remember the thread it opened.
 
-        The place is made *after* the send, not before, because some providers
-        only reveal the thread id once the mail is away — and a place for a
-        thread that does not exist would swallow the person's reply into a
-        conversation nothing ever delivered to.
+        The recipient's place on the inbox was made before, keyed by their
+        address (``conversation_for``); how to write to it is learnt *after*
+        the send, because some providers only reveal the thread id once the
+        mail is away.
         """
         assert channel.email_address is not None  # guarded by the caller
         thread = await self.egress.open_cold_email_thread(
@@ -196,65 +197,80 @@ class NotificationEgress:
         outbound: Outbound,
         message: str,
     ) -> None:
-        """The thread as a place in the recipient's channel, so their reply
-        continues this conversation.
+        """How to write to the recipient's email place from now: the thread
+        this mail opened, so their reply continues this conversation. Its
+        address is the thread's opening mail: nothing has been heard there yet.
+        """
+        source = await self._email_place(channel, outbound=outbound)
+        await self.seats.addressed_at(source.id, thread.last_event)
 
-        The place is keyed as their reply will arrive -- by their address --
-        and made only if new. Its address is the thread's opening
-        mail: nothing has been heard there yet.
+    async def _email_place(
+        self, channel: DeliveryChannel, *, outbound: Outbound
+    ) -> Source:
+        """The recipient's place on this inbox, made if new.
+
+        Keyed as their reply will arrive -- by their address, one place per
+        correspondent on the inbox, the thread kept on each line -- so it is
+        known before any mail is sent, and the conversation the mail is
+        written into is the one their reply continues. How to write to it
+        waits for the send (``_remember_thread``): some providers name the
+        thread only once the mail is away.
         """
         surface = channel.surface
         address = (channel.email_address or "").strip().lower() or None
-        source = await self.seats.source_for(
+        return await self.seats.source_for(
             pod_id=outbound.pod_id,
             place=Place(
                 surface_id=surface.id,
                 platform=surface.surface_type.value,
                 account=account_of(surface),
                 kind=SourceKind.PERSON,
-                # Keyed by the person, as their reply is heard: one place per
-                # correspondent on the inbox, the thread kept on each line.
                 external_channel_id=None,
                 external_user_id=address,
             ),
             home=MembersHome(user_id=outbound.recipient_user_id),
         )
-        await self.seats.addressed_at(source.id, thread.last_event)
 
     async def conversation_for(
         self, channel: DeliveryChannel, *, outbound: Outbound
     ) -> UUID | None:
         """The recipient's conversation this notification lands in.
 
-        Their one conversation with the sending agent in the channel the
-        message goes to -- the chat's, or for a cold email their DIRECT
-        channel -- opened if they have none. However cold, it is the same
-        conversation: the agent sees the question beside everything else
-        between them, and a reply, a tap on its buttons or a typed answer
-        reaches it.
+        Their conversation with the sending agent at the place the message
+        goes to -- their chat on the platform, or for an email their place on
+        the inbox -- opened if they have none. It is the conversation their
+        reply arrives in: a reply, a tap on its buttons or a typed answer
+        reaches the agent beside the question it answers, and nothing said at
+        their other places.
 
         Always a conversation the *recipient* owns, never the asker's, so their
         reply runs under their own permissions.
         """
         pod_id = outbound.pod_id
         recipient = outbound.recipient_user_id
-        channel_id = (
-            channel.source.channel_id
-            if channel.source is not None
-            else await self.seats.direct_channel(pod_id=pod_id, user_id=recipient)
-        )
+        place = channel.source
+        if place is None:
+            if not channel.email_address:
+                # No chat and no address: nowhere their reply could arrive.
+                return None
+            place = await self._email_place(channel, outbound=outbound)
+        channel_id = place.channel_id
 
         async def theirs(found: UUID) -> UUID:
             return found
 
         async def opening() -> UUID | None:
             return await self.open_conversation(
-                channel, outbound=outbound, channel_id=channel_id
+                channel,
+                outbound=outbound,
+                channel_id=channel_id,
+                platform=place.platform,
             )
 
         return await find_or_open(
             self.seats,
             channel_id=channel_id,
+            platform=place.platform,
             pod_id=pod_id,
             agent_id=channel.surface.agent_id,
             user_id=recipient,
@@ -290,6 +306,7 @@ class NotificationEgress:
         *,
         outbound: Outbound,
         channel_id: UUID,
+        platform: str,
     ) -> UUID | None:
         surface = channel.surface
         conversation = await agent_conversations.open_surface_conversation(
@@ -298,6 +315,7 @@ class NotificationEgress:
             agent_name=await self.egress.agent_name_for_surface(surface),
             user_id=outbound.recipient_user_id,
             channel_id=channel_id,
+            platform=platform,
             title=outbound.title,
             metadata={"channel_message_id": str(outbound.id)},
             require_execute_grant=False,

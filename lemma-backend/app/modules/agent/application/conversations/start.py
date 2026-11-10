@@ -114,6 +114,7 @@ class StartConversation:
         require_execute_grant: bool = True,
         contact_id: UUID | None = None,
         channel_id: UUID | None = None,
+        platform: str | None = None,
         origin: ConversationOrigin | None = None,
         parent_run_id: UUID | None = None,
         spawn_key: str | None = None,
@@ -130,7 +131,8 @@ class StartConversation:
         no request a client sends reaches it. Neither does the typed state
         after it: ``origin`` (a person's chat, or a project, when no opener
         says otherwise), a sub-agent's link to its parent, the ask another pod
-        opened it with, the call it belongs to. ``started_on`` is the platform
+        opened it with, the call it belongs to. ``platform`` is the one it is kept
+        on in ``channel_id`` (None: kept in Lemma itself). ``started_on`` is the platform
         (or ``web_widget``) a surface opened it on, for the started count.
 
         ``repository`` is the GitHub repository the person picked to work in.
@@ -187,6 +189,7 @@ class StartConversation:
             pod_id=pod_id,
             contact_id=contact_id,
             channel_id=channel_id,
+            platform=platform,
             organization_id=organization_id,
             agent_id=agent.id if agent else None,
             title=title,

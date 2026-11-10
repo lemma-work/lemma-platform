@@ -299,15 +299,23 @@ observer renders them on the surface and a submission resumes the run.
   `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH=true`: a number claimed by exactly one
   profile then routes to it, each such match is logged
   (`unverified_phone_match_used`). A verified owner always wins; a number claimed by several *unverified* profiles never matches.
-- **One conversation per person, agent and channel.** Every thread sits on a
+- **One conversation per person, agent and platform.** Every thread sits on a
   channel source (`services/channel_places.py`): a private chat on the member's
   `DIRECT` channel or the contact's `CONTACT` channel, keyed by the person
   rather than the address it arrived on; a group, a shared Slack channel or an
   email thread with others on it on a `GROUP` channel of its own. The binder
   (`services/conversation_binder.py`) continues the person's conversation with
-  the answering agent in that channel -- across another pool number, another of
-  the pod's bots, another platform, or a quiet week -- and opens one only for a
-  different agent or person. There is no inactivity reset; the per-surface
+  the answering agent on that source's platform in the channel
+  (`agent_conversations.platform`) -- across a new thread, another pool number,
+  another of the pod's bots on the platform, or a quiet week -- and opens one
+  for a different agent, person or platform. A member's WhatsApp chat, their
+  email with the pod's inbox and their chat in Lemma are three places of one
+  `DIRECT` channel and three conversations: what is asked on one is neither
+  read nor answered on another, and none waits behind another's run. A
+  notification lands in the recipient's conversation on the platform it is
+  sent on -- for email, their place on the inbox is made first -- which is
+  where their reply arrives. A web widget's chat (`WEB`) continues across a
+  visitor's sessions. There is no inactivity reset; the per-surface
   `dm_conversation_reset_after_hours` field is accepted and ignored. This is
   the only place a surface decides which conversation a message joins.
 - **Every line lands on the channel's timeline** (`services/channel_lines.py`),

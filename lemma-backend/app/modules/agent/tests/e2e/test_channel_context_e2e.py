@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects import postgresql
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -24,7 +25,11 @@ from app.core.infrastructure.db.uow_factory import (
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.infrastructure.db.channel_conversations import in_channel_query
-from app.modules.agent.contracts.channels import append_follow_up
+from app.modules.agent.contracts.channels import (
+    append_follow_up,
+    conversation_in_channel,
+    place_in_channel,
+)
 from app.modules.agent.contracts.channel_replies import visible_messages
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.value_objects import (
@@ -290,7 +295,11 @@ async def test_finding_a_persons_conversation_in_a_channel_uses_its_unique_index
     await scenario.create_org_with_pod(name_prefix="Plan")
     pod_id, owner = UUID(scenario.pod_id), UUID(scenario.owner_user["id"])
     query = in_channel_query(
-        channel_id=uuid4(), pod_id=pod_id, agent_id=None, person_id=owner
+        channel_id=uuid4(),
+        pod_id=pod_id,
+        agent_id=None,
+        person_id=owner,
+        platform="WHATSAPP",
     )
     sql = str(
         query.compile(
@@ -313,3 +322,61 @@ async def test_finding_a_persons_conversation_in_a_channel_uses_its_unique_index
         )
         await session.rollback()
     assert "uq_agent_conversations_channel_person" in plan, plan
+
+
+async def test_a_person_has_one_conversation_with_an_agent_on_each_platform(
+    scenario,
+):
+    """Their WhatsApp chat, their email and Lemma itself are three places of
+    their one DIRECT channel, and three conversations with the agent -- found
+    each by its platform. A second on the same platform is refused."""
+    first = await seeded_conversation(scenario)
+    others = []
+    for title in ("Email", "Lemma", "WhatsApp again"):
+        made = await scenario.owner_client.post(
+            f"/pods/{scenario.pod_id}/conversations",
+            json={"agent_name": first.agent_name, "title": title, "type": "CHAT"},
+        )
+        assert made.status_code == 201, made.text
+        others.append(UUID(made.json()["id"]))
+    on_email, in_lemma, duplicate = others
+    whatsapp, email = "WHATSAPP", "RESEND"
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        channel = await direct_channel(uow, pod_id=first.pod_id, user_id=first.user_id)
+        for conversation_id, place in (
+            (first.conversation_id, whatsapp),
+            (on_email, email),
+            (in_lemma, None),
+        ):
+            await place_in_channel(
+                uow,
+                conversation_id=conversation_id,
+                channel_id=channel.id,
+                platform=place,
+            )
+        await uow.commit()
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        found = {
+            place: await conversation_in_channel(
+                uow,
+                channel_id=channel.id,
+                pod_id=first.pod_id,
+                agent_id=first.agent_id,
+                user_id=first.user_id,
+                contact_id=None,
+                platform=place,
+            )
+            for place in (whatsapp, email, None, "TELEGRAM")
+        }
+    assert list(found.values()) == [first.conversation_id, on_email, in_lemma, None]
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        with pytest.raises(IntegrityError):
+            await place_in_channel(
+                uow,
+                conversation_id=duplicate,
+                channel_id=channel.id,
+                platform=whatsapp,
+            )
+            await uow.commit()

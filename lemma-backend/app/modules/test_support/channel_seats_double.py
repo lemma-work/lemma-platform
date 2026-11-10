@@ -51,7 +51,8 @@ from app.modules.channels.contracts.places import ReplyAddress
 type _PlaceKey = tuple[UUID, str, str]
 #: An account's unique key: its pod, platform, workspace and bot.
 type _AccountKey = tuple[UUID, str, str, str | None]
-type _SeatKey = tuple[UUID, UUID, UUID]
+#: ``(channel, platform, agent, person)``: platform None is Lemma itself.
+type _SeatKey = tuple[UUID, str | None, UUID, UUID]
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +145,7 @@ class InMemoryChannelSeats:
             self.seat(
                 conversation_id,
                 channel_id=source.channel_id,
+                platform=source.platform,
                 pod_id=source.pod_id,
                 agent_id=agent_id,
                 person=person,
@@ -157,10 +159,12 @@ class InMemoryChannelSeats:
         pod_id: UUID,
         agent_id: UUID | None,
         person: UUID,
+        platform: str | None = None,
     ) -> None:
-        """Give ``person`` -- a member's or a contact's id -- this conversation."""
+        """Give ``person`` -- a member's or a contact's id -- this conversation
+        on ``platform`` (None: in Lemma itself)."""
         agent = effective_agent_id(agent_id, pod_id=pod_id)
-        self._seated[(channel_id, agent, person)] = conversation_id
+        self._seated[(channel_id, platform, agent, person)] = conversation_id
         self.placed[conversation_id] = channel_id
 
     # -- ChannelSeats ----------------------------------------------------------
@@ -205,7 +209,13 @@ class InMemoryChannelSeats:
         )
 
     async def lock_person(
-        self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
+        self,
+        *,
+        channel_id: UUID,
+        pod_id: UUID,
+        agent_id: UUID | None,
+        person_id: UUID,
+        platform: str | None,
     ) -> None:
         self.locked.append(person_id)
 
@@ -217,9 +227,10 @@ class InMemoryChannelSeats:
         agent_id: UUID | None,
         user_id: UUID,
         contact_id: UUID | None,
+        platform: str | None,
     ) -> UUID | None:
         agent = effective_agent_id(agent_id, pod_id=pod_id)
-        return self._seated.get((channel_id, agent, contact_id or user_id))
+        return self._seated.get((channel_id, platform, agent, contact_id or user_id))
 
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:
         return self.channels.setdefault(("DIRECT", pod_id, user_id), uuid4())
