@@ -1,6 +1,7 @@
 import type {
     ConnectorChoice,
     ConnectorPlan,
+    ImportPlanOutcome,
     ImportStatus,
     PlanStep,
     StepAction,
@@ -177,6 +178,25 @@ export function contentsLine(groups: StepGroup[]): string {
     );
     if (parts.length < 2) return parts.join("");
     return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+}
+
+/** One line on what the install does with what the bundle's Lemma owned, or
+ *  null when there is nothing to say: it owned nothing, or this Lemma already
+ *  owns the same thing. */
+export function ownsLine(outcome: ImportPlanOutcome | null | undefined): string | null {
+    if (!outcome) return null;
+    switch (outcome.action) {
+        case "SET":
+            return "It will own: “" + outcome.sentence + "”";
+        case "KEEP":
+            return (
+                "Keeps what this Lemma already owns; the bundle's “" +
+                outcome.sentence +
+                "” is not set"
+            );
+        default:
+            return null;
+    }
 }
 
 /** What the installer has picked for one bundled connector.

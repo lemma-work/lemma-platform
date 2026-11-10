@@ -1,11 +1,18 @@
 """Plan builder diff logic against a fabricated bundle + a fake pod snapshot."""
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from app.modules.pod_bundle.domain.state import StepAction, StepKind, StepStatus
+from app.modules.pod.contracts.outcome import PodOutcome
+from app.modules.pod_bundle.domain.state import (
+    OutcomePlanAction,
+    StepAction,
+    StepKind,
+    StepStatus,
+)
 from app.modules.pod_bundle.infrastructure.plan_builder import PlanBuilder
 
 
@@ -487,3 +494,117 @@ async def test_a_bundle_declaring_more_steps_than_the_cap_is_refused(tmp):
     with pytest.raises(BundleInvalidError) as excinfo:
         await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
     assert str(MAX_IMPORT_PLAN_STEPS) in str(excinfo.value)
+
+
+# --- what the bundle's pod owned -----------------------------------------------
+
+_OWNS = {
+    "sentence": "Every lead hears back within two days.",
+    "kind": "week",
+    "target": 90,
+    "unit": "%",
+    "measure": "SELECT 90",
+}
+
+
+class _Owns:
+    """What the target pod owns now."""
+
+    def __init__(self, outcome=None):
+        self.outcome = outcome
+
+    async def owned(self):
+        return self.outcome
+
+
+def _bundle_owning(tmp: Path, outcome) -> Path:
+    root = tmp / "bundle"
+    _write(root / "pod.json", {"name": "CRM", "format_version": 2, "outcome": outcome})
+    return root
+
+
+async def _plan_owning(tmp: Path, outcome, owned=None):
+    builder = PlanBuilder(FakeExisting(), outcome=_Owns(owned))
+    return await builder.build_plan(bundle_root=_bundle_owning(tmp, outcome))
+
+
+async def test_a_pod_that_owns_nothing_is_planned_to_take_the_bundles_outcome(tmp):
+    plan = await _plan_owning(tmp, _OWNS)
+
+    assert plan.outcome is not None
+    assert plan.outcome.model_dump() == {
+        "sentence": _OWNS["sentence"],
+        "kind": "week",
+        "target": 90.0,
+        "unit": "%",
+        "due": None,
+        "has_measure": True,
+        "action": OutcomePlanAction.SET,
+    }
+    assert plan.warnings == []
+
+
+async def test_a_pod_that_owns_something_else_is_planned_to_keep_it(tmp):
+    mine = PodOutcome(sentence="The launch ships on time.", kind="week")
+
+    plan = await _plan_owning(tmp, _OWNS, owned=mine)
+
+    assert plan.outcome is not None
+    assert plan.outcome.action is OutcomePlanAction.KEEP
+    assert plan.outcome.sentence == _OWNS["sentence"]
+
+
+async def test_a_pod_that_owns_the_same_promise_is_planned_same_whatever_its_measure(
+    tmp,
+):
+    same = PodOutcome(**{**_OWNS, "measure": None})
+
+    plan = await _plan_owning(tmp, _OWNS, owned=same)
+
+    assert plan.outcome is not None
+    assert plan.outcome.action is OutcomePlanAction.SAME
+
+
+async def test_a_finish_line_carries_its_due_date(tmp):
+    line = {"sentence": "The launch ships.", "kind": "date", "due": "2026-12-01"}
+
+    plan = await _plan_owning(tmp, line)
+
+    assert plan.outcome is not None
+    assert plan.outcome.due == date(2026, 12, 1)
+    assert plan.outcome.has_measure is False
+
+
+@pytest.mark.parametrize(
+    "block",
+    [{"sentence": "Ships by spring.", "kind": "date"}, "ship it"],
+    ids=["finish-line-without-due", "not-an-object"],
+)
+async def test_an_outcome_block_that_does_not_read_is_a_warning_not_a_failure(
+    tmp, block
+):
+    plan = await _plan_owning(tmp, block)
+
+    assert plan.outcome is None
+    assert len(plan.warnings) == 1
+    assert plan.warnings[0].startswith("What this bundle's pod owns will not be set:")
+
+
+async def test_a_bundle_whose_pod_owned_nothing_plans_no_outcome(tmp):
+    plan = await PlanBuilder(FakeExisting(), outcome=_Owns()).build_plan(
+        bundle_root=_build_bundle(tmp)
+    )
+
+    assert plan.outcome is None
+    assert plan.warnings == []
+
+
+async def test_an_import_that_sets_no_outcome_plans_none(tmp):
+    """A template's import is planned without the target's outcome: its start
+    sets it, so the plan claims nothing about it."""
+    plan = await PlanBuilder(FakeExisting()).build_plan(
+        bundle_root=_bundle_owning(tmp, _OWNS)
+    )
+
+    assert plan.outcome is None
+    assert plan.warnings == []

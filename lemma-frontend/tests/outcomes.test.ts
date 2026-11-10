@@ -263,6 +263,16 @@ test("saving an unchanged plan onto its file writes the file back as it was", ()
     assert.equal(serializePlan(parsePlan(WRITTEN), WRITTEN), WRITTEN);
 });
 
+test("a plan with nothing left for its front matter saves with no empty block, and keeps every line", () => {
+    const plan = parsePlan(WRITTEN);
+    const prose = { ...plan, outcome: "", kind: null, target: null, due: null, measure: null, unit: null };
+    const saved = serializePlan(prose, WRITTEN);
+    assert.ok(!saved.startsWith("---"), saved);
+    assert.ok(!saved.includes("measure:"), saved);
+    assert.ok(saved.startsWith("## What must be true"), saved);
+    assert.deepEqual(parsePlan(saved).sections, plan.sections);
+});
+
 test("editing a line keeps what the parser does not read, and changes only that line", () => {
     const plan = parsePlan(WRITTEN);
     const how = [...plan.sections.how];

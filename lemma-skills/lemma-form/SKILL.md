@@ -16,7 +16,7 @@ table the pod has **opened to people outside**. Two things, always in this order
    app you design. Customising the look changes nothing about what can be written.
 
 Responses are the table's rows. Anything that reacts to a new row — a workflow
-started on insert, a schedule, the teammate — reacts to a response.
+started on insert, a schedule, the Lemma's own agent — reacts to a response.
 
 ## 1. The table
 
