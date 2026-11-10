@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import type { PickedFile } from "../../data/io";
 
@@ -6,7 +7,12 @@ import type { PickedFile } from "../../data/io";
  *
  *  The library is a native module, so it is loaded only when asked for: a
  *  build of the app without it still attaches from the camera, the system's
- *  photo picker and files, and says nothing about what it lacks. */
+ *  photo picker and files, and says nothing about what it lacks.
+ *
+ *  Never on Android. Reading the library there takes READ_MEDIA_IMAGES,
+ *  which Google Play allows only to apps whose purpose is photos, so the
+ *  Android build blocks it (app.json) and attaches photos through the
+ *  system's picker, which needs no leave at all. */
 
 type Library = typeof import("expo-media-library/legacy");
 
@@ -14,6 +20,10 @@ let loaded: Library | null | undefined;
 
 function library(): Library | null {
     if (loaded !== undefined) return loaded;
+    if (Platform.OS === "android") {
+        loaded = null;
+        return loaded;
+    }
     try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         loaded = require("expo-media-library/legacy") as Library;

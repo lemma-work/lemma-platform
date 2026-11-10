@@ -129,7 +129,7 @@ From `design-v2.md` (approved 2026-10-24): "Chat" and "Files in a chat".
 | Questions with large choice buttons | `thread/interaction.tsx` | done |
 | Widgets and tables grow to the whole screen from their card, and shrink back | `thread/resources.tsx`, `ui/files-in-chat/grow.tsx` | done |
 | A document, a page or any file grows into Files' reader as it opens, and shrinks back on return | `ui/files-in-chat/grow.tsx` (`useGrowInto`) | done |
-| Attach tray: + turns into ×; camera, the latest photos one tap each, files | `ui/files-in-chat/attach-tray.tsx`, `recent-photos.ts` | done (the latest photos need the APK with `expo-media-library`; without it the tray offers the photo picker) |
+| Attach tray: + turns into ×; camera, the latest photos one tap each, files | `ui/files-in-chat/attach-tray.tsx`, `recent-photos.ts` | done (the latest photos on iOS only. Android attaches through the system's photo picker, and its build blocks READ_MEDIA_IMAGES, which Google Play allows only to apps whose purpose is photos) |
 | Photos as a grid (one large, two small, "+N"); whole-screen viewer: swipe, pinch, "1 of 5", share, swipe down | `ui/files-in-chat/photo-grid.tsx`, `photo-viewer.tsx` | done |
 | Documents as cards: first page, name, kind · pages · size | `ui/files-in-chat/document-card.tsx` | done (the first page is the server's render, `pages/page_0001.jpg`) |
 | Spreadsheets and CSV: first rows and the row count | `ui/files-in-chat/sheet-preview.tsx` | done (a CSV is read here; a spreadsheet from the server's converted markdown) |

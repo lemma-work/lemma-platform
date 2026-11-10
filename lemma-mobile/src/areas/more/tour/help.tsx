@@ -19,7 +19,8 @@ import { askForTour } from "./bus";
 import { GUIDE_PLACES, guideFor, guideTitle, isGuidePlace, type GuidePlace } from "./model";
 
 /** Help, on the account screen (the web's help menu): the tour again, how
- *  each place works, and the two pages on the web that explain the rest.
+ *  each place works, the two pages on the web that explain the rest, and
+ *  the server's privacy policy and terms.
  *  The tour runs over Home, so asking for it goes back to Home, past
  *  whatever else is open, and starts once Home is in front. */
 export function HelpGroup() {
@@ -39,7 +40,11 @@ export function HelpGroup() {
                 <Row key={place} label={guideTitle(place)} onPress={() => router.push(moreRoutes.guide(place) as never)} />
             ))}
             <Row label="Documentation" value={server.web.replace(/^https?:\/\//, "")} onPress={() => void WebBrowser.openBrowserAsync(server.web + "/docs")} />
-            <Row label="What’s new" onPress={() => void WebBrowser.openBrowserAsync(server.web + "/changelog")} last />
+            <Row label="What’s new" onPress={() => void WebBrowser.openBrowserAsync(server.web + "/changelog")} />
+            {/* The server's own policies, as the web's footer links them.
+                Both stores want them reachable from inside the app. */}
+            <Row label="Privacy" onPress={() => void WebBrowser.openBrowserAsync(server.web + "/privacy")} />
+            <Row label="Terms" onPress={() => void WebBrowser.openBrowserAsync(server.web + "/tos")} last />
         </Group>
     );
 }
