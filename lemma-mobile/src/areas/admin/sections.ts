@@ -28,7 +28,7 @@ export interface SettingsEntry {
 
 /** The account's and the organization's settings, in the web's order. */
 export const SETTINGS: readonly SettingsEntry[] = [
-    { id: "profile", label: "Profile", title: "Profile", hint: "Your name, time zone and mobile number", group: "you" },
+    { id: "profile", label: "Profile", title: "Profile", hint: "Your name, time zone, mobile number and Telegram", group: "you" },
     { id: "usage", label: "Usage", title: "Your usage", hint: "What you have spent, and what you may spend", group: "you" },
     { id: "plan", label: "Plan", title: "Your plan", hint: "What you pay for", group: "you", billing: true },
     { id: "people", label: "People", title: "People", hint: "Who is in this organization", group: "organization" },

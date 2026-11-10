@@ -8,11 +8,13 @@ import { Loading } from "../../ui/chrome";
 import { PersonFace } from "../../ui/face";
 import { Icon } from "../../ui/icons";
 import { Button, Press } from "../../ui/press";
+import { Sheet } from "../../ui/sheet";
 import { Num, Text } from "../../ui/text";
 import { color, TOUCH } from "../../ui/tokens";
 import { Choices, Field, Label, Rule, SaidBy, SearchField, Segments, SwitchRow, TextAction, Trouble } from "./bits";
 import { Header } from "./chat-view";
 import { chatKeys, keepChannel, refreshLists, useAbilities, useAgents, useChannel, useChatsSource, useMyId, useOnline, usePeople } from "./hooks";
+import { LinkTelegramSteps } from "./identity-link";
 import { agoSaid, answersSharedSaid, glyphOf, isForbidden, peopleRows } from "./model";
 import { chatsRoutes, type DetailsTab } from "./routes";
 import { SourceSettingsView } from "./sources-view";
@@ -325,6 +327,16 @@ function People({ podId, channel, may, lemmaName }: { podId: string; channel: Ch
     });
     const join = useMutation({ mutationFn: () => source.join(podId, channel.id), onSuccess: (saved) => keepChannel(cache, key, podId, saved) });
     const group = channel.kind === "GROUP";
+    /* Somebody the Lemma took for a stranger in a Telegram group may be the
+       reader on Telegram: "This is me" proves it through the group's bot. */
+    const telegram = group ? channel.places.find((place) => place.platform === "TELEGRAM" && place.surfaceId) ?? null : null;
+    const [mine, setMine] = useState<{ contactId: string; seenAs: string } | null>(null);
+    const proved = () => {
+        setMine(null);
+        /* A proved account becomes the reader here: its seat and what it said. */
+        reread();
+        void cache.invalidateQueries({ queryKey: chatKeys.lines(key, podId, channel.id) });
+    };
     const problem = add.error ?? role.error ?? remove.error ?? join.error;
     const rows = peopleRows(people.flatMap((one) => (one.person.id ? [{ userId: one.person.id, name: one.person.name ?? personName(one.person, me), email: null, role: one.role }] : [])), online, me);
     return (
@@ -371,11 +383,17 @@ function People({ podId, channel, may, lemmaName }: { podId: string; channel: Ch
                                 {one.you || may.manage ? <TextAction label={one.you ? "Leave" : "Remove"} tone={color.amber} disabled={remove.isPending} onPress={() => remove.mutate(one.userId)} /> : null}
                             </View>
                         ) : null}
+                        {telegram && contact ? <TextAction label="This is me" tone={color.ink} onPress={() => setMine({ contactId: one.userId, seenAs: one.name })} /> : null}
                     </View>
                 );
             })}
             {rows.length === 0 && needle ? <Text size={14} tone={color.ink2}>Nobody in it matches.</Text> : null}
             <Trouble>{problem ? (isForbidden(problem) ? "Only who started this chat, or an editor, can change who is in it." : problemOf(problem, "Couldn’t do that.")) : null}</Trouble>
+            <Sheet open={Boolean(mine && telegram?.surfaceId)} onClose={proved} title="Link your Telegram">
+                {mine && telegram?.surfaceId ? (
+                    <LinkTelegramSteps key={mine.contactId} podId={podId} podName={lemmaName} surfaceId={telegram.surfaceId} contactId={mine.contactId} seenAs={mine.seenAs} onClose={proved} />
+                ) : null}
+            </Sheet>
         </View>
     );
 }

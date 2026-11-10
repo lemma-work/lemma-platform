@@ -11,6 +11,7 @@ import type { VerifyTransaction } from "./source";
 import { VERIFY_POLL_MS, reasonOf, secondsLeft } from "./verify";
 import { verificationMessage } from "@web/session/mobile-number";
 import { displayName } from "@web/session/profile-edit";
+import type { MyTelegramSurfaces } from "@web/session/telegram-bots";
 
 /** This part's reads and writes, through react-query. Key every query with
  *  `adminKey(useCacheKey(), "account", …)`. */
@@ -52,6 +53,54 @@ export function useSaveProfile() {
 export function useDeleteAccount() {
     const source = useAccountSource();
     return useMutation({ mutationFn: (confirmEmail: string) => source.deleteAccount(confirmEmail) });
+}
+
+/** The person's Telegram bots across every Lemma: whether there is anything
+ *  to link an account through. */
+export function useMyTelegramSurfaces() {
+    const source = useAccountSource();
+    const key = useCacheKey();
+    return useQuery({ queryKey: adminKey(key, "account", "telegram-surfaces"), queryFn: () => source.myTelegramSurfaces(), staleTime: 60_000 });
+}
+
+/** Which bot each is, read once the link sheet opens. */
+export function useTelegramBots(mine: MyTelegramSurfaces | null) {
+    const source = useAccountSource();
+    const key = useCacheKey();
+    return useQuery({
+        queryKey: adminKey(key, "account", "telegram-bots", mine?.surfaceIds ?? []),
+        queryFn: () => source.telegramBots(mine!),
+        enabled: Boolean(mine),
+        staleTime: 60_000,
+    });
+}
+
+/** The Telegram accounts the person proved. Read whenever the profile
+ *  opens: one may have been proved from a group since. */
+export function useTelegramAccounts() {
+    const source = useAccountSource();
+    const key = useCacheKey();
+    return useQuery({ queryKey: adminKey(key, "account", "telegram-accounts"), queryFn: () => source.telegramAccounts() });
+}
+
+/** Unlink one, then read the list again: on a failure too, since one
+ *  already unlinked elsewhere is refused, and its row should go rather
+ *  than stay to be tried again. */
+export function useUnlinkTelegram() {
+    const source = useAccountSource();
+    const key = useCacheKey();
+    const cache = useQueryClient();
+    return useMutation({
+        mutationFn: (id: string) => source.unlinkTelegramAccount(id),
+        onSettled: () => void cache.invalidateQueries({ queryKey: adminKey(key, "account", "telegram-accounts") }),
+    });
+}
+
+/** After a link sheet closes: the list again. */
+export function useRereadTelegramAccounts() {
+    const key = useCacheKey();
+    const cache = useQueryClient();
+    return useCallback(() => void cache.invalidateQueries({ queryKey: adminKey(key, "account", "telegram-accounts") }), [cache, key]);
 }
 
 /** Whether this server verifies numbers over WhatsApp. */

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
-import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { useCacheKey, useMe } from "../../data/hooks";
 import { liveAvailable, podLive, pollWhenDown, useLapsing, useLiveStatus, useLiveTopic } from "../../live/pod-live";
 import type { LiveStatus } from "@web/live/socket";
 import { useArea } from "../use-area";
 import { EVERYTHING, readAbilities, type Abilities } from "@web/channels/abilities";
 import { HeldUpdates } from "@web/channels/held-updates";
+import { LINK_POLL_MS, linkStep, type TelegramAccount } from "@web/channels/identity-link-model";
 import {
     answeringStep,
     mergeChannel,
@@ -68,6 +69,10 @@ export const chatKeys = {
     columns: (key: string, podId: string, table: string) => [key, "chats", podId, "columns", table] as const,
     ack: (key: string, podId: string) => [key, "chats", podId, "ack"] as const,
     bot: (key: string, podId: string, name: string) => [key, "chats", podId, "bot", name] as const,
+    grants: (key: string, podId: string, channelId: string) => [key, "chats", podId, "grants", channelId] as const,
+    grantable: (key: string, podId: string) => [key, "chats", podId, "grantable"] as const,
+    grantColumns: (key: string, podId: string, table: string) => [key, "chats", podId, "grant-columns", table] as const,
+    identityLink: (key: string, podId: string, code: string | null) => [key, "chats", podId, "identity-link", code] as const,
 };
 
 /** How often an open chat is read again over REST: only while the live
@@ -233,6 +238,92 @@ export function useSurfaces(podId: string) {
     const source = useChatsSource();
     const key = useCacheKey();
     return useQuery({ queryKey: chatKeys.surfaces(key, podId), queryFn: () => source.surfaces(podId), staleTime: 60_000 });
+}
+
+/** The tables a group's people outside the Lemma may read or add to (the
+ *  web's `TableGrants`). */
+export function useTableGrants(podId: string, channelId: string) {
+    const source = useChatsSource();
+    const key = useCacheKey();
+    return useQuery({ queryKey: chatKeys.grants(key, podId, channelId), queryFn: () => source.tableGrants(podId, channelId), staleTime: 30_000 });
+}
+
+/** The tables there are to give, read while a grant is being made. */
+export function useGrantableTables(podId: string, enabled: boolean) {
+    const source = useChatsSource();
+    const key = useCacheKey();
+    return useQuery({ queryKey: chatKeys.grantable(key, podId), queryFn: () => source.grantableTables(podId), enabled, staleTime: 60_000 });
+}
+
+export function useGrantableColumns(podId: string, table: string) {
+    const source = useChatsSource();
+    const key = useCacheKey();
+    return useQuery({ queryKey: chatKeys.grantColumns(key, podId, table), queryFn: () => source.grantableColumns(podId, table), enabled: Boolean(table), staleTime: 60_000 });
+}
+
+/** Proving a Telegram account is the reader's (the web's `LinkTelegramSteps`):
+ *  a code made once, as this opens, on the bot at `surfaceId`; asked after
+ *  every two seconds until it is opened in Telegram, and at once when the
+ *  person comes back to the app; then confirmed or declined. Nothing is
+ *  linked before the confirm. */
+export function useIdentityLink({ podId, surfaceId, contactId, onLinked, onDeclined }: {
+    podId: string;
+    surfaceId: string;
+    contactId?: string;
+    onLinked?: (account: TelegramAccount) => void;
+    onDeclined?: () => void;
+}) {
+    const source = useChatsSource();
+    const key = useCacheKey();
+    const [link, setLink] = useState<{ code: string; url: string } | null>(null);
+    const [linked, setLinked] = useState<TelegramAccount | null>(null);
+    const make = useMutation({
+        mutationFn: () => source.identityLink(podId, surfaceId, contactId),
+        onSuccess: (made) => setLink({ code: made.code, url: made.url }),
+    });
+    const took = useRef(false);
+    const mint = make.mutate;
+    useEffect(() => {
+        if (took.current) return;
+        took.current = true;
+        mint();
+    }, [mint]);
+    const status = useQuery({
+        queryKey: chatKeys.identityLink(key, podId, link?.code ?? null),
+        queryFn: () => source.identityLinkStatus(podId, link!.code),
+        enabled: Boolean(link) && !linked,
+        refetchInterval: (query) => ((query.state.data?.state ?? "WAITING") === "WAITING" ? LINK_POLL_MS : false),
+    });
+    /* Back from Telegram is the moment it has usually just been opened. */
+    const refetch = status.refetch;
+    const waiting = Boolean(link) && !linked && (status.data?.state ?? "WAITING") === "WAITING";
+    useEffect(() => {
+        if (!waiting) return;
+        const listening = AppState.addEventListener("change", (state) => { if (state === "active") void refetch(); });
+        return () => listening.remove();
+    }, [waiting, refetch]);
+    const tell = useRef({ onLinked, onDeclined });
+    tell.current = { onLinked, onDeclined };
+    const confirm = useMutation({
+        mutationFn: () => source.confirmIdentityLink(podId, link!.code),
+        onSuccess: (account) => { setLinked(account); tell.current.onLinked?.(account); },
+    });
+    const decline = useMutation({
+        mutationFn: () => source.declineIdentityLink(podId, link!.code),
+        onSuccess: () => tell.current.onDeclined?.(),
+    });
+    const step = linkStep(status.data, Boolean(linked));
+    return {
+        link,
+        step,
+        account: status.data?.state === "OPENED" ? status.data.account : null,
+        linked,
+        problem: make.error ?? confirm.error ?? decline.error,
+        confirm: () => confirm.mutate(),
+        confirming: confirm.isPending,
+        decline: () => decline.mutate(),
+        declining: decline.isPending,
+    };
 }
 
 /** What the reader may do in the Lemma's chats (`podPermissions.me`). The

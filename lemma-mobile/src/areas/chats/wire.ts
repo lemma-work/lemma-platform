@@ -111,3 +111,14 @@ export function mineRequest(change: MineChange): Record<string, unknown> {
     if (change.mutedUntil !== undefined) body.muted_until = change.mutedUntil;
     return body;
 }
+
+/** The tables a group can be given (the web's picker): those read whole,
+ *  never one that is read one row per person. */
+export function grantableNames(tables: readonly { name: string; enable_rls?: boolean | null }[]): string[] {
+    return tables.filter((table) => !table.enable_rls).map((table) => table.name);
+}
+
+/** A table's own columns, the ones a grant can name: not the system's. */
+export function ownColumns(columns: readonly { name: string; system?: boolean | null }[]): string[] {
+    return columns.filter((column) => !column.system).map((column) => column.name);
+}

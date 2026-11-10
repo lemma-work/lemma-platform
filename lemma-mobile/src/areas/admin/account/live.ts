@@ -1,10 +1,13 @@
 import type { LiveContext } from "../../context";
 import type { AccountSource, VerifyStatus } from "./source";
+import { botChoices, readBots, readLinkedAccounts, readMine } from "@web/session/telegram-bots";
 
 /** The same calls the web makes: `users.current` and `users.upsertProfile`
- *  for the profile, and the WhatsApp verification routes, which are kept
+ *  for the profile, the WhatsApp verification routes, which are kept
  *  out of the API's schema and so are reached as plain requests
- *  (`session/use-mobile-verification.ts`). */
+ *  (`session/use-mobile-verification.ts`), and `userSurfaces` for the
+ *  Telegram accounts and the bots to prove one through
+ *  (`session/link-telegram.tsx`, `telegram-accounts.ts`). */
 export function accountLive(context: LiveContext): AccountSource {
     const client = () => context.client();
     return {
@@ -47,6 +50,31 @@ export function accountLive(context: LiveContext): AccountSource {
         },
         async deleteAccount(confirmEmail) {
             await client().users.deleteAccount({ confirm_email: confirmEmail });
+        },
+        async myTelegramSurfaces() {
+            return readMine(await client().userSurfaces.list());
+        },
+        async telegramBots(mine) {
+            const wanted = new Set(mine.surfaceIds);
+            /* A Lemma that will not say is left out rather than failing the
+               rest; only when none answers is that the answer. */
+            const read = await Promise.allSettled(mine.podIds.map(async (podId) => {
+                const pod = context.client(podId);
+                const [row, listed] = await Promise.all([
+                    pod.pods.get(podId).catch(() => null),
+                    pod.podSurfaces.list(podId, { platform: "TELEGRAM", limit: 30 }),
+                ]);
+                return readBots(listed.items ?? [], wanted, { id: podId, name: row?.name?.trim() || "A Lemma" });
+            }));
+            const failed = read.find((one) => one.status === "rejected");
+            if (failed && read.every((one) => one.status === "rejected")) throw failed.reason;
+            return botChoices(read.flatMap((one) => (one.status === "fulfilled" ? one.value : [])), mine.preferred);
+        },
+        async telegramAccounts() {
+            return readLinkedAccounts(await client().userSurfaces.telegramAccounts());
+        },
+        async unlinkTelegramAccount(id) {
+            await client().userSurfaces.unlinkTelegramAccount(id);
         },
     };
 }

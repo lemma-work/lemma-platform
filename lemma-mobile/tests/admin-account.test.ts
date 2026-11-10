@@ -6,6 +6,8 @@ import { deletionRefusal } from "@web/session/account-deletion";
 import { clock, isVerifiedNumber, phoneProblems, reasonOf, secondsLeft, unknownSender, verifyBlocker } from "../src/areas/admin/account/verify";
 import { changes, draftOf } from "@web/session/profile-edit";
 import { dayToDate, isoDay, sameZone, spokenDay, zoneChoices, zoneCity, zoneMatches, zoneRegion } from "../src/areas/admin/account/zones";
+import { LINK_HINT, botToOpen, linkButton, linkedRow, telegramShown } from "../src/areas/admin/account/link-telegram";
+import { botDetail, botTitle, type BotChoice } from "@web/session/telegram-bots";
 
 /** Your profile (PARITY.md, F): the time zones offered, the dates, and
  *  proving a mobile number over WhatsApp. */
@@ -139,5 +141,92 @@ describe("deleting the account", () => {
         const asked = accountSample().deleteAccount("ada@acme.example").catch((problem: unknown) => problem);
         await vi.runAllTimersAsync();
         expect(deletionRefusal(await asked)).toMatchObject({ message: "Sample data has no account to delete. Sign in to delete yours." });
+    });
+});
+
+describe("Telegram on the profile", () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    const choice = (surfaceId: string, shared: boolean, spaces: string[], handle = "@example_bot"): BotChoice =>
+        ({ surfaceId, podId: "pod-" + surfaceId, podName: spaces[0], handle, shared, spaces });
+
+    it("shows nothing until the accounts are read, then only with a bot, an account or a failure", () => {
+        expect(telegramShown({ pending: true, unread: false, bots: 2, linked: 1 })).toBe(false);
+        expect(telegramShown({ pending: false, unread: false, bots: 0, linked: 0 })).toBe(false);
+        expect(telegramShown({ pending: false, unread: false, bots: 1, linked: 0 })).toBe(true);
+        expect(telegramShown({ pending: false, unread: false, bots: 0, linked: 1 })).toBe(true);
+        expect(telegramShown({ pending: false, unread: true, bots: 0, linked: 0 })).toBe(true);
+    });
+
+    it("says each linked account on one line, and the button as there are some", () => {
+        const now = new Date(2026, 10, 10, 15, 0);
+        expect(linkedRow({ id: "a", name: "Ada L.", provedAt: new Date(2026, 10, 10, 9, 0).toISOString() }, now)).toEqual({ label: "Ada L.", value: "linked today" });
+        expect(linkedRow({ id: "b", name: null, provedAt: null }, now)).toEqual({ label: "A Telegram account", value: null });
+        expect(linkButton(0)).toBe("Link Telegram");
+        expect(linkButton(2)).toBe("Link another account");
+        expect(LINK_HINT).not.toMatch(/\b(space|channel|line|place)s?\b/i);
+    });
+
+    it("goes straight to the link with one bot, and otherwise to the one picked, the first until then", () => {
+        const shared = choice("s-shared", true, ["Support", "Renewals"]);
+        const own = choice("s-own", false, ["Launch"], "@launch_example_bot");
+        expect(botToOpen([own], null, null)).toEqual({ through: own, selected: own });
+        expect(botToOpen([shared, own], null, null)).toEqual({ through: null, selected: shared });
+        expect(botToOpen([shared, own], "s-own", null)).toEqual({ through: null, selected: own });
+        expect(botToOpen([shared, own], "s-own", own).through).toBe(own);
+        expect(botToOpen([], null, null)).toEqual({ through: null, selected: null });
+    });
+
+    it("reads the bots live from /surfaces/me and each Lemma's own list, past a Lemma that will not say", async () => {
+        const client = (podId?: string) => ({
+            userSurfaces: {
+                list: async () => ({ groups: [{ platform: "TELEGRAM", default_surface_id: null, surfaces: [{ id: "tg-a", pod_id: "pod-a" }, { id: "tg-b", pod_id: "pod-b" }, { id: "tg-c", pod_id: "pod-c" }] }] }),
+                telegramAccounts: async () => ({ items: [{ id: "acct-1", name: "Ada L.", proved_at: "2026-11-10T09:00:00Z" }] }),
+            },
+            pods: { get: async () => ({ name: podId === "pod-a" ? "Support" : "Launch" }) },
+            podSurfaces: {
+                list: async (pod: string, options: { platform?: string }) => {
+                    expect(options.platform).toBe("TELEGRAM");
+                    if (pod === "pod-c") throw new Error("Not yours");
+                    return pod === "pod-a"
+                        ? { items: [{ id: "tg-a", status: "ACTIVE", reach: { handle: "@lemma_example_bot" } }] }
+                        : { items: [{ id: "tg-b", status: "ACTIVE", credential_mode: "CUSTOM", surface_identity_username: "@launch_example_bot" }] };
+                },
+            },
+        });
+        const account = accountLive({ client } as unknown as LiveContext);
+        const mine = await account.myTelegramSurfaces();
+        expect(mine).toEqual({ surfaceIds: ["tg-a", "tg-b", "tg-c"], podIds: ["pod-a", "pod-b", "pod-c"], preferred: null });
+        const bots = await account.telegramBots(mine);
+        expect(bots.map((one) => [botTitle(one), botDetail(one)])).toEqual([
+            ["Lemma’s bot", "@lemma_example_bot · Support"],
+            ["@launch_example_bot", "Launch’s own bot"],
+        ]);
+        expect(await account.telegramAccounts()).toEqual([{ id: "acct-1", name: "Ada L.", provedAt: "2026-11-10T09:00:00Z" }]);
+    });
+
+    it("unlinks through the API's own call", async () => {
+        const sent: string[] = [];
+        const client = { userSurfaces: { unlinkTelegramAccount: async (id: string) => { sent.push(id); } } };
+        await accountLive({ client: () => client } as unknown as LiveContext).unlinkTelegramAccount("acct-1");
+        expect(sent).toEqual(["acct-1"]);
+    });
+
+    it("is acted out in the sample: a bot to pick, and an old account to unlink", async () => {
+        vi.useFakeTimers();
+        const sample = accountSample();
+        const read = async <T,>(asked: Promise<T>) => { await vi.runAllTimersAsync(); return asked; };
+        const mine = await read(sample.myTelegramSurfaces());
+        const bots = await read(sample.telegramBots(mine));
+        expect(bots.map((one) => [botTitle(one), botDetail(one)])).toEqual([
+            ["Lemma’s bot", "@lemma_sample_bot · Support and Renewals"],
+            ["@launch_acme_bot", "Launch’s own bot"],
+        ]);
+        const accounts = await read(sample.telegramAccounts());
+        expect(accounts.map((one) => one.name)).toEqual(["Ada (old phone)"]);
+        await read(sample.unlinkTelegramAccount(accounts[0].id));
+        expect(await read(sample.telegramAccounts())).toEqual([]);
+        const again = sample.unlinkTelegramAccount(accounts[0].id).catch((problem: unknown) => problem);
+        expect(await read(again)).toMatchObject({ statusCode: 404 });
     });
 });
