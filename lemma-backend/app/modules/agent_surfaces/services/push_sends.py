@@ -8,8 +8,11 @@ push whose lines the member has read in the channel by then is ``SKIPPED``
 (``IN_APP``); one to a member who had the app open in the last
 ``PRESENT_FOR_SECONDS`` is held until its newest line is that old
 (``FOLDED``), and goes then if they still have not read it -- having the app
-open is not reading this channel. A platform asked that took none of it ends as
-its failure says (``delivery_outcome.of_send``) -- so a push that may be on
+open is not reading this channel. An agent's paused question is held the same
+way, though it asks them: it is on the card of the chat it was asked in too,
+which they may be answering right now. A push that is only a question
+answered by then is ``SKIPPED`` (``IN_APP``). A platform asked that took none
+of it ends as its failure says (``delivery_outcome.of_send``) -- so a push that may be on
 their screen is not tried again -- and nowhere to reach them is ``SKIPPED``
 (``UNREACHABLE``): it waits in Lemma.
 """
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -34,6 +38,8 @@ from app.modules.channels.contracts import (
     Delivery,
     DeliveryReasonCode as Code,
     Principal,
+    Question,
+    QuestionAsker,
     member_of,
     read_upto,
 )
@@ -46,6 +52,11 @@ type PushesFor = Callable[[SqlAlchemyUnitOfWork], MemberPushes]
 PRESENT_FOR_SECONDS = 5 * 60
 
 READ_IN_APP = "They read it in the app before it was pushed."
+ANSWERED_FIRST = "It was answered before it was pushed."
+ASK_HELD_WHILE_IN_APP = (
+    "They had the app open, where the chat that asked shows it too: held for a "
+    "few minutes, and pushed then if still unanswered."
+)
 HELD_WHILE_IN_APP = (
     "They had the app open: held for a few minutes, and pushed then if still unread."
 )
@@ -63,16 +74,13 @@ async def push_outcome(
     recipient = delivery.recipient_user_id
     if recipient is None:  # pragma: no cover - a CHECK holds it to one target
         return Outcome.skipped("This delivery names nobody.", code=Code.UNREACHABLE)
-    if not delivery.urgent:
-        async with uow_factory() as uow:
-            read = await read_upto(uow, channel_id=channel.id, user_id=recipient)
-        if read >= delivery.seq:
-            return Outcome.skipped(READ_IN_APP, code=Code.IN_APP)
-        wait = _fresh_for(line)
-        if wait is not None and await seen_within(
-            channel.pod_id, [recipient], seconds=PRESENT_FOR_SECONDS
-        ):
-            return Outcome.folded(HELD_WHILE_IN_APP, hold_for=wait)
+    asks = _asks(line, recipient)
+    if (
+        held := await _held_back(
+            uow_factory, delivery, channel, line, recipient=recipient, asks=asks
+        )
+    ) is not None:
+        return held
     raised: BaseException | None = None
     delivered = Delivered(reason="The push did not go.")
     with track_sends() as sends:
@@ -90,7 +98,8 @@ async def push_outcome(
                         recipient_user_id=recipient,
                         member=member,
                         key=delivery_key(delivery),
-                        urgent=delivery.urgent,
+                        # A question held and folded back goes as one still.
+                        urgent=delivery.urgent or asks is not None,
                         lines=delivery.lines,
                     )
                 )
@@ -112,6 +121,50 @@ async def push_outcome(
     return Outcome.skipped(
         delivered.reason or "Nothing could reach them.", code=Code.UNREACHABLE
     )
+
+
+async def _held_back(
+    uow_factory: UnitOfWorkFactory,
+    delivery: Delivery,
+    channel: Channel,
+    line: ChannelMessage,
+    *,
+    recipient: UUID,
+    asks: Question | None,
+) -> Outcome | None:
+    """Why the push does not go now -- answered, read, or held while they
+    have the app open -- or ``None`` when it goes."""
+    if asks is not None and not asks.is_waiting and delivery.lines == 1:
+        return Outcome.skipped(ANSWERED_FIRST, code=Code.IN_APP)
+    if not delivery.urgent:
+        async with uow_factory() as uow:
+            read = await read_upto(uow, channel_id=channel.id, user_id=recipient)
+        if read >= delivery.seq:
+            return Outcome.skipped(READ_IN_APP, code=Code.IN_APP)
+    if delivery.urgent and not _paused_call(asks):
+        return None
+    wait = _fresh_for(line)
+    if wait is None or not await seen_within(
+        channel.pod_id, [recipient], seconds=PRESENT_FOR_SECONDS
+    ):
+        return None
+    return Outcome.folded(
+        HELD_WHILE_IN_APP if asks is None else ASK_HELD_WHILE_IN_APP, hold_for=wait
+    )
+
+
+def _asks(line: ChannelMessage, recipient: UUID) -> Question | None:
+    """The question the line puts to the recipient, if it puts one."""
+    question = line.question
+    if question is None or question.awaits.user_id != recipient:
+        return None
+    return question
+
+
+def _paused_call(question: Question | None) -> bool:
+    """An agent's paused ``ask_user`` or approval: answerable on its chat's
+    own card as well as on the line."""
+    return question is not None and question.asker is QuestionAsker.TOOL
 
 
 def _fresh_for(line: ChannelMessage) -> timedelta | None:
