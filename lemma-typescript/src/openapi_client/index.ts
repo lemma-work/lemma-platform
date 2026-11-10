@@ -280,6 +280,7 @@ export type { IdentityLinkStatusResponse } from './models/IdentityLinkStatusResp
 export { IdentityStrength } from './models/IdentityStrength.js';
 export type { ImpactedPod } from './models/ImpactedPod.js';
 export type { ImpactedPodConnector } from './models/ImpactedPodConnector.js';
+export { ImportPlanOutcome } from './models/ImportPlanOutcome.js';
 export type { ImportPlanResponse } from './models/ImportPlanResponse.js';
 export type { ImportStartRequest } from './models/ImportStartRequest.js';
 export { ImportStatus } from './models/ImportStatus.js';
@@ -382,6 +383,7 @@ export type { OrganizationUpdateRequest } from './models/OrganizationUpdateReque
 export type { OutcomeHistoryResponse } from './models/OutcomeHistoryResponse.js';
 export type { OutcomeInput } from './models/OutcomeInput.js';
 export { OutcomeKind } from './models/OutcomeKind.js';
+export { OutcomePlanAction } from './models/OutcomePlanAction.js';
 export type { OutcomeSetResponse } from './models/OutcomeSetResponse.js';
 export type { OutcomeStandingResponse } from './models/OutcomeStandingResponse.js';
 export type { OutcomeTemplateCard } from './models/OutcomeTemplateCard.js';

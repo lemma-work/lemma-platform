@@ -545,9 +545,9 @@ async def _watch(
         _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
-        from app.modules.workspace.api.controllers.browser_view_stream import carry
+        from app.modules.workspace.api.controllers.browser_view_stream import carry_view
 
-        code = await carry(websocket, target, rtc)
+        code = await carry_view(websocket, target, rtc)
         # The relay refuses with these same 44xx codes, and they mean the same
         # things on both sides of the sandbox wall -- so pass the reason on
         # rather than replacing it with 1011. Told 1011, the pane says "the

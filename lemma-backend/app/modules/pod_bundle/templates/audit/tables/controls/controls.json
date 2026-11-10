@@ -28,6 +28,11 @@
       "required": false
     },
     {
+      "name": "evidence_on",
+      "type": "DATE",
+      "required": false
+    },
+    {
       "name": "due_on",
       "type": "DATE",
       "required": false

@@ -21,10 +21,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from lemma_pod_bundle import (
-    diff_table_columns,
-    load_resource_payload,
-)
+from lemma_pod_bundle import diff_table_columns, load_resource_payload
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_pod_bundle.layout import (
@@ -51,12 +48,10 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
     NoConnectorLookup,
     plan_connectors,
 )
-from app.modules.pod_bundle.infrastructure import account_checks
-from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure import account_checks, bundle_outcome
 from app.modules.pod_bundle.infrastructure import machine_bundle
-from app.modules.pod_bundle.infrastructure.plan_variables import (
-    variables_from_manifest,
-)
+from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure.plan_variables import variables_from_manifest
 from app.modules.pod_bundle.infrastructure.grant_planning import (
     GrantConferral,
     NoGrantConferral,
@@ -238,8 +233,11 @@ class PlanBuilder:
         connectors: ConnectorLookup | None = None,
         grants: GrantConferral | None = None,
         accounts: account_checks.AccountUsability | None = None,
+        outcome: bundle_outcome.OwnedOutcome | None = None,
     ):
         self._existing = existing
+        #: What the target pod owns now; ``None`` when this import sets none.
+        self._outcome = outcome
         #: Whether the importer could use an account a schedule names.
         self._accounts = accounts or account_checks.AnyAccountUsable()
         #: Grants on connectors the pod does not declare (``connector_grants``).
@@ -435,14 +433,17 @@ class PlanBuilder:
             check=self._accounts,
         )
 
+        outcome, notes = await bundle_outcome.plan_outcome(pod_manifest, self._outcome)
+
         return ImportPlan(
             format_version=format_version,
             bundle_name=bundle_name,
             description=pod_manifest.get("description"),
             steps=steps,
             variables=variables,
-            warnings=warnings,
+            warnings=warnings + notes,
             connectors=connectors,
+            outcome=outcome,
         )
 
     def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:
@@ -504,7 +505,7 @@ class PlanBuilder:
         return parsed if isinstance(parsed, dict) else {}
 
 
-class ServiceExistingResources:
+class ServiceExistingResources(machine_bundle.PodMachineNames):
     """Production :class:`ExistingResources` — lists the pod's resources through
     the module services over a caller-supplied short UoW + ``Context``. Lazy
     imports keep the module import cheap and cycle-free (mirrors the exporter)."""
@@ -595,6 +596,3 @@ class ServiceExistingResources:
                 exc_info=True,
             )
             return set()
-
-    async def machine_names(self) -> set[str]:
-        return await machine_bundle.pod_machine_names(self._uow, self._pod_id)

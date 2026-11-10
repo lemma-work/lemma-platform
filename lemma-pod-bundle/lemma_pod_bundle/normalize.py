@@ -74,13 +74,45 @@ def _normalize_pod_payload(
     pod: dict[str, Any], *, format_version: int = FORMAT_VERSION
 ) -> dict[str, Any]:
     """``pod.json``. An exporter passes ``bundle_format_version`` of what it
-    wrote, so a bundle with no connectors stays readable by a reader of 3."""
-    return {
+    wrote, so a bundle with no connectors stays readable by a reader of 3.
+
+    What the pod owns travels as ``outcome``, in a template's shape, only when
+    it owns something. A reader that does not know the key skips it, as it
+    skips ``lemma``: it adds nothing a reader of 3 would misread, so it does
+    not move the format."""
+    payload = {
         "format_version": format_version,
         "name": pod.get("name"),
         "description": pod.get("description"),
         "icon_url": pod.get("icon_url"),
     }
+    config = pod.get("config")
+    owned = config.get("outcome") if isinstance(config, dict) else None
+    if (outcome := _outcome_payload(owned)) is not None:
+        payload["outcome"] = outcome
+    return payload
+
+
+#: What a pod owns, as ``pod.json -> outcome`` carries it: the keys a shipped
+#: template writes. ``since`` and the tables its measure was checked against
+#: belong to the pod that took it on, and are set again by the one importing it.
+OUTCOME_KEYS = ("sentence", "kind", "target", "unit", "due", "measure")
+
+
+def _outcome_payload(outcome: object) -> dict[str, Any] | None:
+    """The ``outcome`` block for a pod that owns something, else ``None``."""
+    if not isinstance(outcome, dict) or not outcome.get("sentence"):
+        return None
+    block: dict[str, Any] = {}
+    for key in OUTCOME_KEYS:
+        value = outcome.get(key)
+        if value is None:
+            continue
+        # A client's typed response may hand back a date or an enum member.
+        if hasattr(value, "isoformat"):
+            value = value.isoformat()
+        block[key] = getattr(value, "value", value)
+    return block
 
 
 # Audit/ownership columns dropped from seeded rows: the backend manages the

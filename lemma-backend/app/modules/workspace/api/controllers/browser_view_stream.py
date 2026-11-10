@@ -123,7 +123,7 @@ async def setup_rtc(
     return False, rtc
 
 
-async def carry(
+async def carry_view(
     websocket: WebSocket, target: ViewUpstream, rtc: PreparedRtc | None
 ) -> int | None:
     """Carry the socket until either end stops; the relay's close code.
@@ -142,7 +142,7 @@ __all__ = [
     "CLOSE_USE_VNC",
     "PreparedRtc",
     "prepare_rtc",
-    "carry",
+    "carry_view",
     "serve_rtc_view",
     "setup_rtc",
 ]

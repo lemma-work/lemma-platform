@@ -448,6 +448,85 @@ async def test_a_workflow_run_limit_survives_export_and_import(
     assert copied.json()["max_concurrent_runs"] == 3
 
 
+async def _import_export(client, download_url: str, target_id: str) -> dict:
+    """Import an export's URL into ``target_id`` and apply it; the final state."""
+    res = await client.post(
+        f"/pods/{target_id}/bundle/imports", json={"kind": "URL", "url": download_url}
+    )
+    assert res.status_code == status.HTTP_202_ACCEPTED, res.text
+    import_id = res.json()["import_id"]
+    await _wait(client, target_id, import_id, until={"AWAITING_CONFIRMATION"})
+    await client.post(f"/pods/{target_id}/bundle/imports/{import_id}/apply", json={})
+    final = await _wait(client, target_id, import_id, until={"COMPLETED", "FAILED"})
+    assert final["status"] == "COMPLETED", final
+    return final
+
+
+async def _owning_source(client, pod_id: str) -> dict:
+    """A table of steps, and a finish line counted over it."""
+    table = f"steps_{uuid4().hex[:6]}"
+    created = await client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": table,
+            "enable_rls": False,
+            "columns": [
+                {"name": "title", "type": "TEXT", "required": True},
+                {"name": "done", "type": "BOOLEAN"},
+            ],
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    owned = {
+        "sentence": "The launch ships by March 3.",
+        "kind": "date",
+        "target": 22.0,
+        "unit": "steps",
+        "due": "2027-03-03",
+        "measure": f"SELECT count(*) FILTER (WHERE done) FROM {table}",
+    }
+    put = await client.put(f"/pods/{pod_id}/outcome", json=owned)
+    assert put.status_code == status.HTTP_200_OK, put.text
+    return owned
+
+
+async def test_what_a_pod_owns_survives_export_and_import(
+    authenticated_client, test_pod, fixed_test_org, worker
+):
+    """The export carries it in pod.json; the import sets it, measure and all,
+    once the table its measure counts has landed."""
+    owned = await _owning_source(authenticated_client, test_pod["id"])
+
+    download_url = await _export_url(authenticated_client, test_pod["id"])
+    target_id = await _new_pod(authenticated_client, fixed_test_org["id"])
+    final = await _import_export(authenticated_client, download_url, target_id)
+
+    assert not any("owns" in note for note in final.get("warnings") or []), final
+    pod = await authenticated_client.get(f"/pods/{target_id}")
+    copied = pod.json()["config"]["outcome"]
+    assert {key: copied[key] for key in owned} == owned
+
+
+async def test_a_pod_that_owns_something_keeps_it_through_an_import(
+    authenticated_client, test_pod, fixed_test_org, worker
+):
+    await _owning_source(authenticated_client, test_pod["id"])
+    download_url = await _export_url(authenticated_client, test_pod["id"])
+    target_id = await _new_pod(authenticated_client, fixed_test_org["id"])
+    mine = {"sentence": "Every partner hears from us monthly.", "kind": "week"}
+    put = await authenticated_client.put(f"/pods/{target_id}/outcome", json=mine)
+    assert put.status_code == status.HTTP_200_OK, put.text
+
+    final = await _import_export(authenticated_client, download_url, target_id)
+
+    assert any(
+        note.startswith("Kept what this pod already owns")
+        for note in final.get("warnings") or []
+    ), final
+    pod = await authenticated_client.get(f"/pods/{target_id}")
+    assert pod.json()["config"]["outcome"]["sentence"] == mine["sentence"]
+
+
 async def _create_function(client, pod_id, func_name):
     code = f"""#input_type_name: In
 #output_type_name: Out

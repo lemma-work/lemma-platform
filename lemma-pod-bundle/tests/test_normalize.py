@@ -33,6 +33,38 @@ def test_normalize_pod_payload():
     }
 
 
+def test_normalize_pod_payload_carries_what_the_pod_owns():
+    pod = {
+        "name": "demo",
+        "config": {
+            "join_policy": "INVITE_ONLY",
+            "outcome": {
+                "sentence": "The launch ships by March 3.",
+                "kind": "date",
+                "target": 22.0,
+                "unit": "steps",
+                "due": "2027-03-03",
+                "measure": "SELECT count(*) FROM steps WHERE done",
+                "since": "2026-11-01",
+                "row_security_checked": [],
+            },
+        },
+    }
+    assert _normalize_pod_payload(pod)["outcome"] == {
+        "sentence": "The launch ships by March 3.",
+        "kind": "date",
+        "target": 22.0,
+        "unit": "steps",
+        "due": "2027-03-03",
+        "measure": "SELECT count(*) FROM steps WHERE done",
+    }
+
+
+def test_normalize_pod_payload_writes_no_outcome_for_a_pod_that_owns_nothing():
+    for config in (None, {}, {"outcome": None}):
+        assert "outcome" not in _normalize_pod_payload({"name": "x", "config": config})
+
+
 def test_normalize_table_payload_defaults_and_drops_none():
     table = {"name": "items", "columns": None, "config": None, "visibility": None}
     payload = _normalize_table_payload(table)

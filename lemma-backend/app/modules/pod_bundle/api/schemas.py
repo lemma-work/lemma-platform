@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -19,6 +20,8 @@ from app.modules.pod_bundle.domain.state import (
     ImportPlan,
     ImportState,
     ImportStatus,
+    OutcomePlanAction,
+    PlannedOutcome,
     Progress,
     PublishState,
     PublishMode,
@@ -142,6 +145,42 @@ class VariableSpecResponse(BaseModel):
     default: str | None = None
 
 
+class ImportPlanOutcome(BaseModel):
+    """What the bundle's pod owned, and what the import does with it."""
+
+    sentence: str = Field(description="What it owns, as one sentence.")
+    kind: Literal["week", "date"] = Field(
+        description="week: a bar held every week. date: a finish line by `due`."
+    )
+    target: float | None = Field(
+        default=None, description="The number its measure is held to, if set."
+    )
+    unit: str | None = Field(
+        default=None, description="'%' for a share; otherwise what it counts."
+    )
+    due: date | None = Field(default=None, description="The finish line's date.")
+    has_measure: bool = Field(
+        default=False,
+        description=(
+            "Whether the bundle carries a measure. It is read as the person "
+            "importing when the import applies; one they cannot read is left "
+            "off, with a warning, and the rest is still set."
+        ),
+    )
+    action: OutcomePlanAction = Field(
+        description=(
+            "SET: the pod owns nothing yet, and the import sets this. KEEP: the "
+            "pod already owns something else and keeps it; this is not set. "
+            "SAME: the pod already owns this (same sentence, kind, target, unit "
+            "and due)."
+        )
+    )
+
+    @classmethod
+    def from_domain(cls, outcome: PlannedOutcome) -> "ImportPlanOutcome":
+        return cls.model_validate(outcome.model_dump())
+
+
 class ImportPlanResponse(BaseModel):
     format_version: int
     bundle_name: str | None = None
@@ -157,6 +196,16 @@ class ImportPlanResponse(BaseModel):
             "created, and (SHARED) your own accounts you could share. "
             "NEEDS_INSTALLATION and CONFLICT block the apply until resolved; "
             "NEEDS_ACCOUNT imports, waiting for an account."
+        ),
+    )
+    outcome: ImportPlanOutcome | None = Field(
+        default=None,
+        description=(
+            "What the bundle's pod owned (`pod.json -> outcome`) and whether "
+            "the import sets it on this pod, which it does only when the pod "
+            "owns nothing yet. Null when the bundle's pod owned nothing, when "
+            "its block is invalid (said in `warnings`), or for a template "
+            "import, whose start sets it."
         ),
     )
 
@@ -191,6 +240,11 @@ class ImportPlanResponse(BaseModel):
             warnings=plan.warnings,
             has_destructive_steps=plan.has_destructive_steps,
             connectors=plan.connectors,
+            outcome=(
+                ImportPlanOutcome.from_domain(plan.outcome)
+                if plan.outcome is not None
+                else None
+            ),
         )
 
 
