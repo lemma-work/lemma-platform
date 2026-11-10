@@ -1338,6 +1338,8 @@ def start_stack(configure: Callable[[StackSpec], None] | None = None):
                     str(port),
                     "--ws-max-size",
                     "1048576",
+                    "--ws-per-message-deflate",
+                    "false",
                     "--log-level",
                     "warning",
                 ],

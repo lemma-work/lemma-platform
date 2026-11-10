@@ -222,4 +222,6 @@ EXPOSE 8000
 # The largest websocket message read (app/core/server_limits.py): passed below,
 # and set for any command that runs uvicorn from this image without it.
 ENV UVICORN_WS_MAX_SIZE=1048576
-CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-size", "1048576", "--no-access-log"]
+# permessage-deflate off (server_limits.WS_PER_MESSAGE_DEFLATE), likewise.
+ENV UVICORN_WS_PER_MESSAGE_DEFLATE=false
+CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-size", "1048576", "--ws-per-message-deflate", "false", "--no-access-log"]

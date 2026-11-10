@@ -118,6 +118,7 @@ SCRIPT_NAMES: dict[str, tuple[str, ...]] = {
     "set-display-size.sh": ("set-display-size",),
     "start-browser-relay.sh": ("start-browser-relay",),
     "start-browser.sh": ("start-browser",),
+    "start-streamer.sh": ("start-streamer",),
     "start-vnc-bridge.sh": ("start-vnc-bridge",),
 }
 

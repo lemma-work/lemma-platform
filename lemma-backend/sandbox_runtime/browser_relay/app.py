@@ -23,11 +23,12 @@ handed a fresh one without restarting anything.
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 import hmac
 import logging
 import os
 from pathlib import Path
+import time
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel, Field
@@ -41,16 +42,16 @@ from .chrome import (
     DEFAULT_SESSION,
     is_safe_session,
     keepalive,
-    default_display_size,
     ensure_port,
     live_port,
     open_url,
     page_targets,
-    RecordingInProgress,
     ensure_vnc_bridge,
-    set_display_size,
 )
+from . import commands, display
+from .rtc import CLOSE_NO_STREAMER, connect_streamer, ensure_streamer, pump_signalling
 from .stream_proxy import CONTROL, VIEW, pump_binary
+from .viewers import VIEWERS, viewer_name
 from .cookies import forget_domains, list_cookie_domains
 from .marks import forget_marks, mark_signed_in, signed_in_sites
 
@@ -155,25 +156,6 @@ class EnsureResponse(BaseModel):
     session: str
 
 
-class DisplayResizeRequest(BaseModel):
-    """The size a viewer wants the sandbox display to be.
-
-    Bounded here rather than trusted: these numbers come from a browser
-    window, and a display is a framebuffer somebody else's memory pays for.
-    The script clamps again against the framebuffer Xvfb actually allocated,
-    which is the limit that cannot be argued with.
-    """
-
-    width: int = Field(ge=320, le=4096)
-    height: int = Field(ge=240, le=4096)
-
-
-class DisplayResizeResponse(BaseModel):
-    #: What the display ended up as, which is not always what was asked for --
-    #: see the clamping in `set-display-size`.
-    size: str
-
-
 class ForgetRequest(BaseModel):
     #: Exact cookie hosts, chosen by the backend. The relay does not know
     #: which of them are "one site" and must not guess -- see `cookies.py`.
@@ -249,16 +231,6 @@ def _session_name(session: str | None, domain: str | None) -> str:
     return candidate
 
 
-#: How many VNC sockets this relay is serving right now.
-#:
-#: Counted here rather than in the API, which was counting in a
-#: process-local dict: two people watching one sandbox can arrive through
-#: different API workers, and the first to leave then reset the display
-#: under the second. One sandbox has exactly one relay, so this is the only
-#: place the question has a single answer.
-_viewers = 0
-
-
 def create_app() -> FastAPI:
     app = FastAPI(title="Lemma browser relay", docs_url=None, redoc_url=None)
 
@@ -279,7 +251,7 @@ def create_app() -> FastAPI:
         return await answers_on(VNC_WS_PORT)
 
     @app.get("/health")
-    async def health() -> dict:
+    async def health() -> dict[str, object]:
         """Whether Chrome is up, and whether a viewer could see it.
 
         A paused or idle workspace has no browser, and that is its resting
@@ -294,12 +266,18 @@ def create_app() -> FastAPI:
         to tell them apart from outside the sandbox.
         """
         vnc = "listening" if await _vnc_is_listening() else "down"
-        _ = _viewers
+        about = {
+            "vnc": vnc,
+            "viewers": VIEWERS.count(),
+            "watching": VIEWERS.summary(),
+            "agent_active_seconds": agent_active_seconds(),
+            "cpus": display.machine_cpus(),
+        }
         try:
             await live_port()
         except BrowserNotRunning:
-            return {"chrome": "stopped", "vnc": vnc, "viewers": _viewers}
-        return {"chrome": "running", "vnc": vnc, "viewers": _viewers}
+            return {"chrome": "stopped", **about}
+        return {"chrome": "running", **about}
 
     @app.get("/targets", dependencies=[Depends(require_token)])
     async def targets(
@@ -359,81 +337,8 @@ def create_app() -> FastAPI:
             session=session,
         )
 
-    @app.post(
-        "/display:resize",
-        response_model=DisplayResizeResponse,
-        dependencies=[Depends(require_token)],
-    )
-    async def display_resize(request: DisplayResizeRequest) -> DisplayResizeResponse:
-        """Make the display the shape of the pane it is being watched in.
-
-        The alternative, and what this replaces, was one fixed display scaled
-        to fit whatever box it landed in: a 3:2 picture letterboxed into a
-        narrow sidebar, small and surrounded by dead space. Resizing the
-        display itself means the pixels sent are the pixels shown, and a
-        narrow pane gets a narrow *viewport* -- so a site serves its mobile
-        layout to somebody signing in on a phone rather than a shrunken
-        desktop one.
-
-        noVNC's own `resizeSession` cannot do this for us: it refuses while
-        the client is view-only, and watching is the default here.
-
-        **Clamped to the starting size, not to the framebuffer ceiling.** A
-        maximised pane on a large monitor would otherwise leave a 1 vCPU /
-        2 GB sandbox running at 1920x1200 -- 1.67x the pixels for x11vnc to
-        encode and for `agent-browser record` to grab, which was measured to
-        lose a recording part-way through on a loaded runner. An agent that
-        genuinely wants the ceiling can still ask for it with
-        `set-display-size`, deliberately, for as long as it needs; a person
-        opening a panel should not be able to do it by accident.
-        """
-        cap_width, cap_height = default_display_size()
-        try:
-            size = await set_display_size(
-                min(request.width, cap_width), min(request.height, cap_height)
-            )
-        except RecordingInProgress as exc:
-            # 409 rather than a silent no-op, and a reason the pane can show.
-            # A person opening the panel while an agent is recording used to
-            # move the framebuffer under the recorder; the picture is
-            # letterboxed until the take ends instead, which is the
-            # recoverable half of the trade.
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if size is None:
-            raise HTTPException(
-                status_code=409, detail="the display could not be resized"
-            )
-        return DisplayResizeResponse(size=size)
-
-    @app.post(
-        "/display:reset",
-        response_model=DisplayResizeResponse,
-        dependencies=[Depends(require_token)],
-    )
-    async def display_reset() -> DisplayResizeResponse:
-        """Put the display back to its starting size.
-
-        Called when the last person watching disconnects. Without it the
-        sandbox kept whichever shape the last pane happened to be for the
-        rest of its life -- so an agent taking a screenshot or a recording
-        afterwards inherited the dimensions of a sidebar it could not see and
-        had no way to know about. A predictable resting size is something it
-        can plan against.
-        """
-        width, height = default_display_size()
-        try:
-            size = await set_display_size(width, height)
-        except RecordingInProgress as exc:
-            # The last viewer leaving must not resize either. This is the
-            # more dangerous of the two paths, because nobody is watching
-            # when it fires: the agent is alone with its recording and the
-            # reset would land in the middle of it. The display keeps the
-            # viewer's shape until the take ends, and the next reset -- or
-            # the next viewer -- puts it back.
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if size is None:
-            raise HTTPException(status_code=409, detail="the display did not reset")
-        return DisplayResizeResponse(size=size)
+    display.register(app, require_token)
+    commands.register(app, require_token)
 
     @app.get("/profile:cookies", dependencies=[Depends(require_token)])
     async def profile_cookies(start: bool = False) -> dict:
@@ -507,6 +412,7 @@ def create_app() -> FastAPI:
         websocket: WebSocket,
         mode: str = Query(default=VIEW),
         session: str = Query(default=""),
+        viewer: str = Query(default=""),
     ) -> None:
         """One viewer of this sandbox's whole display, over VNC.
 
@@ -523,31 +429,8 @@ def create_app() -> FastAPI:
         screen. The caller resolves it beforehand: `/browser:ensure`'s reply
         says which session a steer actually landed in.
         """
-        if not _authenticate(websocket.headers.get("x-lemma-relay-token", "")):
-            await _refuse(
-                websocket, CLOSE_UNAUTHENTICATED, "no token, or the wrong one"
-            )
-            return
-        if mode not in (VIEW, CONTROL):
-            await _refuse(websocket, CLOSE_UNAUTHENTICATED, f"{mode!r} is not a mode")
-            return
-        session_name = session or DEFAULT_SESSION
-        if session_name != DEFAULT_SESSION and not is_safe_session(session_name):
-            await _refuse(
-                websocket, CLOSE_UNAUTHENTICATED, f"{session_name!r} is not a session"
-            )
-            return
-        try:
-            # `session_name`, not the bare default: a sign-in's Chrome runs in
-            # its own named session (its own profile, its own port), and
-            # `live_port()` with no argument checks only the default one's.
-            # Checking the wrong session here reported "no browser running"
-            # about a browser that was on screen at the time -- the picture
-            # is shared, but whether *a* Chrome process is up is still asked
-            # per session, and the login session's was never the one asked.
-            await live_port(session_name)
-        except BrowserNotRunning as exc:
-            await _refuse(websocket, CLOSE_NO_BROWSER, f"no browser running: {exc}")
+        session_name = await _admit(websocket, mode=mode, session=session)
+        if session_name is None:
             return
 
         # The viewing chain is not started with the display -- x11vnc and
@@ -579,54 +462,145 @@ def create_app() -> FastAPI:
             return
 
         await websocket.accept()
-        global _viewers
-        _viewers += 1
-        # Watching is not a command, so without this the agent's idle timeout
-        # retires the browser out from under somebody reading the page.
-        #
-        # `session_name`, not the default -- the same distinction the liveness
-        # check above already makes. This used to keep the *default* session
-        # warm while a sign-in ran in `login-<host>` and a watch named its
-        # conversation's session -- so the browser actually on screen went
-        # idle and retired mid-page, taking a sign-in with it, while a browser
-        # nobody was watching was held open in a sandbox whose memory guard
-        # kills on ~220 MB free. There is one session now, so the name this
-        # keeps warm and the one being watched cannot disagree.
-        keepalive_task = create_background_task(_keepalive_loop(session_name))
-        # Nothing is claimed here. There was a lease -- a file the agent's own
-        # commands read before acting, so a person driving could not be typed
-        # over -- and it was removed because it never covered the case it was
-        # written for and only ever cost the case it did reach. A sign-in runs
-        # in `login-<host>`, a session the agent never touches, so the lease
-        # was a no-op at the one moment somebody was typing a password; an
-        # ordinary watch attaches to the agent's *own* session, so the only
-        # thing it ever stopped was the agent using its own browser while
-        # somebody looked at it. Two parties acting at once costs a retry,
-        # which is cheaper than stalling the run.
-        try:
-            async with websockets.connect(
-                f"ws://127.0.0.1:{VNC_WS_PORT}/",
-                max_size=_MAX_FRAME_BYTES,
-            ) as upstream:
-                await pump_binary(
-                    upstream,
-                    mode=mode,
-                    send_bytes=websocket.send_bytes,
-                    receive_bytes=_receiver_bytes(websocket),
-                )
-        except OSError, websockets.exceptions.WebSocketException:
-            with suppress(RuntimeError):
-                await websocket.close(code=CLOSE_UPSTREAM_GONE)
-        finally:
-            _viewers = max(0, _viewers - 1)
-            keepalive_task.cancel()
-            # Awaited, not just cancelled: a cancelled task is not finished
-            # until it has been collected, and leaving it uncollected is how a
-            # socket outlives the request that opened it.
-            with suppress(asyncio.CancelledError):
-                _ = await keepalive_task
+        async with _watching(session_name, viewer_name(viewer), mode, "vnc"):
+            try:
+                # `compression=None`: websockify never agreed to deflate, but
+                # the offer still cost a negotiation, and the frames are JPEG
+                # and zlib rectangles that deflate cannot shrink.
+                async with websockets.connect(
+                    f"ws://127.0.0.1:{VNC_WS_PORT}/",
+                    max_size=_MAX_FRAME_BYTES,
+                    compression=None,
+                ) as upstream:
+                    await pump_binary(
+                        upstream,
+                        mode=mode,
+                        send_bytes=websocket.send_bytes,
+                        receive_bytes=_receiver_bytes(websocket),
+                    )
+            except OSError, websockets.exceptions.WebSocketException:
+                with suppress(RuntimeError):
+                    await websocket.close(code=CLOSE_UPSTREAM_GONE)
+
+    @app.websocket("/rtc")
+    async def rtc_socket(
+        websocket: WebSocket,
+        mode: str = Query(default=VIEW),
+        session: str = Query(default=""),
+        viewer: str = Query(default=""),
+    ) -> None:
+        """One WebRTC viewer's signalling, carried to the streamer.
+
+        The same admission as `/vnc` -- token, mode, a running browser -- and
+        then the streamer instead of the VNC chain. An image built before the
+        streamer existed closes with `CLOSE_NO_STREAMER`, which the pane reads
+        as "use VNC" rather than as a fault.
+        """
+        session_name = await _admit(websocket, mode=mode, session=session)
+        if session_name is None:
+            return
+        state = await ensure_streamer()
+        if state != "ready":
+            await _refuse(
+                websocket,
+                CLOSE_NO_STREAMER if state == "absent" else CLOSE_UPSTREAM_GONE,
+                f"the streamer is {state}",
+            )
+            return
+        await websocket.accept()
+        name = viewer_name(viewer)
+        async with _watching(session_name, name, mode, "rtc"):
+            try:
+                async with await connect_streamer() as upstream:
+                    await pump_signalling(websocket, upstream, viewer=name)
+                # Closed here whichever side ended it: a frame that was not
+                # signalling ends the session, and the viewer is told so
+                # rather than left on a socket nothing reads.
+                with suppress(RuntimeError):
+                    await websocket.close(code=1000)
+            except OSError, websockets.exceptions.WebSocketException:
+                with suppress(RuntimeError):
+                    await websocket.close(code=CLOSE_UPSTREAM_GONE)
 
     return app
+
+
+async def _admit(websocket: WebSocket, *, mode: str, session: str) -> str | None:
+    """Check a viewer socket before anything is started for it.
+
+    The session name to keep warm, or `None` once the socket has been refused
+    with a reason.
+    """
+    if not _authenticate(websocket.headers.get("x-lemma-relay-token", "")):
+        await _refuse(websocket, CLOSE_UNAUTHENTICATED, "no token, or the wrong one")
+        return None
+    if mode not in (VIEW, CONTROL):
+        await _refuse(websocket, CLOSE_UNAUTHENTICATED, f"{mode!r} is not a mode")
+        return None
+    session_name = session or DEFAULT_SESSION
+    if session_name != DEFAULT_SESSION and not is_safe_session(session_name):
+        await _refuse(
+            websocket, CLOSE_UNAUTHENTICATED, f"{session_name!r} is not a session"
+        )
+        return None
+    try:
+        # `session_name`, not the bare default: a sign-in's Chrome runs in
+        # its own named session (its own profile, its own port), and
+        # `live_port()` with no argument checks only the default one's.
+        # Checking the wrong session here reported "no browser running"
+        # about a browser that was on screen at the time -- the picture
+        # is shared, but whether *a* Chrome process is up is still asked
+        # per session, and the login session's was never the one asked.
+        await live_port(session_name)
+    except BrowserNotRunning as exc:
+        await _refuse(websocket, CLOSE_NO_BROWSER, f"no browser running: {exc}")
+        return None
+    return session_name
+
+
+@asynccontextmanager
+async def _watching(session: str, viewer: str, mode: str, transport: str):
+    """Somebody is looking: count them, and keep the browser awake meanwhile.
+
+    Watching is not a command, so without the keepalive the agent's idle
+    timeout retires the browser out from under somebody reading the page.
+    `session`, not the default: the liveness check names the session being
+    watched, and keeping a different one warm would let the one on screen
+    retire mid-page.
+
+    Nothing is claimed for the agent's sake. There was a lease the agent's own
+    commands read before acting, removed because it never covered the case it
+    was written for; two parties acting at once costs a retry, which is
+    cheaper than stalling the run. The only lease now is on the screen's size
+    (`display.py`), and the agent never asks for that one.
+    """
+    VIEWERS.join(viewer, mode=mode, transport=transport)
+    keepalive_task = create_background_task(_keepalive_loop(session))
+    try:
+        yield
+    finally:
+        VIEWERS.leave(viewer)
+        keepalive_task.cancel()
+        # Awaited, not just cancelled: a cancelled task is not finished until
+        # it has been collected, and leaving it uncollected is how a socket
+        # outlives the request that opened it.
+        with suppress(asyncio.CancelledError):
+            _ = await keepalive_task
+
+
+#: Touched by the `agent-browser` wrapper on every command the agent runs, so
+#: a person watching can be told the agent is driving. A file rather than a
+#: message because the wrapper is a shell script with no way to reach this
+#: process, and its mtime is the whole signal.
+AGENT_ACTIVE_MARKER = Path("/tmp/lemma-browser/agent-active")
+
+
+def agent_active_seconds() -> float | None:
+    """Seconds since the agent last ran a browser command, if it ever has."""
+    try:
+        return max(0.0, time.time() - AGENT_ACTIVE_MARKER.stat().st_mtime)
+    except OSError:
+        return None
 
 
 def _receiver_bytes(websocket: WebSocket):

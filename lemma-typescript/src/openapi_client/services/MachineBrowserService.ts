@@ -4,12 +4,15 @@
 /* eslint-disable */
 import type { BrowserAccessRequest } from '../models/BrowserAccessRequest.js';
 import type { BrowserAccessResponse } from '../models/BrowserAccessResponse.js';
+import type { BrowserCommandRequest } from '../models/BrowserCommandRequest.js';
+import type { BrowserCommandResponse } from '../models/BrowserCommandResponse.js';
 import type { BrowserStatusResponse } from '../models/BrowserStatusResponse.js';
 import type { CurrentPageUrlResponse } from '../models/CurrentPageUrlResponse.js';
 import type { DisplaySizeRequest } from '../models/DisplaySizeRequest.js';
 import type { DisplaySizeResponse } from '../models/DisplaySizeResponse.js';
 import type { NavigateRequest } from '../models/NavigateRequest.js';
 import type { NavigateResponse } from '../models/NavigateResponse.js';
+import type { StreamBeacon } from '../models/StreamBeacon.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -80,6 +83,59 @@ export class MachineBrowserService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/machines/{ref}/browser:access',
+            path: {
+                'ref': ref,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Report how a live screen session went
+     * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
+     * @param requestBody
+     * @returns void
+     * @throws ApiError
+     */
+    public static machineBrowserBeacon(
+        ref: string,
+        requestBody: StreamBeacon,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/machines/{ref}/browser:beacon',
+            path: {
+                'ref': ref,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Steer a machine's browser from the screen's toolbar
+     * One toolbar command; the open tabs as they are afterwards.
+     *
+     * 409 with a sentence when the browser cannot do it right now -- it is not
+     * running, the tab has closed -- because the toolbar shows it, and 422 for
+     * an address that is not a web address.
+     * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
+     * @param requestBody
+     * @returns BrowserCommandResponse Successful Response
+     * @throws ApiError
+     */
+    public static machineBrowserCommand(
+        ref: string,
+        requestBody: BrowserCommandRequest,
+    ): CancelablePromise<BrowserCommandResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/machines/{ref}/browser:command',
             path: {
                 'ref': ref,
             },

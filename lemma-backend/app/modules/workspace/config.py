@@ -311,6 +311,98 @@ class WorkspaceSettings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    # --- The live browser view ----------------------------------------------
+    # WebRTC is rolled out per user: team, then a pod, then a percentage, then
+    # everyone. A user outside the rollout gets VNC, which every image has.
+    browser_stream: Literal["vnc", "webrtc", "auto"] = Field(
+        default="vnc",
+        validation_alias=AliasChoices("BROWSER_STREAM"),
+        description=(
+            "How a user in the rollout watches their browser: `vnc` always, "
+            "`webrtc` with no fallback (for testing the streamer alone), or "
+            "`auto` -- WebRTC, falling back to VNC when it cannot connect in "
+            "five seconds. Users outside the rollout get `vnc`."
+        ),
+    )
+    browser_stream_users: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("BROWSER_STREAM_USERS"),
+        description="Comma-separated user ids always in the WebRTC rollout",
+    )
+    browser_stream_percent: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("BROWSER_STREAM_PERCENT"),
+        description=(
+            "Share of other users in the WebRTC rollout, chosen by a stable "
+            "hash of the user id so a person does not flip between transports"
+        ),
+    )
+    browser_native_density: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("BROWSER_NATIVE_DENSITY"),
+        description=(
+            "Stream a high-density screen at twice its pixels on machines with "
+            "at least two vCPUs. Chrome at DPR 2 takes a whole vCPU on its own, "
+            "so a one-vCPU machine always streams at 1x."
+        ),
+    )
+    turn_provider: Literal["none", "cloudflare", "coturn"] = Field(
+        default="none",
+        validation_alias=AliasChoices("TURN_PROVIDER"),
+        description=(
+            "Where WebRTC media is relayed. Both the machine and the viewer "
+            "are relay-only, so without a TURN provider WebRTC is off and "
+            "everyone watches over VNC."
+        ),
+    )
+    cloudflare_turn_key_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("CLOUDFLARE_TURN_KEY_ID"),
+        description="Cloudflare Realtime TURN key id",
+    )
+    cloudflare_turn_api_token: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("CLOUDFLARE_TURN_API_TOKEN"),
+        description="Cloudflare Realtime TURN key's API token",
+    )
+    coturn_urls: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("COTURN_URLS"),
+        description=(
+            "Comma-separated coturn ICE URLs. Must include a `turns:` URL on "
+            "port 443: UDP can be dropped by a sandbox fabric or a corporate "
+            "network, and TLS on 443 is the transport that still gets through."
+        ),
+    )
+    coturn_secret: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("COTURN_SECRET"),
+        description="coturn's `static-auth-secret`, for REST credentials",
+    )
+    turn_credential_ttl_seconds: int = Field(
+        default=4 * 3600,
+        ge=60,
+        le=86_400,
+        validation_alias=AliasChoices("TURN_CREDENTIAL_TTL_SECONDS"),
+        description=(
+            "How long the TURN credentials minted for one connection last, on "
+            "both ends. A relay may check them again when an allocation is "
+            "refreshed, so this bounds how long one view can stay connected "
+            "before it has to reconnect; short enough that a credential "
+            "copied out of a browser is soon worthless."
+        ),
+    )
+
+    @field_validator("browser_stream_users", "coturn_urls", mode="before")
+    @classmethod
+    def _split_comma_lists(cls, value: object) -> object:
+        """Comma-separated, like `browser_proxy_urls`, and for its reason."""
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
     # --- E2B ---------------------------------------------------------------
     e2b_api_key: Optional[SecretStr] = Field(
         default=None,

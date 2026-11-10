@@ -28,6 +28,8 @@ from uuid import UUID
 from ..errors import LemmaAPIError, LemmaConfigError
 from ..openapi_client.api.machine_browser import (
     machine_browser_access,
+    machine_browser_beacon,
+    machine_browser_command,
     machine_browser_current_page_url,
     machine_browser_display,
     machine_browser_navigate,
@@ -81,6 +83,8 @@ from ..openapi_client.api.machines import (
     machine_startup,
 )
 from ..openapi_client.models.browser_access_request import BrowserAccessRequest
+from ..openapi_client.models.browser_command_request import BrowserCommandRequest
+from ..openapi_client.models.stream_beacon import StreamBeacon
 from ..openapi_client.models.create_pod_machine_request import (
     CreatePodMachineRequest,
 )
@@ -741,6 +745,23 @@ class MachineBrowser(_MachineResource):
     def navigate(self, ref: str, url: str) -> object:
         return self._call(
             machine_browser_navigate, self._ref(ref), body=NavigateRequest(url=url)
+        )
+
+    def command(self, ref: str, action: dict[str, str]) -> object:
+        """One of the toolbar's browser commands, e.g. ``{"command": "back"}``
+        or ``{"command": "navigate", "url": "https://example.com"}``; the open
+        tabs afterwards. The set is closed: back, forward, reload, navigate,
+        tabs, activate, close."""
+        return self._call(
+            machine_browser_command,
+            self._ref(ref),
+            body=BrowserCommandRequest.from_dict({"action": action}),
+        )
+
+    def beacon(self, ref: str, report: dict[str, object]) -> object:
+        """Report how a live screen session went (transport, fps, latency)."""
+        return self._call(
+            machine_browser_beacon, self._ref(ref), body=StreamBeacon.from_dict(report)
         )
 
     def logins(self, ref: str = "me", *, wake: bool = False) -> WebLoginListResponse:

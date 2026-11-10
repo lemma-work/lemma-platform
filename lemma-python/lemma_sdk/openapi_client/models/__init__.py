@@ -119,7 +119,12 @@ _NAME_TO_MODULE = {
     'AvailableSurfacesResponse': 'available_surfaces_response',
     'BrowserAccessRequest': 'browser_access_request',
     'BrowserAccessResponse': 'browser_access_response',
+    'BrowserCommandRequest': 'browser_command_request',
+    'BrowserCommandResponse': 'browser_command_response',
     'BrowserStatusResponse': 'browser_status_response',
+    'BrowserStatusResponsePresetsType0': 'browser_status_response_presets_type_0',
+    'BrowserStatusResponseWatchingItem': 'browser_status_response_watching_item',
+    'BrowserTab': 'browser_tab',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -350,6 +355,8 @@ _NAME_TO_MODULE = {
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
     'HarnessKind': 'harness_kind',
+    'HistoryCommand': 'history_command',
+    'HistoryCommandCommand': 'history_command_command',
     'HistoryMessage': 'history_message',
     'HistoryResponse': 'history_response',
     'HomeAgentResponse': 'home_agent_response',
@@ -438,6 +445,7 @@ _NAME_TO_MODULE = {
     'MyMembershipUpdateNotifyViaType0Item': 'my_membership_update_notify_via_type_0_item',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
+    'NavigateCommand': 'navigate_command',
     'NavigateRequest': 'navigate_request',
     'NavigateResponse': 'navigate_response',
     'NavigationOrganizationResponse': 'navigation_organization_response',
@@ -682,6 +690,11 @@ _NAME_TO_MODULE = {
     'StartedPodResponse': 'started_pod_response',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
+    'StreamBeacon': 'stream_beacon',
+    'StreamBeaconCodecType0': 'stream_beacon_codec_type_0',
+    'StreamBeaconFallbackType0': 'stream_beacon_fallback_type_0',
+    'StreamBeaconRelayType0': 'stream_beacon_relay_type_0',
+    'StreamBeaconTransport': 'stream_beacon_transport',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
     'SurfaceBehaviorConfigInput': 'surface_behavior_config_input',
     'SurfaceChannelRouteInput': 'surface_channel_route_input',
@@ -724,6 +737,8 @@ _NAME_TO_MODULE = {
     'SyncRequest': 'sync_request',
     'SyncRequestDirection': 'sync_request_direction',
     'SyncResponse': 'sync_response',
+    'TabCommand': 'tab_command',
+    'TabCommandCommand': 'tab_command_command',
     'TableColumn': 'table_column',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -734,6 +749,7 @@ _NAME_TO_MODULE = {
     'TableOpeningResponse': 'table_opening_response',
     'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TabsCommand': 'tabs_command',
     'TelegramAccountItem': 'telegram_account_item',
     'TelegramAccountResponse': 'telegram_account_response',
     'TelegramAccountsResponse': 'telegram_accounts_response',
@@ -954,7 +970,12 @@ if TYPE_CHECKING:
     from .available_surfaces_response import AvailableSurfacesResponse
     from .browser_access_request import BrowserAccessRequest
     from .browser_access_response import BrowserAccessResponse
+    from .browser_command_request import BrowserCommandRequest
+    from .browser_command_response import BrowserCommandResponse
     from .browser_status_response import BrowserStatusResponse
+    from .browser_status_response_presets_type_0 import BrowserStatusResponsePresetsType0
+    from .browser_status_response_watching_item import BrowserStatusResponseWatchingItem
+    from .browser_tab import BrowserTab
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -1185,6 +1206,8 @@ if TYPE_CHECKING:
     from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
     from .harness_kind import HarnessKind
+    from .history_command import HistoryCommand
+    from .history_command_command import HistoryCommandCommand
     from .history_message import HistoryMessage
     from .history_response import HistoryResponse
     from .home_agent_response import HomeAgentResponse
@@ -1273,6 +1296,7 @@ if TYPE_CHECKING:
     from .my_membership_update_notify_via_type_0_item import MyMembershipUpdateNotifyViaType0Item
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
+    from .navigate_command import NavigateCommand
     from .navigate_request import NavigateRequest
     from .navigate_response import NavigateResponse
     from .navigation_organization_response import NavigationOrganizationResponse
@@ -1517,6 +1541,11 @@ if TYPE_CHECKING:
     from .started_pod_response import StartedPodResponse
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
+    from .stream_beacon import StreamBeacon
+    from .stream_beacon_codec_type_0 import StreamBeaconCodecType0
+    from .stream_beacon_fallback_type_0 import StreamBeaconFallbackType0
+    from .stream_beacon_relay_type_0 import StreamBeaconRelayType0
+    from .stream_beacon_transport import StreamBeaconTransport
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
     from .surface_behavior_config_input import SurfaceBehaviorConfigInput
     from .surface_channel_route_input import SurfaceChannelRouteInput
@@ -1559,6 +1588,8 @@ if TYPE_CHECKING:
     from .sync_request import SyncRequest
     from .sync_request_direction import SyncRequestDirection
     from .sync_response import SyncResponse
+    from .tab_command import TabCommand
+    from .tab_command_command import TabCommandCommand
     from .table_column import TableColumn
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -1569,6 +1600,7 @@ if TYPE_CHECKING:
     from .table_opening_response import TableOpeningResponse
     from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
+    from .tabs_command import TabsCommand
     from .telegram_account_item import TelegramAccountItem
     from .telegram_account_response import TelegramAccountResponse
     from .telegram_accounts_response import TelegramAccountsResponse
@@ -1802,7 +1834,12 @@ __all__ = [
     'AvailableSurfacesResponse',
     'BrowserAccessRequest',
     'BrowserAccessResponse',
+    'BrowserCommandRequest',
+    'BrowserCommandResponse',
     'BrowserStatusResponse',
+    'BrowserStatusResponsePresetsType0',
+    'BrowserStatusResponseWatchingItem',
+    'BrowserTab',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -2033,6 +2070,8 @@ __all__ = [
     'GranteeRefGranteeType',
     'GroupPublicResponse',
     'HarnessKind',
+    'HistoryCommand',
+    'HistoryCommandCommand',
     'HistoryMessage',
     'HistoryResponse',
     'HomeAgentResponse',
@@ -2121,6 +2160,7 @@ __all__ = [
     'MyMembershipUpdateNotifyViaType0Item',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
+    'NavigateCommand',
     'NavigateRequest',
     'NavigateResponse',
     'NavigationOrganizationResponse',
@@ -2365,6 +2405,11 @@ __all__ = [
     'StartedPodResponse',
     'StepRecordResponse',
     'StepStatus',
+    'StreamBeacon',
+    'StreamBeaconCodecType0',
+    'StreamBeaconFallbackType0',
+    'StreamBeaconRelayType0',
+    'StreamBeaconTransport',
     'SurfaceAdminConsentInfo',
     'SurfaceBehaviorConfigInput',
     'SurfaceChannelRouteInput',
@@ -2407,6 +2452,8 @@ __all__ = [
     'SyncRequest',
     'SyncRequestDirection',
     'SyncResponse',
+    'TabCommand',
+    'TabCommandCommand',
     'TableColumn',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
@@ -2417,6 +2464,7 @@ __all__ = [
     'TableOpeningResponse',
     'TableResponse',
     'TableSummaryResponse',
+    'TabsCommand',
     'TelegramAccountItem',
     'TelegramAccountResponse',
     'TelegramAccountsResponse',

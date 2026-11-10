@@ -69,10 +69,16 @@ export function socketUrl(
         /** The bearer token, where this browser has one. Absent on a cookie
          *  session, which is the case that needs no credential in a URL. */
         accessToken?: string | null;
+        /** `rtc` carries WebRTC signalling instead of the VNC picture. */
+        transport?: "vnc" | "rtc";
+        /** This pane's name, which the resize lease follows. See `presets.ts`. */
+        viewer?: string | null;
     },
 ): string {
     const base = api.replace(/^http/, "ws").replace(/\/$/, "");
     const query = new URLSearchParams({ mode: options.mode });
+    if (options.transport === "rtc") query.set("transport", "rtc");
+    if (options.viewer) query.set("viewer", options.viewer);
     /* One or the other, never both: a sign-in names the site it is for, and
        the server resolves the session from that. Sending a conversation beside
        it would be a second answer to a question with one. */
