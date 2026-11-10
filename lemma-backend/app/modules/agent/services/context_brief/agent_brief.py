@@ -348,18 +348,18 @@ class AgentContextBriefBuilder:
             profile = await repo.get_user_profile(user_id)
         lines = [
             "# Runtime Context",
-            f"- Pod: {pod.name or '(unknown)'} ({pod_id})",
+            f"- This Lemma: {pod.name or '(unknown)'} (pod id {pod_id})",
         ]
         if pod.description and pod.description.strip():
             # The one sentence the team wrote about their own work. The brief
             # named the pod and never said what it was for, so an agent had the
             # id of a thing it could not describe.
-            lines.append(f"- What this pod is for: {pod.description.strip()}")
-        if pod.owns:
-            # What the pod owns and how it is counted. The plan for getting there
-            # is a file the line points at, read when the work needs it rather
-            # than carried in every prompt.
-            lines.append(f"- What this pod owns: {pod.owns}")
+            lines.append(f"- What this Lemma is for: {pod.description.strip()}")
+        # What it owns and how it is counted. The plan for getting there is a
+        # file the line points at, read when the work needs it rather than
+        # carried in every prompt. Owning nothing is said too: the agent's
+        # prompt tells it what to do then, and silence read as "no idea".
+        lines.append(f"- What this Lemma owns: {pod.owns or 'nothing yet'}")
         lines.extend(user_lines(profile, user_id))
 
         lines.extend(

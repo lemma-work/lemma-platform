@@ -25,7 +25,8 @@
     {
       "name": "link",
       "type": "TEXT",
-      "required": false
+      "required": false,
+      "unique": true
     },
     {
       "name": "status",

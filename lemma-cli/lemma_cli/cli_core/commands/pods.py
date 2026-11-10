@@ -806,6 +806,434 @@ def members(
         emit(state, result)
 
 
+# -- starting a Lemma, and what it owns ----------------------------------------------
+
+owns_app = typer.Typer(
+    help="What a pod owns: a bar held every week or a finish line by a date, "
+    "and where its number stands.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+app.add_typer(owns_app, name="owns")
+
+_OUTCOME_KINDS = ("week", "date")
+
+_TEMPLATES_EXAMPLE = """\
+  lemma pods templates
+  lemma pods templates --output json"""
+
+_START_EXAMPLE = """\
+  lemma pods start --template support
+  lemma pods start --template launch --due 2026-12-01 --name "Spring launch"
+  lemma pods start --name Replies --owns "Every customer hears back within a day" \\
+    --kind week --target 90 --unit %"""
+
+_OWNS_EXAMPLE = """\
+  lemma pods owns
+  lemma pods owns get Support --history 8"""
+
+_OWNS_SET_EXAMPLE = """\
+  lemma pods owns set "Every customer hears back within a day" --kind week \\
+    --target 90 --unit % --measure-file measure.sql --pod Support
+  lemma pods owns set "The launch ships by December 1" --kind date \\
+    --target 22 --unit steps --due 2026-12-01"""
+
+
+def _outcome_kind(value: str) -> str:
+    kind = value.strip().lower()
+    if kind not in _OUTCOME_KINDS:
+        raise typer.BadParameter(
+            "--kind is week (a bar held every week) or date (a finish line)."
+        )
+    return kind
+
+
+def _iso_date(value: str | None, flag: str = "--due") -> str | None:
+    if value is None:
+        return None
+    from datetime import date
+
+    try:
+        return date.fromisoformat(value.strip()).isoformat()
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{flag} is a date like 2026-12-01, got {value!r}."
+        ) from exc
+
+
+def _number(value: object) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:g}"
+    return "" if value is None else str(value)
+
+
+def _held_to(target: object, unit: object) -> str:
+    """90 with % reads "90%"; 22 with steps reads "22 steps"."""
+    if target is None:
+        return ""
+    number = _number(target)
+    if not unit:
+        return number
+    return f"{number}{unit}" if unit == "%" else f"{number} {unit}"
+
+
+def _template_cards(client) -> list[dict[str, Any]]:  # type: ignore[no-untyped-def]
+    """The templates this server ships, as cards.
+
+    The SDK has no wrapper for `GET /pods/bundle/templates` yet, so this calls
+    its generated endpoint and raises the SDK's own error on a refusal, which
+    `run_with_client` reports (and refreshes a lapsed session on) like any other.
+    """
+    import json
+
+    from lemma_sdk.errors import LemmaAPIError
+    from lemma_sdk.openapi_client.api.pod_bundle import pod_bundle_templates
+
+    response = pod_bundle_templates.sync_detailed(client=client.generated)
+    status_code = int(response.status_code)
+    if status_code >= 400:
+        message = "Request failed"
+        try:
+            body = json.loads(response.content or b"null")
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            message = str(body.get("message") or body.get("detail") or message)
+        raise LemmaAPIError(status_code=status_code, message=message)
+    return [to_plain(card) for card in response.parsed or []]
+
+
+@app.command("templates", epilog=f"Examples:\n\n{_TEMPLATES_EXAMPLE}")
+def list_templates(ctx: typer.Context) -> None:
+    """List the templates a Lemma can start from."""
+    state = state_from_ctx(ctx)
+    cards = run_with_client(ctx, lambda client, s: _template_cards(client))
+    if cards is None:
+        return
+    if state.output == "json":
+        emit(state, cards)
+        return
+    view = Table(box=box.SIMPLE_HEAVY)
+    for heading in ("Template", "Name", "Owns", "Held to"):
+        view.add_column(heading, overflow="fold")
+    for card in cards:
+        outcome = card.get("outcome") or {}
+        held = _held_to(outcome.get("target"), outcome.get("unit"))
+        if card.get("kind") == "date":
+            held = f"{held} by --due".strip()
+        else:
+            held = f"{held} every week".strip()
+        view.add_row(
+            escape(str(card.get("id") or "")),
+            escape(str(card.get("name") or "")),
+            escape(str(card.get("sentence") or "")),
+            escape(held),
+        )
+    console.print(view)
+    err_console.print(
+        "[dim]start one with[/dim] lemma pods start --template <template>"
+    )
+
+
+@app.command("start", epilog=f"Examples:\n\n{_START_EXAMPLE}")
+def start_lemma(
+    ctx: typer.Context,
+    template: str | None = typer.Option(
+        None,
+        "--template",
+        help="Start from a template; `lemma pods templates` lists them.",
+    ),
+    owns: str | None = typer.Option(
+        None, "--owns", help="Or say what it owns, as one sentence a person can check."
+    ),
+    kind: str | None = typer.Option(
+        None,
+        "--kind",
+        help="With --owns: week (a bar held every week) or date (a finish line).",
+    ),
+    target: float | None = typer.Option(
+        None, "--target", help="With --owns: the number it is held to, e.g. 90."
+    ),
+    unit: str | None = typer.Option(
+        None,
+        "--unit",
+        help="With --owns: % for a share from 0 to 100, else what it counts.",
+    ),
+    due: str | None = typer.Option(
+        None, "--due", help="A finish line's date, e.g. 2026-12-01."
+    ),
+    name: str | None = typer.Option(
+        None, "--name", help="Its short name. A template's own when omitted."
+    ),
+    description: str | None = typer.Option(None, "--description"),
+    org: str | None = typer.Option(None, "--org"),
+) -> None:
+    """Start a Lemma: a new pod that owns something, and the chat where it sets itself up."""
+    from lemma_sdk.openapi_client.models.start_lemma_request import StartLemmaRequest
+
+    state = state_from_ctx(ctx)
+    if (template is None) == (owns is None):
+        raise typer.BadParameter("Start from --template or from --owns, not both.")
+    due_date = _iso_date(due)
+    body: dict[str, Any] = {"name": name, "description": description}
+    if template is not None:
+        if kind is not None or target is not None or unit is not None:
+            raise typer.BadParameter(
+                "--kind, --target and --unit go with --owns; a template brings its own."
+            )
+        body.update(template=template, due=due_date)
+    else:
+        if kind is None:
+            raise typer.BadParameter("--owns needs --kind week or --kind date.")
+        if name is None:
+            raise typer.BadParameter("A Lemma started from --owns needs a --name.")
+        outcome_kind = _outcome_kind(kind)
+        if outcome_kind == "date" and due_date is None:
+            raise typer.BadParameter("--kind date needs --due.")
+        if outcome_kind == "week" and due_date is not None:
+            raise typer.BadParameter("--due goes with --kind date.")
+        body["outcome"] = {
+            "sentence": owns,
+            "kind": outcome_kind,
+            "target": target,
+            "unit": unit,
+            "due": due_date,
+        }
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        payload = {"organization_id": selected_org_id(client, s, org), **body}
+        if isinstance(payload.get("outcome"), dict):
+            payload["outcome"] = {
+                key: value
+                for key, value in payload["outcome"].items()
+                if value is not None
+            }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        return client.pods.start(build_request(StartLemmaRequest, payload))
+
+    result = run_with_client(ctx, run)
+    if result is None:
+        return
+    emit(state, result)
+    started = to_plain(result)
+    pod_id = str((started.get("pod") or {}).get("id") or "")
+    conversation_id = str(started.get("conversation_id") or "")
+    if pod_id and conversation_id:
+        err_console.print(
+            f"[dim]follow the setup chat:[/dim] lemma conversations stream "
+            f"{conversation_id} --pod {pod_id}\n"
+            f"[dim]read it:[/dim] lemma conversations messages {conversation_id} "
+            f"--pod {pod_id}\n"
+            f"[dim]reply in it:[/dim] lemma --pod {pod_id} chat --conversation "
+            f"{conversation_id}",
+            soft_wrap=True,
+        )
+
+
+def _render_standing(data: dict[str, Any]) -> None:
+    outcome = data.get("outcome")
+    if not isinstance(outcome, dict):
+        console.print("This pod owns nothing yet.")
+        err_console.print(
+            '[dim]set it with[/dim] lemma pods owns set "<sentence>" --kind week|date'
+        )
+        return
+    kind = outcome.get("kind")
+    shape = "a bar held every week" if kind == "week" else "a finish line"
+    rows: list[tuple[str, str]] = [
+        ("Owns", str(outcome.get("sentence") or "")),
+        ("Kind", f"{kind} ({shape})"),
+        ("Target", _held_to(outcome.get("target"), outcome.get("unit"))),
+    ]
+    if outcome.get("due"):
+        rows.append(("Due", str(outcome["due"])))
+    if outcome.get("since"):
+        rows.append(("Since", str(outcome["since"])))
+    rows.append(("Measure", str(outcome.get("measure") or "(none yet)")))
+    if data.get("problem"):
+        now = f"cannot be read: {data['problem']}"
+    elif data.get("value") is None:
+        now = "no reading" if outcome.get("measure") else "no measure yet"
+    else:
+        now = _held_to(data.get("value"), outcome.get("unit"))
+    if data.get("measured_at"):
+        now = f"{now}  (measured {data['measured_at']})"
+    rows.append(("Now", now))
+    view = Table(box=None, show_header=False, pad_edge=False)
+    view.add_column(style="dim")
+    view.add_column(overflow="fold")
+    for label, value in rows:
+        view.add_row(label, escape(value))
+    console.print(view)
+
+    weeks = data.get("weeks")
+    if isinstance(weeks, list):
+        history = Table(title="Weeks", box=box.SIMPLE_HEAVY)
+        for heading in ("Week of", "Value", "Target", "Measured at", "Problem"):
+            history.add_column(heading, overflow="fold")
+        unit = outcome.get("unit")
+        for week in weeks:
+            if not isinstance(week, dict):
+                continue
+            history.add_row(
+                escape(str(week.get("starts_on") or "")),
+                escape(_held_to(week.get("value"), unit)),
+                escape(_held_to(week.get("target"), unit)),
+                escape(str(week.get("measured_at") or "")),
+                escape(str(week.get("problem") or "")),
+            )
+        console.print(history)
+
+
+def _show_owns(ctx: typer.Context, pod: str | None, history: int | None) -> None:
+    state = state_from_ctx(ctx)
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        pod_id = resolve_pod_id(client, s, pod)
+        standing = dict(to_plain(client.pods.outcome_standing(pod_id)) or {})
+        if history:
+            weeks = to_plain(client.pods.outcome_history(pod_id, weeks=history))
+            standing["weeks"] = (weeks or {}).get("weeks") or []
+        return standing
+
+    result = run_with_client(ctx, run)
+    if result is None:
+        return
+    if state.output == "json":
+        emit(state, result)
+        return
+    _render_standing(result)
+
+
+_HISTORY_OPTION_HELP = "Also show the last N weeks, oldest first."
+
+
+@owns_app.callback(epilog=f"Examples:\n\n{_OWNS_EXAMPLE}")
+def owns_root(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(None, "--pod"),
+    history: int | None = typer.Option(
+        None, "--history", min=1, help=_HISTORY_OPTION_HELP
+    ),
+) -> None:
+    """Show what the pod owns and where its number stands."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _show_owns(ctx, pod, history)
+
+
+@owns_app.command("get", epilog=f"Examples:\n\n{_OWNS_EXAMPLE}")
+def get_owns(
+    ctx: typer.Context,
+    pod: str | None = typer.Argument(None, help="Pod id or name."),
+    pod_option: str | None = typer.Option(
+        None, "--pod", help="Same as the positional."
+    ),
+    history: int | None = typer.Option(
+        None, "--history", min=1, help=_HISTORY_OPTION_HELP
+    ),
+) -> None:
+    """Show what the pod owns and where its number stands."""
+    _show_owns(ctx, pod_option or pod, history)
+
+
+@owns_app.command("set", epilog=f"Examples:\n\n{_OWNS_SET_EXAMPLE}")
+def set_owns(
+    ctx: typer.Context,
+    sentence: str = typer.Argument(
+        ..., help="What it owns, as one sentence a person can check."
+    ),
+    kind: str = typer.Option(
+        ...,
+        "--kind",
+        help="week (a bar held every week) or date (a finish line by --due).",
+    ),
+    target: float | None = typer.Option(
+        None, "--target", help="The number it is held to."
+    ),
+    unit: str | None = typer.Option(
+        None, "--unit", help="% for a share from 0 to 100, else what it counts."
+    ),
+    due: str | None = typer.Option(
+        None, "--due", help="A finish line's date, e.g. 2026-12-01."
+    ),
+    measure: str | None = typer.Option(
+        None,
+        "--measure",
+        help="One read-only SQL query over the pod's tables that answers one number.",
+    ),
+    measure_file: Path | None = typer.Option(
+        None,
+        "--measure-file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Read the measure from a file.",
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Set what the pod owns, replacing all of it: pass the measure again to keep it."""
+    from lemma_sdk.openapi_client.models.outcome_input import OutcomeInput
+
+    state = state_from_ctx(ctx)
+    outcome_kind = _outcome_kind(kind)
+    due_date = _iso_date(due)
+    if outcome_kind == "date" and due_date is None:
+        raise typer.BadParameter("--kind date needs --due.")
+    if outcome_kind == "week" and due_date is not None:
+        raise typer.BadParameter("--due goes with --kind date.")
+    if measure is not None and measure_file is not None:
+        raise typer.BadParameter("Pass --measure or --measure-file, not both.")
+    if measure_file is not None:
+        measure = measure_file.read_text(encoding="utf-8").strip()
+    body = {
+        key: value
+        for key, value in {
+            "sentence": sentence,
+            "kind": outcome_kind,
+            "target": target,
+            "unit": unit,
+            "due": due_date,
+            "measure": measure,
+        }.items()
+        if value is not None
+    }
+    result = run_with_client(
+        ctx,
+        lambda client, s: client.pods.set_outcome(
+            resolve_pod_id(client, s, pod), build_request(OutcomeInput, body)
+        ),
+    )
+    if result is None:
+        return
+    if state.output == "json":
+        emit(state, result)
+        return
+    _render_standing(to_plain(result))
+
+
+@owns_app.command("clear")
+def clear_owns(
+    ctx: typer.Context,
+    pod: str | None = typer.Argument(None, help="Pod id or name."),
+    pod_option: str | None = typer.Option(
+        None, "--pod", help="Same as the positional."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    """Let go of what the pod owns. Its weeks are kept; nothing else changes."""
+    state = state_from_ctx(ctx)
+    target = pod_option or pod
+    selector = selected_pod(state, target) or ""
+    confirm_destructive(f"Clear what pod {selector} owns?", yes)
+    result = run_with_client(
+        ctx,
+        lambda client, s: client.pods.clear_outcome(resolve_pod_id(client, s, target)),
+    )
+    if result is None:
+        emit(state, {"ok": True})
+
+
 @app.command("export")
 def export_pod(
     ctx: typer.Context,

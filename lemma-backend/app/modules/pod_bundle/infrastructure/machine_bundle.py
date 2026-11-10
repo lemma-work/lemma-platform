@@ -8,7 +8,7 @@ the architecture ratchet allows to grow, on the same grounds as
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from dataclasses import asdict
 from pathlib import Path
 from uuid import UUID
@@ -17,6 +17,9 @@ from lemma_pod_bundle.layout import _write_json
 from lemma_pod_bundle.normalize import _normalize_machine_payload
 
 from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+
+if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 
 async def export_machines(
@@ -68,7 +71,15 @@ async def machine_steps(bundle_root: Path, pod: MachineNames) -> list[PlanStep]:
     ]
 
 
-async def pod_machine_names(uow, pod_id: UUID) -> set[str]:
-    from app.modules.workspace.contracts.pod_machines import list_pod_machine_names
+class PodMachineNames:
+    """:class:`MachineNames` over a pod's UoW, for the production lookup."""
 
-    return await list_pod_machine_names(uow, pod_id=pod_id)
+    _uow: SqlAlchemyUnitOfWork
+    _pod_id: UUID
+
+    async def machine_names(self) -> set[str]:
+        from app.modules.workspace.contracts.pod_machines import (
+            list_pod_machine_names,
+        )
+
+        return await list_pod_machine_names(self._uow, pod_id=self._pod_id)

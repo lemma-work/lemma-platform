@@ -30,7 +30,8 @@
     {
       "name": "link",
       "type": "TEXT",
-      "required": false
+      "required": false,
+      "unique": true
     },
     {
       "name": "opened_at",
@@ -50,6 +51,11 @@
     {
       "name": "with_person",
       "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "drafted_at",
+      "type": "DATETIME",
       "required": false
     }
   ]

@@ -12662,6 +12662,79 @@
         "title": "ImpactedPodConnector",
         "type": "object"
       },
+      "ImportPlanOutcome": {
+        "description": "What the bundle's pod owned, and what the import does with it.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/OutcomePlanAction",
+            "description": "SET: the pod owns nothing yet, and the import sets this. KEEP: the pod already owns something else and keeps it; this is not set. SAME: the pod already owns this (same sentence, kind, target, unit and due)."
+          },
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The finish line's date.",
+            "title": "Due"
+          },
+          "has_measure": {
+            "default": false,
+            "description": "Whether the bundle carries a measure. It is read as the person importing when the import applies; one they cannot read is left off, with a warning, and the rest is still set.",
+            "title": "Has Measure",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "week: a bar held every week. date: a finish line by `due`.",
+            "enum": [
+              "week",
+              "date"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sentence": {
+            "description": "What it owns, as one sentence.",
+            "title": "Sentence",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The number its measure is held to, if set.",
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'%' for a share; otherwise what it counts.",
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind",
+          "action"
+        ],
+        "title": "ImportPlanOutcome",
+        "type": "object"
+      },
       "ImportPlanResponse": {
         "properties": {
           "bundle_name": {
@@ -12691,6 +12764,17 @@
             "default": false,
             "title": "Has Destructive Steps",
             "type": "boolean"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportPlanOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the bundle's pod owned (`pod.json -> outcome`) and whether the import sets it on this pod, which it does only when the pod owns nothing yet. Null when the bundle's pod owned nothing, when its block is invalid (said in `warnings`), or for a template import, whose start sets it."
           },
           "steps": {
             "items": {
@@ -16759,6 +16843,16 @@
           "date"
         ],
         "title": "OutcomeKind",
+        "type": "string"
+      },
+      "OutcomePlanAction": {
+        "description": "What an import does with what its bundle's pod owned.",
+        "enum": [
+          "SET",
+          "KEEP",
+          "SAME"
+        ],
+        "title": "OutcomePlanAction",
         "type": "string"
       },
       "OutcomeSetResponse": {

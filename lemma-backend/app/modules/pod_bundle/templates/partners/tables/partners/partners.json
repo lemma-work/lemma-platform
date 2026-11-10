@@ -18,6 +18,12 @@
       "required": true
     },
     {
+      "name": "link",
+      "type": "TEXT",
+      "required": false,
+      "unique": true
+    },
+    {
       "name": "owner",
       "type": "TEXT",
       "required": false

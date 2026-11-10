@@ -112,6 +112,7 @@ from lemma_pod_bundle.apply_fields import (
 
 from lemma_sdk import Lemma
 
+from .pod_bundle_outcome import bundle_outcome, carry_outcome, plan_outcome
 from .pod_bundle_connectors import (
     declare_pod_connectors,
     export_pod_connectors,
@@ -2523,7 +2524,9 @@ def import_pod_bundle(
         summary["connectors"] = [
             f"created:{item.connector.slug}" for item in planned_connectors
         ] + [f"kept:{slug}" for slug in kept_connectors]
+    owned_block = bundle_outcome(source_dir)
     if dry_run:
+        summary["outcome"] = plan_outcome(client, pod_id, owned_block)
         return {
             "ok": len(issues) == 0,
             "dry_run": True,
@@ -3085,6 +3088,12 @@ def import_pod_bundle(
         _progress_done(
             kind, resource_name, f"replaced permissions ({len(grants)} grant(s))"
         )
+
+    # Last, so its measure counts the tables and rows applied above.
+    summary["outcome"], owned_notes = carry_outcome(client, pod_id, owned_block)
+    for note in owned_notes:
+        console.print(f"[yellow]advisory[/yellow] {note}")
+    advisories = [*advisories, *owned_notes]
 
     return {
         "ok": True,
