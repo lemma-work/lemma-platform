@@ -456,6 +456,8 @@ function mergedHead(plan: Plan, before: Plan, head: string, front: string | null
         if (meta[key]) kept[key] = meta[key];
         else delete kept[key];
     }
+    /* Nothing left once what it owns moved onto the Lemma: no empty block. */
+    if (!Object.keys(kept).length) return "";
     return "---\n" + dump(kept, { lineWidth: -1 }) + "---";
 }
 
@@ -515,7 +517,9 @@ function mergePlan(plan: Plan, onto: string): string {
         while (out.length && !out[out.length - 1].trim()) out.pop();
         out.push("", `## ${SECTION_TITLES[section]}`, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`), "");
     }
-    return mergedHead(plan, before, head, front) + out.join("\n");
+    const top = mergedHead(plan, before, head, front);
+    /* A block that was taken away leaves the blank line after it behind. */
+    return top || !head ? top + out.join("\n") : out.join("\n").replace(/^\n+/, "");
 }
 
 export interface DraftInput {

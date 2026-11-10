@@ -27,7 +27,7 @@
     "kind": "week",
     "target": 90,
     "unit": "%",
-    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE reviewed_same_day) / nullif(count(*), 0), 1) FROM pull_requests WHERE opened_at >= date_trunc('week', now())"
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE reviewed_same_day) / nullif(count(*) FILTER (WHERE reviewed_at IS NOT NULL OR opened_at < date_trunc('day', now())), 0), 1) FROM pull_requests WHERE opened_at >= date_trunc('week', now())"
   },
   "variables": {}
 }

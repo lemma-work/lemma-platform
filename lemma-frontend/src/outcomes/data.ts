@@ -310,12 +310,16 @@ export async function askIn(podId: string, text: string): Promise<string | null>
     return conversation.id;
 }
 
-/** What "Ask Lemma to write the plan" sends: set what it owns where the
- *  server keeps it, then the plan's lines in the file this frame reads. */
-export function planRequest(outcome: string): string {
+/** What "Write it with {name}" sends, for a Lemma that owns nothing yet.
+ *  `purpose` is what it is for, its description, which is not yet a result
+ *  it owns. What it owns is kept with `set_what_you_own`, on the Lemma; the
+ *  file holds the plan's prose, in the sections this frame reads back line
+ *  for line. */
+export function planRequest(purpose: string): string {
+    const why = purpose.trim();
     return [
-        `Set what you own with set_what_you_own${outcome ? `: "${outcome}"` : ""} -- one sentence, a bar held every week or a finish line by a date, its target, and a measure: one read-only SQL query over this pod's tables that returns a single number. Build the tables it counts first.`,
-        `Then write the plan to ${PLAN_PATH} in four sections: ## What must be true, ## How we work, ## Who holds what, ## Never. One line per bullet, each ending with " — Lemma, <Mon D>". No front matter: what you own is kept on the pod.`,
-        "Only write lines that name something that exists here or that you are about to set up. If you build anything for this, say what you built in your reply.",
+        `${why ? `You are here for: "${why}". ` : ""}Work out with me one result you should own, a bar held every week or a finish line by a date, and keep it with set_what_you_own, with a measure once what it counts exists.`,
+        `Then write the plan in ${PLAN_PATH} under ## What must be true, ## How we work, ## Who holds what and ## Never: one line per bullet, each ending with who said it and when. No front matter: what you own is kept on the Lemma.`,
+        "Only write lines that name something that exists here or that you are about to set up, and say what you built.",
     ].join(" ");
 }
