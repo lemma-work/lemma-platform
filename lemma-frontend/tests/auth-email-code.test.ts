@@ -63,7 +63,7 @@ test("malformed successful responses never advance the flow", async () => {
     await assert.rejects(startEmailCode("person@example.test", "binding", async () => new Response("bad gateway", { status: 502 })), /Unable to continue/);
 });
 
-for (const answer of [{ method: "password" }, { method: "thirdparty", provider: "google" }, { method: "thirdparty", provider: "active-directory" }, { method: "code", challenge_id: "new", expires_at: "2030-01-01T00:00:00Z" }]) {
+for (const answer of [{ method: "password" }, { method: "thirdparty", provider: "google" }, { method: "thirdparty", provider: "active-directory" }, { method: "thirdparty", provider: "apple" }, { method: "code", challenge_id: "new", expires_at: "2030-01-01T00:00:00Z" }]) {
     test(`continue selects ${JSON.stringify(answer)} and abandons the previous challenge`, async () => {
         const result = await continueEmail(" person@example.test ", "binding", "old", async (url, options) => {
             assert.match(String(url), /email-code\/continue$/);

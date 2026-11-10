@@ -9,9 +9,21 @@ import { stUrl } from "./config";
  *  reach. A button for a provider nobody configured ends at the provider's
  *  "unknown client" page, which is the worst place to learn it.
  */
-export type ProviderId = "google" | "active-directory";
+export type ProviderId = "google" | "active-directory" | "apple";
 
-const KNOWN: readonly ProviderId[] = ["google", "active-directory"];
+const KNOWN: readonly ProviderId[] = ["google", "active-directory", "apple"];
+
+/** What a person calls each provider. Microsoft's id is SuperTokens' name for
+ *  its recipe, which nobody signing in would recognise. */
+export const PROVIDER_NAMES: Record<ProviderId, string> = {
+    "google": "Google",
+    "active-directory": "Microsoft",
+    "apple": "Apple",
+};
+
+export function isProviderId(value: unknown): value is ProviderId {
+    return typeof value === "string" && (KNOWN as readonly string[]).includes(value);
+}
 
 function record(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;

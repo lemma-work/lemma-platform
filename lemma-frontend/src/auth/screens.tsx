@@ -19,8 +19,8 @@ import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { waitingFor } from "./waiting";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { HideIcon, LemmaLogo, ShowIcon } from "@/ui/icons";
-import { GoogleMark, MicrosoftMark } from "./marks";
-import { fetchConfiguredProviders, type ProviderId } from "./login-methods";
+import { AppleMark, GoogleMark, MicrosoftMark } from "./marks";
+import { fetchConfiguredProviders, PROVIDER_NAMES, type ProviderId } from "./login-methods";
 import { portalTrip } from "@/session/portal-trip";
 
 /* ── the two panes ──────────────────────────────────────────────────── */
@@ -324,13 +324,17 @@ function ReturnLoop({ destination }: { destination: string }) {
 
 /* ── the providers ──────────────────────────────────────────────────── */
 
-/** Google and Microsoft, which are the two the backend can register — see
- *  `build_thirdparty_providers`, where each is conditional on being
- *  configured. Only the ones this deployment registered are drawn: it says
- *  which through SuperTokens' `/loginmethods` (`login-methods.ts`). */
-const PROVIDERS: { id: ProviderId; name: string; Mark: typeof GoogleMark }[] = [
-    { id: "google", name: "Google", Mark: GoogleMark },
-    { id: "active-directory", name: "Microsoft", Mark: MicrosoftMark },
+/** Google, Microsoft and Apple, which are the three the backend can
+ *  register — see `build_thirdparty_providers`, where each is conditional on
+ *  being configured. Only the ones this deployment registered are drawn: it
+ *  says which through SuperTokens' `/loginmethods` (`login-methods.ts`).
+ *
+ *  Apple's is drawn in Apple's own black or white (`.auth__apple`) and the
+ *  same size as the others, which is what its rules ask of a custom button. */
+const PROVIDERS: { id: ProviderId; Mark: typeof GoogleMark; className?: string }[] = [
+    { id: "google", Mark: GoogleMark },
+    { id: "active-directory", Mark: MicrosoftMark },
+    { id: "apple", Mark: AppleMark, className: "auth__apple" },
 ];
 
 /** The configured providers, or null until the deployment has said. Nothing
@@ -363,12 +367,12 @@ function Providers({ configured, onProblem }: { configured: ProviderId[]; onProb
             {PROVIDERS.filter((provider) => configured.includes(provider.id)).map((provider) => (
                 <button
                     key={provider.id}
-                    className="btn auth__provider"
+                    className={["btn auth__provider", provider.className].filter(Boolean).join(" ")}
                     disabled={going !== null}
                     onClick={() => void leave(provider.id)}
                 >
                     <provider.Mark />
-                    <span>{going === provider.id ? <LoadingIndicator inline label={"Connecting to " + provider.name} /> : "Continue with " + provider.name}</span>
+                    <span>{going === provider.id ? <LoadingIndicator inline label={"Connecting to " + PROVIDER_NAMES[provider.id]} /> : "Continue with " + PROVIDER_NAMES[provider.id]}</span>
                 </button>
             ))}
         </div>
