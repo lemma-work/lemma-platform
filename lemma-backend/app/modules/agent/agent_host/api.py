@@ -78,6 +78,55 @@ if TYPE_CHECKING:
     from app.modules.agent.agent_host.link.registry import (
         link_registry as link_registry,
     )
+    from app.modules.agent.agent_host.domain.host import (
+        AGENT_HOST_PROTOCOL_VERSION as AGENT_HOST_PROTOCOL_VERSION,
+    )
+    from app.modules.agent.agent_host.domain.link import (
+        AGENT_HOST_LINK_HEARTBEAT_MS as AGENT_HOST_LINK_HEARTBEAT_MS,
+        AGENT_HOST_LINK_MISSED_HEARTBEATS as AGENT_HOST_LINK_MISSED_HEARTBEATS,
+        REVOKED_OR_MISSING_REASON as REVOKED_OR_MISSING_REASON,
+        HostFrameType as HostFrameType,
+        LinkCloseCode as LinkCloseCode,
+        LinkErrorCode as LinkErrorCode,
+        LinkFrame as LinkFrame,
+        ServerFrameType as ServerFrameType,
+    )
+    from app.modules.agent.agent_host.domain.compute import (
+        COMPUTE_MIN_PROTOCOL_VERSION as COMPUTE_MIN_PROTOCOL_VERSION,
+        COMPUTE_PAIRING_TTL_SECONDS as COMPUTE_PAIRING_TTL_SECONDS,
+        ComputeControlBody as ComputeControlBody,
+        ComputeControlOkBody as ComputeControlOkBody,
+        ComputeHelloBody as ComputeHelloBody,
+        ComputePairBody as ComputePairBody,
+        ComputePairedBody as ComputePairedBody,
+        ComputeWelcomeBody as ComputeWelcomeBody,
+        MachineMode as MachineMode,
+        MachineReport as MachineReport,
+        RuntimeBundleTarget as RuntimeBundleTarget,
+        RuntimeGrant as RuntimeGrant,
+        StreamTargetKind as StreamTargetKind,
+    )
+    from app.modules.agent.agent_host.control.channels import (
+        REVOKED as REVOKED,
+        parse_host_notice as parse_host_notice,
+    )
+    from app.modules.agent.agent_host.link.mcp_relay import (
+        notice_stream as notice_stream,
+    )
+    from app.modules.agent.agent_host.link.ownership import (
+        LinkOwnership as LinkOwnership,
+    )
+    from app.modules.agent.agent_host.link.wire import (
+        TRANSIENT_ERRORS as TRANSIENT_ERRORS,
+        EmptyBody as EmptyBody,
+        LinkClose as LinkClose,
+        LinkSocket as LinkSocket,
+        LinkWriter as LinkWriter,
+        bearer_secret as bearer_secret,
+        log_host_reported_error as log_host_reported_error,
+        validation_summary as validation_summary,
+    )
+
 
 _PACKAGE = "app.modules.agent.agent_host"
 
@@ -113,6 +162,40 @@ _EXPORTS: dict[str, str] = {
     "RemoteHarness": "harness.harness",
     "host_pre_approves": "harness.pre_approvals",
     "link_registry": "link.registry",
+    "AGENT_HOST_PROTOCOL_VERSION": "domain.host",
+    "AGENT_HOST_LINK_HEARTBEAT_MS": "domain.link",
+    "AGENT_HOST_LINK_MISSED_HEARTBEATS": "domain.link",
+    "REVOKED_OR_MISSING_REASON": "domain.link",
+    "HostFrameType": "domain.link",
+    "LinkCloseCode": "domain.link",
+    "LinkErrorCode": "domain.link",
+    "LinkFrame": "domain.link",
+    "ServerFrameType": "domain.link",
+    "COMPUTE_MIN_PROTOCOL_VERSION": "domain.compute",
+    "COMPUTE_PAIRING_TTL_SECONDS": "domain.compute",
+    "ComputeControlBody": "domain.compute",
+    "ComputeControlOkBody": "domain.compute",
+    "ComputeHelloBody": "domain.compute",
+    "ComputePairBody": "domain.compute",
+    "ComputePairedBody": "domain.compute",
+    "ComputeWelcomeBody": "domain.compute",
+    "MachineMode": "domain.compute",
+    "MachineReport": "domain.compute",
+    "RuntimeBundleTarget": "domain.compute",
+    "RuntimeGrant": "domain.compute",
+    "StreamTargetKind": "domain.compute",
+    "REVOKED": "control.channels",
+    "parse_host_notice": "control.channels",
+    "notice_stream": "link.mcp_relay",
+    "LinkOwnership": "link.ownership",
+    "TRANSIENT_ERRORS": "link.wire",
+    "EmptyBody": "link.wire",
+    "LinkClose": "link.wire",
+    "LinkSocket": "link.wire",
+    "LinkWriter": "link.wire",
+    "bearer_secret": "link.wire",
+    "log_host_reported_error": "link.wire",
+    "validation_summary": "link.wire",
 }
 
 

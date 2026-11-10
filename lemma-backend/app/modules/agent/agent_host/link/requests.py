@@ -50,6 +50,7 @@ from app.modules.agent.agent_host.link.wire import (
     OutboundFrameTooLarge,
     SentCommands,
     event_error,
+    log_skipped_config_options,
     parse_control_items,
 )
 from app.modules.agent.agent_host.mcp_authorization import RelayingHost
@@ -139,16 +140,7 @@ class LinkedHostRequests:
     async def harnesses(self, frame: LinkFrame) -> None:
         host_id = self.host.host_id
         body = HarnessesBody.model_validate(frame.body)
-        for snapshot in body.harnesses:
-            # An option the agent added that this build cannot offer. Named by
-            # its type, never by its content; the rest of the harness stands.
-            if snapshot.skipped_config_options:
-                logger.info(
-                    "agent.agent_host_link.config_options_skipped",
-                    host_id=str(host_id),
-                    harness_key=snapshot.harness_key,
-                    skipped=sorted(set(snapshot.skipped_config_options)),
-                )
+        log_skipped_config_options(body, host_id=host_id)
         try:
             items = await self._store.publish_harnesses(
                 host_id=host_id, snapshots=body.harnesses

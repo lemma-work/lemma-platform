@@ -1,4 +1,5 @@
-"""One provider in front of two: the deployment's own, and the user's Mac.
+"""One provider in front of the deployment's own, the user's Mac, and the
+machines people joined with ``lemma machine connect``.
 
 A Desktop local install runs most sandboxes in its VM and a paired user's host
 sandboxes on the Mac (docs/architecture/desktop-host-execution.md). The service
@@ -8,8 +9,10 @@ answers every provider call by routing it on the sandbox it names.
 The route is read from the sandbox id, which is where the choice is recorded
 (``domain/host_execution``). So a host sandbox can only ever reach the host and
 nothing else can, whatever the host is doing, and no call needs a lookup to
-find out which it is. Everything that is not a host sandbox -- including every
-function sandbox and every sweep -- goes to the default provider unchanged.
+find out which it is. A connected machine's id carries a tag of its own
+(``domain/machine_connection``) and goes to the connected fabric the same way.
+Everything else -- including every function sandbox and every sweep -- goes to
+the default provider unchanged.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from sandbox_runtime.protocol import (
 )
 
 from app.modules.workspace.domain.host_execution import is_host_sandbox_id
+from app.modules.workspace.domain.machine_connection import is_connected_machine_id
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.runtime_client import RuntimeState
@@ -47,9 +51,10 @@ from app.modules.workspace.providers.base import (
 class HostRoutingProvider:
     """``SandboxProvider`` + ``SandboxOpsProvider``, routed by sandbox id."""
 
-    def __init__(self, default, host) -> None:
+    def __init__(self, default, host=None, *, connected=None) -> None:
         self.default = default
         self.host = host
+        self.connected = connected
         self.name = default.name
         self.storage_kind = getattr(default, "storage_kind", ProviderStorageKind.VOLUME)
         self.resumes_stopped_instances = getattr(
@@ -61,7 +66,11 @@ class HostRoutingProvider:
     # ------------------------------------------------------------ routing
 
     def for_sandbox(self, sandbox_id: UUID):
-        return self.host if is_host_sandbox_id(sandbox_id) else self.default
+        if self.connected is not None and is_connected_machine_id(sandbox_id):
+            return self.connected
+        if self.host is not None and is_host_sandbox_id(sandbox_id):
+            return self.host
+        return self.default
 
     def for_name(self, name: str):
         parsed = naming.parse_container_name(name)
@@ -131,7 +140,9 @@ class HostRoutingProvider:
         try:
             await self.default.close()
         finally:
-            await self.host.close()
+            for extra in (self.host, self.connected):
+                if extra is not None:
+                    await extra.close()
 
     # -------------------------------------------------------------- ops
 

@@ -183,11 +183,18 @@ class MachineConnectionModel(UUIDAuditBase):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     mode: Mapped[str] = mapped_column(Text, nullable=False)
-    secret_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Null between the person's approval and the machine's claim: the secret
+    #: is minted when the machine presents its claim key, so it exists in
+    #: plaintext only in the one frame that carries it.
+    secret_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The installation that claimed it, sent on every ``hello``.
+    installation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    platform: Mapped[str | None] = mapped_column(Text, nullable=True)
     capabilities: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
-    home: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Where its runtime's home is; unknown until its first ``hello``.
+    home: Mapped[str | None] = mapped_column(Text, nullable=True)
     runtime_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     link_generation: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("0")

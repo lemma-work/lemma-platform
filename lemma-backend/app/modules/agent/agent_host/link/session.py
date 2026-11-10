@@ -51,6 +51,7 @@ from app.modules.agent.agent_host.domain.link import (
     ServerFrameType,
     WelcomeBody,
 )
+from app.modules.agent.agent_host.domain.compute import LinkRole
 from app.modules.agent.agent_host.control.repository_common import (
     AgentHostRepositoryError,
 )
@@ -73,6 +74,7 @@ from app.modules.agent.agent_host.link.wire import (
     answer_request,
     LinkClose,
     LinkSocket,
+    ComputeHandler,
     LinkWriter,
     SentCommands,
     bearer_secret,
@@ -122,6 +124,7 @@ class AgentHostLinkSession:
         max_in_flight: int | None = None,
         max_waits: int | None = None,
         transfers: AgentHostTransferStore | None = None,
+        compute: ComputeHandler | None = None,
     ) -> None:
         # The tunables are read here rather than bound as defaults, so a test
         # that shortens the module's floor reaches the session the route builds.
@@ -131,6 +134,7 @@ class AgentHostLinkSession:
         self._mcp = mcp
         self._channels = channels
         self._registry = registry
+        self._compute = compute
         self._heartbeat_ms = heartbeat_ms
         self._silence_limit = heartbeat_ms * AGENT_HOST_LINK_MISSED_HEARTBEATS / 1000
         self._push_floor_seconds = (
@@ -235,6 +239,10 @@ class AgentHostLinkSession:
         try:
             first = await self._next_frame()
             if first is None:
+                return
+            if first.body.get("role") == LinkRole.COMPUTE and self._compute:
+                self._registry.add(self)  # A deploy drains it like any link.
+                await self._compute(self._socket, self._writer, self.stop, first)
                 return
             if first.type == HostFrameType.PAIR:
                 await self._pair(first)
@@ -420,6 +428,7 @@ class AgentHostLinkSession:
             WelcomeBody(
                 host_id=host.host_id,
                 user_id=host.user_id,
+                protocol_version=body.hello.protocol_version,  # As negotiated.
                 heartbeat_ms=self._heartbeat_ms,
             ),
             re=frame.id,

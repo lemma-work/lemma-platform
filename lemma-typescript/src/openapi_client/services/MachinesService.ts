@@ -2,12 +2,16 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ApprovePairingRequest } from '../models/ApprovePairingRequest.js';
 import type { CreatePodMachineRequest } from '../models/CreatePodMachineRequest.js';
+import type { MachineConnectionList } from '../models/MachineConnectionList.js';
+import type { MachineConnectionResponse } from '../models/MachineConnectionResponse.js';
 import type { MachineGrantsModel } from '../models/MachineGrantsModel.js';
 import type { MachineListResponse } from '../models/MachineListResponse.js';
 import type { MachinePolicyResponse } from '../models/MachinePolicyResponse.js';
 import type { MachineResponse } from '../models/MachineResponse.js';
 import type { MachineStartupResponse } from '../models/MachineStartupResponse.js';
+import type { PendingPairingResponse } from '../models/PendingPairingResponse.js';
 import type { ResetRequest } from '../models/ResetRequest.js';
 import type { ResetResponse } from '../models/ResetResponse.js';
 import type { UpdatePodMachineRequest } from '../models/UpdatePodMachineRequest.js';
@@ -15,6 +19,76 @@ import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class MachinesService {
+    /**
+     * List your connected machines
+     * @returns MachineConnectionList Successful Response
+     * @throws ApiError
+     */
+    public static machineConnectionsList(): CancelablePromise<MachineConnectionList> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/machine-connections',
+        });
+    }
+    /**
+     * What a pairing code asks for
+     * @param code
+     * @returns PendingPairingResponse Successful Response
+     * @throws ApiError
+     */
+    public static machineConnectionsPairing(
+        code: string,
+    ): CancelablePromise<PendingPairingResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/machine-connections/pairings/{code}',
+            path: {
+                'code': code,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Disconnect a machine
+     * @param connectionId
+     * @returns void
+     * @throws ApiError
+     */
+    public static machineConnectionsDelete(
+        connectionId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/machine-connections/{connection_id}',
+            path: {
+                'connection_id': connectionId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Approve a machine's pairing code
+     * @param requestBody
+     * @returns MachineConnectionResponse Successful Response
+     * @throws ApiError
+     */
+    public static machineConnectionsPair(
+        requestBody: ApprovePairingRequest,
+    ): CancelablePromise<MachineConnectionResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/machine-connections:pair',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
     /**
      * List the machines you can see
      * @param podId Also list this pod's machines.

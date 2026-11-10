@@ -49,7 +49,11 @@ impl NoConsoleWindow for std::process::Command {
 }
 
 pub const HOST_RELEASE: &str = env!("CARGO_PKG_VERSION");
-/// The link protocol this host speaks. 3 is the WebSocket link with
-/// normalized run events; 2 was the HTTP long-poll. Lemma closes a link whose
-/// `hello` names any other version with 4426, and Desktop's updater takes over.
-pub const PROTOCOL_VERSION: u16 = 3;
+/// The link protocol this host speaks. 4 added the link's `compute` role
+/// (`link::protocol::compute`), which a machine joined with `lemma machine
+/// connect` speaks and this host does not; 3 is the WebSocket link with
+/// normalized run events; 2 was the HTTP long-poll. Lemma accepts 3 and 4 from
+/// a host and closes a link whose `hello` names any other version with 4426,
+/// and Desktop's updater takes over. A Lemma older than 4 refuses this host,
+/// so the backend ships before the Desktop release that carries 4.
+pub const PROTOCOL_VERSION: u16 = 4;
