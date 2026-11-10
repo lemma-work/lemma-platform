@@ -21,7 +21,7 @@ export function peopleLive(context: LiveContext): PeopleSource {
         async add(podId, orgMemberId, role) {
             await pod(podId).podMembers.add(podId, { organization_member_id: orgMemberId, roles: [role] });
         },
-        async invite(orgId, podId, email, role) {
+        async invite(orgId, podId, email, role, note) {
             const made = (await context.client().organizations.invitations.invite(orgId, {
                 email,
                 /* The least the organization can give. The access here is
@@ -29,9 +29,10 @@ export function peopleLive(context: LiveContext): PeopleSource {
                 role: "ORG_MEMBER" as never,
                 pod_id: podId,
                 pod_role: role,
+                note,
                 /* Relative, so it resolves against whichever address they
                    open the invitation on (the web's own). */
-                redirect_uri: "/t/" + encodeURIComponent(podId),
+                redirect_uri: "/l/" + encodeURIComponent(podId),
             })) as { email?: string | null; accept_url?: string | null; emailed?: boolean | null };
             return { email: made.email ?? email, acceptUrl: made.accept_url ?? null, emailed: made.emailed ?? null };
         },

@@ -33,6 +33,9 @@ export function AddPeopleScreen({ podId }: PartProps) {
     const [problem, setProblem] = useState<string | null>(null);
     const [added, setAdded] = useState<string | null>(null);
     const [sent, setSent] = useState<SentInvite | null>(null);
+    /* A line from the inviter, quoted in the invitation email: why this
+       person is being asked in, which the email cannot say on its own. */
+    const [note, setNote] = useState("");
 
     const plan = addPlan({
         query,
@@ -58,8 +61,8 @@ export function AddPeopleScreen({ podId }: PartProps) {
     const send = (email: string) => {
         if (busy || !org) return;
         clear();
-        invite.mutate({ email, role }, {
-            onSuccess: (made) => { setQuery(""); setSent(made); },
+        invite.mutate({ email, role, note: note.trim() || null }, {
+            onSuccess: (made) => { setQuery(""); setNote(""); setSent(made); },
             onError: (error) => setProblem(isForbidden(error) ? `You may not invite people to ${orgName || "this organization"}.` : problemOf(error, "That invitation was not sent. Try again.")),
         });
     };
@@ -100,6 +103,15 @@ export function AddPeopleScreen({ podId }: PartProps) {
                     autoFocus
                     onSubmit={submit}
                 />
+                {plan.action === "invite" ? (
+                    <Field
+                        label="A note for the invitation email"
+                        value={note}
+                        onChange={setNote}
+                        placeholder="Why you’re asking them in (optional)"
+                        maxLength={500}
+                    />
+                ) : null}
                 <ChoiceRow
                     label="Access"
                     title={`Access to ${name}`}

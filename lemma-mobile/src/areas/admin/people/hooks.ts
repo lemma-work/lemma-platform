@@ -56,7 +56,7 @@ export function useInvitePerson(podId: string, orgId: string | null | undefined)
     const cache = useQueryClient();
     const invitations = useKey(podId, "invitations", orgId);
     return useMutation({
-        mutationFn: ({ email, role }: { email: string; role: string }) => source.invite(orgId!, podId, email, role),
+        mutationFn: ({ email, role, note }: { email: string; role: string; note: string | null }) => source.invite(orgId!, podId, email, role, note),
         onSuccess: () => void cache.invalidateQueries({ queryKey: invitations }),
     });
 }

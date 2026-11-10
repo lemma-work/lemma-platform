@@ -438,6 +438,8 @@ is in (`areas/more/links.ts`, `link-return.tsx`).
 | First profile step | `session/first-profile-step.tsx` | done (a sheet: name, time zone, the phone by WhatsApp; then the tour, never both at once) |
 | Start a Lemma | `outcomes/shelf.tsx` (#1194) | built, not yet checked on a device (the server's templates by kind of work, what each owns, brings and never does, a date for a finish line; your own words; a link someone shared; one `POST /pods/start` into its setup chat; a missing model said) |
 | What a new Lemma's template is bringing in, over its first chat | `outcomes/chats.tsx` `SetupStrip` | built, not yet checked on a device |
+| Somebody new is not asked about an organization: an invitation is accepted and lands on its Lemma, or one is made for them and they land on the shelf; a company's to join stays a choice | `outcomes/arrival.tsx` `FrameArrival` | built, not yet checked on a device |
+| A note for the invitation email, from Add people | `shell/add-people.tsx` | built, not yet checked on a device |
 | Ask to join a Lemma | `shell/not-yours.tsx` | done (a Lemma's page and `join/{id}`; one of yours in another organization opens there) |
 | Invitation links, accept or decline | `site/invitation.tsx` | done (decline is refused by the server for the person invited, as on the web; the phone says so) |
 | Templates, import, remix | `site/import/install-panel.tsx`, `/templates`, `/import/github`, `/remix` | done (the journey in a tall sheet over the repository's page; an install left behind is offered back) |

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMe, useOrg } from "../../../data/hooks";
@@ -11,11 +11,20 @@ import { useProfile } from "../../admin/account/hooks";
 import { Reading, Row, RowIcon, Say, problemOf } from "../../admin/ui";
 import { useArrive, useInvitations, useSuggested, useWelcomeSource } from "./hooks";
 import { MakeOne } from "./make-one";
+import { moreRoutes } from "../routes";
 import { arrivalLede, inviteLine, landingRoute, sampleArrival, MEMBER_LEDE, memberHeading } from "./model";
-import { arrivalHeading, domainOf } from "@web/org/arrival";
+import { arrivalHeading, defaultOrgKind, domainOf, personalNameFor, teamNameFor } from "@web/org/arrival";
 
 /** The first morning, for somebody in no organization (the web's
- *  `ArrivalView`).
+ *  `ArrivalView`, behind the frame's `FrameArrival`).
+ *
+ *  The organization is a container, not a decision a first-time person can
+ *  make well, so it is asked about only when there is a real choice. An
+ *  invitation is accepted, and they land on what they were invited to; with
+ *  no invitation and no organization of their company's to join, one is
+ *  made for them, by invitation only, and they land on the shelf to start
+ *  their first Lemma. A company's organization to join is a real choice, so
+ *  that one is this door, as is anything that fails on the way.
  *
  *  Three rungs, closed to open, and the order is the point: an invitation
  *  first, because it is the most specific thing anyone knows about you; an
@@ -76,6 +85,44 @@ export function Arrival({ onEntered, top }: {
     const checking = invitations.isFetching || suggested.isFetching;
     const domain = domainOf(email);
 
+    /* Nothing to choose: in without asking. Once, and only for somebody in
+       no organization; anyone already in one came here to look around. */
+    const [door, setDoor] = useState(false);
+    const [entering, setEntering] = useState(false);
+    const begun = useRef(false);
+    const known = invitations.isSuccess && suggested.isSuccess && !profile.isPending;
+    const automatic = mode === "live" && orgs.length === 0 && known && matches.length === 0 && !door;
+    const deciding = mode === "live" && orgs.length === 0 && !door && invitations.isSuccess && suggested.isSuccess && profile.isPending;
+    useEffect(() => {
+        if (!automatic || begun.current) return;
+        begun.current = true;
+        setEntering(true);
+        void (async () => {
+            try {
+                if (invites.length > 0) {
+                    for (const invite of invites) await source.acceptInvitation(invite.id);
+                    await arrive(invites[0].orgId);
+                    const podId = invites.find((invite) => invite.podId)?.podId ?? null;
+                    if (podId) land(podId);
+                    else router.replace(moreRoutes.newLemma as never);
+                    return;
+                }
+                const team = defaultOrgKind(email, deployment === "local") === "team" ? teamNameFor(email) : "";
+                const made = await source.createOrg({ name: team || personalNameFor(name, email), derived: true });
+                await arrive(made.id);
+                router.replace(moreRoutes.newLemma as never);
+            } catch {
+                /* Some invitations may be accepted already: the door shows
+                   what is still waiting, read again. */
+                void invitations.refetch();
+                void suggested.refetch();
+                setDoor(true);
+            } finally {
+                setEntering(false);
+            }
+        })();
+    }, [automatic, invites, email, name, deployment, source, arrive, land, router, invitations, suggested]);
+
     const go = async (id: string, run: () => Promise<{ orgId: string; name: string }>, podId: string | null) => {
         setProblem(null);
         setBusy(id);
@@ -99,6 +146,15 @@ export function Arrival({ onEntered, top }: {
                 <View style={{ flexDirection: "row" }}>
                     <Button title="Continue" onPress={() => { const podId = kept.podId; setKept(null); land(podId); }} />
                 </View>
+            </View>
+        );
+    }
+
+    if (entering || automatic || deciding) {
+        return (
+            <View style={{ gap: 18 }}>
+                {top}
+                <Reading label={invites.length > 0 ? "Accepting your invitation" : "Setting you up"} />
             </View>
         );
     }

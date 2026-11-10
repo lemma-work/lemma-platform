@@ -131,8 +131,8 @@ describe("the sample", () => {
 
     it("emails Acme's own addresses and hands back a link for any other", async () => {
         const source = peopleSample();
-        expect((await source.invite("sample-acme", "sample-books-986", "new@acme.example", "POD_USER")).emailed).toBe(true);
-        const other = await source.invite("sample-acme", "sample-books-986", "new@example.com", "POD_USER");
+        expect((await source.invite("sample-acme", "sample-books-986", "new@acme.example", "POD_USER", null)).emailed).toBe(true);
+        const other = await source.invite("sample-acme", "sample-books-986", "new@example.com", "POD_USER", "We need you on Books");
         expect(other.emailed).toBe(false);
         expect(other.acceptUrl).toMatch(/^https:\/\/acme\.example\//);
         expect((await source.invitations("sample-acme", "sample-books-986")).map((one) => one.email)).toEqual(["new@acme.example", "new@example.com"]);

@@ -19,7 +19,9 @@ export interface PeopleSource {
     add(podId: string, orgMemberId: string, role: string): Promise<void>;
     /** Invite somebody new: an organization invitation that names this Lemma
      *  and the access it gives, so accepting joins both and lands them here. */
-    invite(orgId: string, podId: string, email: string, role: string): Promise<SentInvite>;
+    /** `note` is a line from the inviter, quoted in the invitation email and
+     *  never stored. */
+    invite(orgId: string, podId: string, email: string, role: string, note: string | null): Promise<SentInvite>;
     /** Who may let themselves in. */
     joinPolicy(podId: string): Promise<JoinPolicy>;
     setJoinPolicy(podId: string, policy: JoinPolicy): Promise<void>;
