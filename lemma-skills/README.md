@@ -25,6 +25,7 @@ Everything named `lemma-*` is a product skill and installs by default.
 | Skill | Use it for |
 |---|---|
 | [lemma-builder](lemma-builder/SKILL.md) | Designing and building a complete pod — tables, files, functions, agents, workflows, schedules, connectors, surfaces, apps — then importing and verifying it |
+| [lemma-setup](lemma-setup/SKILL.md) | Setting a Lemma up to own its result: where the work happens, the last four weeks of it, a feed that keeps it coming, the measure and the plan |
 | [lemma-user](lemma-user/SKILL.md) | Operating a pod that already exists: querying records under RLS, running functions and workflows, chatting with agents |
 | [lemma-app-design](lemma-app-design/SKILL.md) | Designing and visually refining a pod app into something production-quality |
 | [lemma-app-qa](lemma-app-qa/SKILL.md) | Testing a pod app through real end-to-end journeys, authenticated, local or deployed |

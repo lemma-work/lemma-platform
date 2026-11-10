@@ -112,14 +112,14 @@ def _identity_lines(*, agent: Agent, pod: PodProfile, is_default: bool) -> list[
     """
     lines = ["\n## You"]
     if is_default and pod.name:
-        lines.append(f"- You are the default agent for this pod, **{pod.name}**.")
+        lines.append(f"- You are **{pod.name}**, this Lemma's own agent.")
     elif is_default:
         # A pod row that no longer resolves. Say what is still true rather than
         # reaching for a placeholder name and asserting it.
-        lines.append("- You are the default agent for this pod.")
+        lines.append("- You are this Lemma's own agent.")
     else:
         lines.append(
-            f"- You are **{agent.name or '(unnamed)'}**, a named agent in this pod."
+            f"- You are **{agent.name or '(unnamed)'}**, a named agent working for this Lemma."
         )
     if agent.description and agent.description.strip():
         lines.append(f"- How you are described: {agent.description.strip()}")

@@ -48,13 +48,13 @@ from app.modules.pod_bundle.domain.state import (
 from app.modules.pod_bundle.infrastructure.archive_offload import (
     extract_bundle_offloaded,
 )
-from app.modules.pod_bundle.infrastructure import github_fetcher
+from app.modules.pod_bundle.infrastructure import github_fetcher, publish_manifest
 from app.modules.pod_bundle.infrastructure.bundle_contents import (
     archived_resource_count,
     resource_count,
 )
 from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
-from app.modules.pod_bundle.infrastructure import publish_manifest
+from app.modules.pod_bundle.infrastructure import bundle_outcome
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
     error_payload,
@@ -243,8 +243,6 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
         staging_key = await staging.put_archive("pod-exports", export_id, zip_bytes)
 
         # (d) READY — mint the signed download URL + retain state/archive for its TTL.
-        from datetime import timedelta
-
         from app.modules.pod_bundle.config import pod_bundle_settings
         from app.modules.pod_bundle.infrastructure.download_url import (
             build_download_url,
@@ -414,6 +412,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                     connectors=ServiceConnectorLookup(**scope, user_id=state.user_id),
                     grants=ServiceGrantConferral(**scope),
                     accounts=ServiceAccountUsability(**scope),
+                    outcome=bundle_outcome.owned_for_plan(state, uow.session),
                 ).build_plan(bundle_root=bundle_root)
 
     await _raise_if_cancelled(store, import_id)
@@ -734,6 +733,8 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                     )
                     return
                 await _checkpoint(store, state, step)
+            # Once every step has landed: its measure counts the tables applied.
+            await bundle_outcome.carry(worker_ctx.uow_factory, state, bundle_root)
 
         await _raise_if_cancelled(store, import_id)
         await _record_recipe(worker_ctx, state)

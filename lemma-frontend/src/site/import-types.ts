@@ -115,6 +115,24 @@ export interface ImportPlan {
     has_destructive_steps: boolean;
     /** Absent from a plan made before bundles carried connectors. */
     connectors?: ConnectorPlan[];
+    /** What the bundle's Lemma owned and what the install does with it; null
+     *  or absent when it owned nothing (or for a plan made before bundles
+     *  carried it). */
+    outcome?: ImportPlanOutcome | null;
+}
+
+/** SET: this Lemma owns nothing yet, and takes the bundle's. KEEP: it keeps
+ *  what it already owns. SAME: it already owns this one. */
+export type OutcomePlanAction = "SET" | "KEEP" | "SAME";
+
+export interface ImportPlanOutcome {
+    sentence: string;
+    kind: "week" | "date";
+    target?: number | null;
+    unit?: string | null;
+    due?: string | null;
+    has_measure?: boolean;
+    action: OutcomePlanAction;
 }
 
 export interface ImportStatusResponse {

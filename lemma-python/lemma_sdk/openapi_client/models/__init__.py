@@ -366,6 +366,8 @@ _NAME_TO_MODULE = {
     'IdentityStrength': 'identity_strength',
     'ImpactedPod': 'impacted_pod',
     'ImpactedPodConnector': 'impacted_pod_connector',
+    'ImportPlanOutcome': 'import_plan_outcome',
+    'ImportPlanOutcomeKind': 'import_plan_outcome_kind',
     'ImportPlanResponse': 'import_plan_response',
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
@@ -487,6 +489,7 @@ _NAME_TO_MODULE = {
     'OutcomeHistoryResponse': 'outcome_history_response',
     'OutcomeInput': 'outcome_input',
     'OutcomeKind': 'outcome_kind',
+    'OutcomePlanAction': 'outcome_plan_action',
     'OutcomeSetResponse': 'outcome_set_response',
     'OutcomeStandingResponse': 'outcome_standing_response',
     'OutcomeTemplateCard': 'outcome_template_card',
@@ -1198,6 +1201,8 @@ if TYPE_CHECKING:
     from .identity_strength import IdentityStrength
     from .impacted_pod import ImpactedPod
     from .impacted_pod_connector import ImpactedPodConnector
+    from .import_plan_outcome import ImportPlanOutcome
+    from .import_plan_outcome_kind import ImportPlanOutcomeKind
     from .import_plan_response import ImportPlanResponse
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
@@ -1319,6 +1324,7 @@ if TYPE_CHECKING:
     from .outcome_history_response import OutcomeHistoryResponse
     from .outcome_input import OutcomeInput
     from .outcome_kind import OutcomeKind
+    from .outcome_plan_action import OutcomePlanAction
     from .outcome_set_response import OutcomeSetResponse
     from .outcome_standing_response import OutcomeStandingResponse
     from .outcome_template_card import OutcomeTemplateCard
@@ -2043,6 +2049,8 @@ __all__ = [
     'IdentityStrength',
     'ImpactedPod',
     'ImpactedPodConnector',
+    'ImportPlanOutcome',
+    'ImportPlanOutcomeKind',
     'ImportPlanResponse',
     'ImportStartRequest',
     'ImportStatus',
@@ -2164,6 +2172,7 @@ __all__ = [
     'OutcomeHistoryResponse',
     'OutcomeInput',
     'OutcomeKind',
+    'OutcomePlanAction',
     'OutcomeSetResponse',
     'OutcomeStandingResponse',
     'OutcomeTemplateCard',

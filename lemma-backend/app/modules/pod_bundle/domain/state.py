@@ -7,7 +7,7 @@ PostgreSQL and mirrored to Redis. Every accepted compare-and-swap write bumps
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
@@ -131,6 +131,35 @@ class VariableSpec(BaseModel):
     default: str | None = None
 
 
+class OutcomePlanAction(str, Enum):
+    """What an import does with what its bundle's pod owned."""
+
+    #: The pod owns nothing yet: the import sets the bundle's.
+    SET = "SET"
+    #: The pod already owns something else, and keeps it: an import adds to a
+    #: pod, it does not change what the pod is for.
+    KEEP = "KEEP"
+    #: The pod already owns this one (sentence, kind, target, unit and due).
+    SAME = "SAME"
+
+
+class PlannedOutcome(BaseModel):
+    """What the bundle's pod owned (``pod.json -> outcome``), and what the
+    import will do with it -- shown so the person approving sees it first.
+
+    Its measure is not repeated: it is a query only the apply reads, as the
+    person importing, and one they cannot read is left off then.
+    """
+
+    sentence: str
+    kind: Literal["week", "date"]
+    target: float | None = None
+    unit: str | None = None
+    due: date | None = None
+    has_measure: bool = False
+    action: OutcomePlanAction
+
+
 class ImportPlan(BaseModel):
     format_version: int
     bundle_name: str | None = None
@@ -142,6 +171,10 @@ class ImportPlan(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     #: The bundle's pod connectors and the choices each offers the importer.
     connectors: list[ConnectorPlan] = Field(default_factory=list)
+    #: What the bundle's pod owned and what the import does with it; ``None``
+    #: when it owned nothing, its block is invalid (said in ``warnings``), or
+    #: the import is a template's, whose start sets it.
+    outcome: PlannedOutcome | None = None
 
     @field_validator("description", mode="before")
     @classmethod

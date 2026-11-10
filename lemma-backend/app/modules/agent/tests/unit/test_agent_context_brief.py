@@ -691,10 +691,10 @@ class TestTheAgentIsToldWhoItIs:
 
         assert "## You" in brief.stable
         assert "**Acme**" in brief.stable
-        assert "Lem" not in brief.stable
-        assert "default agent for this pod" in brief.stable
+        assert "**Lem**" not in brief.stable
+        assert "this Lemma's own agent" in brief.stable
         assert "Here since 2026-03-04" in brief.stable
-        assert "What this pod is for: Where support lives." in brief.stable
+        assert "What this Lemma is for: Where support lives." in brief.stable
 
     async def test_a_named_agent_is_named_as_one(self, stubbed):
         agent = _named_agent()
@@ -706,8 +706,8 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=uuid4(),
         )
 
-        assert "a named agent in this pod" in brief.stable
-        assert "default agent for this pod" not in brief.stable
+        assert "a named agent working for this Lemma" in brief.stable
+        assert "this Lemma's own agent" not in brief.stable
 
     async def test_schedules_separate_yours_from_everyone_elses(
         self, stubbed, monkeypatch
