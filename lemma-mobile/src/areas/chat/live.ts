@@ -10,8 +10,9 @@ import type { ChatSource, ShownFile } from "./source";
 /** The chat thread's reads and writes, from the server: the same calls the
  *  web's `data/live.ts` makes for a chat's cards (`tableRows`, `runQuery`,
  *  `readFile`), its model picker (`listRuntimes`, `defaultRuntime`,
- *  `getPodRuntime`, `get/setConversationRuntime`), and renaming and
- *  archiving (`conversations.update`). A file's words are read from the
+ *  `getPodRuntime`, `get/setConversationRuntime`), the repositories a new
+ *  chat can open in (`listChatRepositories`), and renaming and archiving
+ *  (`conversations.update`). A file's words are read from the
  *  response itself (`readText`), since React Native cannot always read the
  *  Blob the SDK's download answers. */
 export function chatLive(context: LiveContext): ChatSource {
@@ -97,6 +98,13 @@ export function chatLive(context: LiveContext): ChatSource {
         },
         async setConversationRuntime(podId, conversationId, choice) {
             await client(podId).conversations.update(conversationId, { agent_runtime: runtimePayload(choice) } as never, { pod_id: podId });
+        },
+        async repositories(podId) {
+            const listed = await client(podId).conversations.repositories({ pod_id: podId });
+            return {
+                items: listed.items.map((repo) => ({ fullName: repo.full_name, private: Boolean(repo.private) })),
+                complete: listed.complete !== false,
+            };
         },
         async rename(podId, conversationId, title) {
             await client(podId).conversations.update(conversationId, { title } as never, { pod_id: podId });

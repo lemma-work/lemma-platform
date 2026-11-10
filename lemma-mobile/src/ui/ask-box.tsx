@@ -8,6 +8,7 @@ import Animated, { FadeOutDown, ReduceMotion, SlideInDown } from "react-native-r
 import type { PickedFile } from "../data/io";
 import type { Lemma } from "../data/types";
 import { NOTHING_TYPED, offered } from "../thread/attachments";
+import { RepositoryChip } from "../thread/repository-chip";
 import { LemmaFace } from "./face";
 import { AttachToggle, AttachTray } from "./files-in-chat";
 import { Icon } from "./icons";
@@ -105,31 +106,40 @@ export function LemmaPicker({ lemmas, chosen, open, onClose, onPick }: {
 /** The two-row box with the picker: words on top, the chip under them.
  *  With `attach`, the + opens the attach tray above the box (the camera,
  *  the latest photos, files), and what is picked goes with the words to the
- *  chat that is opened for them. Send is the chosen Lemma's colour. */
-export function AskBox({ lemmas, podId, onPick, onSend, placeholder = "Ask anything, or say what to do", attach = false, autoFocus = false }: {
+ *  chat that is opened for them. With `repositories`, a chip beside the
+ *  Lemma's picks a GitHub repository for that chat to work in
+ *  (`thread/repository-chip.tsx`), handed to `onSend` with the words.
+ *  Send is the chosen Lemma's colour. */
+export function AskBox({ lemmas, podId, onPick, onSend, placeholder = "Ask anything, or say what to do", attach = false, repositories = false, autoFocus = false }: {
     lemmas: readonly Lemma[];
     podId: string | null;
     onPick: (id: string) => void;
-    onSend: (podId: string, text: string, files: PickedFile[]) => void;
+    onSend: (podId: string, text: string, files: PickedFile[], repository: string | null) => void;
     placeholder?: string;
     attach?: boolean;
+    repositories?: boolean;
     autoFocus?: boolean;
 }) {
     const [text, setText] = useState("");
     const [picking, setPicking] = useState(false);
     const [tray, setTray] = useState(false);
     const [files, setFiles] = useState<PickedFile[]>([]);
+    /* A repository is one of a Lemma's own -- its GitHub connector decides
+       them -- so a pick holds only while that Lemma is the one asked. */
+    const [repository, setRepository] = useState<{ podId: string; name: string } | null>(null);
     const lemma = lemmas.find((one) => one.id === podId) ?? lemmas[0] ?? null;
+    const picked = repositories && repository && repository.podId === lemma?.id ? repository.name : null;
     const router = useRouter();
     const callable = useCallable(lemma?.id);
     const identity = useIdentity(lemma?.id ?? "");
     const ready = Boolean((text.trim() || files.length > 0) && lemma);
     const send = () => {
         if (!ready || !lemma) return;
-        onSend(lemma.id, text.trim() || NOTHING_TYPED, files);
+        onSend(lemma.id, text.trim() || NOTHING_TYPED, files, picked);
         setText("");
         setFiles([]);
         setTray(false);
+        setRepository(null);
     };
     const take = (picked: PickedFile[]) => {
         const { take: kept, refused } = offered(picked);
@@ -185,6 +195,9 @@ export function AskBox({ lemmas, podId, onPick, onSend, placeholder = "Ask anyth
                 />
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     {lemma ? <LemmaChip lemma={lemma} onPress={() => setPicking(true)} /> : null}
+                    {lemma && repositories ? (
+                        <RepositoryChip key={lemma.id} podId={lemma.id} picked={picked} onPick={(name) => setRepository(name ? { podId: lemma.id, name } : null)} />
+                    ) : null}
                     <View style={{ flex: 1 }} />
                     {attach ? <AttachToggle open={tray} onPress={() => { if (!tray) Keyboard.dismiss(); setTray((was) => !was); }} /> : <MicButton label={lemma ? "Call " + lemma.name : undefined} onPress={lemma && callable ? () => router.push(moreRoutes.call(lemma.id) as never) : null} />}
                     <SendButton ready={ready} onPress={send} tone={identity.ink} onTone={identity.onInk} />

@@ -1,3 +1,4 @@
+import type { ChatRepositories } from "@web/data/types";
 import { fileKind } from "../../thread/previews";
 import { sampleFirstPage, sampleMediaUrl } from "./sample-media";
 import { SAMPLE_PAGES, SAMPLE_SHEET, SAMPLE_SIZES } from "./sample-paths";
@@ -71,6 +72,17 @@ const RUNTIMES: Runtime[] = [
     },
 ];
 
+/** What a new chat can open in: the shop's GitHub organization and one
+ *  person's own account, so the picker groups them as it does live. */
+const REPOSITORIES: ChatRepositories = {
+    items: [
+        { fullName: "northwind-lamps/storefront", private: true },
+        { fullName: "northwind-lamps/help-pages", private: false },
+        { fullName: "ada-northwind/price-scripts", private: true },
+    ],
+    complete: true,
+};
+
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function chatSample(): ChatSource {
@@ -122,6 +134,10 @@ export function chatSample(): ChatSource {
         async setConversationRuntime(_podId, id, choice) {
             await pause(250);
             picked.set(id, choice);
+        },
+        async repositories() {
+            await pause(250);
+            return REPOSITORIES;
         },
         rename: async () => pause(200),
         archive: async () => pause(200),

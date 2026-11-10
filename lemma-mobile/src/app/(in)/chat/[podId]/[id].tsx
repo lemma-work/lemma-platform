@@ -27,6 +27,8 @@ import { takeFiles } from "../../../../thread/hand-over";
 import { ChatLook } from "../../../../thread/look";
 import { noModelSentence } from "@web/thread/model-setup";
 import { ModelPicker } from "../../../../thread/model-picker";
+import { RepositoryChip } from "../../../../thread/repository-chip";
+import { repositoryTitle } from "@web/thread/repositories";
 import { runFailure } from "@web/thread/transcript-state";
 import { useChat } from "../../../../thread/use-chat";
 import { LiveReply, MessageMenu, TurnRow } from "../../../../thread/view";
@@ -68,7 +70,7 @@ function usePaneKey(podId: string, id: string, adopted: MutableRefObject<string 
 function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const params = useLocalSearchParams<{ podId: string; id: string; ask?: string; fill?: string; files?: string }>();
+    const params = useLocalSearchParams<{ podId: string; id: string; ask?: string; fill?: string; files?: string; repository?: string }>();
     const podId = String(params.podId);
     const { scheme } = useTheme();
     const identity = useMemo(() => identityOf(podId, scheme), [podId, scheme]);
@@ -78,8 +80,8 @@ function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
     const chat = useChat(podId, id, name, (made) => {
         adopted.current = made;
         setId(made);
-        router.setParams({ id: made, ask: undefined, files: undefined, fill: undefined } as never);
-    });
+        router.setParams({ id: made, ask: undefined, files: undefined, fill: undefined, repository: undefined } as never);
+    }, params.repository ? String(params.repository) : null);
 
     /* The words this screen has sent for its `ask`, so a re-render or the same
        route opened again does not send them twice. */
@@ -211,6 +213,11 @@ function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
         [podId, chat.conversationId, chat.agentId, chat.pickedModel, chat.setPickedModel],
     );
     const choices = chat.waitingOn?.kind === "question" ? NO_CHOICES : chat.reply.choices;
+    /* The repository to work in, picked only while the chat is a draft: its
+       worktree is cut when the conversation is made. Not while the words it
+       was opened with go, and back if they could not start it. */
+    const opening = Boolean(params.ask) && chat.turns.length === 0;
+    const repositoryPick = !chat.conversationId && !chat.busy && !opening;
 
     const failure = runFailure(chat.error);
     const failedLine = chat.state === "failed" && !chat.onReload;
@@ -233,9 +240,20 @@ function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
                                 </BreathingRing>
                             </View>
                         ) : null}
-                        <Press role="link" label={`${title}, with ${name}`} onPress={() => router.push(routes.lemma(podId) as never)} style={{ flex: 1, minWidth: 0, paddingLeft: 4 }}>
+                        <Press role="link" label={`${title}, with ${name}` + (chat.repository ? `. ${repositoryTitle(chat.repository)}` : "")} onPress={() => router.push(routes.lemma(podId) as never)} style={{ flex: 1, minWidth: 0, paddingLeft: 4 }}>
                             <Text size={16} weight="medium" numberOfLines={1}>{title}</Text>
-                            <Text size={12.5} tone={color.ink2}>{lemma?.name ?? " "}</Text>
+                            {/* A chat that works in a repository says which,
+                                beside who it is with. */}
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, minWidth: 0 }}>
+                                <Text size={12.5} tone={color.ink2} numberOfLines={1}>{lemma?.name ?? " "}</Text>
+                                {chat.repository ? (
+                                    <>
+                                        <Text size={12.5} tone={color.ink3}>·</Text>
+                                        <Glyph name="branch" size={12} tone={color.ink2} />
+                                        <Text size={12.5} tone={color.ink2} numberOfLines={1} style={{ flexShrink: 1 }}>{chat.repository}</Text>
+                                    </>
+                                ) : null}
+                            </View>
                         </Press>
                         <Press label="More: rename, archive, add people" onPress={() => setMenu(true)} style={{ width: TOUCH, height: TOUCH, alignItems: "center", justifyContent: "center" }}>
                             <Icon name="more" size={20} />
@@ -330,6 +348,7 @@ function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
                             answerWith={chat.answerWith}
                         />
                     ) : null}
+                    {repositoryPick ? <RepositoryChip row podId={podId} picked={chat.pickedRepository} onPick={chat.setPickedRepository} /> : null}
                     <Composer
                         placeholder={placeholder}
                         note={chat.note}

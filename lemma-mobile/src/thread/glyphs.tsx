@@ -9,7 +9,7 @@ import { color } from "../ui/tokens";
 export type GlyphName =
     | "copy" | "globe" | "terminal" | "code" | "image" | "camera" | "stop" | "lock" | "memory"
     | "arrow-down" | "agent" | "plug" | "shield" | "question" | "deny" | "pointer" | "text"
-    | "tree" | "folder" | "edit" | "trash" | "move" | "download" | "external" | "eye" | "wait";
+    | "tree" | "folder" | "branch" | "edit" | "trash" | "move" | "download" | "external" | "eye" | "wait";
 
 export function Glyph({ name, size = 16, tone = color.ink, width = 1.8 }: { name: GlyphName; size?: number; tone?: string; width?: number }) {
     const s = { stroke: tone, strokeWidth: width, fill: "none", strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -107,6 +107,16 @@ function draw(name: GlyphName, s: { stroke: string; strokeWidth: number; fill: "
             return <Path {...s} d="M6 5v14M6 9h6M6 15h6M14 7.5h4v3h-4zM14 13.5h4v3h-4z" />;
         case "folder":
             return <Path {...s} d="M4 7.5a2 2 0 0 1 2-2h3.5l2 2.5H18a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />;
+        case "branch":
+            /* A GitHub repository a chat works in: the web's GitBranch. */
+            return (
+                <>
+                    <Circle {...s} cx={7} cy={6} r={2} />
+                    <Circle {...s} cx={7} cy={18} r={2} />
+                    <Circle {...s} cx={17} cy={6} r={2} />
+                    <Path {...s} d="M7 8v8M17 8v1a3 3 0 0 1-3 3h-4a3 3 0 0 0-3 3" />
+                </>
+            );
         case "edit":
             return <Path {...s} d="M5 19h3.5L18.5 9 15 5.5 5 15.5zM13 7.5 16.5 11" />;
         case "trash":

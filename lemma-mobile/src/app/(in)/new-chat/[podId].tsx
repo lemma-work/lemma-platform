@@ -21,7 +21,8 @@ const STARTER_ICON: Record<Starter["platform"], IconName | "#"> = { GROUP: "peop
 
 /** A chat not started yet: who it is with and what it owns, what it runs,
  *  ways to start one with people instead, and the box -- where the Lemma is
- *  picked. Nothing is created until the first send. The Lemma's colour is
+ *  picked, and the GitHub repository the chat works in, where the Lemma has
+ *  any. Nothing is created until the first send. The Lemma's colour is
  *  here already: its wash behind the top, its ink on Send and the links. */
 export default function NewChat() {
     const router = useRouter();
@@ -109,10 +110,11 @@ export default function NewChat() {
                             lemmas={lemmas}
                             podId={podId}
                             attach
+                            repositories
                             autoFocus={false}
                             placeholder={`Ask ${lemma.name}, or say what to do`}
                             onPick={(next) => router.replace(routes.newChat(next) as never)}
-                            onSend={(chosen, text, files) => router.replace(chatRoutes.start(chosen, text, holdFiles(files)) as never)}
+                            onSend={(chosen, text, files, repository) => router.replace(chatRoutes.start(chosen, text, holdFiles(files), repository) as never)}
                         />
                     </View>
                 ) : null}
