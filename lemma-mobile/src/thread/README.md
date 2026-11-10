@@ -6,7 +6,8 @@ The chat runs the web's own thread modules where they live
 (`@web/thread/turns`, `approval`, `display-resource`, `tool-cards`,
 `tool-name`, `memory-notes`, `pending-sends`, `queued`, `model-setup`,
 `stuck-run`, `transcript-state`, `send-message`, `turn-identity`, `drafts`,
-`channel-reply`, and `@web/data/agent-names`; see `../../web-imports.js`).
+`channel-reply`, `repositories`, and `@web/data/agent-names`; see
+`../../web-imports.js`).
 They turn a conversation's messages into turns a person reads and have no
 client or DOM in them, so the two apps cannot disagree about what a
 transcript says. Drafts and the reply choice are kept in `kept.ts` (a store
@@ -28,10 +29,12 @@ handed to the web's functions where the web hands them `localStorage`.
 - `use-chat.ts`: the conversation, on the SDK's `useAssistantSession` (the
   web's hook), over the live socket; a sample engine runs the same rules.
 - `view.tsx`, `cards.tsx`, `interaction.tsx`, `resources.tsx`, `dock.tsx`,
-  `composer.tsx`, `model-picker.tsx`: the web's `turn-row.tsx`,
-  `tool-card-view.tsx`, `interaction-card.tsx`, `resource-card.tsx`,
-  `interaction-dock.tsx`, `composer.tsx` and `model-picker.tsx`, drawn for a
-  phone.
+  `composer.tsx`, `model-picker.tsx`, `repository-chip.tsx`: the web's
+  `turn-row.tsx`, `tool-card-view.tsx`, `interaction-card.tsx`,
+  `resource-card.tsx`, `interaction-dock.tsx`, `composer.tsx`,
+  `model-picker.tsx` and `repository-chip.tsx`, drawn for a phone.
+- `repository.ts`: the GitHub repository a chat works in, read off its
+  directory, and the create's part for one.
 - `blocks.ts`: markdown cut into blocks, so a streaming reply redraws only its
   last block and code, tables and quotes each carry a Copy.
 - `glyphs.tsx`, `clipboard.ts`, `hand-over.ts`.

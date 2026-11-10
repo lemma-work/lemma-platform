@@ -21,6 +21,7 @@ import { kept } from "./kept";
 import { needsAiModel, pointsAtModels, runFailure } from "@web/thread/model-setup";
 import { CLIENT_MESSAGE_KEY, isSending, pendingSend, stillPending, type PendingSend } from "@web/thread/pending-sends";
 import { withdrawFailure, withoutSent, type Queued } from "@web/thread/queued";
+import { repositoryOf, repositoryPayload } from "./repository";
 import type { Choice } from "./runtimes";
 import { sendToConversation, steerConversation } from "@web/thread/send-message";
 import { stepTimes, type StepTime } from "./steps";
@@ -109,6 +110,13 @@ export interface Chat {
     /** A model chosen before the chat exists; it goes with the create. */
     pickedModel: Choice | null;
     setPickedModel: (choice: Choice | null) => void;
+    /** Likewise the GitHub repository it works in ("owner/name"), which can
+     *  only be chosen before it exists: its worktree is cut when it is made. */
+    pickedRepository: string | null;
+    setPickedRepository: (repository: string | null) => void;
+    /** The repository the chat works in: read off the conversation once it
+     *  exists (`repository.ts`), the pick it was created with until then. */
+    repository: string | null;
     rename: (title: string | null) => Promise<void>;
     archive: () => Promise<void>;
     /** When a step of a run started and ended, by its call id. */
@@ -143,7 +151,7 @@ interface Engine {
     retryLoad: () => void;
     reload: () => Promise<void>;
     markCreated: (id: string) => void;
-    create: (choice: Choice | null) => Promise<{ id: string; pod_cwd?: string }>;
+    create: (choice: Choice | null, repository: string | null) => Promise<{ id: string; pod_cwd?: string }>;
     adopt: (id: string) => void;
     send: (content: string, id: string, known: { pod_cwd?: string } | undefined, metadata: Record<string, unknown>) => Promise<void>;
     append: (id: string, content: string, metadata: Record<string, unknown>) => Promise<void>;
@@ -383,13 +391,16 @@ function useLiveEngine(podId: string, routeId: string, enabled: boolean, lastTur
         retryLoad: () => setLoadAttempt((attempt) => attempt + 1),
         reload,
         markCreated: (id) => { createdHere.current = id; },
-        create: async (choice) => {
+        create: async (choice, repository) => {
             /* Created straight off the client, naming no agent: that is the
-               only payload that means "the Lemma's own", and a model chosen
-               while this was a draft goes with it so the first run uses it. */
+               only payload that means "the Lemma's own". A model and a
+               repository chosen while this was a draft go with it, so the
+               first run uses the model and already works in the repository's
+               worktree. */
             const made = await client.conversations.create({
                 pod_id: podId,
                 ...(choice ? { agent_runtime: { profile_id: choice.runtimeId, model_name: choice.model || null } } : {}),
+                ...repositoryPayload(repository),
             } as Parameters<typeof client.conversations.create>[0]);
             return made as unknown as { id: string; pod_cwd?: string };
         },
@@ -577,15 +588,17 @@ function useStable<A extends unknown[], R>(run: (...args: A) => R): (...args: A)
     return useCallback((...args: A) => latest.current(...args), []);
 }
 
-export function useChat(podId: string, routeId: string, name: string, onCreated: (id: string) => void): Chat {
+/** `repository` is one picked where the chat was asked for (the new-chat
+ *  screen's box), to create it in. */
+export function useChat(podId: string, routeId: string, name: string, onCreated: (id: string) => void, repository: string | null = null): Chat {
     const { mode } = useSession();
     const lastTurnId = useRef("");
     const live = useLiveEngine(podId, routeId, mode === "live", lastTurnId);
     const sample = useSampleEngine(routeId, mode === "sample");
-    return useChatOver(mode === "sample" ? sample : live, podId, name, onCreated, lastTurnId);
+    return useChatOver(mode === "sample" ? sample : live, podId, name, onCreated, lastTurnId, repository);
 }
 
-function useChatOver(engine: Engine, podId: string, name: string, onCreated: (id: string) => void, lastTurnId: MutableRefObject<string>): Chat {
+function useChatOver(engine: Engine, podId: string, name: string, onCreated: (id: string) => void, lastTurnId: MutableRefObject<string>, askedIn: string | null): Chat {
     const source = useChatSource();
     const cache = useQueryClient();
     const mounted = useRef(true);
@@ -601,6 +614,7 @@ function useChatOver(engine: Engine, podId: string, name: string, onCreated: (id
        words are not a safe key for. */
     const [sendProblem, setSendProblem] = useState<unknown>(null);
     const [pickedModel, setPickedModel] = useState<Choice | null>(null);
+    const [pickedRepository, setPickedRepository] = useState<string | null>(askedIn);
     const uploadFailed = useRef<string | null>(null);
     const [pending, setPending] = useState<readonly PendingSend[]>([]);
     const steering = useRef<Set<string>>(new Set());
@@ -774,7 +788,7 @@ function useChatOver(engine: Engine, podId: string, name: string, onCreated: (id
         try {
             await sendToConversation(text, {
                 conversationId: current,
-                create: () => engine.create(pickedModel),
+                create: () => engine.create(pickedModel, pickedRepository),
                 isActive: () => mounted.current,
                 adopt: (conversation) => engine.adopt(conversation.id),
                 onCreated: (conversation) => {
@@ -814,7 +828,7 @@ function useChatOver(engine: Engine, podId: string, name: string, onCreated: (id
             sendingRef.current = false;
             if (mounted.current) setSending(false);
         }
-    }, [conversationId, running, steer, engine, pickedModel, putFiles, sendWith, cache]);
+    }, [conversationId, running, steer, engine, pickedModel, pickedRepository, putFiles, sendWith, cache]);
 
     const [refill, setRefill] = useState<{ text: string; id: number } | null>(null);
     const takeBack = (clientId: string): PendingSend | undefined => {
@@ -944,6 +958,9 @@ function useChatOver(engine: Engine, podId: string, name: string, onCreated: (id
         answerWith,
         pickedModel,
         setPickedModel,
+        pickedRepository,
+        setPickedRepository,
+        repository: repositoryOf(record_) ?? (conversationId ? pickedRepository : null),
         rename,
         archive,
         timeOf,

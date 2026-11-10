@@ -147,7 +147,8 @@ function supportTone(now: number): SampleChat {
     };
 }
 
-/** Launch, working right now, with a message it has not heard yet. */
+/** Launch, working right now, with a message it has not heard yet, in a
+ *  worktree of the shop's storefront repository. */
 function launchCopy(now: number): SampleChat {
     const w = writer(now - 8 * MIN);
     w.user("u1", "Do a second pass on the landing copy. Shorter, and keep the price.", 0);
@@ -159,7 +160,7 @@ function launchCopy(now: number): SampleChat {
         status: "RUNNING",
         messages: w.out,
         older: [],
-        conversation: {},
+        conversation: { workspace_cwd: "/home/user/lemma/worktrees/northwind-lamps/storefront/k3m9q2ab" },
         run: {
             steps: [
                 { tool: "browser_open", args: { url: "https://staging.northwind-lamps.example", comment: "Checking the staging page" }, result: { success: true, url: "https://staging.northwind-lamps.example", title: "Northwind Lamps" }, ms: 2600 },

@@ -76,6 +76,21 @@ export function useConverted(podId: string, path: string, enabled: boolean) {
     });
 }
 
+/** The GitHub repositories a new chat in this Lemma can work in, read once
+ *  for every box that offers them: the web's `useChatRepositories`. Refused
+ *  with the connector's code when there is none to offer. */
+export function useChatRepositories(podId: string | null) {
+    const source = useChatSource();
+    const key = useCacheKey();
+    return useQuery({
+        queryKey: [key, "chat-repositories", podId],
+        queryFn: () => source.repositories(podId as string),
+        enabled: Boolean(podId),
+        staleTime: 5 * 60_000,
+        retry: false,
+    });
+}
+
 const SAVING_MODEL = ["chat-runtime", "save"];
 
 /** The model a chat answers on, and the choice offered: the web's

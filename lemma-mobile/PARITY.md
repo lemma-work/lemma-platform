@@ -104,6 +104,8 @@ engine; `src/areas/chat/sample-chats.ts` has a chat for each state below.
 | Live updates over the pod socket, not polling | `lemma-sdk/react` `useAssistantSession` | done (the run streams over the socket; the `conversation` topic is held while a chat is open; REST every 15 s only while the socket is down) |
 | Composer: attach from photos, camera, files | `thread/composer.tsx`, `attachments.ts` | done (into the chat's `pod_cwd`, named in the message as the web names them; also from the new-chat box) |
 | Composer: model picker | `thread/model-picker.tsx` | done |
+| Pick a GitHub repository when starting a chat, from every installation the organization holds; the chat is created in it | `thread/repository-chip.tsx`, `outcomes/ask.tsx`, `thread/live-conversation.tsx` | built, not yet checked on a device (a chip beside the Lemma's in the new-chat box, and above a new chat's own box; a sheet grouped by GitHub account; a refusal the person can fix says the step and opens Connectors, read again on coming back; the words and grouping are the web's, `@web/thread/repositories`; goes with the create as `repository`) |
+| A chat that works in a repository says which | not on the web | built, not yet checked on a device (beside the Lemma's name in the header, read off the conversation's `workspace_cwd`, `thread/repository.ts`) |
 | Composer: drafts kept, Stop, filled by a widget's compose | `thread/drafts.ts`, `compose-bridge.ts` | done (drafts are kept on the phone and dropped on sign out) |
 | Reply choice in a chat that also lives on a chat platform | `thread/use-channel-reply.tsx` | done |
 | Rename, archive | `conversations.update` | done |
@@ -139,6 +141,12 @@ Known, and why:
   phone has no computer pane yet (area G).
 - Copy uses React Native's own clipboard module; `expo-clipboard` is the
   long-term home once a native build adds it (`src/thread/clipboard.ts`).
+- Home's ask box offers no repository yet, where the web's does: Home's send
+  has to carry the pick to the chat it opens (`AskBox`'s `repositories`, as
+  the new-chat screen passes it). The new-chat screen and a new chat's own
+  box offer it.
+- Sample data offers three repositories for every Lemma, under two GitHub
+  accounts, and Launch's "Landing copy, second pass" works in one.
 
 ## B. Tables and records (`src/areas/tables`, `(in)/lemma/[podId]/table`, `record`, `edit`, `collect`)
 

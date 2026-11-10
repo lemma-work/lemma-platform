@@ -1,3 +1,4 @@
+import type { ChatRepositories } from "@web/data/types";
 import type { PickedFile } from "../../data/io";
 import type { FileKind } from "../../thread/previews";
 import type { Choice, Runtime } from "../../thread/runtimes";
@@ -57,6 +58,13 @@ export interface ChatSource {
     agentPinsRuntime(podId: string, agentId: string): Promise<boolean>;
     conversationRuntime(podId: string, conversationId: string): Promise<Choice | null>;
     setConversationRuntime(podId: string, conversationId: string, choice: Choice | null): Promise<void>;
+
+    /** The GitHub repositories a new chat in this Lemma can work in, from
+     *  every installation the organization holds: the web's
+     *  `listChatRepositories`. Refused, with the connector's code, when the
+     *  Lemma's `github` connector cannot give the reader's computer a
+     *  checkout. */
+    repositories(podId: string): Promise<ChatRepositories>;
 
     /** A null title lets the conversation name itself again. */
     rename(podId: string, conversationId: string, title: string | null): Promise<void>;
