@@ -2,7 +2,7 @@
  *  native module, so the tests read it directly. */
 
 import { originOf } from "./origin";
-import type { Channel, ConversationRef, PersonRef } from "./types";
+import type { Automation, Channel, ConversationRef, DayCount, NeedItem, NeedKind, PersonRef } from "./types";
 
 export type Wire = Record<string, unknown>;
 
@@ -102,4 +102,96 @@ export function flatAskArgs(args: unknown): unknown {
     const outer = record(args);
     const inner = outer.request;
     return inner && typeof inner === "object" && !Array.isArray(inner) && !Array.isArray(outer.questions) ? inner : args;
+}
+
+/* ── the organization's reads ─────────────────────────────────────────── */
+
+/** What started a recent chat (`ListedOrigin`), as the conversation's own
+ *  metadata would say it, so `originOf` names it the same everywhere. */
+function listedMetadata(origin: string | null, platform: string | null, channel: string | null): Wire {
+    switch (origin) {
+        case "channel": return { source: "agent_surfaces", surface_platform: platform, channel_name: channel };
+        case "notification": return { source: "notification", surface_platform: platform };
+        case "schedule": return { source: "SCHEDULE" };
+        case "workflow": return { source: "WORKFLOW_RUN" };
+        case "ask": return { source: "pod_ask" };
+        case "resource": return { lemma_resource: "resource" };
+        default: return {};
+    }
+}
+
+/** One of `recents`' chats as the lists draw it. Its flag is the server's
+ *  own word that it waits on the reader. */
+export function recentChatOf(raw: unknown): ConversationRef | null {
+    const row = record(raw);
+    const id = words(row.conversation_id);
+    if (!id) return null;
+    const origin = words(row.origin);
+    const type = origin === "task" ? "TASK" : "CHAT";
+    return {
+        id,
+        title: words(row.title) ?? "Untitled",
+        activityAt: words(row.last_activity_at),
+        kind: type,
+        boundTo: origin === "resource" ? "resource" : null,
+        origin: originOf(listedMetadata(origin, words(row.platform), words(row.channel_name)), type),
+        agentId: words(row.agent_id),
+        status: words(row.status),
+        waitingOnYou: row.waiting_on_you === true,
+    };
+}
+
+/** One of `recents`' automations. */
+export function readAutomation(raw: unknown): Automation | null {
+    const row = record(raw);
+    const id = words(row.id);
+    const latestAt = words(row.latest_at);
+    if (!id || !latestAt) return null;
+    return {
+        id,
+        kind: row.kind === "SCHEDULE" ? "SCHEDULE" : "WORKFLOW",
+        name: words(row.name),
+        latestAt,
+        running: words(row.latest_status)?.toUpperCase() === "RUNNING",
+        runs: Math.max(1, count(row.run_count)),
+        workflowRunId: words(row.workflow_run_id),
+        conversationId: words(row.conversation_id),
+    };
+}
+
+export function readDayCount(raw: unknown): DayCount | null {
+    const row = record(raw);
+    const day = words(row.day);
+    return day ? { day, byAgent: count(row.by_agent), byPeople: count(row.by_people) } : null;
+}
+
+const NEED_KINDS = new Set<NeedKind>(["QUESTION", "APPROVAL", "PERMISSION", "FORM", "DECISION", "CONTACT", "MESSAGE"]);
+
+/** One item of `needsYou`, in the queue's words. */
+export function needOf(raw: unknown, now: number): NeedItem | null {
+    const row = record(raw);
+    const key = words(row.key);
+    const podId = words(row.pod_id);
+    const kind = words(row.kind) as NeedKind | null;
+    if (!key || !podId || !kind || !NEED_KINDS.has(kind)) return null;
+    const since = Date.parse(words(row.since) ?? "");
+    const said = words(row.title);
+    const detail = words(row.detail);
+    /* A contact's title is their name; the queue says what to do. */
+    const title = kind === "CONTACT" ? `Reply to ${said ?? "a contact"}` : said ?? detail ?? "A question for you";
+    return {
+        key,
+        kind,
+        podId,
+        podName: words(row.pod_name) ?? "A Lemma",
+        title,
+        detail: kind === "CONTACT" ? detail ?? "Waiting on a person" : said ? detail : null,
+        sinceMs: Number.isNaN(since) ? now : since,
+        conversationId: words(row.conversation_id),
+        toolCallId: words(row.tool_call_id),
+        workflowRunId: words(row.workflow_run_id),
+        channelId: words(row.channel_id),
+        messageId: words(row.message_id),
+        choices: rows(row.choices).flatMap((choice) => (words(choice) ? [words(choice) as string] : [])),
+    };
 }

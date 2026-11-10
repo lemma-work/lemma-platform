@@ -9,7 +9,7 @@ import { platformName, type ConversationOrigin, type OriginKind } from "./origin
 import { tablesRoutes } from "../areas/tables/routes";
 import { workRoutes } from "../areas/work/routes";
 import { NEW_CHAT, routes } from "./routes";
-import type { Channel, ConversationRef, NeedItem, NeedKind, Owns, SideRow } from "./types";
+import type { Automation, Channel, ConversationRef, DayCount, NeedItem, NeedKind, Owns, SideRow } from "./types";
 
 export { NEW_CHAT };
 
@@ -101,6 +101,19 @@ export function workSince(conversations: readonly ConversationRef[], sinceMs: nu
         else people += 1;
     }
     return { lemma, people };
+}
+
+/** A day as the server's day counts name it, in the phone's own time zone. */
+export function dayOf(ms: number): string {
+    const at = new Date(ms);
+    return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+}
+
+/** Conversations no person started, from the day of `sinceMs` on. The
+ *  server counts by day, so the day the reader last looked counts whole. */
+export function ranOnTheirOwn(activity: readonly DayCount[], sinceMs: number): number {
+    const from = dayOf(sinceMs);
+    return activity.reduce((sum, day) => sum + (day.day >= from ? day.byAgent : 0), 0);
 }
 
 export function isRunning(conversation: { status: string | null }): boolean {
@@ -206,6 +219,8 @@ export function needItems(
             toolCallId: ask.tool_call_id ?? null,
             workflowRunId: null,
             channelId: null,
+            messageId: null,
+            choices: [],
         });
     }
     for (const wait of waits) {
@@ -221,6 +236,8 @@ export function needItems(
             toolCallId: null,
             workflowRunId: wait.runId,
             channelId: null,
+            messageId: null,
+            choices: [],
         });
     }
     for (const channel of contacts) {
@@ -237,6 +254,8 @@ export function needItems(
             toolCallId: null,
             workflowRunId: null,
             channelId: channel.id,
+            messageId: null,
+            choices: [],
         });
     }
     return [...items.values()];
@@ -251,7 +270,7 @@ export function freshQueue(items: readonly NeedItem[], now: number): NeedItem[] 
 export type NeedFilter = "all" | "yes" | "questions" | "people" | "forms";
 
 export function filterOf(kind: NeedKind): Exclude<NeedFilter, "all"> {
-    if (kind === "QUESTION") return "questions";
+    if (kind === "QUESTION" || kind === "MESSAGE") return "questions";
     if (kind === "CONTACT") return "people";
     if (kind === "FORM") return "forms";
     return "yes";
@@ -361,11 +380,14 @@ function automationOf(conversation: ConversationRef): { key: string; name: strin
 export function workRows(input: {
     podId: string;
     conversations: readonly ConversationRef[];
+    /** The server's one line per automation; without it, they are read off
+     *  the conversations. */
+    automations?: readonly Automation[] | null;
     tables: readonly { name: string; updated: string | null }[];
     now: number;
 }): SideRow[] {
     const latest = new Map<string, { row: SideRow; runs: Set<string> }>();
-    for (const conversation of input.conversations) {
+    for (const conversation of input.automations ? [] : input.conversations) {
         const origin = conversation.origin;
         if (!origin || conversation.waitingOnYou) continue;
         const automation = automationOf(conversation);
@@ -393,7 +415,9 @@ export function workRows(input: {
         if ((row.at ?? 0) > (held.row.at ?? 0)) held.row = { ...row, running: row.running || held.row.running };
         else if (row.running) held.row = { ...held.row, running: true };
     }
-    const automations = [...latest.values()].map(({ row, runs }) => ({ ...row, runs: runs.size }));
+    const automations = input.automations
+        ? input.automations.map((automation) => automationRow(input.podId, automation))
+        : [...latest.values()].map(({ row, runs }) => ({ ...row, runs: runs.size }));
     const tables = input.tables.flatMap((table): SideRow[] => {
         const at = timeOf(table.updated);
         if (at === null || input.now - at > QUIET_AFTER_MS) return [];
@@ -412,6 +436,30 @@ export function workRows(input: {
         }];
     });
     return [...automations, ...tables];
+}
+
+/** One automation's row, from the server's line for it. */
+export function automationRow(podId: string, automation: Automation): SideRow {
+    const schedule = automation.kind === "SCHEDULE";
+    const title = automation.name ? readableName(automation.name) : schedule ? "A schedule" : "A workflow";
+    const href = automation.workflowRunId
+        ? workRoutes.run(podId, automation.workflowRunId)
+        : automation.conversationId
+            ? routes.chat(podId, automation.conversationId)
+            : schedule ? workRoutes.schedule(podId, automation.id) : workRoutes.runs(podId);
+    return {
+        key: "auto:" + automation.id,
+        kind: "automation",
+        title,
+        said: schedule ? "Runs on a schedule" : "A workflow",
+        at: timeOf(automation.latestAt),
+        href,
+        needsYou: false,
+        unread: 0,
+        running: automation.running,
+        platforms: [],
+        runs: automation.runs,
+    };
 }
 
 /** Whether a chat earns a line: a person's own line is a way in, not a
@@ -522,6 +570,20 @@ export function parsePlan(source: string): Plan {
         }
     }
     return plan;
+}
+
+/** What a Lemma keeps on the server as what it owns, read as a plan's
+ *  fields, so the same `ownsOf` says it. */
+export function planOfOutcome(outcome: { sentence: string; kind: string; target?: number | null; unit?: string | null; due?: string | null; measure?: string | null }): Plan {
+    const target = outcome.target ?? null;
+    return {
+        outcome: outcome.sentence,
+        kind: outcome.kind === "date" ? "date" : "week",
+        target: target === null || !Number.isFinite(target) ? null : String(target),
+        due: outcome.due ?? null,
+        measure: outcome.measure ?? null,
+        unit: outcome.unit ?? null,
+    };
 }
 
 /** The number a measure answered: the first finite value in its first row. */

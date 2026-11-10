@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession, useSource } from "../session/session";
 import { store } from "../session/store";
-import { DAY_MS, chatRows, freshQueue, needItems, sectionRows, sidebarSections, startedByLemma, timeOf, workRows } from "./model";
+import { DAY_MS, chatRows, freshQueue, ranOnTheirOwn, sectionRows, sidebarSections, startedByLemma, timeOf, workRows } from "./model";
 import type { Lemma, LemmaSection, NeedItem, Org, Owns } from "./types";
 
 /** The screens' reads, through react-query, from whichever source the
@@ -52,8 +52,8 @@ export function useLemmas() {
     return { lemmas: query.data ?? [], pending: org ? query.isPending : orgsPending, error: query.error, org, refetch: query.refetch };
 }
 
-/** Each Lemma's raw reads, polled once a minute: nothing pushes a new ask,
- *  so a list that only read on navigation could sit saying nothing is owed. */
+/** Each Lemma's reads, polled once a minute: what moved lately for the whole
+ *  organization, and each Lemma's chats with people and tables. */
 export function usePulse() {
     const source = useSource();
     const key = useCacheKey();
@@ -87,14 +87,23 @@ export function useOwns(lemma: Lemma | null) {
     return useQuery({ queryKey: [key, "owns", lemma?.id], queryFn: () => source.owns(lemma!), enabled: Boolean(lemma), staleTime: 5 * 60_000 });
 }
 
-/** Everything waiting on the reader, every Lemma, oldest first. */
+/** Everything waiting on the reader, every Lemma, oldest first: one read for
+ *  the organization, polled once a minute, since nothing pushes a new ask.
+ *  Kept under the pulse's key, so whatever reads the pulse again after an
+ *  answer reads this again too. */
 export function useNeeds(): { needs: NeedItem[]; pending: boolean; refetch: () => void } {
-    const { pulse, pending, refetch } = usePulse();
-    const needs = useMemo(() => {
-        const now = Date.now();
-        return freshQueue(pulse.flatMap((one) => needItems(one.lemma, one.asks, one.waits, one.contacts, now)), now);
-    }, [pulse]);
-    return { needs, pending, refetch: () => void refetch() };
+    const source = useSource();
+    const key = useCacheKey();
+    const { lemmas, org } = useLemmas();
+    const query = useQuery({
+        queryKey: [key, "pulse", "needs", org?.id, lemmas.map((one) => one.id).join(",")],
+        queryFn: () => source.needs(org!.id, lemmas),
+        enabled: Boolean(org) && lemmas.length > 0,
+        staleTime: 20_000,
+        refetchInterval: POLL_MS,
+    });
+    const needs = useMemo(() => freshQueue(query.data ?? [], Date.now()), [query.data]);
+    return { needs, pending: query.isPending && lemmas.length > 0, refetch: () => void query.refetch() };
 }
 
 /** The Lemmas tab: each Lemma's section, busiest first, quiet ones folded. */
@@ -118,7 +127,7 @@ export function useSections(): { sections: LemmaSection[]; pending: boolean; ref
         const now = Date.now();
         const built = sidebarSections(pulse.map((one) => ({
             lemma: one.lemma,
-            rows: sectionRows(chatRows(one.lemma.id, one.conversations, one.channels), workRows({ podId: one.lemma.id, conversations: one.conversations, tables: one.tables, now })),
+            rows: sectionRows(chatRows(one.lemma.id, one.conversations, one.channels), workRows({ podId: one.lemma.id, conversations: one.conversations, automations: one.automations, tables: one.tables, now })),
         })), now, chosen);
         return built.map((section) => ({ ...section, owns: owns.get(section.lemma.id) ?? null }));
     }, [pulse, chosen, owns]);
@@ -156,6 +165,11 @@ export function useStartedOnTheirOwn(): { count: number; since: string } {
         const from = lastSeen ?? now - DAY_MS;
         let count = 0;
         for (const one of pulse) {
+            /* Live, the server counts them by day; the sample counts its own. */
+            if (one.activity) {
+                count += ranOnTheirOwn(one.activity, from);
+                continue;
+            }
             for (const conversation of one.conversations) {
                 const at = timeOf(conversation.activityAt);
                 if (at !== null && at >= from && startedByLemma(conversation)) count += 1;

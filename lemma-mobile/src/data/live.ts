@@ -1,43 +1,30 @@
 import { lemma } from "../session/client";
 import type { Server } from "../session/server";
 import { askQuestions } from "@web/thread/approval";
-import { PLAN_PATH, firstNameOf, ownsOf, parsePlan, readMeasure, readableName, type PendingAsk, type WaitRow } from "./model";
+import { PLAN_PATH, firstNameOf, ownsOf, parsePlan, planOfOutcome, readMeasure, readableName } from "./model";
 import type { ChatLine, LemmaPulse, LemmaSource } from "./source";
-import { SOMEBODY, conversationRefOf, flatAskArgs, items, readChannel, readPerson, record, words } from "./wire";
-import type { AppItem, Channel, ConversationRef, Lemma, NeedCard, Org, Owns, Starter } from "./types";
-import { store } from "../session/store";
+import { SOMEBODY, flatAskArgs, items, needOf, readAutomation, readChannel, readDayCount, readPerson, recentChatOf, record, rows, words } from "./wire";
+import type { AppItem, Automation, Channel, ConversationRef, DayCount, Lemma, NeedCard, NeedItem, Org, Owns, Starter } from "./types";
 import { readText } from "./io";
 
-/** Main's API, as it is, read per Lemma.
+/** Main's API, as it is.
  *
- *  This is the one module the open backend PRs shrink. `pulse` fans out six
- *  reads per Lemma; #1045 replaces it with `organizations.needsYou` and
- *  `organizations.recents` (one request each for the whole org), `apps`
- *  becomes `organizations.apps`, `homeSeen` becomes `homeSeen.get/mark`,
- *  and #1046 turns `owns` into `config.outcome` + `outcome/standing`. Each
- *  of those keeps the shapes in `types.ts`, so no screen changes. */
+ *  What waits on the reader and what moved lately are one read each for the
+ *  whole organization (`organizations.needsYou`, `organizations.recents`),
+ *  as are its apps and when Home was last looked at. A Lemma's chats with
+ *  people and its tables are still read per Lemma: nothing org-wide lists
+ *  them. What a Lemma owns is its own `outcome.standing`. */
 
-function readWaits(listed: unknown, names: ReadonlyMap<string, string>): WaitRow[] {
-    return items(listed).flatMap((entry) => {
-        const wait = record(record(entry).wait);
-        const run = record(record(entry).run);
-        const id = words(wait.id);
-        const runId = words(wait.run_id) ?? words(run.id);
-        /* A form waits as HUMAN (`WorkflowRunWaitType`): the queue's FORM. */
-        const said = words(wait.wait_type);
-        const type = said === "HUMAN" || said === "FORM" ? "FORM" : said === "DECISION" ? "DECISION" : null;
-        if (!id || !runId || !type) return [];
-        const schema = record(record(wait.payload).schema);
-        const answer = record(record(schema.properties).answer);
-        return [{
-            id,
-            type,
-            question: words(answer.description),
-            createdAt: words(wait.created_at),
-            runId,
-            workflowName: names.get(words(run.workflow_id) ?? "") ?? "a workflow",
-        }];
-    });
+/** How many of the reader's chats `recents` lists per Lemma. */
+const CHATS_PER_LEMMA = 15;
+
+/** The phone's IANA time zone, so `recents` counts the reader's own days. */
+function timeZone(): string {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+        return "UTC";
+    }
 }
 
 async function settled<T>(work: Promise<T>, fallback: T): Promise<T> {
@@ -48,14 +35,14 @@ async function settled<T>(work: Promise<T>, fallback: T): Promise<T> {
     }
 }
 
-function appOf(raw: unknown, lemma: Lemma): AppItem | null {
+function appOf(raw: unknown, lemma: Pick<Lemma, "id" | "name">): AppItem | null {
     const app = record(raw);
     const name = words(app.name);
     if (!name) return null;
     return {
         id: words(app.id) ?? name,
-        podId: lemma.id,
-        podName: lemma.name,
+        podId: words(app.pod_id) ?? lemma.id,
+        podName: words(app.pod_name) ?? lemma.name,
         name,
         label: readableName(name),
         description: words(app.description),
@@ -67,23 +54,28 @@ function appOf(raw: unknown, lemma: Lemma): AppItem | null {
 export function liveSource(server: Server): LemmaSource {
     const client = (podId?: string) => lemma(server, podId);
 
-    async function pulseOf(one: Lemma): Promise<LemmaPulse> {
+    /** What only a Lemma itself lists: its chats with people, its tables. */
+    async function ownReads(one: Lemma): Promise<Pick<LemmaPulse, "channels" | "tables">> {
         const pod = client(one.id);
-        const [conversations, asks, waits, channels, contacts, tables] = await Promise.all([
-            settled(pod.conversations.list({ pod_id: one.id, limit: 25, in_channel: false } as never).then((listed) => items(listed).map(conversationRefOf)), [] as ConversationRef[]),
-            settled(pod.conversations.pendingInteractions({ pod_id: one.id, limit: 100 } as never).then((listed) => items(listed) as PendingAsk[]), [] as PendingAsk[]),
-            settled((async () => {
-                const owed = await pod.workflows.runs.waitingAssignedToMe({ limit: 50 } as never);
-                if (items(owed).length === 0) return [] as WaitRow[];
-                const flows = await settled(pod.workflows.list({ limit: 100 } as never), { items: [] } as unknown);
-                const names = new Map(items(flows).map((flow) => [words(record(flow).id) ?? "", readableName(words(record(flow).name) ?? "a workflow")]));
-                return readWaits(owed, names);
-            })(), [] as WaitRow[]),
+        const [channels, tables] = await Promise.all([
             settled(pod.channels.list(one.id, { archived: false } as never).then((listed) => items(listed).map(readChannel).filter((channel): channel is Channel => channel !== null)), [] as Channel[]),
-            settled(pod.channels.list(one.id, { kind: "CONTACT", archived: false, needsPerson: true } as never).then((listed) => items(listed).map(readChannel).filter((channel): channel is Channel => channel !== null)), [] as Channel[]),
             settled(pod.tables.list({ limit: 100 } as never).then((listed) => items(listed).map((table) => ({ name: String(record(table).name), updated: words(record(table).updated_at) }))), [] as { name: string; updated: string | null }[]),
         ]);
-        return { lemma: one, conversations, asks, waits, channels, contacts, tables };
+        return { channels, tables };
+    }
+
+    /** `recents`, by Lemma: its chats, automations and days. A failed read
+     *  is no rows rather than no Lemmas: their chats with people still list. */
+    async function recentsByLemma(orgId: string): Promise<Map<string, { conversations: ConversationRef[]; automations: Automation[]; activity: DayCount[] }>> {
+        const read = await settled(client().organizations.recents(orgId, { days: 14, chats: CHATS_PER_LEMMA, timezone: timeZone() }), null);
+        return new Map(rows(record(read).pods).map((raw) => {
+            const pod = record(raw);
+            return [String(pod.pod_id), {
+                conversations: rows(pod.chats).map(recentChatOf).filter((one): one is ConversationRef => one !== null),
+                automations: rows(pod.automations).map(readAutomation).filter((one): one is Automation => one !== null),
+                activity: rows(pod.activity).map(readDayCount).filter((one): one is DayCount => one !== null),
+            }];
+        }));
     }
 
     return {
@@ -116,11 +108,48 @@ export function liveSource(server: Server): LemmaSource {
             });
         },
 
-        async pulse(_orgId, lemmas) {
-            return Promise.all(lemmas.map(pulseOf));
+        async pulse(orgId, lemmas) {
+            const [recents, own] = await Promise.all([recentsByLemma(orgId), Promise.all(lemmas.map(ownReads))]);
+            return lemmas.map((one, index) => {
+                const recent = recents.get(one.id);
+                return {
+                    lemma: one,
+                    conversations: recent?.conversations ?? [],
+                    automations: recent?.automations ?? [],
+                    activity: recent?.activity ?? [],
+                    ...own[index],
+                };
+            });
         },
 
+        /* Unlike the rows, a failed read here is said: an empty queue reads
+           as "nothing waits on you". */
+        async needs(orgId) {
+            const listed = await client().organizations.needsYou(orgId);
+            const now = Date.now();
+            return items(listed).map((raw) => needOf(raw, now)).filter((item): item is NeedItem => item !== null);
+        },
+
+        /* What it owns is the Lemma's own, kept on the server; a Lemma that
+           keeps nothing there yet is read from its plan file, as the web does. */
         async owns(one): Promise<Owns> {
+            const standing = record(await settled(client(one.id).pods.outcome.standing(one.id), null));
+            const outcome = standing.outcome && typeof standing.outcome === "object" ? record(standing.outcome) : null;
+            const sentence = words(outcome?.sentence);
+            if (outcome && sentence) {
+                const plan = planOfOutcome({
+                    sentence,
+                    kind: String(outcome.kind ?? "week"),
+                    target: typeof outcome.target === "number" ? outcome.target : null,
+                    unit: words(outcome.unit),
+                    due: words(outcome.due),
+                    measure: words(outcome.measure),
+                });
+                const value = typeof standing.value === "number" && Number.isFinite(standing.value) ? standing.value : null;
+                const owns = ownsOf(plan, value, Date.now());
+                const problem = words(standing.problem);
+                return problem && owns.display === null ? { ...owns, note: problem } : owns;
+            }
             const text = await readText(server, one.id, PLAN_PATH);
             const plan = text ? parsePlan(text) : null;
             let value: number | null = null;
@@ -130,12 +159,10 @@ export function liveSource(server: Server): LemmaSource {
             return ownsOf(plan, value, Date.now());
         },
 
-        async apps(_orgId, lemmas) {
-            const lists = await Promise.all(lemmas.map(async (one) => settled(
-                client(one.id).apps.list({ limit: 50 } as never).then((listed) => items(listed).map((raw) => appOf(raw, one)).filter((app): app is AppItem => app !== null)),
-                [] as AppItem[],
-            )));
-            return lists.flat().sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+        /* Each app names its own Lemma; the server lists them newest first. */
+        async apps(orgId) {
+            const listed = await client().organizations.apps(orgId);
+            return items(listed).map((raw) => appOf(raw, { id: "", name: "" })).filter((app): app is AppItem => app !== null && app.podId !== "");
         },
 
         async card(item): Promise<NeedCard> {
@@ -143,6 +170,14 @@ export function liveSource(server: Server): LemmaSource {
             if (item.kind === "CONTACT") return open("Reply");
             if (item.kind === "FORM") return open("Open the form");
             if (item.kind === "DECISION") return open("Decide");
+            /* A question a Lemma asked in your chat with it: its choices are
+               the answers, when it offered a few. */
+            if (item.kind === "MESSAGE") {
+                if (item.channelId && item.messageId && item.choices.length >= 2 && item.choices.length <= 4) {
+                    return { ...item, note: item.detail, answer: { kind: "choose", questionId: "choice", options: item.choices } };
+                }
+                return open("Answer");
+            }
             if (!item.conversationId || !item.toolCallId) return open(item.kind === "QUESTION" ? "Answer" : "Open");
             if (item.kind === "APPROVAL" || item.kind === "PERMISSION") {
                 return { ...item, note: item.detail, answer: { kind: "approve", approve: "Approve", decline: "Not this one" } };
@@ -160,6 +195,12 @@ export function liveSource(server: Server): LemmaSource {
         },
 
         async answer(item, decision, answers) {
+            if (item.kind === "MESSAGE") {
+                const choice = answers ? words(Object.values(answers)[0]) : null;
+                if (!item.channelId || !item.messageId || !choice) throw new Error("This one is answered in its chat.");
+                await client(item.podId).channels.answer(item.podId, item.channelId, item.messageId, { choice });
+                return;
+            }
             if (!item.conversationId || !item.toolCallId) throw new Error("This one is answered in its chat.");
             await client(item.podId).conversations.approvals.resolve(
                 item.conversationId,
@@ -228,7 +269,14 @@ export function liveSource(server: Server): LemmaSource {
             await client(podId).channels.post(podId, channelId, { text } as never);
         },
 
-        homeSeen: (orgId) => store.homeSeen(orgId),
-        markHomeSeen: (orgId, at) => store.setHomeSeen(orgId, at),
+        /* Kept by the server, so the web and the phone agree on it. */
+        async homeSeen(orgId) {
+            const seen = record(await client().organizations.homeSeen.get(orgId));
+            const at = Date.parse(words(seen.seen_at) ?? "");
+            return Number.isNaN(at) ? null : at;
+        },
+        async markHomeSeen(orgId, at) {
+            await client().organizations.homeSeen.mark(orgId, new Date(at).toISOString());
+        },
     };
 }

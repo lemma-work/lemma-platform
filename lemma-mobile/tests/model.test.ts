@@ -58,18 +58,18 @@ describe("the queue", () => {
     });
 
     it("drops what has waited more than a week", () => {
-        const item = (key: string, ago: number): NeedItem => ({ key, kind: "QUESTION", podId: "p", podName: "P", title: key, detail: null, sinceMs: NOW - ago, conversationId: key, toolCallId: null, workflowRunId: null, channelId: null });
+        const item = (key: string, ago: number): NeedItem => ({ key, kind: "QUESTION", podId: "p", podName: "P", title: key, detail: null, sinceMs: NOW - ago, conversationId: key, toolCallId: null, workflowRunId: null, channelId: null, messageId: null, choices: [] });
         expect(freshQueue([item("old", 8 * DAY), item("new", HOUR)], NOW).map((one) => one.key)).toEqual(["new"]);
     });
 
     it("puts what is behind first on Home, then the newest", () => {
-        const item = (key: string, podId: string, ago: number): NeedItem => ({ key, kind: "QUESTION", podId, podName: podId, title: key, detail: null, sinceMs: NOW - ago, conversationId: key, toolCallId: null, workflowRunId: null, channelId: null });
+        const item = (key: string, podId: string, ago: number): NeedItem => ({ key, kind: "QUESTION", podId, podName: podId, title: key, detail: null, sinceMs: NOW - ago, conversationId: key, toolCallId: null, workflowRunId: null, channelId: null, messageId: null, choices: [] });
         const cards = homeCards([item("a", "p", 12 * MIN), item("b", "p", 2 * HOUR), item("c", "p", 3 * HOUR), item("late", "behind", DAY)], new Set(["behind"]));
         expect(cards.map((one) => one.key)).toEqual(["a", "b", "late"]);
     });
 
     it("groups the list behind, today, earlier", () => {
-        const item = (key: string, podId: string, ago: number): NeedItem => ({ key, kind: "QUESTION", podId, podName: podId, title: key, detail: null, sinceMs: NOW - ago, conversationId: key, toolCallId: null, workflowRunId: null, channelId: null });
+        const item = (key: string, podId: string, ago: number): NeedItem => ({ key, kind: "QUESTION", podId, podName: podId, title: key, detail: null, sinceMs: NOW - ago, conversationId: key, toolCallId: null, workflowRunId: null, channelId: null, messageId: null, choices: [] });
         const groups = needGroups([item("today", "p", HOUR), item("earlier", "p", DAY), item("late", "behind", 2 * DAY)], new Set(["behind"]), NOW);
         expect(groups.behind.map((one) => one.key)).toEqual(["late"]);
         expect(groups.today.map((one) => one.key)).toEqual(["today"]);

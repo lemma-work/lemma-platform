@@ -1,7 +1,7 @@
-/** What the app reads, in its own words. The shapes mirror the org-level
- *  reads proposed in #1045 (`/organizations/{org}/needs-you`, `/recents`,
- *  `/apps`) and #1046's owns line, so the day those land only `live.ts`
- *  changes: it stops fanning out per Lemma and asks once. */
+/** What the app reads, in its own words. Live, most of it is one read for
+ *  the whole organization (`/organizations/{org}/needs-you`, `/recents`,
+ *  `/apps`, `/home-seen`) and a Lemma's own `/outcome/standing`; `live.ts`
+ *  turns those into these shapes, and the sample source builds the same. */
 
 import type { ConversationOrigin } from "./origin";
 
@@ -72,8 +72,9 @@ export interface Channel {
 
 /* ── what needs you ──────────────────────────────────────────────────── */
 
-/** #1045's `NeedsYouItem.kind`. */
-export type NeedKind = "QUESTION" | "APPROVAL" | "PERMISSION" | "FORM" | "DECISION" | "CONTACT";
+/** The server's `NeedsYouKind`. A MESSAGE is a question a Lemma asked in
+ *  your own chat with it, answered with one of its choices or in words. */
+export type NeedKind = "QUESTION" | "APPROVAL" | "PERMISSION" | "FORM" | "DECISION" | "CONTACT" | "MESSAGE";
 
 export interface NeedItem {
     key: string;
@@ -88,8 +89,12 @@ export interface NeedItem {
     /** The paused call: also the approval id the decision endpoint takes. */
     toolCallId: string | null;
     workflowRunId: string | null;
-    /** A contact's channel. */
+    /** A contact's chat, or the chat a MESSAGE was asked in. */
     channelId: string | null;
+    /** A MESSAGE's own line, which its answer is sent to. */
+    messageId: string | null;
+    /** The answers a MESSAGE offered. */
+    choices: string[];
 }
 
 /** What a card on Home offers, read off the paused call when it was opened:
@@ -130,8 +135,8 @@ export interface SideRow {
     runs?: number;
 }
 
-/** What a Lemma owns and where it stands: #1046's `config.outcome` plus
- *  `/outcome/standing`, read today from `/plan.md` and its measure. */
+/** What a Lemma owns and where it stands: its `/outcome/standing`, or for a
+ *  Lemma that keeps none on the server yet, `/plan.md` and its measure. */
 export interface Owns {
     /** "every customer hears back within a day", or null for nothing yet. */
     sentence: string | null;
@@ -147,6 +152,29 @@ export interface Owns {
     standing: "on" | "behind" | null;
 }
 
+/** One of a Lemma's workflows or schedules that ran lately: its newest run,
+ *  and how many it ran in the window (`/organizations/{org}/recents`). */
+export interface Automation {
+    id: string;
+    kind: "WORKFLOW" | "SCHEDULE";
+    name: string | null;
+    latestAt: string;
+    running: boolean;
+    runs: number;
+    /** The run to open for the newest: the workflow's, or one a schedule started. */
+    workflowRunId: string | null;
+    /** The conversation a schedule's agent ran in, for the newest fire. */
+    conversationId: string | null;
+}
+
+/** One day's conversations of the reader's, by who started them. */
+export interface DayCount {
+    /** A calendar day in the phone's time zone, `2026-11-10`. */
+    day: string;
+    byAgent: number;
+    byPeople: number;
+}
+
 export interface LemmaSection {
     lemma: Lemma;
     rows: SideRow[];
@@ -157,7 +185,7 @@ export interface LemmaSection {
     owns: Owns | null;
 }
 
-/** An app, as #1045's `/organizations/{org}/apps` lists it. */
+/** An app, as `/organizations/{org}/apps` lists it. */
 export interface AppItem {
     id: string;
     podId: string;

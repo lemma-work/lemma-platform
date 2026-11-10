@@ -1,6 +1,6 @@
 import type { RawMessage } from "@web/thread/turns";
 import { originOf } from "./origin";
-import type { PendingAsk } from "./model";
+import { freshQueue, needItems, type PendingAsk, type WaitRow } from "./model";
 import type { ChatLine, LemmaPulse, LemmaSource } from "./source";
 import type { AppItem, Channel, ConversationRef, Lemma, NeedCard, NeedItem, Owns, Starter } from "./types";
 
@@ -93,8 +93,17 @@ function contact(id: string, name: string, reason: string, ago: number, now: num
 const SCHEDULE = (name: string) => ({ source: "SCHEDULE", schedule_name: name });
 const WORKFLOW = (run: string) => ({ source: "WORKFLOW_RUN", workflow_run_id: run });
 
-export function samplePulse(now: number): LemmaPulse[] {
-    return [
+/** A Lemma's sample reads: the ones the live source gets from the
+ *  organization's `needsYou` are kept here per Lemma, and turned into the
+ *  queue by the same `needItems` the web's per-Lemma reads used. */
+export interface SamplePulse extends LemmaPulse {
+    asks: PendingAsk[];
+    waits: WaitRow[];
+    contacts: Channel[];
+}
+
+export function samplePulse(now: number): SamplePulse[] {
+    const pulses: Omit<SamplePulse, "automations" | "activity">[] = [
         {
             lemma: SUPPORT,
             conversations: [
@@ -163,6 +172,7 @@ export function samplePulse(now: number): LemmaPulse[] {
             tables: [{ name: "invoices", updated: iso(8 * DAY, now) }],
         },
     ];
+    return pulses.map((pulse) => ({ ...pulse, automations: null, activity: null }));
 }
 
 /** Where each Lemma stands, as the canvas draws it. */
@@ -183,11 +193,32 @@ const SAMPLE_APPS: AppItem[] = [
     { id: "app-invoices", podId: BOOKS.id, podName: BOOKS.name, name: "invoices", label: "Invoices", description: null, url: null, updatedAt: null },
 ];
 
+/** A question a Lemma asked in the reader's own chat with it (a MESSAGE):
+ *  the one kind of need only the organization's read reports. */
+function sampleMessages(now: number): NeedItem[] {
+    return [{
+        key: "message:support-line-delay",
+        kind: "MESSAGE",
+        podId: SUPPORT.id,
+        podName: SUPPORT.name,
+        title: "Send the delivery-delay note to the 12 customers waiting?",
+        detail: null,
+        sinceMs: now - 40 * MIN,
+        conversationId: null,
+        toolCallId: null,
+        workflowRunId: null,
+        channelId: "support-line",
+        messageId: "support-line-delay",
+        choices: ["Send it", "Not yet"],
+    }];
+}
+
 /** What the canvas's cards say, beyond the queue's one line. */
 const CARDS: Record<string, Pick<NeedCard, "title" | "note" | "answer">> = {
     "ask:support-refund": { title: "Refund $240 to Northwind? Their order arrived broken.", note: "Then they hear back today: 32 of 44", answer: { kind: "approve", approve: "Approve", decline: "Not this one" } },
     "ask:launch-day": { title: "Which day should the launch post go out?", note: null, answer: { kind: "choose", questionId: "day", options: ["Mon 10", "Tue 11", "Wed 12"] } },
     "ask:renewals-globex": { title: "Sam hasn’t confirmed Globex. It renews in 3 days.", note: null, answer: { kind: "choose", questionId: "next", options: ["Nudge Sam", "I’ll take it"] } },
+    "message:support-line-delay": { title: "Send the delivery-delay note to the 12 customers waiting?", note: "Asked in your WhatsApp chat with Support", answer: { kind: "choose", questionId: "choice", options: ["Send it", "Not yet"] } },
 };
 
 /** The Needs list's one-line titles, where they differ from a card's. */
@@ -263,11 +294,15 @@ export function sampleSource(): LemmaSource {
         lemmas: async () => SAMPLE_LEMMAS,
         pulse: async () => {
             const now = Date.now();
-            return samplePulse(now).map((pulse) => ({
+            return samplePulse(now).map(({ asks: _asks, waits: _waits, contacts: _contacts, ...pulse }) => ({
                 ...pulse,
-                asks: pulse.asks.filter((one) => !answered.has("ask:" + one.conversation_id)),
                 conversations: pulse.conversations.map((one) => (answered.has("ask:" + one.id) ? { ...one, waitingOnYou: false } : one)),
             }));
+        },
+        needs: async () => {
+            const now = Date.now();
+            const asked = samplePulse(now).flatMap((one) => needItems(one.lemma, one.asks, one.waits, one.contacts, now));
+            return freshQueue([...asked, ...sampleMessages(now)], now).filter((item) => !answered.has(item.key));
         },
         owns: async (lemma) => SAMPLE_OWNS[lemma.id] ?? { sentence: null, display: null, label: null, fill: null, mark: null, note: null, standing: null },
         apps: async () => SAMPLE_APPS,

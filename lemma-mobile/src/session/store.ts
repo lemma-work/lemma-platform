@@ -8,7 +8,6 @@ import * as SecureStore from "expo-secure-store";
 const SERVER = "lemma.server";
 const MODE = "lemma.mode";
 const ORG = "lemma.org";
-const SEEN = "lemma.home-seen";
 const FOLDED = "lemma.folded";
 const HANDOFF = "lemma.handoff";
 const APPEARANCE = "lemma.appearance";
@@ -48,12 +47,6 @@ export const store = {
     setSession: (serverId: string, value: string | null) => write(sessionKey(serverId), value),
     org: () => read(ORG),
     setOrg: (id: string) => write(ORG, id),
-    homeSeen: async (orgId: string): Promise<number | null> => {
-        const held = await read(SEEN + "." + orgId.replace(/[^A-Za-z0-9._-]/g, "_"));
-        const at = held ? Number(held) : Number.NaN;
-        return Number.isFinite(at) ? at : null;
-    },
-    setHomeSeen: (orgId: string, at: number) => write(SEEN + "." + orgId.replace(/[^A-Za-z0-9._-]/g, "_"), String(at)),
     folded: async (): Promise<Map<string, boolean>> => {
         const held = await read(FOLDED);
         try {
