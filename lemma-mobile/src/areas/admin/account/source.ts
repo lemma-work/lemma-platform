@@ -1,4 +1,5 @@
 import type { UserProfileRequest, UserResponse } from "lemma-sdk";
+import type { BotChoice, LinkedTelegramAccount, MyTelegramSurfaces } from "@web/session/telegram-bots";
 
 /** Whether this server can verify a number over WhatsApp at all: it is off
  *  unless a deployment has set it up, so "no" is the ordinary answer. */
@@ -47,4 +48,18 @@ export interface AccountSource {
      *  back as the confirmation. Throws the API's refusal as it came, for
      *  the web's `deletionRefusal` to read. */
     deleteAccount(confirmEmail: string): Promise<void>;
+    /** The person's Telegram bots across every Lemma they are in, from one
+     *  read of `/surfaces/me` (the web's `session/link-telegram.tsx`):
+     *  enough to say whether there is anything to link an account through. */
+    myTelegramSurfaces(): Promise<MyTelegramSurfaces>;
+    /** Which bot each of those is, each Lemma's own list naming it:
+     *  Lemma's shared bot once, first, then each Lemma's own. */
+    telegramBots(mine: MyTelegramSurfaces): Promise<BotChoice[]>;
+    /** The Telegram accounts the person proved from a Lemma session. The
+     *  proof holds on every bot, so they are read across every Lemma at
+     *  once. Proving one is the chats area's (`chats/identity-link.tsx`),
+     *  since the code is made on one Lemma's bot. */
+    telegramAccounts(): Promise<LinkedTelegramAccount[]>;
+    /** From its next message the account is a stranger's again. */
+    unlinkTelegramAccount(id: string): Promise<void>;
 }

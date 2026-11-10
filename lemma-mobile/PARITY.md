@@ -282,6 +282,8 @@ for a phone in `chat-view.tsx`, `line.tsx`, `composer.tsx`, `thread-view.tsx`,
 | Edit, delete, share a message; retry delivery | `channels/line.tsx`, `parts.tsx` | done (hold a message: reply, copy, edit, delete or remove for everyone, share an answer kept to you; Try again on a send that gave up; files shown or handed to another app) |
 | New group, join, leave | `channels/new-channel.tsx` | done |
 | Group details: members, agents, roles, settings | `channels/chat-details.tsx` | done (notifications, mute and where to hear of it; about; people, owners, add and remove; who answers and when; connected; public or private, archive, delete) |
+| Prove your Telegram account from a group ("This is me"), and be a member in its groups | `channels/identity-link.tsx`, `chat-details.tsx` | built, device check pending (on somebody outside the Lemma in a Telegram group's People: a sheet with a code made on the group's bot, "Open Telegram" hands its t.me link to Telegram, then "Is … your Telegram account?" with Not me or Yes, link it; the chat and its messages are read again after) |
+| Give a group a table: its people outside read and add only that | `channels/table-grants.tsx`, `source-settings.tsx` | built, device check pending (under Connected › Settings: what was given, Take back, and Give them a table in a sheet: a table read whole, then Read and Add per column) |
 | Assign to me, agent answers on or off, mark read | `channel-page.tsx`, `contact-controls.tsx`, `agent-switch.tsx` | done (the contact strip's Take over and Hand back; assignee, status, hand-back hours and the Lemma's switch in details; read as you see it, or Mark read on a held row) |
 | WhatsApp group and Telegram link sources | `channels/source-sheets.tsx`, `source-settings.tsx` | done (New: start a WhatsApp group and share its link, add the Lemma to a Telegram group or a Slack channel, each waiting for the group to arrive; a group's settings under Connected) |
 | Waiting on you (the bell) | `channels/waiting-panel.tsx`, `form-answer.tsx` | done (a section at the top of the Chats tab and All chats, kept by the `inbox` topic: new messages in your own chat, questions answered in place, mentions) |
@@ -304,6 +306,12 @@ Drawn for a phone, and where it departs from the web:
   (`model.ts`), and a test holds that.
 - All chats reads each Lemma's counts on a poll rather than holding a socket
   open per Lemma; a Lemma's own Chats tab and an open chat are live.
+- Proving a Telegram account and giving a group a table run on the web's own
+  pure modules (`@web/channels/identity-link-model`, `table-grants-model`),
+  moved out of the web's `identity-link.tsx` and `table-grants.tsx` for it.
+  The proof's sheet (`identity-link.tsx`) is also the profile's (F): the
+  code is made on one Lemma's bot, so its calls are this area's. The web's
+  table of checkboxes is a row per column with a Read and an Add chip.
 
 Design v2 (`room.ts` for what it works out, tested in `tests/chats-room.test.ts`):
 - People are discs with initials and Lemmas their free-standing character
@@ -344,6 +352,10 @@ dark. Not checked, and why:
 - The server refuses the last person leaving a private group ("delete it
   instead"), and the phone shows its words; leaving with others in it is the
   same call.
+- "This is me" and a group's tables (2026-11-10) were built and tested in
+  vitest and typecheck only, not yet on a device or against the local stack.
+  Proving an account needs a real Telegram bot to open the code with;
+  without one it is acted out in sample data.
 
 Sample data (`sample.ts`): Support has Ada's own chat on WhatsApp, "Customer
 care" (mirrored from a WhatsApp group, with a contact in it, a question
@@ -351,7 +363,12 @@ waiting on Ada, a thread, a removed message, a send that gave up, an answer
 kept private, three photos and a voicemail, a mention), four contacts, thirty older chats, and
 its contacts' setup; Launch has "launch-week" (private, its Lemma answering
 every message, an approval and a form waiting on Ada, an edit, a thread, a
-mention) and "Press friends" on Telegram. Writes stay in memory.
+mention) and "Press friends" on Telegram (given Launch's `releases` to read,
+with `launch_checklist` to give; "Ada L." is Ada's own Telegram account,
+which "This is me" links and folds into her, and a journalist's, where it is
+opened from the wrong account). A code opens "in Telegram" four seconds after
+it is made, from Ada's account; the link goes to example.com, not Telegram.
+Writes stay in memory.
 
 ## F. Settings and admin (`src/areas/admin`, `(in)/account`, `(in)/settings`, `(in)/lemma/[podId]/settings`)
 
@@ -372,6 +389,7 @@ are rows on the account screen, `(in)/settings/[section]`.
 | Delete a Lemma | `space/delete-teammate.tsx` | done (typing its name confirms) |
 | Connect WhatsApp, Telegram, Email, Slack, Teams, Discord; phone verification | `shell/reach.tsx`, `own-bot.tsx`, `surface-*` | done (every way in the web offers; Discord is named but the backend has no Discord platform yet; no real third-party account was connected, see below) |
 | Profile: name, time zone, mobile | `session/profile-panel.tsx` | done (WhatsApp verification; Telegram verification needs a browser cookie, so the phone sends that one to the web) |
+| Profile: link Telegram through a bot you pick, the accounts you proved, unlink | `session/link-telegram.tsx`, `telegram-bots.ts`, `telegram-accounts.ts` | built, device check pending (a Telegram group under the profile's form: each account on one line with when and Unlink; Link Telegram opens a sheet: which bot, Lemma's shared one first, then E's proof with "every Lemma you're in") |
 | Appearance: light, dark, as the phone | settings modal | done |
 | Usage | `usage/usage-panel.tsx` | done |
 | Plan and billing | `billing/*` | done (iOS: shown, never bought; see below) |
@@ -407,6 +425,13 @@ How it is built:
   plans and their prices at all is part of that call. Android buys in the
   phone's browser and reads the plan again on return.
 - A local installation has no billing: Plan and Billing are not listed there.
+- Telegram on the profile (`account/telegram.tsx`, its decisions in
+  `link-telegram.ts`) reads `/surfaces/me` and each Lemma's bots through the
+  web's `@web/session/telegram-bots` (`readBots`, `botTitle` and `botDetail`
+  moved there from `link-telegram.tsx` for it). The proof itself is the
+  chats area's sheet (E), since its code is made on one Lemma's bot. Built
+  and tested in vitest and typecheck only, not yet on a device; linking needs
+  a real Telegram bot, so it is acted out in sample data.
 - No real third-party account was connected while this was built. Each
   platform's flow runs on the phone up to the point that needs one: a real
   Meta number (WhatsApp of its own, groups, verification), a BotFather token
@@ -418,6 +443,9 @@ How it is built:
   up a coding agent on this computer, local model servers.
 - Sample data: Acme, with Ada as its owner; every part has its own
   (`<part>/sample.ts`), and writes stay in memory while the app is open.
+  Ada's Telegram: Support and Renewals on Lemma's shared bot and Launch's own
+  bot to pick from, an old phone's account to unlink, and her current one
+  listed once E's sheet confirms it.
 
 ## G. Everything else (`src/areas/more`, `(in)/search`, `(in)/new-lemma`, `welcome`, `new-org`, `invitations`, `join`, `templates`, `import`, `remix`, `computer`, `sign-in-to-site`, `call`, `guide`)
 

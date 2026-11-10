@@ -2,7 +2,9 @@ import { SAMPLE_LEMMAS, samplePulse } from "../../data/sample";
 import type { ConversationRef } from "../../data/types";
 import { SAMPLE_PNG } from "../files/sample-media";
 import { SAMPLE_PHOTOS, SAMPLE_SIZES, SAMPLE_VOICEMAIL } from "../chat/sample-paths";
+import { rememberSampleLink } from "../admin/account/sample";
 import type { AgentRef, BotAnswer, ChannelChange, ChatsSource, LemmaPerson, MineChange, PostBody, WaitingRun } from "./source";
+import type { TableGrant } from "@web/channels/table-grants-model";
 import type { Contact, ContactReach, WebWidget } from "@web/data/contacts";
 import type { Channel, ChannelDetail, Line, LineDelivery, Member, Part, SourcePlace } from "@web/channels/model";
 import type { SearchHit } from "@web/channels/search-model";
@@ -28,7 +30,9 @@ const SAMPLE_LINE_FILES: Record<string, string> = {
  *  - Launch: "launch-week", a private group whose Lemma answers every message,
  *    naming Ada, with an approval and a form waiting on her, an answer only she
  *    reads, edits, a thread, and Dev typing (Sam in the thread) for a while
- *    after it opens; "Press friends", a Telegram group.
+ *    after it opens; "Press friends", a Telegram group given Launch's
+ *    releases to read, with Ada's own Telegram account in it as somebody
+ *    outside (proving it is hers folds it into her) and a journalist's.
  *
  *  Held in memory, so what is sent, edited, read or changed stays for as long
  *  as the app is open. The ids are the core sample's (`data/sample.ts`), so a
@@ -47,6 +51,12 @@ const MARIA: PersonRef = { kind: "CONTACT", id: "contact-maria", name: "Maria Ch
 const OMAR: PersonRef = { kind: "CONTACT", id: "contact-omar", name: "Omar Haddad" };
 const LI: PersonRef = { kind: "CONTACT", id: "contact-li", name: "Li Wei" };
 const NEWS: PersonRef = { kind: "CONTACT", id: "contact-june", name: "June Park" };
+/** Ada's own Telegram account, which Launch took for somebody outside it. */
+const ADA_TELEGRAM: PersonRef = { kind: "CONTACT", id: "contact-ada-telegram", name: "Ada L." };
+const INES: PersonRef = { kind: "CONTACT", id: "contact-ines", name: "Inès (Le Monde)" };
+/** The Telegram account a sample link is opened from: always Ada's, so
+ *  "This is me" on her account links it and on anybody else's does not. */
+const SAMPLE_TELEGRAM = { id: "sample-telegram-ada", name: "Ada L.", username: "ada_l", contactId: "contact-ada-telegram" };
 
 const agentOf = (podId: string, name: string): PersonRef => ({ kind: "AGENT", id: "agent-" + podId, name });
 const SUPPORT_AGENT = agentOf(SUPPORT.id, SUPPORT.name);
@@ -261,7 +271,9 @@ function build(now: number): Held[] {
         });
     }
 
-    /* Launch: a Telegram group. */
+    /* Launch: a Telegram group, where Ada's own Telegram account wrote
+       before Launch knew it was hers ("This is me" proves it), and a
+       journalist's ("This is me" there is opened from the wrong account). */
     {
         const tg = "press-tg";
         held.push({
@@ -269,12 +281,13 @@ function build(now: number): Held[] {
             channel: channelOf("press-friends", "GROUP", {
                 title: "Press friends", sources: [{ platform: "TELEGRAM", title: "Press friends" }],
                 places: [place(tg, "TELEGRAM", "CHAT", "Press friends", at(2 * DAY))],
-                members: [member(ME, "owner"), member(SAM), seat(LAUNCH_AGENT)],
-                me: { joined: true, notify: "MENTIONS", notifyVia: null, mutedUntil: iso(-2 * HOUR, now), readSeq: 2, role: "owner", canManage: true },
+                members: [member(ME, "owner"), member(SAM), member(ADA_TELEGRAM), member(INES), seat(LAUNCH_AGENT)],
+                me: { joined: true, notify: "MENTIONS", notifyVia: null, mutedUntil: iso(-2 * HOUR, now), readSeq: 3, role: "owner", canManage: true },
             }, now),
             lines: [
-                say(1, { kind: "CONTACT", id: "contact-ines", name: "Inès (Le Monde)" }, "@launch_acme_bot when does the embargo lift?", at(2 * DAY), { sourceId: tg }),
-                say(2, LAUNCH_AGENT, "Tuesday at 9:00 Paris time. The kit is linked in the pinned message.", at(2 * DAY - MIN), { sourceId: tg }),
+                say(1, ADA_TELEGRAM, "Dropping the press kit here for everyone.", at(2 * DAY + 30 * MIN), { sourceId: tg }),
+                say(2, INES, "@launch_acme_bot when does the embargo lift?", at(2 * DAY), { sourceId: tg }),
+                say(3, LAUNCH_AGENT, "Tuesday at 9:00 Paris time. The kit is linked in the pinned message.", at(2 * DAY - MIN), { sourceId: tg }),
             ],
             replies: new Map(),
         });
@@ -292,6 +305,19 @@ function settle(one: Held): void {
     one.channel.lastSeq = lastSeq;
     one.channel.lastLine = top ? { sender: top.sender, text: top.text ?? "", createdAt: top.createdAt } : null;
     one.channel.lastMessageAt = top?.createdAt ?? null;
+}
+
+/** A contact proved to be Ada (the backend's `ContactBecameMember`): she
+ *  takes its seat and what it said, and it leaves the group. */
+function foldIntoMe(one: Held, contactId: string): void {
+    const isIt = (person: PersonRef) => person.kind === "CONTACT" && person.id === contactId;
+    if (!one.channel.members.some((each) => isIt(each.person))) return;
+    one.channel.members = one.channel.members.filter((each) => !isIt(each.person));
+    if (!one.channel.members.some((each) => each.person.kind === "MEMBER" && each.person.id === ME.id)) one.channel.members.push(member(ME));
+    const mine = (line: Line): Line => (isIt(line.sender) ? { ...line, sender: ME } : line);
+    one.lines = one.lines.map(mine);
+    for (const [root, replies] of one.replies) one.replies.set(root, replies.map(mine));
+    settle(one);
 }
 
 /* ── history ───────────────────────────────────────────────────────── */
@@ -362,6 +388,20 @@ const SURFACES: Record<string, Surface[]> = {
     ],
 };
 
+/** The tables a group can be given, by Lemma, with their own columns: the
+ *  tables area's sample tables, less Support's replies, read one row per
+ *  person. */
+const GRANTABLE: Record<string, Record<string, readonly string[]>> = {
+    [SUPPORT.id]: {
+        customers: ["name", "contact", "plan", "region", "segment", "seats", "renews_on"],
+        tickets: ["subject", "status", "priority", "channel", "customer_id", "email"],
+    },
+    [LAUNCH.id]: {
+        launch_checklist: ["task", "owner", "due", "done"],
+        releases: ["title", "shipped_at", "area", "version"],
+    },
+};
+
 function agentsFor(podId: string): AgentRef[] {
     const lemma = SAMPLE_LEMMAS.find((one) => one.id === podId);
     const front: AgentRef = { id: "agent-" + podId, name: "pod_default", label: lemma?.name ?? "Lemma", front: true, blurb: lemma?.description ?? "" };
@@ -401,6 +441,13 @@ export function chatsSample(): ChatsSource {
         ["press-tg", { id: "press-tg", channelId: "press-friends", platform: "TELEGRAM", title: "Press friends", surfaceName: "launch-telegram", answersOutsiders: false, welcomesOutsiders: false, botAnswersOutsiders: true, canManage: true, owner: ME, inviteLink: null, pending: false, sharedExternally: false, publicReach: { files: [], tables: [], more: false } }],
     ]);
     const bots = new Map<string, BotAnswer>([["support-whatsapp", { answer: "known", own: true }], ["support-mail", { answer: "anyone", own: true }], ["launch-telegram", { answer: "off", own: false }]]);
+    /* Press friends was given Launch's releases to read; checklist is there to give. */
+    const grants = new Map<string, Map<string, TableGrant>>([
+        ["press-friends", new Map([["releases", { table: "releases", readColumns: ["title", "shipped_at", "version"], addColumns: [] }]])],
+    ]);
+    /* Codes made to prove a Telegram account, each opened "in Telegram" a few
+       seconds after it is made, so the confirm step can be seen. */
+    const links = new Map<string, { opensAt: number; contactId: string | null; ended: "OTHER_ACCOUNT" | "GONE" | null }>();
     let autoAck: string | null = "Thanks — someone from Support will reply.";
     let made = 0;
     const answered = new Set<string>();
@@ -732,6 +779,58 @@ export function chatsSample(): ChatsSource {
         },
         async surfaces(podId) {
             return SURFACES[podId] ?? [];
+        },
+        async tableGrants(_podId, channelId) {
+            return [...(grants.get(channelId)?.values() ?? [])].map((one) => ({ ...one }));
+        },
+        async setTableGrant(podId, channelId, table, grant) {
+            if (!GRANTABLE[podId]?.[table]) throw Object.assign(new Error("That table is not one you can give."), { statusCode: 403 });
+            const saved: TableGrant = { table, readColumns: [...grant.readColumns], addColumns: [...grant.addColumns] };
+            grants.set(channelId, new Map(grants.get(channelId) ?? []).set(table, saved));
+            return { ...saved };
+        },
+        async removeTableGrant(_podId, channelId, table) {
+            grants.get(channelId)?.delete(table);
+        },
+        async grantableTables(podId) {
+            return Object.keys(GRANTABLE[podId] ?? {});
+        },
+        async grantableColumns(podId, table) {
+            return [...(GRANTABLE[podId]?.[table] ?? [])];
+        },
+
+        async identityLink(_podId, _surfaceId, contactId) {
+            const code = "sample-link-" + (++made);
+            links.set(code, { opensAt: Date.now() + 4_000, contactId: contactId ?? null, ended: null });
+            /* Not Telegram: a sample has no bot to open. */
+            return { code, url: "https://example.com/telegram?start=lk_" + code, expiresAt: new Date(Date.now() + 10 * MIN).toISOString() };
+        },
+        async identityLinkStatus(_podId, code) {
+            const link = links.get(code);
+            if (!link || link.ended === "GONE") return { state: "GONE" };
+            if (link.ended) return { state: link.ended };
+            if (Date.now() < link.opensAt) return { state: "WAITING" };
+            /* A code made for somebody in a group works only from their
+               account, and the sample's is always Ada's. */
+            if (link.contactId && link.contactId !== SAMPLE_TELEGRAM.contactId) {
+                link.ended = "OTHER_ACCOUNT";
+                return { state: "OTHER_ACCOUNT" };
+            }
+            return { state: "OPENED", account: { name: SAMPLE_TELEGRAM.name, username: SAMPLE_TELEGRAM.username } };
+        },
+        async confirmIdentityLink(_podId, code) {
+            const link = links.get(code);
+            if (!link || link.ended || Date.now() < link.opensAt) throw Object.assign(new Error("That link has expired. Close this and try again."), { statusCode: 410 });
+            link.ended = "GONE";
+            /* Proved, the account is Ada's in every Lemma: where it spoke as
+               somebody outside, it is her, and so is what it said. */
+            for (const one of store) foldIntoMe(one, SAMPLE_TELEGRAM.contactId);
+            rememberSampleLink({ id: SAMPLE_TELEGRAM.id, name: SAMPLE_TELEGRAM.name });
+            return { name: SAMPLE_TELEGRAM.name, username: SAMPLE_TELEGRAM.username };
+        },
+        async declineIdentityLink(_podId, code) {
+            const link = links.get(code);
+            if (link) link.ended = "GONE";
         },
 
         async agents(podId) {

@@ -8,11 +8,13 @@ import type { LiveContext } from "../context";
 import type { ChatsSource, FilePart, LemmaPerson } from "./source";
 import { attachmentFolder } from "@web/channels/compose-model";
 import { everyPage, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "@web/data/contacts";
+import { readIdentityLinkStatus, readTelegramAccount } from "@web/channels/identity-link-model";
 import { readChannelDetail, readChannelPage, readLine, readLinePage, readThreadPage, writeParts } from "@web/channels/model";
+import { readTableGrant } from "@web/channels/table-grants-model";
 import { readSearchPage } from "@web/channels/search-model";
 import { readSourceSettings } from "@web/channels/sources";
 import { readInbox } from "@web/channels/waiting";
-import { mineRequest, must, postRequest, readAgents, readSurfaces, roleOf, updateRequest } from "./wire";
+import { grantableNames, mineRequest, must, ownColumns, postRequest, readAgents, readSurfaces, roleOf, updateRequest } from "./wire";
 
 /** Chats, groups, people and contacts, from the server: the calls the web
  *  makes (`lemma-frontend/src/channels/api.ts`, and `data/live.ts` for the
@@ -158,6 +160,41 @@ export function chatsLive(context: LiveContext): ChatsSource {
         async surfaces(podId) {
             const [listed, name] = await Promise.all([pod(podId).podSurfaces.list(podId, { limit: 30 } as never), nameOf(podId)]);
             return readSurfaces(listed, name);
+        },
+        async tableGrants(podId, channelId) {
+            return (await pod(podId).channels.sources.tableGrants(podId, channelId)).items.map(readTableGrant);
+        },
+        async setTableGrant(podId, channelId, table, grant) {
+            return readTableGrant(await pod(podId).channels.sources.setTableGrant(podId, channelId, table, grant));
+        },
+        async removeTableGrant(podId, channelId, table) {
+            await pod(podId).channels.sources.removeTableGrant(podId, channelId, table);
+        },
+        async grantableTables(podId) {
+            /* The web's picker, every page of it: a table read one row per
+               person cannot be given whole. */
+            const tables = await everyPage(async (pageToken) => {
+                const page = await pod(podId).tables.list({ limit: 100, pageToken });
+                return { items: page.items ?? [], next: page.next_page_token };
+            });
+            return grantableNames(tables);
+        },
+        async grantableColumns(podId, table) {
+            return ownColumns(((await pod(podId).tables.get(table)).columns ?? []) as { name: string; system?: boolean }[]);
+        },
+
+        async identityLink(podId, surfaceId, contactId) {
+            const link = await pod(podId).channels.sources.identityLink(podId, surfaceId, { contactId });
+            return { code: link.code, url: link.url, expiresAt: link.expires_at };
+        },
+        async identityLinkStatus(podId, code) {
+            return readIdentityLinkStatus(await pod(podId).channels.sources.identityLinkStatus(podId, code));
+        },
+        async confirmIdentityLink(podId, code) {
+            return readTelegramAccount(await pod(podId).channels.sources.confirmIdentityLink(podId, code));
+        },
+        async declineIdentityLink(podId, code) {
+            await pod(podId).channels.sources.declineIdentityLink(podId, code);
         },
 
         async agents(podId) {

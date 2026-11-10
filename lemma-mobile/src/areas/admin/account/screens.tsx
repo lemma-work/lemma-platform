@@ -11,6 +11,7 @@ import { color, TOUCH } from "../../../ui/tokens";
 import { settingsEntry } from "../sections";
 import { Field, Group, ReadProblem, Row, Say, SettingsScreen, problemOf } from "../ui";
 import { useProfile, useSaveProfile } from "./hooks";
+import { TelegramGroup } from "./telegram";
 import { VerifyMobile } from "./verify-mobile";
 import { isVerifiedNumber, phoneProblems } from "./verify";
 import { dayToDate, isoDay, sameZone, spokenDay, supportedZones, zoneChoices, zoneCity, zoneMatches, zoneRegion } from "./zones";
@@ -20,8 +21,9 @@ const ENTRY = settingsEntry("profile");
 
 /** Your profile, edited here (the web's `session/profile-panel.tsx`): your
  *  name, the time zone every "when" is told in, where you are, and your
- *  mobile number with its proof over WhatsApp. The address you sign in with
- *  is the server's answer, not something to change here. */
+ *  mobile number with its proof over WhatsApp; then the Telegram accounts
+ *  you proved (`telegram.tsx`). The address you sign in with is the
+ *  server's answer, not something to change here. */
 export function ProfileScreen() {
     const profile = useProfile();
     return (
@@ -29,7 +31,12 @@ export function ProfileScreen() {
             {profile.isPending ? <Loading label="Reading your profile" /> : profile.isError ? (
                 <ReadProblem said={problemOf(profile.error, "Your profile could not be read.")} onRetry={() => void profile.refetch()} />
             ) : (
-                <ProfileForm user={profile.data} />
+                <>
+                    <ProfileForm user={profile.data} />
+                    {/* Apart from the form: linking an account is done at
+                        once, never saved with the rest. */}
+                    <TelegramGroup />
+                </>
             )}
         </SettingsScreen>
     );

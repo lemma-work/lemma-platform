@@ -9,6 +9,7 @@ import { color } from "../../ui/tokens";
 import { Label, SwitchRow, TextAction, Trouble } from "./bits";
 import { chatKeys, useChatsSource, useMyId, useSurfaces } from "./hooks";
 import { isForbidden } from "./model";
+import { TableGrants } from "./table-grants";
 import { problemOf } from "@web/channels/problem";
 import {
     answering,
@@ -31,9 +32,9 @@ import type { PublicReach } from "@web/data/types";
 
 /** One group a chat is fed from, from the Lemma's side (the web's
  *  `SourceSettingsView`): how its people join, who answers its people from
- *  outside the Lemma, from what, and how they ask -- with the switch and
- *  "Take it on" for a reader the server lets change it. Anyone else is told
- *  who can. */
+ *  outside the Lemma, from what, which of its tables they read and add to,
+ *  and how they ask -- with the switch and "Take it on" for a reader the
+ *  server lets change it. Anyone else is told who can. */
 export function SourceSettingsView({ podId, channelId, sourceId, lemmaName }: { podId: string; channelId: string; sourceId: string; lemmaName: string }) {
     const source = useChatsSource();
     const key = useCacheKey();
@@ -97,6 +98,7 @@ function Settings({ podId, settings, lemmaName }: { podId: string; settings: Sou
                     ) : null}
                     {told ?? who ? <Text size={13} tone={color.ink3}>{told ?? who}</Text> : null}
                     {settings.publicReach ? <PublicList reach={settings.publicReach} lemmaName={lemmaName} /> : null}
+                    <TableGrants podId={podId} channelId={settings.channelId} lemmaName={lemmaName} answerer={bot} />
                     {change.isError ? <Trouble>{isForbidden(change.error) ? refusedChange(lemmaName) : "Couldn’t change that. Try again."}</Trouble> : null}
                 </>
             )}

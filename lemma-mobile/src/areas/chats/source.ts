@@ -16,7 +16,9 @@ import type {
     ThreadPage,
     Visibility,
 } from "@web/channels/model";
+import type { IdentityLinkStatus, TelegramAccount } from "@web/channels/identity-link-model";
 import type { SearchHit } from "@web/channels/search-model";
+import type { TableGrant } from "@web/channels/table-grants-model";
 import type { SourceChange, SourceSettings } from "@web/channels/sources";
 import type { Surface } from "@web/data/types";
 import type { ListFilter } from "@web/channels/views";
@@ -150,6 +152,24 @@ export interface ChatsSource {
     startWhatsAppGroup(podId: string, body: { surfaceName: string; title: string; answersOutsiders: boolean }): Promise<SourceSettings>;
     telegramLink(podId: string, surfaceName: string): Promise<{ url: string; expiresAt: string }>;
     surfaces(podId: string): Promise<Surface[]>;
+    /** The tables a group's people outside the Lemma may read or add to. */
+    tableGrants(podId: string, channelId: string): Promise<TableGrant[]>;
+    setTableGrant(podId: string, channelId: string, table: string, grant: { readColumns: string[]; addColumns: string[] }): Promise<TableGrant>;
+    removeTableGrant(podId: string, channelId: string, table: string): Promise<void>;
+    /** The tables a group can be given: those the reader reads whole, not
+     *  one row per person. */
+    grantableTables(podId: string): Promise<string[]>;
+    /** A table's own columns, the ones a grant can name. */
+    grantableColumns(podId: string, table: string): Promise<string[]>;
+
+    /* ── proving a Telegram account is yours ──────────────────────── */
+    /** A ten-minute code proving, once the reader confirms, that a Telegram
+     *  account is theirs, opened with the bot on `surfaceId`. With
+     *  `contactId`, only that person's account may open it. */
+    identityLink(podId: string, surfaceId: string, contactId?: string): Promise<{ code: string; url: string; expiresAt: string }>;
+    identityLinkStatus(podId: string, code: string): Promise<IdentityLinkStatus>;
+    confirmIdentityLink(podId: string, code: string): Promise<TelegramAccount>;
+    declineIdentityLink(podId: string, code: string): Promise<void>;
 
     /* ── the Lemma around them ────────────────────────────────────── */
     agents(podId: string): Promise<AgentRef[]>;
