@@ -98,8 +98,7 @@ async def push_outcome(
                         recipient_user_id=recipient,
                         member=member,
                         key=delivery_key(delivery),
-                        # A question held and folded back goes as one still.
-                        urgent=delivery.urgent or asks is not None,
+                        urgent=delivery.urgent,
                         lines=delivery.lines,
                     )
                 )

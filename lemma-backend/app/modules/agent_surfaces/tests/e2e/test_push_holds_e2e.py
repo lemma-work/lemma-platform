@@ -452,3 +452,61 @@ async def test_a_question_is_pushed_at_once_when_the_app_is_not_open(
     assert (await _row(push.id)).status is DeliveryStatus.SENT
     [mail] = message_store.get_all("RESEND")
     assert "Which repos?" in mail["text"]
+
+
+async def test_a_held_question_read_but_unanswered_still_goes(
+    authenticated_client, async_client, db_session, setting, message_store
+):
+    """Reading a question is not answering it: held and folded back, it
+    still calls them, so having read it in the app does not drop it."""
+    pod_id, colleague = setting
+    channel_id = await _my_channel(db_session, pod_id, colleague["id"])
+    await mark_online(UUID(pod_id), UUID(colleague["id"]))
+    asked = await _agent_asks(pod_id, channel_id, colleague["id"], "Which repos?")
+    held = await _push_to(asked, colleague["id"])
+    await _deliver(held.id)
+    read = await async_client.post(
+        f"/pods/{pod_id}/channels/{channel_id}/read",
+        json={"seq": held.seq},
+        headers=auth_headers(colleague),
+    )
+    assert read.status_code == 200, read.text
+
+    await _said_minutes_ago([asked], 10)
+    await window_ends_now(channel_id, colleague["id"])
+    await run_pushes()
+    later = await _push_to(asked, colleague["id"])
+    assert later.urgent
+    await _deliver(later.id)
+
+    assert (await _row(later.id)).status is DeliveryStatus.SENT
+    [mail] = message_store.get_all("RESEND")
+    assert "Which repos?" in mail["text"]
+
+
+async def test_a_held_question_in_a_group_leads_what_came_meanwhile(
+    authenticated_client, setting, message_store
+):
+    """A plain group line said during the hold waits with the question, and
+    the push leads with the question -- still one that may go by email."""
+    pod_id, colleague = setting
+    group = await _a_group_with(authenticated_client, pod_id, colleague)
+    await mark_online(UUID(pod_id), UUID(colleague["id"]))
+    asked = await _agent_asks(pod_id, group, colleague["id"], "Which repos?")
+    held = await _push_to(asked, colleague["id"])
+    await _deliver(held.id)
+    assert (await _row(held.id)).reason_code is DeliveryReasonCode.FOLDED
+    plain = await member_writes(authenticated_client, pod_id, group, "Lunch at one.")
+    assert await _pushes_to(plain["id"], colleague["id"]) == []
+    assert message_store.get_all("RESEND") == []
+
+    await _said_minutes_ago([asked, plain["id"]], 10)
+    await window_ends_now(group, colleague["id"])
+    await run_pushes()
+    together = await _push_to(asked, colleague["id"])
+    assert (together.urgent, together.lines) == (True, 2)
+    await _deliver(together.id)
+
+    assert (await _row(together.id)).status is DeliveryStatus.SENT
+    [mail] = message_store.get_all("RESEND")
+    assert "Which repos?" in mail["text"]
