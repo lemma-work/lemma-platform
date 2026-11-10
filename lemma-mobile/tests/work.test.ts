@@ -10,7 +10,7 @@ import { workSample } from "../src/areas/work/sample";
 import type { Member, Surface } from "../src/areas/work/source";
 import { readAgentDetail, readAgentRow } from "@web/data/agents";
 import { boardOf } from "@web/workflow/board";
-import { parsePlan, serializePlan } from "../src/areas/work/web/plan";
+import { parsePlan, serializePlan } from "@web/outcomes/model";
 import { buildTree, readGraph } from "@web/workflow/run-tree";
 import { readRun, type RunRow } from "@web/workflow/runs";
 import { readSchedule } from "@web/schedule/schedules";

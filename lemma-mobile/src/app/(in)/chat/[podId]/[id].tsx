@@ -5,6 +5,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { adminRoutes } from "../../../../areas/admin/routes";
 import { chatRoutes } from "../../../../areas/chat/routes";
 import { useCallable } from "../../../../areas/more/call/hooks";
+import { SetupStrip } from "../../../../areas/more/begin/setup-strip";
 import { moreRoutes } from "../../../../areas/more/routes";
 import { useLemma } from "../../../../data/hooks";
 import { NEW_CHAT, routes, workspace } from "../../../../data/routes";
@@ -241,6 +242,7 @@ function ChatBody({ adopted }: { adopted: MutableRefObject<string | null> }) {
                             <Icon name="more" size={20} />
                         </Press>
                     </View>
+                    <SetupStrip podId={podId} name={name} />
 
                     <View style={{ flex: 1 }}>
                         <ScrollView

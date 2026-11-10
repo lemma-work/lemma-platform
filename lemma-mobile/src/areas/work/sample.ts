@@ -635,6 +635,14 @@ export function workSample(): WorkSource {
             await settle();
             plans.set(podId, text);
         },
+        /* Sample data keeps what a Lemma owns in its plan file, as the web's
+           sample does: there is no server to keep it. */
+        owned: async () => null,
+        saveOwned: async () => {
+            await settle();
+            throw new Error("Sample data keeps what it owns in plan.md.");
+        },
+        weeks: async () => [],
         query: async (podId) => (podId === SUPPORT.id ? [{ count: 31 }] : []),
         mcpUrl: (podId) => `https://api.lemma.work/mcp/${podId}`,
     };

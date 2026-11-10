@@ -57,6 +57,20 @@ copying a schedule, installing a bundle, connecting a place).
 |---|---|---|
 | A Lemma's Connections page (connect, reconnect, share, "Use for everyone as", coverage, ask members) | opened on the web from where it is needed | not built |
 
+## The organization's reads (main, after the areas)
+
+Main added one read per organization for what Home, Needs you and the
+Lemmas list show (#1045), and keeps what a Lemma owns on the Lemma (#1046).
+The phone reads them in `src/data/live.ts`; the shapes in `src/data/types.ts`
+did not change, so no screen did.
+
+| Web | Phone | Status |
+|---|---|---|
+| What waits on you, every Lemma, one read (`organizations.needsYou`), a question asked in your chat with a Lemma answered by its choices | `src/data/live.ts` `needs`, Home's cards | built, not yet checked on a device |
+| What moved lately, one read (`organizations.recents`): your chats, each automation's newest run and count, the days | `src/data/live.ts` `pulse` (a Lemma's chats with people and its tables are still read per Lemma) | built, not yet checked on a device |
+| Every app, one read (`organizations.apps`); when Home was last looked at, kept by the server (`homeSeen`) | `src/data/live.ts` | built, not yet checked on a device |
+| What a Lemma owns and its number (`outcome.standing`), over the plan's front matter for older Lemmas | `src/data/live.ts` `owns` | built, not yet checked on a device |
+
 ## A. Chat thread (`src/areas/chat`, `src/thread/*`, `(in)/chat`, `(in)/new-chat`, `src/ui/ask-box.tsx`)
 
 The conversation runs on the SDK's own `useAssistantSession`, the hook the web
@@ -210,7 +224,8 @@ opens it on one. The Plan tab is the `/o` frame's plan.
 | Schedules: status, runs, pause, who sees it, retry, copy, events | `schedule/standing-work.tsx` | done (health and failure streak, firings with retry, skipped events, a copy of your own, a new schedule) |
 | Agents: list, page, chats with it | `space/agent-page.tsx` | done (a box that starts a chat with that agent; what it can do, where it is reached, what uses it) |
 | Agent: edit instruction, model, effort, max tokens; delete | `stage/agents-view.tsx` | done (as `allowed_actions` allows; the model's own settings, or a coding agent's options) |
-| Plan (`/plan.md`): read, edit without overwriting another's change, draft, ask the Lemma | `outcomes/outcome.tsx` (branch) | done (line by line; a save refused when the file moved on) |
+| Plan (`/plan.md`): read, edit without overwriting another's change, draft, ask the Lemma | `outcomes/outcome.tsx` | done (line by line; a save refused when the file moved on) |
+| What it owns kept on the Lemma (`PUT .../outcome`), its last weeks (`.../outcome/history`) | `outcomes/outcome.tsx` `PlanTab`, `Weeks` | built, not yet checked on a device (the measure form saves to the Lemma live, to the file in sample data, as on the web) |
 | X-ray: agents, schedules, tables, apps, skills, MCP address | `outcomes/outcome.tsx` (branch) | done (each piece opens its own screen; where people reach it opens Settings) |
 
 How it is built:
@@ -218,7 +233,7 @@ How it is built:
   turn-on, schedules, agents, runtimes) read every payload, so a run, a
   schedule's health and an agent's permissions say the same on both;
   `tests/work.test.ts` fails when the web's copy moves on (README there).
-  The plan is the `/o` frame's own code, copied from its branch.
+  The plan is the frame's own code, imported from `@web/outcomes/model`.
 - Live as the web is: a run going is pushed whole by its own stream
   (`/workflow-runs/{id}/stream`, through `expo/fetch`) and read again only
   while that stream is not arriving; run lists are read again while
@@ -415,7 +430,8 @@ is in (`areas/more/links.ts`, `link-return.tsx`).
 | Search across files, tables, agents, workflows, apps, schedules, people | `search/palette.tsx`, `use-search.ts` | done (every Lemma, or one; Ask {Lemma} first; rows bounded across the whole search; each source that fails is named; every hit opens the phone's own screen) |
 | First run: invitations, suggested organizations, join, new organization | `org/arrival-view.tsx`, `new-org-dialog.tsx` | done (on Home for somebody with no organization; Account › Invitations and organizations to join, and New organization, for everyone else) |
 | First profile step | `session/first-profile-step.tsx` | done (a sheet: name, time zone, the phone by WhatsApp; then the tour, never both at once) |
-| Start a Lemma | `stage/hiring.tsx`, `/o` new-Lemma list | done (what it should own, your own sentence, only a name, or a template; the steps ticked as they finish; a missing model said) |
+| Start a Lemma | `outcomes/shelf.tsx` (#1194) | built, not yet checked on a device (the server's templates by kind of work, what each owns, brings and never does, a date for a finish line; your own words; a link someone shared; one `POST /pods/start` into its setup chat; a missing model said) |
+| What a new Lemma's template is bringing in, over its first chat | `outcomes/chats.tsx` `SetupStrip` | built, not yet checked on a device |
 | Ask to join a Lemma | `shell/not-yours.tsx` | done (a Lemma's page and `join/{id}`; one of yours in another organization opens there) |
 | Invitation links, accept or decline | `site/invitation.tsx` | done (decline is refused by the server for the person invited, as on the web; the phone says so) |
 | Templates, import, remix | `site/import/install-panel.tsx`, `/templates`, `/import/github`, `/remix` | done (the journey in a tall sheet over the repository's page; an install left behind is offered back) |

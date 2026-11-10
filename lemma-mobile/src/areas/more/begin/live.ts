@@ -1,43 +1,65 @@
+import type { ImportStatusResponse, OutcomeTemplateCard, StartLemmaRequest } from "lemma-sdk";
+import { OutcomeKind } from "lemma-sdk";
 import type { LiveContext } from "../../context";
 import { modelsLive } from "../../admin/models/live";
 import { modelSetupState } from "@web/shell/runs-on-state";
 import { readJoinRequest } from "@web/data/joining";
-import { filesLive } from "../../files/live";
-import { PLAN_PATH } from "../../work/web/plan";
+import type { ShelfCard } from "@web/outcomes/model";
 import type { BeginSource } from "./source";
 
+/** A template as the shelf reads it (the web's `shelfCardOf`). */
+export function shelfCardOf(card: OutcomeTemplateCard): ShelfCard {
+    return {
+        id: card.id,
+        name: card.name,
+        sentence: card.sentence,
+        kind: card.kind === "date" ? "date" : "week",
+        work: card.function ?? null,
+        face: card.face ?? null,
+        place: card.place ?? null,
+        brings: card.brings ?? [],
+        never: card.plan?.never ?? [],
+    };
+}
+
 /** The calls the web makes to start a Lemma and to ask to join one, read
- *  the way the web reads them. The plan is written as the Work area writes
- *  one that does not exist yet (`work/live.ts` `writePlan`); the setup chat
- *  is started as the Work area starts one with an agent (`talkTo`): made,
- *  then the words appended, so its run is going before the chat opens. */
+ *  the way the web reads them (`outcomes/data.ts`). */
 export function beginLive(context: LiveContext): BeginSource {
-    const files = filesLive(context);
     const models = modelsLive(context);
     return {
-        async create(orgId, name, about) {
-            const pod = await context.client().pods.create({
-                name,
-                organization_id: orgId,
-                ...(about.trim() ? { description: about.trim() } : {}),
-            });
-            if (!pod?.id) throw new Error("The Lemma was made but came back without an id.");
-            return { id: pod.id, name: pod.name?.trim() || name, standsIn: null };
+        async templates() {
+            return (await context.client().pods.templates()).map(shelfCardOf);
+        },
+
+        async start(request) {
+            const payload: StartLemmaRequest = "template" in request
+                ? { organization_id: request.orgId, template: request.template, due: request.due }
+                : {
+                    organization_id: request.orgId,
+                    name: request.name,
+                    outcome: { sentence: request.sentence, kind: request.kind === "date" ? OutcomeKind.DATE : OutcomeKind.WEEK, due: request.kind === "date" ? request.due : null },
+                };
+            const started = await context.client().pods.start(payload);
+            return {
+                id: started.pod.id,
+                name: started.pod.name?.trim() || ("name" in request ? request.name : "Your Lemma"),
+                conversationId: started.conversation_id,
+                importId: started.import_id ?? null,
+                standsIn: null,
+            };
         },
 
         async setFace(podId, icon) {
             await context.client(podId).pods.update(podId, { icon_url: icon });
         },
 
-        async writePlan(podId, text) {
-            await files.createText(podId, PLAN_PATH, text);
-        },
-
-        async askToSetUp(podId, words) {
-            const client = context.client(podId);
-            const made = await client.conversations.create({ pod_id: podId });
-            await client.conversations.appendMessage(made.id, { content: words }, { pod_id: podId });
-            return made.id;
+        async setup(podId, importId) {
+            const status = await context.client(podId).request<ImportStatusResponse>("GET", `/pods/${encodeURIComponent(podId)}/bundle/imports/${encodeURIComponent(importId)}`);
+            return {
+                status: String(status.status),
+                steps: (status.plan?.steps ?? []).map((step) => ({ kind: String(step.kind), name: String(step.name) })),
+                error: status.error ?? null,
+            };
         },
 
         async needsModel(orgId) {

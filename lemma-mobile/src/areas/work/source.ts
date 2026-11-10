@@ -3,6 +3,10 @@ import type { AgentDetail, AgentDraft, AgentRow } from "@web/data/agents";
 import type { Assignment, RunDetail, RunRow, WorkflowRow } from "@web/workflow/runs";
 import type { Runtime } from "@web/data/runtimes";
 import type { ScheduleRun, ServerEvent, StandingJob } from "@web/schedule/schedules";
+import type { Owned } from "@web/outcomes/model";
+
+/** What setting what a Lemma owns sends: everything but the number. */
+export type OwnedInput = Pick<Owned, "sentence" | "kind" | "target" | "unit" | "due" | "measure">;
 
 /** What a Lemma runs: workflows, runs, schedules, agents, its plan (PARITY.md, D).
  *
@@ -107,6 +111,14 @@ export interface WorkSource {
      *  throws: a plan that could not be read is never a Lemma with no plan. */
     planText(podId: string): Promise<string | null>;
     writePlan(podId: string, text: string, exists: boolean): Promise<void>;
+    /** What the Lemma itself keeps it owns, with its number now; null when it
+     *  keeps nothing there yet (an older Lemma's plan carries it in its front
+     *  matter). Sample data keeps it in the plan file, so it answers null. */
+    owned(podId: string): Promise<Owned | null>;
+    /** Set what it owns, on the Lemma. A new or changed measure is read once. */
+    saveOwned(podId: string, owned: OwnedInput): Promise<void>;
+    /** The last weeks, each on its last reading; null where unread. */
+    weeks(podId: string): Promise<{ startsOn: string; value: number | null }[]>;
     /** The number a measure answers: its rows. */
     query(podId: string, sql: string): Promise<Record<string, unknown>[]>;
     /** The address an assistant (Claude, ChatGPT) connects to for this Lemma. */

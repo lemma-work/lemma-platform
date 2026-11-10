@@ -1,9 +1,9 @@
-import { parseSSEJson, readSSE, WorkflowRunStatus } from "lemma-sdk";
+import { OutcomeKind, parseSSEJson, readSSE, WorkflowRunStatus } from "lemma-sdk";
 import { readText } from "../../data/io";
 import { isPodDefaultAgent } from "@web/data/agent-names";
 import type { LiveContext } from "../context";
 import { filesLive } from "../files/live";
-import { PLAN_PATH } from "./web/plan";
+import { PLAN_PATH } from "@web/outcomes/model";
 import { agentChanges, agentRows, readAgentDetail } from "@web/data/agents";
 import { readPodConnectors } from "@web/data/pod-connectors";
 import { readAssignments, readRun, readRunDetail, readRuns, readWorkflows, type RunRow } from "@web/workflow/runs";
@@ -236,6 +236,39 @@ export function workLive(context: LiveContext): WorkSource {
         async writePlan(podId, body, exists) {
             if (exists) await files.writeText(podId, PLAN_PATH, body);
             else await files.createText(podId, PLAN_PATH, body);
+        },
+
+        /* The web's `ownedOf`: the standing read, in the frame's names. */
+        async owned(podId) {
+            const standing = await pod(podId).pods.outcome.standing(podId);
+            const outcome = standing?.outcome;
+            if (!outcome) return null;
+            return {
+                sentence: outcome.sentence,
+                kind: outcome.kind === "date" ? "date" : "week",
+                target: outcome.target ?? null,
+                unit: outcome.unit ?? null,
+                due: outcome.due ?? null,
+                measure: outcome.measure ?? null,
+                value: standing.value ?? null,
+                problem: standing.problem ?? null,
+            };
+        },
+
+        async saveOwned(podId, owned) {
+            await pod(podId).pods.outcome.set(podId, {
+                sentence: owned.sentence,
+                kind: owned.kind === "date" ? OutcomeKind.DATE : OutcomeKind.WEEK,
+                target: owned.target,
+                unit: owned.unit,
+                due: owned.kind === "date" ? owned.due : null,
+                measure: owned.measure,
+            });
+        },
+
+        async weeks(podId) {
+            const read = await pod(podId).pods.outcome.history(podId, 8);
+            return read.weeks.map((week) => ({ startsOn: week.starts_on, value: typeof week.value === "number" ? week.value : null }));
         },
 
         async query(podId, sql) {

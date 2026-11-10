@@ -1,32 +1,49 @@
 import type { JoinRequest } from "@web/data/joining";
+import type { ShelfCard } from "@web/outcomes/model";
 
-/** A Lemma just made. */
-export interface MadeLemma {
+/** A Lemma just started, and where it sets itself up. */
+export interface StartedLemma {
     id: string;
     name: string;
+    /** The chat its agent sets itself up in. */
+    conversationId: string;
+    /** The import bringing a template's tables, skills and schedules. */
+    importId: string | null;
     /** Sample data only: its list of Lemmas is fixed, so nothing is added,
      *  and this existing one stands in for the one that would have been. */
     standsIn?: { id: string; name: string } | null;
 }
 
+/** What starting a Lemma asks for: a template (with a date for a finish
+ *  line), or what it owns in its owner's own words, and its name. */
+export type StartRequest =
+    | { orgId: string; template: string; due: string | null }
+    | { orgId: string; name: string; sentence: string; kind: "week" | "date"; due: string | null };
+
+/** How far a template's import has got (`ImportStatusResponse`). */
+export interface SetupStatus {
+    status: string;
+    steps: { kind: string; name: string }[];
+    error: string | null;
+}
+
 /** Starting a Lemma, and asking to join one that is not yours (PARITY.md, G;
- *  the `/o` frame's new-Lemma list, the web's `stage/hiring.tsx` and
- *  `shell/not-yours.tsx`).
+ *  the frame's shelf, `outcomes/shelf.tsx`, and `shell/not-yours.tsx`).
  *
- *  The same calls the web makes (`data/live.ts`: `createPod`, `setPodIcon`,
- *  `myJoinRequest`, `askToJoin`; `outcomes/data.ts`: `savePlan`, `askIn`).
+ *  The same calls the web makes (`outcomes/data.ts`: `useShelf`,
+ *  `startLemma`, `useSetup`; `data/live.ts`: `myJoinRequest`, `askToJoin`).
  *  The live side is `live.ts`, the sample side `sample.ts`; screens reach it
  *  through `hooks.ts`, never the SDK directly. */
 export interface BeginSource {
-    /** A new Lemma in the organization, with what it is for as its
-     *  description. */
-    create(orgId: string, name: string, about: string): Promise<MadeLemma>;
-    /** Store the face it was given (`lemma-identity:N`). */
+    /** The templates a new Lemma can start from, as the server ships them. */
+    templates(): Promise<ShelfCard[]>;
+    /** Start a Lemma (`POST /pods/start`): the pod, its setup chat, and for
+     *  a template the import bringing what it starts with. */
+    start(request: StartRequest): Promise<StartedLemma>;
+    /** Wear a template's face (a cast path, as the web stores it). */
     setFace(podId: string, icon: string): Promise<void>;
-    /** Write its first plan to `/plan.md`, a file that does not exist yet. */
-    writePlan(podId: string, text: string): Promise<void>;
-    /** A new chat with it, these words said in it; answers the chat's id. */
-    askToSetUp(podId: string, words: string): Promise<string>;
+    /** A template's import, while it comes in. */
+    setup(podId: string, importId: string): Promise<SetupStatus>;
     /** Whether a new Lemma here would have no model to answer with: the
      *  organization has none, or its default is not one of them. */
     needsModel(orgId: string): Promise<boolean>;

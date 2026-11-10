@@ -581,6 +581,20 @@ export function stampOf(at: Date): string {
     return at.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/** What "Write it with {name}" sends, for a Lemma that owns nothing yet.
+ *  `purpose` is what it is for, its description, which is not yet a result
+ *  it owns. What it owns is kept with `set_what_you_own`, on the Lemma; the
+ *  file holds the plan's prose, in the sections this frame reads back line
+ *  for line. */
+export function planRequest(purpose: string): string {
+    const why = purpose.trim();
+    return [
+        `${why ? `You are here for: "${why}". ` : ""}Work out with me one result you should own, a bar held every week or a finish line by a date, and keep it with set_what_you_own, with a measure once what it counts exists.`,
+        `Then write the plan in ${PLAN_PATH} under ## What must be true, ## How we work, ## Who holds what and ## Never: one line per bullet, each ending with who said it and when. No front matter: what you own is kept on the Lemma.`,
+        "Only write lines that name something that exists here or that you are about to set up, and say what you built.",
+    ].join(" ");
+}
+
 /* ── the queue ────────────────────────────────────────────────────────── */
 
 export type QueueKind = "decide" | "answer" | "do";

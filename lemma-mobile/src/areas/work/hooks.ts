@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useIsFocused } from "expo-router";
 import { useCacheKey, useMe, useOrg } from "../../data/hooks";
+import { useSession } from "../../session/session";
 import { isPodDefaultAgent } from "@web/data/agent-names";
 import { useArea } from "../use-area";
 import { planToWrite, PlanMovedOn, stepNames } from "./model";
 import { answeringAs, type AgentDetail, type AgentDraft } from "@web/data/agents";
-import { parsePlan, type Plan } from "./web/plan";
+import { parsePlan, type Owned, type Plan } from "@web/outcomes/model";
+import type { OwnedInput } from "./source";
 import { readGraph } from "@web/workflow/run-tree";
 import { stillGoing, type RunDetail, type RunRow } from "@web/workflow/runs";
 import { readShape } from "@web/workflow/shape";
@@ -407,6 +409,38 @@ export function usePlan(podId: string) {
         },
         staleTime: 5 * 60_000,
     });
+}
+
+/** What the Lemma keeps it owns, on the server; live only, since sample data
+ *  keeps it in the plan file. Kept under the owns key, so a save there reads
+ *  the Lemma's own number again everywhere it shows. */
+export function useOwned(podId: string) {
+    const source = useWorkSource();
+    const key = useCacheKey();
+    const { mode } = useSession();
+    return useQuery({
+        queryKey: [key, "owns", podId, "standing"],
+        queryFn: (): Promise<Owned | null> => source.owned(podId),
+        enabled: mode === "live",
+        staleTime: 5 * 60_000,
+    });
+}
+
+export function useSaveOwned(podId: string) {
+    const source = useWorkSource();
+    const key = useCacheKey();
+    const cache = useQueryClient();
+    return useMutation({
+        mutationFn: (owned: OwnedInput) => source.saveOwned(podId, owned),
+        onSuccess: () => void cache.invalidateQueries({ queryKey: [key, "owns", podId] }),
+    });
+}
+
+/** The last eight weeks of what it owns, for the bars under it. */
+export function useWeeks(podId: string, enabled: boolean) {
+    const source = useWorkSource();
+    const key = useCacheKey();
+    return useQuery({ queryKey: [key, "owns", podId, "weeks"], queryFn: () => source.weeks(podId), enabled, staleTime: 30 * 60_000 });
 }
 
 /** Save the plan. An existing file is read again first and edited in place

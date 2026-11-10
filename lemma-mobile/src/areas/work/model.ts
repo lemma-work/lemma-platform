@@ -12,7 +12,8 @@ import { stampOf } from "../../data/model";
 import { isPodDefaultAgent } from "@web/data/agent-names";
 import { AGENT_EDIT, AGENT_REMOVE, AGENT_RUN, may as mayAgent, type AgentDetail, type AgentRow } from "@web/data/agents";
 import type { BoardCard } from "@web/workflow/board";
-import { draftPlan, PLAN_SECTIONS, serializePlan, stampOf as stampLine, type Plan, type PlanLine, type PlanSection } from "./web/plan";
+import { draftPlan, PLAN_SECTIONS, serializePlan, stampOf as stampLine, type Plan, type PlanLine, type PlanSection } from "@web/outcomes/model";
+import type { OwnedInput } from "./source";
 import { millisOf, runMillis, runTone, sayFor, sayWhen, stillGoing, type Assignment, type RunRow, type WorkflowRow } from "@web/workflow/runs";
 import type { Automation } from "@web/workflow/turn-on";
 import type { WorkflowShape } from "@web/workflow/shape";
@@ -425,6 +426,28 @@ export function withMeta(plan: Plan, meta: PlanMeta): Plan {
         unit: meta.unit.trim() || null,
         due: meta.kind === "date" ? meta.due.trim() || null : null,
         measure: meta.measure.trim() || null,
+    };
+}
+
+/** What the measure form sets on the Lemma (the web's `saveMeta`), or why
+ *  not: a target the server would keep as nothing, or a % against a unit
+ *  picked as a count, is said back rather than saved over the last one. */
+export function ownedOfMeta(meta: PlanMeta): { owned: OwnedInput } | { problem: string } {
+    const said = meta.target.trim();
+    const target = said ? Number.parseFloat(said) : null;
+    const unit = meta.unit.trim() || null;
+    if (target !== null && !Number.isFinite(target)) return { problem: "The target needs a number, like 90 or 90%." };
+    if (/%\s*$/.test(said) && unit !== "%") return { problem: "The target says % but the unit is a count. Pick “A share (%)”, or drop the %." };
+    if (!meta.outcome.trim()) return { problem: "Say what it owns first." };
+    return {
+        owned: {
+            sentence: meta.outcome.trim(),
+            kind: meta.kind,
+            target,
+            unit,
+            due: meta.kind === "date" ? meta.due.trim() || null : null,
+            measure: meta.measure.trim() || null,
+        },
     };
 }
 
