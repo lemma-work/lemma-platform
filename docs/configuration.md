@@ -629,6 +629,15 @@ In the Services ID, list the hosts of both URLs as its domains and the API's
 URL as its return URL. Apple shows the person's name to Lemma once, on the
 first sign-in, and Lemma keeps it then.
 
+When someone who signs in with Apple deletes their account, Lemma asks Apple
+to revoke that sign-in, as Apple asks of apps that offer it. Each Apple
+sign-in's refresh token is kept for this, sealed with the secret cipher in the
+SuperTokens user's metadata, and the deletion's work item spends it just
+before it removes the user. While Apple is unreachable the item waits and
+tries again; anything Apple answers is final, and the deletion finishes.
+Revoking signs a client secret with the same key, so keep the `APPLE_*`
+values set for as long as any account was made with Apple.
+
 **Register your sending domains with Apple before turning it on.** Someone who
 chooses *Hide My Email* signs up as an `@privaterelay.appleid.com` address,
 and Apple forwards mail to it only from senders registered under *Sign in with

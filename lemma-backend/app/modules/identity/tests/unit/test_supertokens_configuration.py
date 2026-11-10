@@ -6,8 +6,8 @@ from supertokens_python.recipe import emailverification
 
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
 from app.core.config import settings
+from app.modules.identity.infrastructure.supertokens_auth.apple import apple_provider
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
-    apple_provider,
     build_supertokens_app_info,
     build_thirdparty_providers,
     email_verification_mode,

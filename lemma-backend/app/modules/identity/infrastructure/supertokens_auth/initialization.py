@@ -1,8 +1,5 @@
 from urllib.parse import urlparse
 
-from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from supertokens_python import init, InputAppInfo, SupertokensConfig
 from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConfig
 from supertokens_python.recipe import (
@@ -25,6 +22,7 @@ from app.modules.identity.infrastructure.supertokens_auth.override_email_passwor
 from app.modules.identity.infrastructure.supertokens_auth.override_email_password_apis import (
     override_emailpassword_apis,
 )
+from app.modules.identity.infrastructure.supertokens_auth.apple import apple_provider
 from app.modules.identity.infrastructure.supertokens_auth.override_thirdparty import (
     override_thirdparty_functions,
 )
@@ -46,7 +44,7 @@ from app.modules.identity.infrastructure.supertokens_auth.querier_client import 
     install_shared_querier_client,
 )
 from app.core.log.log import get_logger
-from app.modules.identity.config import IdentitySettings, identity_settings
+from app.modules.identity.config import identity_settings
 from app.modules.identity.infrastructure.supertokens_auth.passwordless_challenges import (
     private_passwordless_apis,
 )
@@ -82,61 +80,6 @@ def build_supertokens_app_info() -> InputAppInfo:
         api_gateway_path=identity_settings.supertokens_api_gateway_path,
         api_base_path=identity_settings.supertokens_api_base_path,
         website_base_path=identity_settings.auth_website_base_path,
-    )
-
-
-def _apple_private_key(config: IdentitySettings) -> str | None:
-    """The `.p8` key as PEM text, or None when it is not a usable key.
-
-    Read once here rather than left to SuperTokens, which loads it only when
-    it signs the client secret -- on the click, as a 500. A key that did not
-    survive the trip into the environment (a file path where the contents
-    belong, a truncated paste) then hides the button and says why in the log.
-    """
-    raw = reveal_secret(config.apple_private_key) or ""
-    pem = raw.strip().strip("\"'").replace("\\n", "\n")
-    try:
-        key = load_pem_private_key(pem.encode(), password=None)
-    except ValueError, TypeError, UnsupportedAlgorithm:
-        key = None
-    if not isinstance(key, EllipticCurvePrivateKey):
-        logger.warning(
-            "identity.apple_sign_in.private_key_unusable",
-            reason="APPLE_PRIVATE_KEY is not the PEM text of an EC private key",
-        )
-        return None
-    return pem
-
-
-def apple_provider(config: IdentitySettings) -> ProviderInput | None:
-    """Sign in with Apple, or None until all four values are set and usable."""
-    if not config.is_apple_oauth_configured():
-        return None
-    private_key = _apple_private_key(config)
-    if private_key is None:
-        return None
-    assert config.apple_client_id is not None
-    return ProviderInput(
-        config=ProviderConfig(
-            # SuperTokens picks its Apple implementation by this id: OIDC
-            # discovery, `response_mode=form_post`, and the client secret
-            # signed from the three values below.
-            third_party_id="apple",
-            clients=[
-                ProviderClientConfig(
-                    client_id=config.apple_client_id,
-                    # SuperTokens asks for openid and email only. Apple sends
-                    # the name when asked, and only on the first sign-in, so
-                    # asking later cannot recover it.
-                    scope=["openid", "email", "name"],
-                    additional_config={
-                        "teamId": config.apple_team_id,
-                        "keyId": config.apple_key_id,
-                        "privateKey": private_key,
-                    },
-                ),
-            ],
-        ),
     )
 
 
