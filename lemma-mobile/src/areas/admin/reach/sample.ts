@@ -184,7 +184,7 @@ function slug(podId: string): string {
 
 function find(podId: string, name: string): Held {
     const found = PLACES.find((one) => one.podId === podId && one.surface.name === name);
-    if (!found) throw Object.assign(new Error("That place is not connected any more."), { statusCode: 404 });
+    if (!found) throw Object.assign(new Error("That is not connected any more."), { statusCode: 404 });
     return found;
 }
 

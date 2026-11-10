@@ -71,6 +71,10 @@ did not change, so no screen did.
 | Every app, one read (`organizations.apps`); when Home was last looked at, kept by the server (`homeSeen`) | `src/data/live.ts` | built, not yet checked on a device |
 | What a Lemma owns and its number (`outcome.standing`), over the plan's front matter for older Lemmas | `src/data/live.ts` `owns` | built, not yet checked on a device |
 
+Copy follows main's #1169: a Lemma's own chats are chats, never a
+"channel" or a "line", and where it answers is "where it answers", never a
+"place". Slack's own channels keep their name.
+
 ## A. Chat thread (`src/areas/chat`, `src/thread/*`, `(in)/chat`, `(in)/new-chat`, `src/ui/ask-box.tsx`)
 
 The conversation runs on the SDK's own `useAssistantSession`, the hook the web

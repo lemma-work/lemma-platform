@@ -106,7 +106,7 @@ export function chatsLive(context: LiveContext): ChatsSource {
                 searchEnabled: true,
             }));
             const path = words(written.path);
-            if (!path) throw new Error(line.name + " came back without a place.");
+            if (!path) throw new Error(line.name + " came back without a path.");
             return { type: "file", path, name: words(written.name) ?? line.name, mimeType: file.type || null, size: file.size, fileId: null };
         },
         async lineFile(podId, channelId, lineId, file) {

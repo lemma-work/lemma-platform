@@ -84,7 +84,7 @@ export function ChannelsScreen({ podId }: PartProps) {
             ) : null}
 
             {offer.length ? (
-                <Group label={on.length ? "Somewhere else" : "Pick a place"}>
+                <Group label={on.length ? "Somewhere else" : "Pick one"}>
                     {offer.map((entry, index) => {
                         const plan = connectPlan(entry, connectors.data ?? [], elsewhere.has(placeKey(entry.platform)));
                         const quick = quickWay(plan);

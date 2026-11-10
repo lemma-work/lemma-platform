@@ -469,7 +469,7 @@ function Connected({ podId, channel, lemmaName }: { podId: string; channel: Chan
     return (
         <View style={{ gap: 6 }}>
             <Text size={14} tone={color.ink2} style={{ lineHeight: 20 }}>
-                {channel.kind === "GROUP" ? "Messages in these places show up here, and what you send here goes back to the place it answers." : "Where messages in this chat come from, and go back to."}
+                {channel.kind === "GROUP" ? "Messages sent in these show up here, and a reply goes back where the message it answers was sent." : "Where messages in this chat come from, and go back to."}
             </Text>
             {channel.places.map((place) => {
                 const settled = channel.kind === "GROUP" && isGroupPlatform(place.platform);

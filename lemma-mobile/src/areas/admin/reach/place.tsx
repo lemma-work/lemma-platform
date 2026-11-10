@@ -40,7 +40,7 @@ export function PlaceScreen({ podId, name }: { podId: string; name: string }) {
         return (
             <SettingsScreen title="Not connected" back={back}>
                 {places.isError
-                    ? <ReadProblem said={problemOf(places.error, "This place could not be read.")} onRetry={() => void places.refetch()} />
+                    ? <ReadProblem said={problemOf(places.error, "Couldn’t read where it answers.")} onRetry={() => void places.refetch()} />
                     : <Say>{`${space} does not answer there any more.`}</Say>}
             </SettingsScreen>
         );
@@ -180,8 +180,8 @@ function PlaceForm({ podId, space, listed, detail, bot, onDone }: {
                     })}
                     {options.isSuccess && choices.length === 0 ? <Say>{`Nowhere yet. Invite ${answerer} in ${name}, then look again.`}</Say> : null}
                     <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: 18 }}>
-                        <Press label={`Add a place in ${name}`} disabled={!free.length || working} onPress={() => setChoosing(true)} style={{ minHeight: 44, justifyContent: "center", opacity: free.length ? 1 : 0.45 }}>
-                            <Text size={15} weight="medium">Add a place in {name}</Text>
+                        <Press label={`Choose where in ${name}`} disabled={!free.length || working} onPress={() => setChoosing(true)} style={{ minHeight: 44, justifyContent: "center", opacity: free.length ? 1 : 0.45 }}>
+                            <Text size={15} weight="medium">Choose where in {name}</Text>
                         </Press>
                         <Press label="Look again" onPress={() => void options.refetch()} style={{ minHeight: 44, justifyContent: "center" }}>
                             <Text size={15} weight="medium">Look again</Text>

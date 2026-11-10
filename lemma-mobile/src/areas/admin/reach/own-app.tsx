@@ -54,7 +54,7 @@ export function SlackManagerStep({ podId, orgId, space, entry, onReady }: Omit<P
     return (
         <View style={{ gap: 12 }}>
             <Heading>Add Lemma to your Slack workspace</Heading>
-            <Body>{`Lemma's app is where your workspace sees its Lemmas, adds them and gives them places to answer. It answers nobody itself. Then ${space} gets a Slack app of its own.`}</Body>
+            <Body>{`Lemma's app is where your workspace sees its Lemmas, adds them and gives them somewhere to answer. It answers nobody itself. Then ${space} gets a Slack app of its own.`}</Body>
             {managed.isError ? <Say tone="bad">{connectProblem(managed.error, "Your Slack workspaces could not be read.")}</Say> : null}
             <SignInStep name="Slack" label="Add Lemma to Slack" flow={flow} />
             <Quiet label={`Skip this, and give ${space} its app now`} onPress={onReady} />

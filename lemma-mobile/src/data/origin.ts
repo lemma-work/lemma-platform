@@ -38,7 +38,7 @@ export function originOf(metadata: Record<string, unknown> | null | undefined, t
         const kind = text(meta.conversation_kind);
         const channel = text(meta.channel_name);
         const where = channel ? " · #" + channel.replace(/^#/, "") : kind === "DM" ? " · direct message" : "";
-        return { kind: "channel", label: (named ?? "Channel") + where, platform };
+        return { kind: "channel", label: (named ?? "Chat") + where, platform };
     }
     if (source === "notification") return { kind: "notification", label: "Notification" + (named ? " · " + named : ""), platform };
     if (source === "SCHEDULE") {

@@ -283,7 +283,7 @@ export interface LineOffers {
  *  where one's own went. "Acme × Northwind (WhatsApp)". */
 export function outsideOf(line: Pick<Line, "sourceId" | "delivered">, channel: Pick<ChannelDetail, "places">): string | null {
     const places = [
-        ...(line.sourceId ? [sourceLabel(line.sourceId, channel.places) ?? "the place it was said"] : []),
+        ...(line.sourceId ? [sourceLabel(line.sourceId, channel.places) ?? "the chat it came from"] : []),
         ...(line.delivered ?? []).filter((one) => one.status === "SENT").map((one) => sourceLabel(one.sourceId, channel.places) ?? (one.platform ? platformName(one.platform) : "outside")),
     ];
     return places.length ? sayList([...new Set(places)]) : null;

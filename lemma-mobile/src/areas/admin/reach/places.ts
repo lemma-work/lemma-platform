@@ -132,10 +132,10 @@ export function reachLine(surfaces: readonly Surface[]): string {
 }
 
 /** The note under the screen's heading when the list is read: how many
- *  places, or only here. */
+ *  other ways, or only here (the web's `sayReachedOtherWays`). */
 export function reachCount(name: string, count: number): string {
     if (count === 0) return `${name} can only be reached here, in Lemma.`;
-    return `${name} answers in ${count === 1 ? "one place" : `${count} places`} besides Lemma.`;
+    return `${name} can also be reached ${count === 1 ? "one other way" : `${count} other ways`}.`;
 }
 
 /* ── what connecting costs ──────────────────────────────────────────── */
