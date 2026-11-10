@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canvasItemFrom } from "../src/call/canvas.ts";
+import { canvasItemFrom, onScreenIndex } from "../src/call/canvas.ts";
 import { callSocketUrl } from "../src/call/call-socket.ts";
 
 const frame = (id: string, args: Record<string, unknown>, result: unknown = { success: true }) => ({
@@ -35,6 +35,15 @@ test("a pod file, a table or an app goes on the canvas as itself", () => {
 test("something that is not a resource does not go on the canvas", () => {
     assert.equal(canvasItemFrom(frame("t4", { kind: "sculpture" })), null);
     assert.equal(canvasItemFrom({ ...frame("", { type: "FILE", path: "/me/a.pdf" }) }), null);
+});
+
+test("the item on screen is the one paged to, else the newest", () => {
+    const items = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    assert.equal(onScreenIndex(items, null), 2);
+    assert.equal(onScreenIndex(items, "a"), 0);
+    // Paged to an item that is no longer there: the newest takes the screen.
+    assert.equal(onScreenIndex(items, "gone"), 2);
+    assert.equal(onScreenIndex([], null), 0);
 });
 
 test("the call socket rides the API origin, with the token when there is one", () => {

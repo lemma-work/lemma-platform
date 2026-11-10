@@ -19,3 +19,11 @@ export function canvasItemFrom(frame: CanvasFrameItem): CanvasItem | null {
     if (!resource || !frame.tool_call_id || !frame.conversation_id) return null;
     return { id: frame.tool_call_id, conversationId: frame.conversation_id, resource, label: resourceLabel(resource) };
 }
+
+/** Which item is on screen: the one the person paged to (`showing`, by id),
+ *  else the newest. The call holds `showing` and clears it whenever an item
+ *  arrives, replayed or new, since the voice is told the newest is up. */
+export function onScreenIndex(items: readonly { id: string }[], showing: string | null): number {
+    const picked = showing === null ? -1 : items.findIndex((one) => one.id === showing);
+    return picked >= 0 ? picked : Math.max(0, items.length - 1);
+}

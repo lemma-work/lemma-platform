@@ -191,8 +191,10 @@ export function callLine(input: Parameters<typeof statusLine>[0]): string {
     return /[.?!…]$/.test(joinedLine) ? joinedLine : joinedLine + ".";
 }
 
-/** The words at the top of the screen in each phase. */
-export function callWords(phase: CallPhase, name: string, live: { muted?: boolean; thinking?: boolean } = {}, os: "ios" | "android" = "android"): { title: string; line: string; tone: "quiet" | "bad" } {
+/** The words at the top of the screen in each phase. A notice (a request
+ *  the Lemma cannot take, and why) takes the line while it is up, as the
+ *  web's `statusLine` is given it. */
+export function callWords(phase: CallPhase, name: string, live: { muted?: boolean; thinking?: boolean; notice?: string | null } = {}, os: "ios" | "android" = "android"): { title: string; line: string; tone: "quiet" | "bad" } {
     switch (phase.kind) {
         case "checking":
             return { title: `Connecting to ${name}…`, line: "", tone: "quiet" };
@@ -206,7 +208,7 @@ export function callWords(phase: CallPhase, name: string, live: { muted?: boolea
             /* Nothing is listening yet, so only muted is worth a line. */
             return { title: `Connecting to ${name}…`, line: live.muted ? callLine({ muted: true, teammate: name }) : "", tone: "quiet" };
         case "live":
-            return { title: `On a call with ${name}`, line: callLine({ ...live, teammate: name }), tone: "quiet" };
+            return { title: `On a call with ${name}`, line: callLine({ error: live.notice, muted: live.muted, thinking: live.thinking, teammate: name }), tone: "quiet" };
         case "ended":
             return { title: "Call ended", line: "", tone: "quiet" };
         case "failed":
@@ -238,20 +240,34 @@ export function captionOf(lines: readonly CallLine[], name: string, limit = 160)
     return { who: line.speaker === "them" ? "You" : name, text: text.length > limit ? "…" + text.slice(-(limit - 1)).trimStart() : text };
 }
 
-/** After the call: the call is a chat of its own, where what was asked and
- *  done is kept. */
-export function afterWords(chatId: string | null): { line: string; link: string | null } {
-    if (!chatId) return { line: "Nothing from this call went to a chat.", link: null };
+/** Whether anything happened on a call: something said, or something shown.
+ *  The server takes a call's own chat that nothing happened in out of the
+ *  list as the call ends (#1076), so there is no chat to point at. */
+export function saidOn(call: { transcript: readonly CallLine[]; canvas: readonly unknown[] }): boolean {
+    return call.canvas.length > 0 || call.transcript.some((line) => line.text.trim().length > 0);
+}
+
+/** Where a call is held (`calls.open`'s `conversation_id`): the chat it was
+ *  started from, so what is said lands there (#1091); or, calling again
+ *  from the call screen, the last call's own chat, which picks that call up
+ *  again with its canvas; or, when that call held nothing, a new chat. */
+export function callPlace(fromChat: string | null, last: { callId: string; said: boolean } | null): string | null {
+    if (fromChat) return fromChat;
+    return last?.said ? last.callId : null;
+}
+
+/** After the call: where what was asked and done went. A call started from
+ *  a chat is held in that chat, so the way there is back; one started
+ *  elsewhere has a chat of its own, unless nothing happened in it. */
+export function afterWords(after: { chatId: string | null; fromChat: boolean; said: boolean }): { line: string; link: string | null } {
+    if (after.fromChat) {
+        return { line: after.said ? "What was asked and done is in the chat." : "Nothing from this call went to the chat.", link: "Back to the chat" };
+    }
+    if (!after.chatId || !after.said) return { line: "Nothing from this call went to a chat.", link: null };
     return { line: "What was asked and done is in the call’s chat.", link: "Open the chat" };
 }
 
 /** "2 of 3": where the screen is among what was shown. */
 export function deckWhere(at: number, count: number): string {
     return `${at + 1} of ${count}`;
-}
-
-/** What the screen shows: the newest the moment it arrives; paging back is
- *  for looking something up, not for holding the screen. */
-export function shownIndex(showing: number, count: number): number {
-    return Math.max(0, Math.min(showing, count - 1));
 }

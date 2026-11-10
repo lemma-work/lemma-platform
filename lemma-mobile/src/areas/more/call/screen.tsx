@@ -13,9 +13,9 @@ import { color, TOUCH } from "../../../ui/tokens";
 import { Confirm } from "../../admin/ui";
 import { chatRoutes } from "../../chat/routes";
 import { CallEngine } from "./engine";
-import type { CanvasItem } from "@web/call/canvas";
+import { onScreenIndex, type CanvasItem } from "@web/call/canvas";
 import { useVoiceCall, type VoiceCall } from "./hooks";
-import { deckWhere, shownIndex } from "./model";
+import { deckWhere } from "./model";
 
 /** A voice call with a Lemma: the web's `CallScreen`, for a phone.
  *
@@ -23,13 +23,14 @@ import { deckWhere, shownIndex } from "./model";
  *  drawn as a violet ring around it (a call is something running). What it
  *  shows during the call takes the screen, the newest the moment it arrives,
  *  paged back with Previous and Next. Under it, one caption: the line being
- *  said. Mute and End call at the foot. Leaving ends the call, asked first
- *  while it is on; after it, a line says where its chat is.
+ *  said. Mute and End call at the foot. A dropped call rejoins on this
+ *  screen, keeping what is on it. Leaving ends the call, asked first while
+ *  it is on; after it, a line says where its chat is.
  *
- *  `?conversation=` is the chat the call grew out of, when it was opened
- *  from one: it goes to the voice as background. The call's sound is an
- *  invisible WebView, mounted only while a call is connecting or on
- *  (`engine.tsx`). */
+ *  `?conversation=` is the chat the call was started from, when it was: the
+ *  call is held in that chat (what is said lands there), and the chat goes
+ *  to the voice as background. The call's sound is an invisible WebView,
+ *  mounted only while a call is connecting or on (`engine.tsx`). */
 export function CallScreen() {
     const params = useLocalSearchParams<{ podId: string; conversation?: string }>();
     const podId = String(params.podId);
@@ -49,6 +50,12 @@ export function CallScreen() {
     }, [words.line]);
 
     const compose = (text: string) => router.push(chatRoutes.filled(podId, text) as never);
+    /* A call held in the chat it was started from goes back to it, which
+       is beneath this screen; a call's own chat is opened. */
+    const openChat = (id: string, back: boolean) => {
+        if (back && router.canGoBack()) router.back();
+        else router.push(routes.chat(podId, id) as never);
+    };
 
     return (
         <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: color.paper }}>
@@ -57,11 +64,11 @@ export function CallScreen() {
             </View>
 
             {bare ? (
-                <Stage call={call} podId={podId} onOpenChat={(id) => router.push(routes.chat(podId, id) as never)} />
+                <Stage call={call} podId={podId} onOpenChat={openChat} />
             ) : (
                 <>
                     <Head call={call} podId={podId} />
-                    <Deck items={call.canvas} podId={podId} onShow={call.looking} onCompose={compose} />
+                    <Deck items={call.canvas} showing={call.showing} podId={podId} onShow={call.show} onCompose={compose} />
                 </>
             )}
 
@@ -142,7 +149,7 @@ function VoiceFace({ podId, icon, size, level: source, on }: { podId: string; ic
 }
 
 /** The whole stage: the face, the words, and what can be done in this phase. */
-function Stage({ call, podId, onOpenChat }: { call: VoiceCall; podId: string; onOpenChat: (id: string) => void }) {
+function Stage({ call, podId, onOpenChat }: { call: VoiceCall; podId: string; onOpenChat: (id: string, back: boolean) => void }) {
     const { phase, words, after } = call;
     const inCall = phase.kind === "connecting" || phase.kind === "live";
     return (
@@ -170,7 +177,7 @@ function Stage({ call, podId, onOpenChat }: { call: VoiceCall; podId: string; on
                 <View style={{ alignItems: "center", gap: 2, maxWidth: 360 }}>
                     <Text size={14.5} tone={color.ink2} style={{ textAlign: "center", lineHeight: 20 }}>{after.line}</Text>
                     {after.link && after.chatId ? (
-                        <Press role="link" label={after.link} onPress={() => after.chatId && onOpenChat(after.chatId)} style={{ minHeight: TOUCH, justifyContent: "center", paddingHorizontal: 8 }}>
+                        <Press role="link" label={after.link} onPress={() => after.chatId && onOpenChat(after.chatId, after.back)} style={{ minHeight: TOUCH, justifyContent: "center", paddingHorizontal: 8 }}>
                             <Text size={15} weight="medium" tone={color.violetInk}>{after.link}</Text>
                         </Press>
                     ) : null}
@@ -205,23 +212,22 @@ function Head({ call, podId }: { call: VoiceCall; podId: string }) {
     );
 }
 
-/** One thing on screen at a time, the newest the moment it arrives. Every
- *  one stays mounted and all but one are hidden, so paging back does not
- *  reload a widget already looked at. Each is drawn from the chat that put
- *  it there: the Lemma and each piece of work it handed on may draw. What is
- *  on screen is told to the call, so the voice knows what the person sees. */
-function Deck({ items, podId, onShow, onCompose }: { items: CanvasItem[]; podId: string; onShow: (item: CanvasItem) => void; onCompose: (text: string) => void }) {
-    const [showing, setShowing] = useState(0);
+/** One thing on screen at a time, the newest the moment it arrives (and
+ *  again when a rejoined call replays it). Every one stays mounted and all
+ *  but one are hidden, so paging back does not reload a widget already
+ *  looked at. Each is drawn from the chat that put it there: the Lemma and
+ *  each piece of work it handed on may draw. Which one is up is the call's
+ *  (`showing`), and every page the person turns, back to the newest
+ *  included, is told to the call, so the voice knows what they see. The
+ *  newest arriving is not a turn of theirs: the voice drew it. */
+function Deck({ items, showing, podId, onShow, onCompose }: { items: CanvasItem[]; showing: string | null; podId: string; onShow: (item: CanvasItem) => void; onCompose: (text: string) => void }) {
     const newest = Math.max(0, items.length - 1);
-    useEffect(() => { setShowing(newest); }, [newest]);
-    const active = shownIndex(showing, items.length);
+    const active = onScreenIndex(items, showing);
     const onScreen = items[active];
-    const shown = useRef<string | null>(null);
-    useEffect(() => {
-        if (!onScreen || shown.current === onScreen.id) return;
-        shown.current = onScreen.id;
-        onShow(onScreen);
-    }, [onScreen, onShow]);
+    const page = (to: number) => {
+        const item = items[to];
+        if (item) onShow(item);
+    };
     return (
         <View style={{ flex: 1, borderTopWidth: 1, borderTopColor: color.line }}>
             <View style={{ flex: 1 }}>
@@ -239,14 +245,14 @@ function Deck({ items, podId, onShow, onCompose }: { items: CanvasItem[]; podId:
             </View>
             {items.length > 1 ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, borderTopWidth: 1, borderTopColor: color.line }}>
-                    <Press label="Previous" disabled={active === 0} onPress={() => setShowing(active - 1)} style={{ width: TOUCH, height: TOUCH, alignItems: "center", justifyContent: "center", opacity: active === 0 ? 0.35 : 1 }}>
+                    <Press label="Previous" disabled={active === 0} onPress={() => page(active - 1)} style={{ width: TOUCH, height: TOUCH, alignItems: "center", justifyContent: "center", opacity: active === 0 ? 0.35 : 1 }}>
                         <Icon name="back" size={20} />
                     </Press>
                     <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 }}>
                         <Text size={14} numberOfLines={1} style={{ flexShrink: 1 }}>{onScreen?.label}</Text>
                         <Num size={13} tone={color.ink3}>{deckWhere(active, items.length)}</Num>
                     </View>
-                    <Press label="Next" disabled={active === newest} onPress={() => setShowing(active + 1)} style={{ width: TOUCH, height: TOUCH, alignItems: "center", justifyContent: "center", opacity: active === newest ? 0.35 : 1 }}>
+                    <Press label="Next" disabled={active === newest} onPress={() => page(active + 1)} style={{ width: TOUCH, height: TOUCH, alignItems: "center", justifyContent: "center", opacity: active === newest ? 0.35 : 1 }}>
                         <Icon name="forward" size={20} />
                     </Press>
                 </View>
