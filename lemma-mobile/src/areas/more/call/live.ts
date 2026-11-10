@@ -30,8 +30,12 @@ export function callLive(context: LiveContext): CallSource {
             }
         },
 
-        async open(podId, name) {
-            const opened = await context.client(podId).calls.open({ display_name: name, title: `Call with ${name}` });
+        async open(podId, name, conversationId) {
+            const opened = await context.client(podId).calls.open({
+                ...(conversationId ? { conversation_id: conversationId } : {}),
+                display_name: name,
+                title: `Call with ${name}`,
+            });
             return opened.call_id;
         },
 

@@ -422,6 +422,11 @@ is in (`areas/more/links.ts`, `link-return.tsx`).
 | Share a Lemma, file, table or app | `space/share-sheet.tsx` | done (one sheet; a file's public links open area C's sheet over it) |
 | The agent's computer: status, live browser, files, saved logins | `computer/*` | done (one computer per person; the live screen over a socket the app holds, full screen with Keyboard and Paste; sign-in requests at the web's path) |
 | Voice call | `call/*` | done, on the call socket the backend holds (#1025): the microphone and speaker in a WebView, the socket in React Native; offered only where the server names a voice |
+| A dropped call rejoins instead of ending (#1076, #1091) | `call/use-call.ts`, `call-rejoin.ts` | done (the web's `rejoinAfter`: twice at most, after 1 s then 2 s; the canvas, the caption, the microphone and mute stay; the server's replay lands on the same items and the newest takes the screen) |
+| Refused or ended by the server: told why, in the web's words (#1091) | `call/call-socket.ts`, `use-call.ts`, `call-status.ts` | done (close codes through the web's `closeOutcome`; an `ended` frame's reason; a refused request as a notice in the line for 12 s while the call stays up; a refused `calls.open` in the server's sentence) |
+| A call started from a chat is held in that chat (#1091) | `call/use-huddle.ts`, `shell/shell.tsx` | done (`calls.open` with the chat's `conversation_id`, so what is said lands there; after the call, Back to the chat. From anywhere else a chat of its own, and Call again picks that call up) |
+| No call opens with nothing in it (#1076) | `call/use-huddle.ts` | done (the brief is read before `calls.open`, so the call connects as soon as it exists; a call nothing happened in points at no chat, and Call again from it starts afresh) |
+| The slide on screen is the call's; every page turned is told to the voice (#1076, #1091) | `call/call-screen.tsx`, `canvas.ts` | done (the web's `onScreenIndex`; arriving or replayed items take the screen, a page turned back to the newest is told too) |
 | Product tour | `tour/*` | done (over Home, offered once in the first week; Help on the account screen has it again, and how each place works) |
 
 How it is built:
@@ -429,8 +434,9 @@ How it is built:
   they live (`@web/…`, `web-imports.js`): search's matching and sources,
   arrival and first-profile, the hiring catalogue, the import plan, types,
   catalogue, pending install and README reading, the computer's machine,
-  startup, live, logins and sign-in, and twelve call modules. The phone's
-  reading on top is each part's `model.ts`.
+  startup, live, logins and sign-in, and the call's socket, close reasons,
+  rejoin rule, status line, transcript, canvas, briefs and audio. The
+  phone's reading on top is each part's `model.ts`.
 - **Search.** The web searches one pod; the phone has no "current Lemma"
   where search opens, so it searches every Lemma, with scope pills. Two
   departures, on purpose: a file found by its contents and a row found by
@@ -453,10 +459,20 @@ How it is built:
   reaches nothing), and PCM crosses the bridge as base64, the voice gathered
   for 60 ms a trip. What the Lemma shows is drawn from the chat that drew
   it, and paging to it tells the call. The voice is briefed with the Lemma
-  (`pod-brief.ts`) and the chat the call grew out of (`history-brief.ts`).
-  Afterwards the call's own chat holds what was asked and done. The mic is
-  offered only where `calls.config` names a voice. app.json declares
+  (`pod-brief.ts`) and the chat the call grew out of (`history-brief.ts`),
+  read before the call is opened. A call from a chat is held in that chat
+  (`conversation_id`, #1091), where the chat screen beneath picks up the
+  call's runs and transcript on its own topic; from anywhere else it has a
+  chat of its own. A drop nobody chose rejoins the same call by the web's
+  rule (`call-rejoin.ts`, moved out of `use-call.ts` for this), keeping the
+  page and its microphone, mute (sent again in `start`) and the screen; the
+  slide on screen is held by the call (`machine.ts`), not the screen. The
+  mic is offered only where `calls.config` names a voice. app.json declares
   `RECORD_AUDIO` and the iOS microphone sentence.
+- **Web files moved for the call** (a move, the web's own code using them):
+  `call/call-rejoin.ts` (`MAX_REJOINS`, `REJOIN_DELAY_MS`, `rejoinAfter`,
+  from `use-call.ts`), `NOTICE_MS` into `call-status.ts`, and
+  `onScreenIndex` into `canvas.ts` (from `call-screen.tsx`).
 - **The tour.** Controls register with `TourTarget` (Home's headline and
   cards, its ask box, search and profile buttons, the tab bar's Lemmas and
   Apps); each stop lights the real control through an even-odd scrim and
@@ -501,6 +517,15 @@ Checked on the emulator against the local stack (light) and in sample data
 
 Not done here:
 - iOS was not run (the Android emulator only).
+- The call rows from #1076 and #1091 (rejoin, refusals, a call held in its
+  chat, no empty calls, the slide) are held by the model tests and acted out
+  in sample data (Support's call drops once and rejoins; Launch's refuses a
+  request with a notice), but not yet checked on a device against the local
+  stack: a real drop (airplane mode mid-call), the chat beneath showing the
+  call's transcript, and iOS keeping the microphone across a rejoin.
+- The web shows the chat beside the call and reattaches it to each run the
+  call starts (`liveEpoch`); the phone's call screen has no chat beside it,
+  and the chat screen beneath follows on its own `conversation` topic.
 - The web's https links (`lemma.work`) open in the app only
   once the web serves `assetlinks.json` (and, for iOS, an
   `apple-app-site-association` with associated domains). Until then they open

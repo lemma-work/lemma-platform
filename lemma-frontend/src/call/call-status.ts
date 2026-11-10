@@ -1,5 +1,9 @@
 import type { PlanStepState } from "@/thread/turns";
 
+/** How long a notice stays up in the line (shown as `error`, which outranks
+ *  everything): it says something once, it is not a state. */
+export const NOTICE_MS = 12_000;
+
 /** The one line under the teammate's name, decided in one place.
  *
  *  One place because there are two surfaces. The call bar and the call screen

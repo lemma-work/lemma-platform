@@ -9,17 +9,19 @@ import { problemOf } from "../../admin/words";
 import { moreKey, useMoreSource } from "../hooks";
 import type { EngineHandle } from "./engine";
 import { CallSession } from "./machine";
-import { afterWords, callWords, captionOf, phaseOf, type FromPage, type Setup } from "./model";
+import { afterWords, callPlace, callWords, captionOf, phaseOf, saidOn, type FromPage, type Setup } from "./model";
 import type { CallSource } from "./source";
 
 /** A call with a Lemma, for the call screen: the web's `useHuddle` and
  *  `useCall` together, on the phone's session.
  *
  *  Before the call: can this server carry one (said plainly when not), and,
- *  on Android, the microphone. Then the call is opened on the server, told
- *  about the Lemma and the chat it grew out of, and its socket carries the
- *  rest (`machine.ts`). When it ends, its own chat holds what was asked and
- *  done. */
+ *  on Android, the microphone. Then the voice's brief is read (the Lemma,
+ *  and the chat it grew out of), and only then is the call opened on the
+ *  server and its socket connected (`machine.ts`): a call opened and then
+ *  left before it connects is a chat with nothing in it. A call started
+ *  from a chat is held in that chat, so what is said lands there; one
+ *  started elsewhere has a chat of its own, and Call again picks it up. */
 
 export function useCallSource(): CallSource {
     return useMoreSource().call;
@@ -57,12 +59,19 @@ export function useVoiceCall(podId: string, conversationId: string | null) {
 
     /* ── before the call ── */
     const [setup, setSetup] = useState<Setup>({ kind: "checking" });
-    /* The call's own chat, kept as it ends: what was asked and done is there. */
+    /* The chat the call is held in, kept as it ends: what was asked and
+       done is there. A ref too, read when calling again. */
     const [callId, setCallId] = useState<string | null>(null);
+    const callIdRef = useRef<string | null>(null);
     const attemptRef = useRef(0);
     const begin = useCallback(async () => {
         const attempt = ++attemptRef.current;
         const current = () => attempt === attemptRef.current;
+        /* Read before anything resets: the last call, and whether anything
+           happened in it, decide where calling again holds this one. */
+        const last = callIdRef.current;
+        const place = callPlace(conversationId, last ? { callId: last, said: saidOn(session.snapshot()) } : null);
+        callIdRef.current = null;
         setCallId(null);
         setSetup({ kind: "checking" });
         let callable: boolean;
@@ -103,17 +112,21 @@ export function useVoiceCall(podId: string, conversationId: string | null) {
         let opened: string;
         let brief: string;
         try {
-            opened = await source.open(podId, nameRef.current);
-            if (!current()) return;
-            setCallId(opened);
             /* What came before the call goes with it, so it continues that
-               chat rather than starting cold. */
-            brief = await source.brief(podId, nameRef.current, conversationId);
+               chat rather than starting cold. Read first: the call is opened
+               only once it can connect straight away. */
+            brief = await source.brief(podId, nameRef.current, place);
+            if (!current()) return;
+            opened = await source.open(podId, nameRef.current, place);
         } catch (error) {
+            /* Refused by the server (a model this person cannot use, a chat
+               that cannot hold a call): said in its words. */
             if (current()) setSetup({ kind: "failed", error: problemOf(error, "Couldn’t start the call. Try calling again.") });
             return;
         }
         if (!current()) return;
+        callIdRef.current = opened;
+        setCallId(opened);
         setSetup({ kind: "started" });
         void session.start(opened, { teammate: nameRef.current, pod: nameRef.current, context: brief });
     }, [source, session, podId, conversationId, server.label]);
@@ -157,14 +170,20 @@ export function useVoiceCall(podId: string, conversationId: string | null) {
         name,
         icon: lemma?.iconUrl ?? null,
         phase,
-        words: callWords(phase, name, { muted: view.muted, thinking: view.working }, OS),
+        words: callWords(phase, name, { muted: view.muted, thinking: view.working, notice: view.notice }, OS),
         muted: view.muted,
         /* The ring's own store, so it alone redraws. */
         level: { subscribe: session.subscribeLevel, snapshot: session.levelSnapshot },
         caption: captionOf(view.transcript, name),
         canvas: view.canvas,
-        /* Only for a call that was placed: one refused before it began went nowhere. */
-        after: placed ? { chatId: callId, ...afterWords(callId) } : null,
+        /* The item on screen, by id (null for the newest): the call's, since
+           the voice is told which one is up. */
+        showing: view.showing,
+        /* Only for a call that was placed: one refused before it began went
+           nowhere. `back` when the call was held in the chat it came from. */
+        after: placed
+            ? { chatId: callId, back: conversationId !== null, ...afterWords({ chatId: callId, fromChat: conversationId !== null, said: saidOn(view) }) }
+            : null,
         engine: source.sound && (view.status === "connecting" || view.status === "live")
             ? { ref: pageRef, onMessage: (message: FromPage) => session.hear(message) }
             : null,
@@ -173,7 +192,7 @@ export function useVoiceCall(podId: string, conversationId: string | null) {
         /* Mute reaches the server and the page, so it waits for the call. */
         canMute: view.status === "connecting" || view.status === "live",
         toggleMute: session.toggleMute,
-        looking: (item: CanvasItem) => session.looking(item),
+        show: (item: CanvasItem) => session.show(item),
         openSettings: () => void Linking.openSettings().catch(() => undefined),
         leaving: leaving !== null,
         leave,
