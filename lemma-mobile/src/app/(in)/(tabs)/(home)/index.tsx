@@ -6,6 +6,7 @@ import { useLemmas, useMe, useNeeds, useOrg, useOwnsAll, usePulse, useStartedOnT
 import { homeCards } from "../../../../data/model";
 import { routes } from "../../../../data/routes";
 import { AskBox } from "../../../../ui/ask-box";
+import { chatRoutes } from "../../../../areas/chat/routes";
 import { chatsRoutes } from "../../../../areas/chats/routes";
 import { moreRoutes } from "../../../../areas/more/routes";
 import { HomeOverlays } from "../../../../areas/more/home-overlays";
@@ -123,7 +124,8 @@ export default function Home() {
                             lemmas={lemmas}
                             podId={chosen}
                             onPick={setAsking}
-                            onSend={(podId, text) => router.push(routes.chat(podId, "new", text) as never)}
+                            repositories
+                            onSend={(podId, text, _files, repository) => router.push(chatRoutes.start(podId, text, null, repository) as never)}
                         />
                         </TourTarget>
                     </View>

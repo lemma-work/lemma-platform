@@ -141,10 +141,8 @@ Known, and why:
   phone has no computer pane yet (area G).
 - Copy uses React Native's own clipboard module; `expo-clipboard` is the
   long-term home once a native build adds it (`src/thread/clipboard.ts`).
-- Home's ask box offers no repository yet, where the web's does: Home's send
-  has to carry the pick to the chat it opens (`AskBox`'s `repositories`, as
-  the new-chat screen passes it). The new-chat screen and a new chat's own
-  box offer it.
+- Home's ask box, the new-chat screen and a new chat's own box all offer a
+  repository, as the web's do.
 - Sample data offers three repositories for every Lemma, under two GitHub
   accounts, and Launch's "Landing copy, second pass" works in one.
 
