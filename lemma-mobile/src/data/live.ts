@@ -6,6 +6,9 @@ import type { ChatLine, LemmaPulse, LemmaSource } from "./source";
 import { SOMEBODY, flatAskArgs, items, needOf, readAutomation, readChannel, readDayCount, readPerson, recentChatOf, record, rows, words } from "./wire";
 import type { AppItem, Automation, Channel, ConversationRef, DayCount, Lemma, NeedCard, NeedItem, Org, Owns, Starter } from "./types";
 import { readText } from "./io";
+import { conversationsIn, needsIn } from "./per-lemma";
+import { store } from "../session/store";
+import { isMissing } from "../areas/admin/words";
 
 /** Main's API, as it is.
  *
@@ -64,10 +67,33 @@ export function liveSource(server: Server): LemmaSource {
         return { channels, tables };
     }
 
-    /** `recents`, by Lemma: its chats, automations and days. A failed read
-     *  is no rows rather than no Lemmas: their chats with people still list. */
-    async function recentsByLemma(orgId: string): Promise<Map<string, { conversations: ConversationRef[]; automations: Automation[]; activity: DayCount[] }>> {
-        const read = await settled(client().organizations.recents(orgId, { days: 14, chats: CHATS_PER_LEMMA, timezone: timeZone() }), null);
+    /* A server from before the organization's reads answers them 404: once
+       one has, the per-Lemma reads stand in for all of them (`per-lemma.ts`)
+       for as long as the app runs, rather than asking again every poll. */
+    let older = false;
+    async function orFallBack<T>(read: () => Promise<T>, fallback: () => Promise<T>): Promise<T> {
+        if (older) return fallback();
+        try {
+            return await read();
+        } catch (problem) {
+            if (!isMissing(problem)) throw problem;
+            older = true;
+            return fallback();
+        }
+    }
+
+    /** `recents`, by Lemma: its chats, automations and days; null on a server
+     *  that has no such read. A read that failed otherwise is no rows rather
+     *  than no Lemmas: their chats with people still list. */
+    async function recentsByLemma(orgId: string): Promise<Map<string, { conversations: ConversationRef[]; automations: Automation[]; activity: DayCount[] }> | null> {
+        const read = await orFallBack<unknown>(
+            () => client().organizations.recents(orgId, { days: 14, chats: CHATS_PER_LEMMA, timezone: timeZone() }).catch((problem: unknown) => {
+                if (isMissing(problem)) throw problem;
+                return null;
+            }),
+            async () => undefined,
+        );
+        if (read === undefined) return null;
         return new Map(rows(record(read).pods).map((raw) => {
             const pod = record(raw);
             return [String(pod.pod_id), {
@@ -110,6 +136,10 @@ export function liveSource(server: Server): LemmaSource {
 
         async pulse(orgId, lemmas) {
             const [recents, own] = await Promise.all([recentsByLemma(orgId), Promise.all(lemmas.map(ownReads))]);
+            if (!recents) {
+                const conversations = await Promise.all(lemmas.map((one) => conversationsIn(client(one.id), one)));
+                return lemmas.map((one, index) => ({ lemma: one, conversations: conversations[index], automations: null, activity: null, ...own[index] }));
+            }
             return lemmas.map((one, index) => {
                 const recent = recents.get(one.id);
                 return {
@@ -124,10 +154,12 @@ export function liveSource(server: Server): LemmaSource {
 
         /* Unlike the rows, a failed read here is said: an empty queue reads
            as "nothing waits on you". */
-        async needs(orgId) {
-            const listed = await client().organizations.needsYou(orgId);
+        async needs(orgId, lemmas) {
             const now = Date.now();
-            return items(listed).map((raw) => needOf(raw, now)).filter((item): item is NeedItem => item !== null);
+            return orFallBack(
+                async () => items(await client().organizations.needsYou(orgId)).map((raw) => needOf(raw, now)).filter((item): item is NeedItem => item !== null),
+                async () => (await Promise.all(lemmas.map((one) => needsIn(client(one.id), one, now)))).flat(),
+            );
         },
 
         /* What it owns is the Lemma's own, kept on the server; a Lemma that
@@ -160,9 +192,17 @@ export function liveSource(server: Server): LemmaSource {
         },
 
         /* Each app names its own Lemma; the server lists them newest first. */
-        async apps(orgId) {
-            const listed = await client().organizations.apps(orgId);
-            return items(listed).map((raw) => appOf(raw, { id: "", name: "" })).filter((app): app is AppItem => app !== null && app.podId !== "");
+        async apps(orgId, lemmas) {
+            return orFallBack(
+                async () => items(await client().organizations.apps(orgId)).map((raw) => appOf(raw, { id: "", name: "" })).filter((app): app is AppItem => app !== null && app.podId !== ""),
+                async () => {
+                    const lists = await Promise.all(lemmas.map((one) => settled(
+                        client(one.id).apps.list({ limit: 50 } as never).then((listed) => items(listed).map((raw) => appOf(raw, one)).filter((app): app is AppItem => app !== null)),
+                        [] as AppItem[],
+                    )));
+                    return lists.flat().sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+                },
+            );
         },
 
         async card(item): Promise<NeedCard> {
@@ -271,12 +311,14 @@ export function liveSource(server: Server): LemmaSource {
 
         /* Kept by the server, so the web and the phone agree on it. */
         async homeSeen(orgId) {
-            const seen = record(await client().organizations.homeSeen.get(orgId));
-            const at = Date.parse(words(seen.seen_at) ?? "");
-            return Number.isNaN(at) ? null : at;
+            return orFallBack(async () => {
+                const seen = record(await client().organizations.homeSeen.get(orgId));
+                const at = Date.parse(words(seen.seen_at) ?? "");
+                return Number.isNaN(at) ? null : at;
+            }, () => store.homeSeen(orgId));
         },
         async markHomeSeen(orgId, at) {
-            await client().organizations.homeSeen.mark(orgId, new Date(at).toISOString());
+            await orFallBack(async () => { await client().organizations.homeSeen.mark(orgId, new Date(at).toISOString()); }, () => store.setHomeSeen(orgId, at));
         },
     };
 }

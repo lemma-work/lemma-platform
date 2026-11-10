@@ -3,6 +3,8 @@ import { Platform, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import DateTimePicker, { DateTimePickerAndroid, type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { useLemmas } from "../../../data/hooks";
+import { routes } from "../../../data/routes";
+import { isMissing } from "../../admin/words";
 import { useSession } from "../../../session/session";
 import { PRESETS } from "../../../session/server";
 import { Loading } from "../../../ui/chrome";
@@ -78,7 +80,15 @@ export function NewLemmaScreen({ top }: {
                 {top}
 
                 <Group label="What do you do?" foot="Pick your work. Each comes with what a Lemma can own there, and works with the tools you already use.">
-                    {shelf.isPending ? <Loading label="Reading what a Lemma can start from" /> : shelf.isError ? (
+                    {shelf.isPending ? <Loading label="Reading what a Lemma can start from" /> : shelf.isError && isMissing(shelf.error) ? (
+                        /* A server from before the shelf (#1194) has no templates and no one-call start. */
+                        <View style={{ gap: 12, paddingVertical: 8 }}>
+                            <Say>This server is older than this app, so a Lemma can’t be started from here yet. Start one on the web.</Say>
+                            <View style={{ flexDirection: "row" }}>
+                                <Button title="Open the web" kind="outline" onPress={() => router.push(routes.web("", "/", "New Lemma") as never)} />
+                            </View>
+                        </View>
+                    ) : shelf.isError ? (
                         <ReadProblem said="Couldn’t read what a Lemma can start from." onRetry={() => void shelf.refetch()} />
                     ) : (
                         <>

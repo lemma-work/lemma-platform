@@ -12,6 +12,13 @@ const said = (name: string, answer: unknown) => async (...args: unknown[]) => {
     calls.push({ name, args });
     return answer;
 };
+/* A server from before the organization's reads: each of them answers 404. */
+let older = false;
+const orgRead = (name: string, answer: unknown) => async (...args: unknown[]) => {
+    calls.push({ name, args });
+    if (older) throw Object.assign(new Error("Not Found"), { statusCode: 404 });
+    return answer;
+};
 
 const RECENTS = {
     organization_id: "org",
@@ -42,11 +49,17 @@ const NEEDS = {
 function fakeClient(podId?: string) {
     return {
         organizations: {
-            recents: said("recents", RECENTS),
-            needsYou: said("needsYou", NEEDS),
-            apps: said("apps", { items: [{ id: "a1", name: "ticket-queue", pod_id: "p1", pod_name: "Support", status: "ACTIVE", updated_at: "2026-11-09T00:00:00Z", visibility: "POD" }] }),
-            homeSeen: { get: said("homeSeen.get", { seen_at: "2026-11-09T22:00:00Z" }), mark: said("homeSeen.mark", {}) },
+            recents: orgRead("recents", RECENTS),
+            needsYou: orgRead("needsYou", NEEDS),
+            apps: orgRead("apps", { items: [{ id: "a1", name: "ticket-queue", pod_id: "p1", pod_name: "Support", status: "ACTIVE", updated_at: "2026-11-09T00:00:00Z", visibility: "POD" }] }),
+            homeSeen: { get: orgRead("homeSeen.get", { seen_at: "2026-11-09T22:00:00Z" }), mark: orgRead("homeSeen.mark", {}) },
         },
+        conversations: {
+            list: said(`conversations.list:${podId}`, { items: [{ id: "c7", title: "Old chat", last_activity_at: "2026-11-10T08:00:00Z", metadata: {} }] }),
+            pendingInteractions: said(`pending:${podId}`, { items: [{ conversation_id: "c7", conversation_title: "Old chat", kind: "QUESTION", summary: "Which day?", created_at: "2026-11-10T08:00:00Z", tool_call_id: "t7" }] }),
+        },
+        workflows: { runs: { waitingAssignedToMe: said(`waits:${podId}`, { items: [] }) }, list: said(`workflows:${podId}`, { items: [] }) },
+        apps: { list: said(`apps.list:${podId}`, { items: [{ id: "a9", name: "old-board" }] }) },
         channels: {
             list: said(`channels.list:${podId}`, { items: [] }),
             answer: said("channels.answer", {}),
@@ -65,6 +78,8 @@ function fakeClient(podId?: string) {
 
 vi.mock("../src/session/client", () => ({ lemma: (_server: unknown, podId?: string) => fakeClient(podId) }));
 vi.mock("../src/data/io", () => ({ readText: async () => null }));
+const held = new Map<string, string>();
+vi.mock("../src/session/store", () => ({ store: { homeSeen: async (org: string) => (held.has(org) ? Number(held.get(org)) : null), setHomeSeen: async (org: string, at: number) => void held.set(org, String(at)) } }));
 
 const SERVER = { id: "s", api: "https://api.example", web: "https://example" } as never;
 const LEMMAS = [{ id: "p1", name: "Support", iconUrl: null, description: null }];
@@ -110,6 +125,28 @@ describe("the organization's reads, live", () => {
         expect(calls).toEqual([{ name: "homeSeen.mark", args: ["org", "2026-11-10T10:00:00.000Z"] }]);
         const [app] = await source.apps("org", LEMMAS);
         expect(app).toMatchObject({ podId: "p1", podName: "Support", label: "Ticket Queue" });
+    });
+});
+
+describe("a server from before the organization's reads", () => {
+    it("reads each Lemma as it used to, and stops asking the organization once it has said 404", async () => {
+        const { liveSource } = await import("../src/data/live");
+        older = true;
+        try {
+            const source = liveSource(SERVER);
+            calls.length = 0;
+            const needs = await source.needs("org", LEMMAS);
+            expect(needs).toEqual([expect.objectContaining({ kind: "QUESTION", title: "Which day?", conversationId: "c7", messageId: null, choices: [] })]);
+            const [pulse] = await source.pulse("org", LEMMAS);
+            expect(pulse).toMatchObject({ automations: null, activity: null });
+            expect(pulse.conversations.map((one) => one.id)).toEqual(["c7"]);
+            expect((await source.apps("org", LEMMAS)).map((app) => app.name)).toEqual(["old-board"]);
+            await source.markHomeSeen("org", 1234);
+            expect(await source.homeSeen("org")).toBe(1234);
+            expect(calls.filter((call) => call.name === "needsYou" || call.name === "recents" || call.name.startsWith("homeSeen") || call.name === "apps")).toHaveLength(1);
+        } finally {
+            older = false;
+        }
     });
 });
 

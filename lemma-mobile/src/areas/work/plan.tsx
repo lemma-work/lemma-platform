@@ -17,6 +17,7 @@ import { AskSheet, Quiet } from "../tables/bits";
 import { useAgents, useOwned, usePlan, useSaveOwned, useSavePlan, useSchedules, useWeeks } from "./hooks";
 import { addLine, draftOf, editLine, metaOf, ownedOfMeta, removeLine, withMeta, type PlanMeta } from "./model";
 import { Heading, Note, Trouble } from "./parts";
+import { isMissing } from "../admin/words";
 import { formatMeasure, PLAN_PATH, PLAN_SECTIONS, planRequest, SECTION_TITLES, withOwned, type Owned, type Plan, type PlanLine, type PlanSection } from "@web/outcomes/model";
 import type { OwnedInput } from "./source";
 
@@ -31,7 +32,8 @@ export function PlanView({ podId, name, description }: { podId: string; name: st
     const router = useRouter();
     const read = usePlan(podId);
     const save = useSavePlan(podId);
-    const owned = useOwned(podId).data ?? null;
+    const ownedRead = useOwned(podId);
+    const owned = ownedRead.data ?? null;
     const keep = useSaveOwned(podId);
     const { mode } = useSession();
     const [note, setNote] = useState<string | null>(null);
@@ -45,9 +47,10 @@ export function PlanView({ podId, name, description }: { podId: string; name: st
             onError: (problem) => setNote(problem instanceof Error ? `Couldn’t save: ${problem.message}` : "Couldn’t save the plan."),
         });
     };
-    /* What it owns goes to the Lemma, and its number is read again; only
-       sample data, with no server to keep it, writes it into the file. */
-    const own = mode === "live"
+    /* What it owns goes to the Lemma, and its number is read again; sample
+       data, with no server to keep it, and a server from before it was kept
+       on the Lemma (#1046) write it into the file. */
+    const own = mode === "live" && !(ownedRead.isError && isMissing(ownedRead.error))
         ? (next: OwnedInput) => {
             setNote(null);
             keep.mutate(next, {

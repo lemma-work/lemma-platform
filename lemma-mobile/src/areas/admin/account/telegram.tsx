@@ -8,6 +8,7 @@ import { Text } from "../../../ui/text";
 import { color } from "../../../ui/tokens";
 import { LinkTelegramSteps } from "../../chats/identity-link";
 import { Group, Row, Say, problemOf } from "../ui";
+import { isMissing } from "../words";
 import { useMyTelegramSurfaces, useRereadTelegramAccounts, useTelegramAccounts, useTelegramBots, useUnlinkTelegram } from "./hooks";
 import { LINK_HINT, botToOpen, linkButton, linkedRow, telegramShown } from "./link-telegram";
 import { botDetail, botTitle, type BotChoice, type MyTelegramSurfaces } from "@web/session/telegram-bots";
@@ -25,6 +26,8 @@ export function TelegramGroup() {
     const [open, setOpen] = useState(false);
     const linked = accounts.data ?? [];
     const through = mine.data?.surfaceIds.length ? mine.data : null;
+    /* A server from before linking Telegram from a profile has nothing to show. */
+    if (accounts.isError && isMissing(accounts.error)) return null;
     const unread = accounts.isError && !accounts.data;
     if (!telegramShown({ pending: accounts.isPending, unread, bots: through ? through.surfaceIds.length : 0, linked: linked.length })) return null;
     return (
