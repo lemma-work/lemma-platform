@@ -19,6 +19,7 @@ from sqlalchemy import (
     Select,
     and_,
     delete,
+    exists,
     func,
     select,
     text,
@@ -143,12 +144,25 @@ class ChannelConversations(UnitOfWorkRepository):
     async def place(
         self, *, conversation_id: UUID, channel_id: UUID, platform: str | None
     ) -> None:
-        """Put a conversation that has no channel yet on this platform of one."""
+        """Put a conversation that has no channel yet on this platform of one,
+        unless another already holds that seat -- one a contact merge unseated
+        stays out beside the survivor's, the unique index or not."""
+        conversation, holder = ConversationModel, aliased(ConversationModel)
+        seat_taken = exists().where(
+            _live_in_a_channel(holder),
+            holder.channel_id == channel_id,
+            _platform(holder) == (platform or IN_LEMMA),
+            func.coalesce(holder.agent_id, holder.pod_id)
+            == func.coalesce(conversation.agent_id, conversation.pod_id),
+            func.coalesce(holder.contact_id, holder.user_id)
+            == func.coalesce(conversation.contact_id, conversation.user_id),
+        )
         await self.session.execute(
-            update(ConversationModel)
+            update(conversation)
             .where(
-                ConversationModel.id == conversation_id,
-                ConversationModel.channel_id.is_(None),
+                conversation.id == conversation_id,
+                conversation.channel_id.is_(None),
+                ~seat_taken,
             )
             .values(channel_id=channel_id, platform=platform)
         )

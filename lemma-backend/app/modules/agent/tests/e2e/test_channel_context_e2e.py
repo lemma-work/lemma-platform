@@ -14,7 +14,6 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects import postgresql
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -27,6 +26,7 @@ from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.infrastructure.db.channel_conversations import in_channel_query
 from app.modules.agent.contracts.channels import (
     append_follow_up,
+    channel_of_conversation,
     conversation_in_channel,
     place_in_channel,
 )
@@ -371,12 +371,15 @@ async def test_a_person_has_one_conversation_with_an_agent_on_each_platform(
         }
     assert list(found.values()) == [first.conversation_id, on_email, in_lemma, None]
 
+    # Placing a second on a taken seat leaves it out -- as a conversation a
+    # contact merge unseated stays out -- rather than doubling the seat.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        with pytest.raises(IntegrityError):
-            await place_in_channel(
-                uow,
-                conversation_id=duplicate,
-                channel_id=channel.id,
-                platform=whatsapp,
-            )
-            await uow.commit()
+        await place_in_channel(
+            uow,
+            conversation_id=duplicate,
+            channel_id=channel.id,
+            platform=whatsapp,
+        )
+        await uow.commit()
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        assert await channel_of_conversation(uow, duplicate) is None
