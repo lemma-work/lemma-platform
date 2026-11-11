@@ -148,7 +148,10 @@ class ChannelConversations(UnitOfWorkRepository):
         unless another already holds that seat -- one a contact merge unseated
         stays out beside the survivor's, the unique index or not. Under the
         seat's lock, as ``find_or_open`` takes it, so an open of that seat
-        still uncommitted is waited for, not missed."""
+        still uncommitted is waited for, not missed; and only while the
+        conversation is still that person's -- one a contact merge moved to
+        another between the read and the lock is left out, not placed under
+        the wrong person's lock."""
         conversation, holder = ConversationModel, aliased(ConversationModel)
         seat = (
             await self.session.execute(
@@ -182,6 +185,7 @@ class ChannelConversations(UnitOfWorkRepository):
             .where(
                 conversation.id == conversation_id,
                 conversation.channel_id.is_(None),
+                func.coalesce(conversation.contact_id, conversation.user_id) == seat[2],
                 ~seat_taken,
             )
             .values(channel_id=channel_id, platform=platform)
