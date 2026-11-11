@@ -19,13 +19,13 @@ so it reads as one kept in Lemma, and a person writing on WhatsApp, email or
 any other platform next opens a fresh conversation there. Nothing is deleted;
 the old, mixed history stays in Lemma.
 
-The column is committed on its own before the index swap, so the code of this
-release -- which may start before the migration ends -- finds it at once. The
-old index is dropped before the new one is built, so that code can open a
-conversation on a second platform at once; the per-person advisory lock keeps
-opens from doubling up meanwhile. Every step reruns cleanly. Downgrade
-archives all but the most recently active of a person's conversations in a
-channel before narrowing the index again.
+The column is added and the old index dropped in one transaction, committed
+before the new index is built: the code of this release -- which may start
+before the migration ends -- finds the column only once nothing refuses it a
+conversation on a second platform. While the new index builds, the per-person
+advisory lock keeps opens from doubling up. Every step reruns cleanly.
+Downgrade archives all but the most recently active of a person's
+conversations in a channel before narrowing the index again.
 
 Revision ID: 0073_conversation_per_platform
 Revises: 0072_workflow_runs_by_time
@@ -87,24 +87,16 @@ def _repair_invalid(name: str) -> None:
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
 
 
-def _swap_in(columns: str, *, first: tuple[str, ...] = ()) -> None:
-    """Drop the unique index in place, then build its replacement.
+def _build(columns: str) -> None:
+    """Build the unique index the old one made way for, and give it its name.
 
-    Dropped first, not after: while both stand, the old one-per-person index
-    refuses the conversation this release opens on a second platform, and
-    every existing conversation is on none -- so every person's first message
-    on every platform would fail until the swap. Between the drop and the
-    build, `lock_person_in_channel` still serializes each person's opens, so
-    nothing doubles up. Concurrently: every inbound message reads and writes
-    this table. ``first`` run before, in the same block: entering it commits
-    what came before, so a column added just before is there for the code that
-    reads it while the build is still going.
+    Concurrently: every inbound message reads and writes this table. Entering
+    the autocommit block commits what came before -- the column and the old
+    index's drop, together, so the code of this release never meets the one
+    without the other.
     """
     with op.get_context().autocommit_block():
-        for statement in first:
-            op.execute(statement)
         _repair_invalid(_BUILDING)
-        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}")
         op.execute(
             f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {_BUILDING} "
             f"ON agent_conversations {columns} WHERE {_LIVE}"
@@ -113,16 +105,19 @@ def _swap_in(columns: str, *, first: tuple[str, ...] = ()) -> None:
 
 
 def upgrade() -> None:
-    # IF NOT EXISTS: the autocommit block below commits the column, and a
-    # failed build leaves the revision unstamped, so a rerun meets it again.
+    # IF [NOT] EXISTS: the autocommit block below commits both, and a failed
+    # build leaves the revision unstamped, so a rerun meets them again.
     op.execute(
         "ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS platform VARCHAR(32)"
     )
-    # Committed on its own before the build: the code of this release reads
-    # and writes the column, and may start before the migration ends.
-    _swap_in(_PER_PLATFORM)
+    # In the same transaction: while the old one-per-person index stands it
+    # refuses the conversation this release opens on a second platform.
+    op.execute(f"DROP INDEX IF EXISTS {_INDEX}")
+    _build(_PER_PLATFORM)
 
 
 def downgrade() -> None:
-    _swap_in(_PER_PERSON, first=(_ARCHIVE_ALL_BUT_LATEST,))
+    op.execute(_ARCHIVE_ALL_BUT_LATEST)
+    op.execute(f"DROP INDEX IF EXISTS {_INDEX}")
+    _build(_PER_PERSON)
     op.execute("ALTER TABLE agent_conversations DROP COLUMN IF EXISTS platform")
