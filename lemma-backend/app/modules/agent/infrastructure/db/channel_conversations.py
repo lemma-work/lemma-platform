@@ -146,8 +146,28 @@ class ChannelConversations(UnitOfWorkRepository):
     ) -> None:
         """Put a conversation that has no channel yet on this platform of one,
         unless another already holds that seat -- one a contact merge unseated
-        stays out beside the survivor's, the unique index or not."""
+        stays out beside the survivor's, the unique index or not. Under the
+        seat's lock, as ``find_or_open`` takes it, so an open of that seat
+        still uncommitted is waited for, not missed."""
         conversation, holder = ConversationModel, aliased(ConversationModel)
+        seat = (
+            await self.session.execute(
+                select(
+                    conversation.pod_id,
+                    conversation.agent_id,
+                    func.coalesce(conversation.contact_id, conversation.user_id),
+                ).where(conversation.id == conversation_id)
+            )
+        ).first()
+        if seat is None:
+            return
+        await self.lock_person(
+            channel_id=channel_id,
+            pod_id=seat[0],
+            agent_id=seat[1],
+            person_id=seat[2],
+            platform=platform,
+        )
         seat_taken = exists().where(
             _live_in_a_channel(holder),
             holder.channel_id == channel_id,

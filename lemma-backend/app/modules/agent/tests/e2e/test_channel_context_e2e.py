@@ -9,6 +9,7 @@ may read it then -- whenever its prompt is built.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from uuid import UUID, uuid4
 
@@ -322,6 +323,50 @@ async def test_finding_a_persons_conversation_in_a_channel_uses_its_unique_index
         )
         await session.rollback()
     assert "uq_agent_conversations_channel_person" in plan, plan
+
+
+async def test_a_placement_waits_for_an_open_of_the_same_seat(scenario):
+    """Two transactions seat one person on one platform at once: the second
+    waits on the seat's lock for the first to commit, then finds the seat
+    taken and stays out -- it neither misses the first nor trips the index."""
+    first = await seeded_conversation(scenario)
+    ids = []
+    for title in ("Seated", "Late"):
+        made = await scenario.owner_client.post(
+            f"/pods/{scenario.pod_id}/conversations",
+            json={"agent_name": first.agent_name, "title": title, "type": "CHAT"},
+        )
+        assert made.status_code == 201, made.text
+        ids.append(UUID(made.json()["id"]))
+    seated, late = ids
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        channel = await direct_channel(uow, pod_id=first.pod_id, user_id=first.user_id)
+
+    async def place(uow, conversation_id: UUID) -> None:
+        await place_in_channel(
+            uow,
+            conversation_id=conversation_id,
+            channel_id=channel.id,
+            platform="TELEGRAM",
+        )
+
+    async with create_uow_from_session_maker(async_session_maker) as opening:
+        await place(opening, seated)
+
+        async def place_late() -> None:
+            async with create_uow_from_session_maker(async_session_maker) as uow:
+                await place(uow, late)
+                await uow.commit()
+
+        waiting = asyncio.create_task(place_late())
+        await asyncio.sleep(0.5)
+        assert not waiting.done()  # held on the seat's lock
+        await opening.commit()
+    await asyncio.wait_for(waiting, timeout=10)
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        assert await channel_of_conversation(uow, seated) == channel.id
+        assert await channel_of_conversation(uow, late) is None
 
 
 async def test_a_person_has_one_conversation_with_an_agent_on_each_platform(
