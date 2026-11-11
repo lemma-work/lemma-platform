@@ -231,6 +231,16 @@ class ChannelConversations(UnitOfWorkRepository):
         )
         return int(result.rowcount or 0)
 
+    async def hold_contacts(self, *, pod_id: UUID, contact_id: UUID) -> None:
+        """Row-lock a contact's conversations until this transaction ends: a
+        placement of one waits for the merge, then finds it the survivor's
+        and stays out; one already placing is waited for, and seen seated."""
+        await self.session.execute(
+            select(ConversationModel.id)
+            .where(*_theirs(pod_id, contact_id))
+            .with_for_update()
+        )
+
     async def unseated_by_merge(
         self, *, pod_id: UUID, merged_id: UUID, survivor_id: UUID
     ) -> list[tuple[UUID, UUID]]:

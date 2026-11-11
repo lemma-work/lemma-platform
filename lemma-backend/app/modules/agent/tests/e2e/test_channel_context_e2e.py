@@ -25,6 +25,7 @@ from app.core.infrastructure.db.uow_factory import (
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.infrastructure.db.channel_conversations import in_channel_query
+from app.modules.agent.application.channels.fold import FoldConversations
 from app.modules.agent.contracts.channels import (
     append_follow_up,
     channel_of_conversation,
@@ -425,6 +426,69 @@ async def test_a_placement_overlapping_a_contact_merge_is_left_out(scenario):
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
         assert await channel_of_conversation(uow, visitor) is None
+
+
+async def test_a_contact_merge_waits_for_a_placement_of_the_merged_contact(
+    scenario,
+):
+    """A merge starts while the merged contact's conversation is being
+    placed: it waits for the placement, then finds it seated beside the
+    survivor's, and unseats it before repointing -- one conversation in the
+    seat, never two."""
+    first = await seeded_conversation(scenario)
+    ids = []
+    for title in ("Merged", "Survivor"):
+        made = await scenario.owner_client.post(
+            f"/pods/{scenario.pod_id}/conversations",
+            json={"agent_name": first.agent_name, "title": title, "type": "CHAT"},
+        )
+        assert made.status_code == 201, made.text
+        ids.append(UUID(made.json()["id"]))
+    theirs, kept = ids
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        merged, survivor = [
+            await open_contact(
+                uow,
+                pod_id=first.pod_id,
+                kind=IdentityKind.EMAIL,
+                value=f"{name}-{uuid4().hex[:8]}@example.com",
+                strength=IdentityStrength.CHANNEL,
+                display_name=name,
+            )
+            for name in ("merged", "survivor")
+        ]
+        channel = await direct_channel(uow, pod_id=first.pod_id, user_id=first.user_id)
+        for conversation_id, contact in ((theirs, merged), (kept, survivor)):
+            await uow.session.execute(
+                text("UPDATE agent_conversations SET contact_id = :c WHERE id = :id"),
+                {"c": contact.id, "id": conversation_id},
+            )
+        await place_in_channel(
+            uow, conversation_id=kept, channel_id=channel.id, platform="WEB"
+        )
+        await uow.commit()
+
+    async with create_uow_from_session_maker(async_session_maker) as placing:
+        await place_in_channel(
+            placing, conversation_id=theirs, channel_id=channel.id, platform="WEB"
+        )
+
+        async def merge() -> None:
+            async with create_uow_from_session_maker(async_session_maker) as uow:
+                await FoldConversations(uow).merge_contact(
+                    pod_id=first.pod_id, merged_id=merged.id, survivor_id=survivor.id
+                )
+                await uow.commit()
+
+        merging = asyncio.create_task(merge())
+        await asyncio.sleep(0.5)
+        assert not merging.done()  # held on the placement's row
+        await placing.commit()
+    await asyncio.wait_for(merging, timeout=10)
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        assert await channel_of_conversation(uow, kept) == channel.id
+        assert await channel_of_conversation(uow, theirs) is None
 
 
 async def test_a_person_has_one_conversation_with_an_agent_on_each_platform(
