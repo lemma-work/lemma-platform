@@ -21,8 +21,14 @@ from app.modules.pod.contracts.lifecycle import (
 from app.modules.pod.domain.events import (
     PodCreatedEvent,
     PodDeletedEvent,
+    PodJoinRequestDecidedEvent,
     PodJoinRequestedEvent,
+    PodMemberAddedEvent,
     PodMemberRemovedEvent,
+)
+from app.modules.pod.events.access_email_work import (
+    add_join_decided_email_work,
+    add_member_added_email_work,
 )
 from app.modules.pod.events.join_request_work import add_join_request_email_work
 
@@ -46,6 +52,10 @@ async def stage_pod_work(
             )
         elif isinstance(event, PodJoinRequestedEvent):
             await add_join_request_email_work(uow, event)
+        elif isinstance(event, PodJoinRequestDecidedEvent):
+            await add_join_decided_email_work(uow, event)
+        elif isinstance(event, PodMemberAddedEvent):
+            await add_member_added_email_work(uow, event)
 
 
 async def _stage_pod_deleted(uow: SqlAlchemyUnitOfWork, event: PodDeletedEvent) -> None:

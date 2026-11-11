@@ -1,9 +1,16 @@
-"""Telling a pod's admins that someone asked to join, as a delivery work item.
+"""Telling whoever can let people into a pod that someone asked to join, as
+a delivery work item.
 
 Written in the transaction that records the request, keyed by the request, so
 the email exists exactly when the request does and asking twice while the
 first is still queued sends one. A ``delivery`` JOB because it sends mail: the
 admins are read in a short transaction, and the sends happen after it closes.
+
+"Whoever can let people in" is read the way the approve route checks it: a
+member whose roles grant ``pod.member.manage``, not only one holding ADMIN by
+name. A pod nobody inside can manage -- its last admin left -- still has its
+organization's owners, who may approve any request, so they are written to
+instead of nobody.
 """
 
 from __future__ import annotations
@@ -61,8 +68,9 @@ async def _read_email(
         build_organization_membership,
         build_user_directory,
     )
-    from app.modules.pod.domain.pod_entities import PodRole
-    from app.modules.pod.domain.visibility import roles_allow_required
+    from app.core.authorization.permissions import Permissions
+    from app.modules.identity.contracts import OrganizationRole
+    from app.modules.pod.domain.visibility import normalize_role_list
     from app.modules.pod.infrastructure.pod_repositories import (
         PodMemberRepository,
         PodRepository,
@@ -74,10 +82,29 @@ async def _read_email(
     requester = await build_user_directory(uow).get(payload.requester_user_id)
     if requester is None:
         return None
-    organization = await build_organization_membership(uow).get(payload.organization_id)
-    members, _ = await PodMemberRepository(uow).list_pod_members(
-        payload.pod_id, limit=1000
-    )
+    organizations = build_organization_membership(uow)
+    organization = await organizations.get(payload.organization_id)
+    pod_members = PodMemberRepository(uow)
+    members, _ = await pod_members.list_pod_members(payload.pod_id, limit=1000)
+    managers = [
+        member.user_email
+        for member in members
+        if member.user_email
+        and await pod_members.roles_grant_permission(
+            payload.pod_id,
+            normalize_role_list(member.roles),
+            Permissions.POD_MEMBER_MANAGE,
+        )
+    ]
+    if not managers:
+        org_members, _ = await organizations.list_organization_members(
+            payload.organization_id, limit=1000
+        )
+        managers = [
+            str(member.user.email)
+            for member in org_members
+            if member.role == OrganizationRole.ORG_OWNER and member.user is not None
+        ]
     return _JoinRequestEmail(
         pod_name=pod.name,
         organization_name=organization.name if organization else "",
@@ -85,11 +112,7 @@ async def _read_email(
             part for part in (requester.first_name, requester.last_name) if part
         ),
         requester_email=str(requester.email),
-        admin_emails=[
-            member.user_email
-            for member in members
-            if member.user_email and roles_allow_required(member.roles, PodRole.ADMIN)
-        ],
+        admin_emails=managers,
     )
 
 
@@ -109,6 +132,7 @@ async def run_join_request_email(
     for admin_email in email.admin_emails:
         await port.send_pod_join_request_email(
             to_email=admin_email,
+            pod_id=payload.pod_id,
             pod_name=email.pod_name,
             organization_name=email.organization_name,
             requester_name=email.requester_name,

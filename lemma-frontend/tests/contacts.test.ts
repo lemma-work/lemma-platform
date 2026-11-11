@@ -111,7 +111,7 @@ test("every refusal says why in words", () => {
     assert.equal(outreachProblem(refused(409, "Conflict")), "They can’t be written to there now.");
     assert.equal(outreachProblem(refused(500, "Traceback (most recent call last): KeyError")), "Lemma couldn’t send it just now. Try again.");
     assert.equal(outreachProblem(refused(503, "Service Unavailable")), "Sending isn’t available right now. Try again in a few minutes.");
-    assert.equal(outreachProblem(refused(404, "Contact not found")), "They are not one of this pod’s contacts any more.");
+    assert.equal(outreachProblem(refused(404, "Contact not found")), "They are not one of this Lemma’s contacts any more.");
     assert.match(outreachProblem(Object.assign(new Error("fetch failed"), { name: "NetworkError" })), /Couldn’t reach Lemma/);
     assert.equal(outreachProblem(undefined), "Couldn’t send it. Try again.");
 });

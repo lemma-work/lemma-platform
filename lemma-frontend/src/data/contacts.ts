@@ -266,8 +266,8 @@ export function outreachProblem(error: unknown): string {
     const message = error instanceof Error ? error.message.trim() : "";
     const sentence = message.length > 0 && message.length < 240 && /^[A-Z][^{}<>\n]*[.!?]$/.test(message) && !/^(Request failed|HTTP|Internal Server Error|Bad Request|Conflict|Unprocessable)/.test(message);
     switch (status) {
-        case 404: return "They are not one of this pod’s contacts any more.";
-        case 403: return "Only an editor of the pod can write to contacts.";
+        case 404: return "They are not one of this Lemma’s contacts any more.";
+        case 403: return "Only an editor of this Lemma can write to contacts.";
         case 409:
         case 422: return sentence ? message : status === 409 ? "They can’t be written to there now." : "That can’t be sent to them there.";
         case 429: return "Too many sent just now. Wait a minute and try again.";

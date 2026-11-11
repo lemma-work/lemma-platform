@@ -188,7 +188,7 @@ export function highlight(title: string, ranges: readonly [number, number][]): {
 
 /** What each kind is called in the list. */
 export const KIND_LABEL: Record<SearchKind, string> = {
-    teammate: "Teammate",
+    teammate: "Lemma",
     conversation: "Conversation",
     doc: "Document",
     record: "Record",

@@ -536,16 +536,25 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
     async def get_pending_by_pod_and_user(
         self, pod_id: UUID, user_id: UUID
     ) -> Optional[PodJoinRequestEntity]:
+        return await self.get_latest_by_pod_and_user(
+            pod_id, user_id, status=PodJoinRequestStatus.PENDING
+        )
+
+    async def get_latest_by_pod_and_user(
+        self,
+        pod_id: UUID,
+        user_id: UUID,
+        *,
+        status: PodJoinRequestStatus | None = None,
+    ) -> Optional[PodJoinRequestEntity]:
         stmt = (
             select(PodJoinRequest, User)
             .outerjoin(User, PodJoinRequest.user_id == User.id)
-            .where(
-                PodJoinRequest.pod_id == pod_id,
-                PodJoinRequest.user_id == user_id,
-                PodJoinRequest.status == PodJoinRequestStatus.PENDING,
-            )
+            .where(PodJoinRequest.pod_id == pod_id, PodJoinRequest.user_id == user_id)
             .order_by(PodJoinRequest.created_at.desc())
         )
+        if status is not None:
+            stmt = stmt.where(PodJoinRequest.status == status)
         row = (await self.session.execute(stmt)).first()
         if not row:
             return None

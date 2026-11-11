@@ -230,7 +230,7 @@ export function declares(c: ConnectorPlan): boolean {
  *  its slug would be bound to nothing; a shared one with no account only
  *  waits for one, which is a warning, not a stop. */
 export function blockedBy(c: ConnectorPlan, pick: ConnectorPick): string | null {
-    if (c.status === "CONFLICT") return c.message ?? "Its name is taken in this teammate.";
+    if (c.status === "CONFLICT") return c.message ?? "Its name is taken in this Lemma.";
     if (!declares(c)) return null;
     if (pick.installation === CREATE_INSTALLATION)
         return c.can_create_installation ? null : c.message;

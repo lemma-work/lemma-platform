@@ -608,8 +608,8 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         </div>
                     </section>
 
-                    <nav className="profile__contents" aria-label="What’s in this pod">
-                        <strong>What’s in this pod</strong>
+                    <nav className="profile__contents" aria-label="What’s in this Lemma">
+                        <strong>What’s in this Lemma</strong>
                         <div>{sections.map(([target, label]) => <button key={target} className="btn" onClick={() => {
                             const section = Array.from(pane.current?.querySelectorAll<HTMLElement>("[data-profile-section]") ?? []).find(item => item.dataset.profileSection === target);
                             section?.scrollIntoView({ block: "start" });

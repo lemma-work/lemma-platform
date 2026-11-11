@@ -8,7 +8,7 @@ export default async function Page({
   return (
     <SitePage
       title="Make it yours"
-      description="Bring an app to your teammate and build on it together."
+      description="Bring an app to a Lemma and build on it together."
     >
       <ActionHost action="remix" source={(await searchParams).source} />
     </SitePage>

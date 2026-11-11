@@ -9,8 +9,8 @@ export type Role = "ORG_OWNER" | "ORG_EDITOR" | "ORG_MEMBER";
 
 export const ROLES: { value: Role; label: string; blurb: string }[] = [
     { value: "ORG_OWNER", label: "Owner", blurb: "Everything, including billing and removing people." },
-    { value: "ORG_EDITOR", label: "Editor", blurb: "Build and change teammates, connectors and keys." },
-    { value: "ORG_MEMBER", label: "Member", blurb: "Work with the teammates that already exist." },
+    { value: "ORG_EDITOR", label: "Editor", blurb: "Build and change Lemmas, connectors and keys." },
+    { value: "ORG_MEMBER", label: "Member", blurb: "Work in the Lemmas that already exist." },
 ];
 
 export function roleLabel(role: string | null | undefined): string {

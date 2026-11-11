@@ -86,7 +86,7 @@ export function TeammateRail({ pods, activeId, atTeam, hiring = false, owed, org
             <button
                 className="trail__home"
                 aria-current={atTeam ? "page" : undefined}
-                aria-label={"All " + MATES.toLowerCase() + " in " + orgName}
+                aria-label={"All " + MATES + " in " + orgName}
                 onClick={() => { hide(); onTeam(); }}
                 {...hint(MATES, orgName)}
             >

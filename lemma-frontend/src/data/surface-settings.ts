@@ -141,7 +141,7 @@ export function connectionLine(view: SurfaceConnectionView): string {
  *  empty when it can. `connector` is the pod connector it names, when the
  *  pod's list has it. */
 export function connectionTrouble(view: SurfaceConnectionView, connector: { status: string } | undefined): string {
-    if (!connector && view.status !== "CONNECTED") return view.podConnector + " is no longer one of this teammate's connectors.";
+    if (!connector && view.status !== "CONNECTED") return view.podConnector + " is no longer one of this Lemma's connectors.";
     if (connector?.status === "UNAVAILABLE") return "The installation behind " + view.podConnector + " is turned off for the organization.";
     if (connector?.status === "NEEDS_ACCOUNT" || view.status === "MISSING") return view.podConnector + " has no account shared with it right now.";
     if (view.status === "REAUTH_REQUIRED") return "The account behind " + view.podConnector + " needs " + (view.owner === "you" ? "you" : view.owner || "its owner") + " to sign in again.";

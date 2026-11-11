@@ -21,13 +21,13 @@ class OpenCallRequest:
         conversation_id (None | Unset | UUID): Hold the call in this chat -- your own, in this pod -- so the call, the
             agent's work and the transcript are that one chat; a call already held there is picked up again. Empty starts a
             new conversation.
-        display_name (str | Unset): What the agent is called in a new call's title. Default: 'your teammate'.
+        display_name (str | Unset): What the agent is called in a new call's title. Default: 'your Lemma'.
         title (None | str | Unset): A new call conversation's title; an existing chat keeps its own.
     """
 
     agent_name: None | str | Unset = UNSET
     conversation_id: None | Unset | UUID = UNSET
-    display_name: str | Unset = "your teammate"
+    display_name: str | Unset = "your Lemma"
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 

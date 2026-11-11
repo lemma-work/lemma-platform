@@ -9,8 +9,15 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationMemberEntity,
     OrganizationRole,
 )
-from app.modules.pod.domain.errors import PodAccessDeniedError, PodConflictError
-from app.modules.pod.domain.events import PodJoinRequestedEvent
+from app.modules.pod.domain.errors import (
+    PodAccessDeniedError,
+    PodConflictError,
+    PodJoinRequestNotFoundError,
+)
+from app.modules.pod.domain.events import (
+    PodJoinRequestDecidedEvent,
+    PodJoinRequestedEvent,
+)
 from app.modules.pod.domain.pod_entities import (
     PodConfig,
     PodEntity,
@@ -684,3 +691,153 @@ async def test_request_join_org_members_pod_creates_pending_for_non_member():
     assert created_org is None
     org_repo.add_member.assert_not_called()
     pod_member_repo.create.assert_not_called()
+
+
+def _decided_events(entity: PodJoinRequestEntity) -> list[PodJoinRequestDecidedEvent]:
+    return [
+        event
+        for event in entity.collect_events()
+        if isinstance(event, PodJoinRequestDecidedEvent)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_approving_someone_elses_request_tells_them():
+    service, join_request, approver_id, _ = _approve_setup(
+        approver_role=OrganizationRole.ORG_OWNER
+    )
+
+    result = await service.approve_join_request(
+        join_request.pod_id, join_request.id, approver_id
+    )
+
+    [event] = _decided_events(result)
+    assert event.approved is True
+    assert event.requester_user_id == join_request.user_id
+    assert event.decided_by_user_id == approver_id
+
+
+@pytest.mark.asyncio
+async def test_an_open_door_admitting_the_asker_sends_no_answer():
+    """The asker's own click let them in; there is nobody to hear from."""
+    pod_id, org_id, user_id = uuid4(), uuid4(), uuid4()
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.PUBLIC)
+    org_repo = AsyncMock()
+    org_repo.get_member.return_value = None
+    org_repo.add_member.return_value = _org_member(
+        member_id=uuid4(),
+        role=OrganizationRole.ORG_MEMBER,
+        org_id=org_id,
+        user_id=user_id,
+    )
+    pod_member_repo = AsyncMock()
+    pod_member_repo.get_by_pod_and_org_member.return_value = None
+    pod_member_repo.create.side_effect = lambda entity: entity
+    join_repo = AsyncMock()
+    join_repo.get_pending_by_pod_and_user.return_value = None
+    join_repo.create.side_effect = lambda entity: entity
+    service = PodJoinRequestService(
+        pod_join_request_repository=join_repo,
+        pod_member_repository=pod_member_repo,
+        pod_repository=pod_repo,
+        organization_repository=org_repo,
+    )
+
+    request, _ = await service.request_join(pod_id, user_id)
+
+    assert request.status == PodJoinRequestStatus.APPROVED
+    assert _decided_events(request) == []
+
+
+@pytest.mark.asyncio
+async def test_reject_marks_the_request_and_tells_the_asker():
+    service, join_request, approver_id, org_repo = _approve_setup(
+        approver_role=OrganizationRole.ORG_OWNER
+    )
+
+    result = await service.reject_join_request(
+        join_request.pod_id, join_request.id, approver_id
+    )
+
+    assert result.status == PodJoinRequestStatus.REJECTED
+    assert result.approved_by_user_id == approver_id
+    [event] = _decided_events(result)
+    assert event.approved is False
+    # Turning someone down never makes them a member of anything.
+    org_repo.add_member.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reject_needs_the_right_to_manage_members():
+    # An organization member who is not in the pod at all.
+    service, join_request, approver_id, _ = _approve_setup(
+        approver_role=OrganizationRole.ORG_MEMBER
+    )
+
+    with pytest.raises(PodAccessDeniedError):
+        await service.reject_join_request(
+            join_request.pod_id, join_request.id, approver_id
+        )
+    assert join_request.status == PodJoinRequestStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_reject_refuses_a_request_already_answered():
+    service, join_request, approver_id, _ = _approve_setup(
+        approver_role=OrganizationRole.ORG_OWNER
+    )
+    join_request.status = PodJoinRequestStatus.WITHDRAWN
+
+    with pytest.raises(PodConflictError):
+        await service.reject_join_request(
+            join_request.pod_id, join_request.id, approver_id
+        )
+
+
+@pytest.mark.asyncio
+async def test_withdraw_takes_back_my_pending_request_quietly():
+    pod_id, org_id, user_id = uuid4(), uuid4(), uuid4()
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = _pod_with_policy(
+        pod_id, org_id, PodJoinPolicy.INVITE_ONLY
+    )
+    pending = PodJoinRequestEntity(
+        pod_id=pod_id, organization_id=org_id, user_id=user_id
+    )
+    join_repo = AsyncMock()
+    join_repo.get_pending_by_pod_and_user.return_value = pending
+    join_repo.update.side_effect = lambda entity: entity
+    service = PodJoinRequestService(
+        pod_join_request_repository=join_repo,
+        pod_member_repository=AsyncMock(),
+        pod_repository=pod_repo,
+        organization_repository=AsyncMock(),
+    )
+
+    result = await service.withdraw_my_join_request(pod_id, user_id)
+
+    assert result.status == PodJoinRequestStatus.WITHDRAWN
+    assert _decided_events(result) == []
+    join_repo.get_pending_by_pod_and_user.assert_awaited_once_with(pod_id, user_id)
+
+
+@pytest.mark.asyncio
+async def test_withdraw_with_nothing_pending_is_not_found():
+    pod_id, org_id = uuid4(), uuid4()
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = _pod_with_policy(
+        pod_id, org_id, PodJoinPolicy.INVITE_ONLY
+    )
+    join_repo = AsyncMock()
+    join_repo.get_pending_by_pod_and_user.return_value = None
+    service = PodJoinRequestService(
+        pod_join_request_repository=join_repo,
+        pod_member_repository=AsyncMock(),
+        pod_repository=pod_repo,
+        organization_repository=AsyncMock(),
+    )
+
+    with pytest.raises(PodJoinRequestNotFoundError):
+        await service.withdraw_my_join_request(pod_id, uuid4())
+    join_repo.update.assert_not_awaited()

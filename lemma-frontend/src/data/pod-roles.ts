@@ -37,6 +37,14 @@ export const CHANNEL_ACTIONS = { read: "channel.read", write: "channel.write", m
 
 /** A member's roles, said as the roster says them. A custom role this build
  *  does not know is still a role, so it is shown tidied rather than dropped. */
+/** The one role a membership is held at, as the wire spells it: the widest
+ *  built-in role it holds, else its first custom one. What a role picker
+ *  shows as selected; null for a membership with no roles at all. */
+export function heldPodRole(roles: readonly string[] | null | undefined): string | null {
+    const held = roles ?? [];
+    return POD_ROLES.find((entry) => held.includes(entry.value))?.value ?? held[0] ?? null;
+}
+
 export function readPodRoles(roles: readonly string[] | null | undefined): { role: string; can: string } {
     const held = roles ?? [];
     const known = POD_ROLES.find((entry) => held.includes(entry.value));

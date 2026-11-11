@@ -109,7 +109,7 @@ TIMED_OUT_RUN_ERROR = "Agent run ran past its time limit and was stopped"
 UNAVAILABLE_RUN_ERROR = (
     "Lemma could not finish this turn: a service it depends on, such as its "
     "database, was unavailable for {minutes} minutes while the turn was "
-    "retried. This has nothing to do with this teammate or its model settings. "
+    "retried. This has nothing to do with this Lemma or its model settings. "
     "Everything up to the interruption is saved; send your message again to "
     "continue."
 )

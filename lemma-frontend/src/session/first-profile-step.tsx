@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UserResponse } from "lemma-sdk";
 import { source } from "@/data";
-import { MATE } from "@/copy";
+import { MATE, MATES } from "@/copy";
 import { isLandingPreview } from "@/marketing/preview-mode";
 import { Modal } from "@/shell/modal";
 import { CheckCircleIcon, RefreshIcon } from "@/ui/icons";
@@ -151,7 +151,7 @@ function FirstProfileDialog({
     return (
         <Modal
             title="Before you start"
-            subtitle={`Your ${MATE}s call you by this name.`}
+            subtitle={`Your ${MATES} call you by this name.`}
             onClose={() => { if (canDismiss) onDone(); }}
         >
             <form

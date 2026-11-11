@@ -115,6 +115,10 @@ class PodJoinRequestRepositoryPort(Protocol):
         self, pod_id: UUID, user_id: UUID
     ) -> Optional[PodJoinRequestEntity]: ...
 
+    async def get_latest_by_pod_and_user(
+        self, pod_id: UUID, user_id: UUID
+    ) -> Optional[PodJoinRequestEntity]: ...
+
     async def list_by_pod(
         self,
         pod_id: UUID,

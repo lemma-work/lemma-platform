@@ -51,6 +51,10 @@ from app.modules.identity.domain.ports import (
 )
 
 
+_VIEW_DENIED = "Only the invitee or someone who manages invitations can view this"
+_REVOKE_DENIED = "You may not revoke this organization's invitations"
+
+
 class OrganizationService:
     def __init__(
         self,
@@ -476,38 +480,41 @@ class OrganizationService:
         requester_user_id: UUID,
         organization_id: UUID | None = None,
     ) -> OrganizationInvitationEntity:
-        invitation = await self.organization_repository.get_invitation_by_id(
-            invitation_id
+        invitation = await self._load_invitation(invitation_id, organization_id)
+
+        await self._require_invitee_or_manager(
+            invitation, requester_user_id, _VIEW_DENIED
         )
-        if not invitation:
-            raise OrganizationInvitationNotFoundError()
-        invitation = await self._mark_invitation_expired_if_needed(invitation)
-
-        if organization_id and invitation.organization_id != organization_id:
-            raise IdentityValidationError("Invitation does not belong to organization")
-
-        user = await self.user_repository.get(requester_user_id)
-        if not user:
-            raise UserNotFoundError()
-
-        is_invitee = str(user.email).lower() == invitation.email.lower()
-        if not is_invitee:
-            await self._require_member(
-                user_id=requester_user_id,
-                organization_id=invitation.organization_id,
-                permission=Permissions.ORG_INVITATION_MANAGE,
-                denied_message="Only the invitee or someone who manages invitations can view this",
-            )
-
         return await self._enrich_invitation_display_fields(invitation)
 
-    async def accept_invitation(self, invitation_id: UUID, user_id: UUID):
+    async def _load_invitation(
+        self, invitation_id: UUID, organization_id: UUID | None = None
+    ):
         invitation = await self.organization_repository.get_invitation_by_id(
             invitation_id
         )
         if not invitation:
             raise OrganizationInvitationNotFoundError()
-        invitation = await self._mark_invitation_expired_if_needed(invitation)
+        if organization_id and invitation.organization_id != organization_id:
+            raise IdentityValidationError("Invitation does not belong to organization")
+        return await self._mark_invitation_expired_if_needed(invitation)
+
+    async def _require_invitee_or_manager(self, invitation, user_id: UUID, denied: str):
+        # The invitee is not a member yet, so only their address lets them in.
+        user = await self.user_repository.get(user_id)
+        if not user:
+            raise UserNotFoundError()
+        if str(user.email).lower() == invitation.email.lower():
+            return
+        await self._require_member(
+            user_id=user_id,
+            organization_id=invitation.organization_id,
+            permission=Permissions.ORG_INVITATION_MANAGE,
+            denied_message=denied,
+        )
+
+    async def accept_invitation(self, invitation_id: UUID, user_id: UUID):
+        invitation = await self._load_invitation(invitation_id)
 
         if invitation.status != OrganizationInvitationStatus.PENDING:
             raise IdentityValidationError(
@@ -560,21 +567,10 @@ class OrganizationService:
         requester_user_id: UUID,
         organization_id: UUID | None = None,
     ):
-        invitation = await self.organization_repository.get_invitation_by_id(
-            invitation_id
-        )
-        if not invitation:
-            raise OrganizationInvitationNotFoundError()
-        invitation = await self._mark_invitation_expired_if_needed(invitation)
+        invitation = await self._load_invitation(invitation_id, organization_id)
 
-        if organization_id and invitation.organization_id != organization_id:
-            raise IdentityValidationError("Invitation does not belong to organization")
-
-        await self._require_member(
-            user_id=requester_user_id,
-            organization_id=invitation.organization_id,
-            permission=Permissions.ORG_INVITATION_MANAGE,
-            denied_message="You may not revoke this organization's invitations",
+        await self._require_invitee_or_manager(
+            invitation, requester_user_id, _REVOKE_DENIED
         )
 
         if invitation.status != OrganizationInvitationStatus.PENDING:

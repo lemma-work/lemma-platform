@@ -2426,6 +2426,12 @@ export const fixtureSource: PodSource = {
         stopPretending();
     },
 
+    async declineInvitation(invitationId: string) {
+        await wait(160);
+        const at = INVITATIONS.findIndex((one) => one.id === invitationId);
+        if (at >= 0) INVITATIONS.splice(at, 1);
+    },
+
     async suggestedOrgs() {
         await wait(60);
         return belongsToNothing() ? SUGGESTED : [];
@@ -3059,6 +3065,21 @@ export const fixtureSource: PodSource = {
         const admitted: JoinRequest = { ...KNOCKING[at], standing: "approved" };
         KNOCKING.splice(at, 1);
         return admitted;
+    },
+    async declineJoinRequest(_podId: string, requestId: string) {
+        await wait(300);
+        const at = KNOCKING.findIndex((one) => one.id === requestId);
+        if (at < 0) throw new Error("That ask is no longer waiting.");
+        const declined: JoinRequest = { ...KNOCKING[at], standing: "refused" };
+        KNOCKING.splice(at, 1);
+        return declined;
+    },
+    async withdrawJoinRequest(podId: string) {
+        await wait(200);
+        const mine = ASKED[podId];
+        if (!mine || mine.standing !== "pending") throw new Error("There is no pending request of yours to take back.");
+        delete ASKED[podId];
+        return { ...mine, standing: "withdrawn" as const };
     },
     async listConnectors() {
         await wait(120);

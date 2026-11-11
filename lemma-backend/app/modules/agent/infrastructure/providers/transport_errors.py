@@ -139,7 +139,7 @@ def response_budget_message(exc: ModelResponseBudgetExceeded) -> str:
     return (
         f"The model took longer than {minutes} minutes to answer, so the "
         "request was stopped. Everything finished before it is kept \u2014 ask "
-        "for a smaller step, or pick a faster model for this teammate "
+        "for a smaller step, or pick a faster model for this Lemma "
         "(Settings \u2192 Models)."
     )
 

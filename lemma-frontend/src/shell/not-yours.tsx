@@ -1,147 +1,196 @@
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { MATE } from "@/copy";
 import { isMissing } from "@/session/auth-state";
+import { lemma } from "@/session/client";
+import { useSession } from "@/session/session";
+import { LockIcon } from "@/ui/icons";
+
+/** How often a waiting page asks whether the answer has come. */
+const WAITING_POLL_MS = 15_000;
 
 /** The door, from outside it.
  *
- *  An address can name a teammate you are not in. Before this, the shell fell
+ *  An address can name a Lemma you are not in. Before this, the shell fell
  *  through to the first pod in your list and showed you that one instead — so
- *  a link somebody sent you opened somebody else's teammate, with nothing on
- *  screen saying it had happened. The address bar then either lied about where
- *  you were or quietly rewrote itself, and both are worse than a wall.
+ *  a link somebody sent you opened somebody else's Lemma, with nothing on
+ *  screen saying it had happened.
  *
- *  `joinChoices` has been telling whoever runs a pod that "anyone else gets a
- *  Request button; the ask arrives here and by email" since the door control
- *  was built. This is the Request button. It was the only part of that
- *  sentence with nothing behind it.
+ *  **There is no name to show.** Everything this app knows about a Lemma is
+ *  read from the pod, and the pod is what is closed — so every line here is
+ *  written to work without one.
  *
- *  **There is no name to show.** Everything this app knows about a teammate is
- *  read from the pod, and the pod is what is closed — so this screen has an id
- *  and nothing else, and every line on it is written to work without one. The
- *  id is shown anyway, small: somebody who has been sent two links needs to
- *  know which one they are looking at.
+ *  **The account is shown instead.** The commonest reason for this screen is
+ *  not a closed door but the wrong account: a work link opened in a browser
+ *  signed in to a personal one. So the address you are signed in with is on
+ *  screen, with a way to switch that comes back to this same link.
+ *
+ *  **Waiting is watched, not narrated.** The answer is emailed, but a page
+ *  left open on "request sent" used to stay on that sentence after it came.
+ *  While a request is pending the page asks again every fifteen seconds. A
+ *  refusal comes back as one, and says so with a way to ask again; an
+ *  approval comes back as no request at all, and the pod list is refetched so
+ *  the shell walks in on its own. A pending ask can be taken back.
  */
 export function NotYours({
     podId,
     onArrived,
+    aside,
 }: {
     podId: string;
     /** Membership was made. The shell refetches and walks in. */
     onArrived: () => void;
+    /** Another way on, under the account line, for somebody with nowhere
+     *  else to go yet. */
+    aside?: ReactNode;
 }) {
     const queryClient = useQueryClient();
+    const session = useSession();
 
-    /* Whether this person has already knocked. Asked before the button is
-       offered, so coming back to a link you have already used says where you
-       stand instead of inviting you to ask again — which reads as though the
-       first ask went nowhere. */
-    const standing = useQuery({
-        queryKey: ["my-join", podId],
-        queryFn: () => source.myJoinRequest(podId),
-        retry: false,
+    const me = useQuery({
+        queryKey: ["current-user"],
+        queryFn: () => lemma().users.current(),
+        staleTime: 5 * 60_000,
     });
 
     const ask = useMutation({
         mutationFn: () => source.askToJoin(podId),
         onSuccess: (request) => {
             queryClient.setQueryData(["my-join", podId], request);
-            /* An open door admits on the spot, and then there is nothing to
-               wait for: the pod list is what decides whether the shell can
-               show this teammate, so refetching it *is* walking in. Telling
-               somebody to reload a page that could refresh itself is the app
-               asking the person to do its work. */
-            if (request.standing === "approved") {
-                void queryClient.invalidateQueries({ queryKey: ["pods"] });
-                onArrived();
-            }
+            /* An open door admits on the spot: the pod list is what decides
+               whether the shell can show this Lemma, so refetching it *is*
+               walking in. */
+            if (request.standing === "approved") arrive();
         },
     });
 
-    const waiting = standing.data?.standing === "pending" || ask.data?.standing === "pending";
-    /* Admitted, and still looking at the door — which is a real moment, not a
-       impossible one: the membership is made the instant an open door is
-       knocked on, and this screen stays up for as long as the pod list takes
-       to come back with the teammate in it. Without a state of its own that
-       window falls through to the ask, so somebody who has just been let in is
-       invited to ask again. */
-    const admitted = standing.data?.standing === "approved" || ask.data?.standing === "approved";
+    /* Whether this person has already knocked, asked before the button is
+       offered, so coming back to a link you have already used says where you
+       stand instead of inviting you to ask again. Polled only while pending. */
+    const standing = useQuery({
+        queryKey: ["my-join", podId],
+        queryFn: () => source.myJoinRequest(podId),
+        retry: false,
+        refetchInterval: (query) => (query.state.data?.standing === "pending" ? WAITING_POLL_MS : false),
+    });
+
+    const arrive = useCallback(() => {
+        void queryClient.invalidateQueries({ queryKey: ["pods"] });
+        onArrived();
+    }, [queryClient, onArrived]);
+
+    /* Taking it back also makes the request vanish, which must not read as
+       being let in. Cleared by the next ask. */
+    const tookBack = useRef(false);
+    const withdraw = useMutation({
+        mutationFn: () => source.withdrawJoinRequest(podId),
+        onSuccess: () => {
+            tookBack.current = true;
+            ask.reset();
+            queryClient.setQueryData(["my-join", podId], null);
+        },
+    });
+
+    /* The platform reports a pending request or a refused one, so an approved
+       one reads back as none. Pending, then nothing, is being let in. */
+    const wasWaiting = useRef(false);
+    const pending = standing.data?.standing === "pending";
+    const gone = standing.isSuccess && standing.data == null;
+    useEffect(() => {
+        if (pending) tookBack.current = false;
+        else if (wasWaiting.current && gone && !tookBack.current) arrive();
+        wasWaiting.current = pending;
+    }, [pending, gone, arrive]);
+
+    /* Read from the one query the ask also writes to, so an answer that
+       arrives by polling is not outvoted by the click that asked. */
+    const waiting = pending;
+    const declined = standing.data?.standing === "refused";
+    const admitted = ask.data?.standing === "approved";
     const nowhere = isMissing(ask.error);
+    const email = me.data?.email ?? null;
+
+    /* Signs out and comes back to this same address, where sign-in returns
+       you after. A full load, so nothing the other account could see stays
+       in memory. */
+    const switchAccount = () => void session.leave(window.location.pathname + window.location.search);
+
+    let title: string;
+    let body: ReactNode;
+    let action: ReactNode = null;
+    if (nowhere) {
+        /* Not a locked door — no door. Offering to ask for something that does
+           not exist sends somebody to wait for an answer that can never come. */
+        title = "This " + MATE + " doesn’t exist";
+        body = <p>It may have been deleted, or the link is wrong. Check it with whoever sent it.</p>;
+    } else if (admitted) {
+        title = "You’re in";
+        body = <p>Opening it now.</p>;
+        action = (
+            <button className="ox-link" onClick={arrive}>Still here? Open it</button>
+        );
+    } else if (waiting) {
+        title = "Request sent";
+        body = (
+            <p>
+                The people who run this {MATE} have it, in Lemma and by email. You’ll get an email
+                with the answer, and this page opens on its own if you’re let in.
+            </p>
+        );
+        action = (
+            <button className="ox-link" disabled={withdraw.isPending} onClick={() => withdraw.mutate()}>
+                {withdraw.isPending ? "Withdrawing…" : "Withdraw request"}
+            </button>
+        );
+    } else if (declined) {
+        title = "Your request was declined";
+        body = <p>The people who run this {MATE} said no for now. If you still need it, ask one of them, or ask again.</p>;
+        action = (
+            <button className="ox-btn" disabled={ask.isPending} onClick={() => ask.mutate()}>
+                {ask.isPending ? "Asking…" : "Ask again"}
+            </button>
+        );
+    } else {
+        title = "You’re not in this " + MATE + " yet";
+        body = <p>Ask to join and the people who run it get your request. Some {MATE}s let you straight in.</p>;
+        action = (
+            <button
+                className="ox-btn ox-btn--primary"
+                disabled={ask.isPending || standing.isPending}
+                onClick={() => ask.mutate()}
+            >
+                {ask.isPending ? "Asking…" : "Ask to join"}
+            </button>
+        );
+    }
 
     return (
-        <div className="screen">
-            <div className="screen__inner">
-                {nowhere ? (
-                    <>
-                        {/* Not a locked door — no door. Said as its own thing,
-                            because offering to ask for access to something that
-                            does not exist sends somebody to wait for an answer
-                            that can never come. */}
-                        <h2>No such {MATE}</h2>
-                        <p>
-                            This link points at a teammate that does not exist, or one that has since
-                            been deleted. Check the link with whoever sent it.
-                        </p>
-                    </>
-                ) : admitted ? (
-                    <>
-                        <h2>You are in</h2>
-                        <p>The door was already open to you. Fetching this {MATE} now.</p>
-                        {/* A way out of a wait that has stopped moving. The
-                            list is what decides whether the stage can take
-                            over, so asking for it again is the only useful
-                            thing left on this screen. */}
-                        <div className="screen__actions">
-                            <button
-                                className="screen__aside"
-                                onClick={() => { void queryClient.invalidateQueries({ queryKey: ["pods"] }); onArrived(); }}
-                            >
-                                Still here? Look again
-                            </button>
-                        </div>
-                    </>
-                ) : waiting ? (
-                    <>
-                        <h2>Access request sent</h2>
-                        <p>
-                            Whoever runs this {MATE} has it, here and by email. You will be added
-                            once one of them says yes — nothing else is needed from you.
-                        </p>
-                    </>
-                ) : (
-                    <>
-                        <h2>This {MATE} is not one of yours</h2>
-                        <p>
-                            Your account does not currently have access to this teammate. You can ask to join.
-                        </p>
-                        {/* Deliberately not a promise about which. The pod's own
-                            policy decides whether this admits on the spot or
-                            waits for somebody, and it is not readable from out
-                            here — so the button asks, and the answer says. */}
-                        <div className="screen__actions">
-                            <button
-                                className="btn btn--primary"
-                                disabled={ask.isPending || standing.isPending}
-                                onClick={() => ask.mutate()}
-                            >
-                                {ask.isPending ? "Asking…" : "Ask to join"}
-                            </button>
-                        </div>
-                    </>
-                )}
-
-                {ask.error && !nowhere && (
-                    <p role="alert">{ask.error instanceof Error ? ask.error.message : "Couldn’t send the access request. Try again."}</p>
-                )}
-
-                {/* Which link this was. Small, and last: this screen is one
-                    somebody screenshots to ask a colleague for access, and the
-                    address bar does not survive a screenshot. Its own quiet
-                    style rather than `screen__footnote`, whose divider would
-                    read as separating the id from the button above it — a
-                    rule between two things that belong together. */}
-                <p className="screen__which"><code>{podId}</code></p>
-            </div>
+        <div className="ox-page ox-door">
+            <span className="ox-door__mark" aria-hidden="true"><LockIcon size={18} /></span>
+            <h1 className="ox-door__t">{title}</h1>
+            <div className="ox-door__body">{body}</div>
+            {action && <div className="ox-door__actions">{action}</div>}
+            {ask.error && !nowhere && (
+                <p className="ox-door__error" role="alert">
+                    {ask.error instanceof Error ? ask.error.message : "Couldn’t send the request. Try again."}
+                </p>
+            )}
+            {withdraw.error && (
+                <p className="ox-door__error" role="alert">
+                    {withdraw.error instanceof Error ? withdraw.error.message : "Couldn’t withdraw the request. Try again."}
+                </p>
+            )}
+            {!nowhere && !admitted && (
+                <p className="ox-door__who ox-vs">
+                    {email ? <>Signed in as {email}. </> : null}
+                    <button className="ox-link" onClick={switchAccount}>Use another account</button>
+                </p>
+            )}
+            {aside && <p className="ox-door__aside ox-vs">{aside}</p>}
+            {/* Which link this was, for somebody who has been sent two:
+                small, last, and plain text rather than a chip. */}
+            <p className="ox-door__which ox-vs">Link {podId}</p>
         </div>
     );
 }

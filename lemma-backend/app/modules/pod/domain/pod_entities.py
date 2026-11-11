@@ -417,6 +417,7 @@ class PodMemberEntity(AggregateRoot):
         email: str,
         first_name: str | None = None,
         last_name: str | None = None,
+        added_by_user_id: UUID | None = None,
     ) -> None:
         from app.modules.pod.domain.events import PodMemberAddedEvent
 
@@ -428,6 +429,7 @@ class PodMemberEntity(AggregateRoot):
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
+                added_by_user_id=added_by_user_id,
             )
         )
 
@@ -446,6 +448,8 @@ class PodJoinRequestStatus(str, Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    #: Taken back by the person who asked, before anybody answered.
+    WITHDRAWN = "WITHDRAWN"
 
 
 class PodJoinRequestEntity(AggregateRoot):
@@ -488,3 +492,42 @@ class PodJoinRequestEntity(AggregateRoot):
         self.approved_at = approved_at or datetime.now(timezone.utc)
         self.org_role = org_role
         self.pod_role = pod_role
+        if approved_by_user_id != self.user_id:
+            self._announce_decision(
+                approved=True, decided_by_user_id=approved_by_user_id
+            )
+
+    def mark_rejected(
+        self,
+        *,
+        rejected_by_user_id: UUID,
+        rejected_at: datetime | None = None,
+    ) -> None:
+        """Turned down by somebody who manages the pod.
+
+        Who decided and when are kept in the approval columns, which record the
+        decision whichever way it went: a second pair of columns for the other
+        answer would be a migration to say the same thing.
+        """
+        self.status = PodJoinRequestStatus.REJECTED
+        self.approved_by_user_id = rejected_by_user_id
+        self.approved_at = rejected_at or datetime.now(timezone.utc)
+        self._announce_decision(approved=False, decided_by_user_id=rejected_by_user_id)
+
+    def mark_withdrawn(self) -> None:
+        """Taken back by the asker. Nobody decided, so nobody is told."""
+        self.status = PodJoinRequestStatus.WITHDRAWN
+
+    def _announce_decision(self, *, approved: bool, decided_by_user_id: UUID) -> None:
+        from app.modules.pod.domain.events import PodJoinRequestDecidedEvent
+
+        self.add_event(
+            PodJoinRequestDecidedEvent(
+                pod_id=self.pod_id,
+                organization_id=self.organization_id,
+                requester_user_id=self.user_id,
+                join_request_id=self.id,
+                approved=approved,
+                decided_by_user_id=decided_by_user_id,
+            )
+        )

@@ -13,3 +13,11 @@ test("a custom role is named rather than dropped, and no role is a plain member"
     assert.deepEqual(readPodRoles([]), { role: "Member", can: "—" });
     assert.deepEqual(readPodRoles(undefined), { role: "Member", can: "—" });
 });
+
+test("the role a picker shows is the widest built-in one held", async () => {
+    const { heldPodRole } = await import("../src/data/pod-roles.ts");
+    assert.equal(heldPodRole(["POD_VIEWER", "POD_ADMIN"]), "POD_ADMIN");
+    assert.equal(heldPodRole(["POD_RELEASE_MANAGER"]), "POD_RELEASE_MANAGER");
+    assert.equal(heldPodRole([]), null);
+    assert.equal(heldPodRole(undefined), null);
+});

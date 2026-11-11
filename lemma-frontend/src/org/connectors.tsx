@@ -143,7 +143,7 @@ function AccountRow({
             ) : confirming ? (
                 <span className="acct__confirm">
                     {usage.data && usage.data.length > 0 && (
-                        <span className="acct__trouble">Used in {usage.data.length === 1 ? "1 teammate" : usage.data.length + " teammates"}</span>
+                        <span className="acct__trouble">Used in {usage.data.length === 1 ? "1 Lemma" : usage.data.length + " Lemmas"}</span>
                     )}
                     <button className="btn reachrow__drop" disabled={drop.isPending} onClick={() => drop.mutate()}>
                         {drop.isPending ? "Removing…" : "Remove"}
@@ -183,7 +183,7 @@ function AccountRow({
                 <ul className="acct__usage" aria-label={"Where " + accountName(account, connector.title) + " is used"}>
                     {usage.isPending && <li role="status">Looking…</li>}
                     {usage.isError && <li role="alert">Couldn’t tell where it is used. <button className="linkish" onClick={() => void usage.refetch()}>Try again</button></li>}
-                    {usage.isSuccess && usage.data.length === 0 && <li>Not in use in any teammate yet.</li>}
+                    {usage.isSuccess && usage.data.length === 0 && <li>Not in use in any Lemma yet.</li>}
                     {usage.data?.map((one) => <li key={one.podAccountId}>{usageLine(one, podName)}</li>)}
                 </ul>
             )}

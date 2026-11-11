@@ -325,6 +325,10 @@ function Inside({ pod, plan, queue, apps, chats, tables, go, actions }: {
     /* Under the keys its Connections page reads them by. */
     const connectors = useQuery({ queryKey: ["pod-connectors", pod.id], queryFn: () => source.listPodConnectors(pod.id), staleTime: 30_000, retry: false });
     const catalog = useQuery({ queryKey: ["connectors"], queryFn: () => source.listConnectors(), staleTime: 10 * 60_000 });
+    /* Who is asking to join. Listing it is an admin's call, so anyone else is
+       refused, which leaves the row saying only who is in. */
+    const knocking = useQuery({ queryKey: ["pod-knocking", pod.id], queryFn: () => source.listJoinRequests(pod.id), retry: false });
+    const asking = knocking.data?.length ?? 0;
 
     const automations = [
         ...(workflows.data ?? []).map((flow) => readableName(flow.name)),
@@ -354,7 +358,7 @@ function Inside({ pod, plan, queue, apps, chats, tables, go, actions }: {
         { key: "chats", icon: "chat", label: "Chats", count: null, said: chats.length ? names(chats) : "None yet", open: { kind: "view", view: outcomeView(pod.id, "chats") } },
         ...(contacts ? [{ key: "contacts", icon: "people", label: "Contacts", count: waiting || null, said: waiting ? `${waiting} waiting on a person` : "People outside who wrote in", you: waiting > 0, open: { kind: "view", view: outcomeView(pod.id, "contacts") } } satisfies MapRow] : []),
         { key: "plan", icon: "skill", label: "Plan", count: lines || null, said: plan === undefined ? "" : lines ? `${counted(lines, "line")} in plan.md` : "Not written yet", open: { kind: "view", view: outcomeView(pod.id, "plan") } },
-        { key: "people", icon: "agent", label: "People", count: pod.members.length || null, said: names(pod.members.map((member) => member.name)), open: { kind: "act", run: () => actions.addPeople(pod.id) } },
+        { key: "people", icon: "agent", label: "People", count: pod.members.length || null, said: asking ? `${asking === 1 ? "1 person" : asking + " people"} asking to join` : names(pod.members.map((member) => member.name)), you: asking > 0, open: { kind: "act", run: () => actions.addPeople(pod.id) } },
         { key: "connections", icon: "plug", label: "Connections", count: through.length || null, said: connectors.isSuccess ? (through.length ? names(through) : "None yet") : "", open: { kind: "view", view: outcomeView(pod.id, "settings", "connections") } },
         { key: "reach", icon: "link", label: "Where it answers", count: on.length || null, said: surfaces.isSuccess ? (places.length ? names(places) : "Only here, so far") : "", open: { kind: "act", run: () => actions.connect(pod.id) } },
         { key: "settings", icon: "gear", label: "Settings", count: null, said: "", open: { kind: "view", view: outcomeView(pod.id, "settings") } },

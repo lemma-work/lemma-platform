@@ -26,7 +26,7 @@ export async function generateMetadata({ params }: Props) {
         ...pageMetadata(
             "Install " + (template?.name ?? teammateName(repo)),
             template?.description ??
-                "Install " + owner + "/" + repo + " on a Lemma teammate.",
+                "Install " + owner + "/" + repo + " on a Lemma.",
             "/import/github/" + owner + "/" + repo,
         ),
         robots: { index: !!template, follow: true },

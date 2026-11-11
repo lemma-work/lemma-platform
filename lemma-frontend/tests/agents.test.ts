@@ -121,7 +121,7 @@ test("the pod's own assistant reports edit and delete, and cannot be edited or d
     assert.equal(may(front, AGENT_EDIT), false, "the API refuses this whatever the field says");
     assert.equal(may(front, AGENT_REMOVE), false);
     assert.match(whyNot(front, AGENT_EDIT), /talk to it/);
-    assert.match(whyNot(front, AGENT_REMOVE), /It is the pod/);
+    assert.match(whyNot(front, AGENT_REMOVE), /It is the Lemma/);
 });
 
 test("an ordinary agent is edited and deleted exactly as far as the field allows", () => {

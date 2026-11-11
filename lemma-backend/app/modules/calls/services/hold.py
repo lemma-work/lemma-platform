@@ -145,7 +145,7 @@ async def _held(
         return
     agents = CallAgents(call_id=call_id, party=party)
     instructions = voice_brief(
-        teammate=str(start.get("teammate") or "your teammate")[:120],
+        teammate=str(start.get("teammate") or "your Lemma")[:120],
         pod=str(start.get("pod") or "this pod")[:120],
         context=str(start.get("context") or "") or None,
         earlier=await _earlier(agents),

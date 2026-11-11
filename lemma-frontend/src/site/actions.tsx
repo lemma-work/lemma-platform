@@ -116,7 +116,7 @@ function Remix({ source }: ActionProps) {
         selectedTarget === "existing"
             ? (pods.data?.[0]?.id ?? "new")
             : selectedTarget;
-    const [name, setName] = useState("New teammate");
+    const [name, setName] = useState("New Lemma");
     const [created, setCreated] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
@@ -193,7 +193,7 @@ function Remix({ source }: ActionProps) {
                         setCreated(null);
                     }}
                 >
-                    <option value="new">A new teammate</option>
+                    <option value="new">A new Lemma</option>
                     {pods.data?.map((p) => (
                         <option key={p.id} value={p.id}>
                             {p.teammate.name}
@@ -219,7 +219,7 @@ function Remix({ source }: ActionProps) {
                 disabled={busy || !orgId || !name.trim() || !source}
                 onClick={() => void prepare()}
             >
-                {busy ? "Preparing…" : "Continue with teammate"}
+                {busy ? "Preparing…" : "Continue"}
             </button>
             <p>
                 The teammate picks it up in a new conversation, where you can

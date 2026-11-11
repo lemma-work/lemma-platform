@@ -224,7 +224,7 @@ export function HiringView({
             setMade({ id: pod.id, name: pod.name, variant, faceSaved });
             setStage("met");
         } catch (problem) {
-            setError(problem instanceof Error ? problem.message : "Couldn’t finish setting up this teammate. Check your teammate list before trying again.");
+            setError(problem instanceof Error ? problem.message : "Couldn’t finish setting up this Lemma. Check your Lemmas before trying again.");
             if (chosen.id === "blank") { setDescribing(true); setStage("shelf"); }
             else setStage("candidate");
         }
@@ -359,7 +359,7 @@ function Shelf({
                 <ResumeInstall />
                 <div className="shelf__head">
                     <h1>What needs doing?</h1>
-                    <p>Give a teammate its first responsibility. Choose a starting role or describe the job yourself.</p>
+                    <p>Give a Lemma its first responsibility. Choose a starting role or describe the job yourself.</p>
                 </div>
 
                 <form

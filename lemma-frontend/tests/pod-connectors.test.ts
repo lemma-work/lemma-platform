@@ -169,7 +169,7 @@ test("an account made for a surface is shared into the pod, then bound by the co
             ["/pods/p1/connector-accounts", { account_id: "acct-new", visibility: "POD" }],
             /* One request: the server shares the account and declares the
                connector, or does neither. */
-            ["/pods/p1/connector-accounts/pa9/share-as", { slug: "telegram-2", purpose: "A teammate's own telegram" }],
+            ["/pods/p1/connector-accounts/pa9/share-as", { slug: "telegram-2", purpose: "A Lemma's own telegram" }],
             ["/pods/p1/surfaces", { platform: "TELEGRAM", credential_mode: "CUSTOM", pod_connector: "telegram-2" }],
         ]);
     } finally {

@@ -261,7 +261,7 @@ function Journey({ repo, owner, title }: Props) {
     const who =
         target === NEW
             ? (created?.teammate.name ?? name.trim())
-            : (existing?.teammate.name ?? "your teammate");
+            : (existing?.teammate.name ?? "your Lemma");
     const podForMark = target === NEW ? created : existing;
 
     const jobId = job?.import_id;
@@ -519,7 +519,7 @@ function Journey({ repo, owner, title }: Props) {
                             <Plus size={16} />
                         </span>
                         <span className={s.choiceText}>
-                            <b>Hire a new teammate</b>
+                            <b>Start a new Lemma</b>
                             <small>Starts with only what {title} brings</small>
                         </span>
                     </label>
