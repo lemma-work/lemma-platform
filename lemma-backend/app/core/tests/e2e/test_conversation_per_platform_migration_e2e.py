@@ -29,7 +29,9 @@ BEFORE = "0072_workflow_runs_by_time"
 REVISION = "0073_conversation_per_platform"
 
 
-def _migrate(database_url: str, direction: str, revision: str) -> None:
+def _migrate(
+    database_url: str, direction: str, revision: str, *, succeeds: bool = True
+) -> None:
     result = subprocess.run(
         ["uv", "run", "--no-sync", "alembic", direction, revision],
         cwd=BACKEND,
@@ -38,7 +40,9 @@ def _migrate(database_url: str, direction: str, revision: str) -> None:
         text=True,
         timeout=300,
     )
-    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
+    assert (result.returncode == 0) == succeeds, (
+        result.stdout[-3000:] + result.stderr[-3000:]
+    )
 
 
 def _seed(plain_url: str) -> dict[str, UUID]:
@@ -130,3 +134,42 @@ def test_a_person_gets_a_conversation_per_platform() -> None:
         assert archived == {ids["old"]: True, by_email: False}
 
         _migrate(database_url, "upgrade", REVISION)
+
+
+def test_an_interrupted_upgrade_reruns_cleanly() -> None:
+    """A build that fails leaves the column committed, the old index dropped
+    and the new one half-built, with 0073 unstamped; the rerun adds no column
+    twice, drops the half-built index and builds it again."""
+    with get_postgres_container() as postgres:
+        database_url = get_postgres_url(postgres)
+        plain_url = database_url.replace("postgresql+asyncpg", "postgresql")
+        _migrate(database_url, "upgrade", BEFORE)
+        ids = _seed(plain_url)
+        # Two live conversations on one platform -- possible only once the old
+        # index is gone -- so the unique build fails part way.
+        with psycopg.connect(plain_url) as connection:
+            connection.execute(
+                "DROP INDEX uq_agent_conversations_channel_person;"
+                "ALTER TABLE agent_conversations ADD COLUMN platform VARCHAR(32)"
+            )
+        doubled = _open_by_email(plain_url, ids)
+        _open_by_email(plain_url, ids)
+
+        _migrate(database_url, "upgrade", REVISION, succeeds=False)
+
+        with psycopg.connect(plain_url) as connection:
+            [(valid,)] = connection.execute(
+                "SELECT i.indisvalid FROM pg_index i JOIN pg_class c "
+                "ON c.oid = i.indexrelid "
+                "WHERE c.relname = 'uq_agent_conversations_channel_person_platform'"
+            ).fetchall()
+            assert not valid
+            connection.execute(
+                "UPDATE agent_conversations SET is_archived = true WHERE id = %s",
+                (doubled,),
+            )
+
+        _migrate(database_url, "upgrade", REVISION)
+
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            _open_by_email(plain_url, ids)
