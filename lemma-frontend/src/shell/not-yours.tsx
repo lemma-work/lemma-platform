@@ -85,11 +85,18 @@ export function NotYours({
        other failure is a check that did not happen, so it is said, with a way
        to run it again — polling has stopped by then, and nothing else would. */
     const [checkFailed, setCheckFailed] = useState(false);
+    /* An answer that lands after this page has gone — the person moved on —
+       must not walk them anywhere. */
+    const mounted = useRef(true);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
     const checkIn = useCallback(() => {
         setCheckFailed(false);
         void source.getPod(podId).then(
-            (pod) => { if (pod) arrive(); },
-            (error) => { if (!isForbidden(error) && !isMissing(error)) setCheckFailed(true); },
+            (pod) => { if (pod && mounted.current) arrive(); },
+            (error) => { if (mounted.current && !isForbidden(error) && !isMissing(error)) setCheckFailed(true); },
         );
     }, [podId, arrive]);
 
