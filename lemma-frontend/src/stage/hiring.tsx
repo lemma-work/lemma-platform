@@ -391,7 +391,7 @@ function Shelf({
                     page, and before this the only blank start was the
                     seventh card, below the fold, behind a name field. */}
                 <button type="button" className="shelf__explore" onClick={onExplore}>
-                    Just exploring? Start with a blank teammate <ArrowRightIcon size={14} />
+                    Just exploring? Start with a blank Lemma <ArrowRightIcon size={14} />
                 </button>
 
                 <div className="shelf__or">or start with a role</div>

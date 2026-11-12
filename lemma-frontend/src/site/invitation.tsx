@@ -6,6 +6,7 @@ import { useSession } from "@/session/session";
 import { safeDestination } from "@/auth/redirects";
 import { POD_ROLES } from "@/data";
 import { MATE } from "@/copy";
+import { isForbidden, isMissing } from "@/session/auth-state";
 import { roleLabel } from "@/org/membership";
 
 /** What a pod role lets you do, in the words the roster uses. */
@@ -70,6 +71,18 @@ export function InvitationDecision({
     }
 
     if (invitation.isPending) return <p role="status">Opening your invitation…</p>;
+    /* A network or server failure is not a wrong account: say so, and offer
+       the retry rather than a sign-out. */
+    if (invitation.isError && !isForbidden(invitation.error) && !isMissing(invitation.error))
+        return (
+            <section className="site-card">
+                <h2>Couldn’t open this invitation</h2>
+                <p>Something went wrong reading it. Try again in a moment.</p>
+                <div className="site-actions">
+                    <button className="btn btn--primary" onClick={() => void invitation.refetch()}>Try again</button>
+                </div>
+            </section>
+        );
     if (invitation.isError)
         return (
             <section className="site-card">

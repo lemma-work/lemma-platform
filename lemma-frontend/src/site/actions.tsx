@@ -185,7 +185,7 @@ function Remix({ source }: ActionProps) {
                 </select>
             </label>
             <label>
-                Teammate
+                Lemma
                 <select
                     value={target}
                     onChange={(e) => {
@@ -222,7 +222,7 @@ function Remix({ source }: ActionProps) {
                 {busy ? "Preparing…" : "Continue"}
             </button>
             <p>
-                The teammate picks it up in a new conversation, where you can
+                The Lemma picks it up in a new conversation, where you can
                 steer the remix.
             </p>
             {error && (

@@ -107,7 +107,7 @@ function Gate(props: Props) {
             <Panel>
                 <h2 className={s.panelTitle}>Install {props.title}</h2>
                 <p className={s.muted}>
-                    Give it to a new or existing teammate. You see everything it
+                    Give it to a new or existing Lemma. You see everything it
                     adds before anything is installed.
                 </p>
                 <button className={s.primary} onClick={session.signIn}>
@@ -156,7 +156,7 @@ function FirstWorkspace({ onMade }: { onMade: () => void }) {
             }}
         >
             <p className={s.muted}>
-                First, a workspace for your teammates. It is private to you;
+                First, an organization for your Lemmas. It is private to you;
                 you can invite people later.
             </p>
             <label className={s.field}>
@@ -418,7 +418,7 @@ function Journey({ repo, owner, title }: Props) {
         return (
             <Panel>
                 <p role="status" className={s.muted}>
-                    Loading your teammates…
+                    Loading your Lemmas…
                 </p>
             </Panel>
         );
@@ -536,12 +536,12 @@ function Journey({ repo, owner, title }: Props) {
                     )}
                     {pods.isPending && (
                         <p className={s.muted} role="status">
-                            Loading your teammates…
+                            Loading your Lemmas…
                         </p>
                     )}
                     {pods.isError && (
                         <p className={s.muted} role="alert">
-                            Could not load your teammates.{" "}
+                            Could not load your Lemmas.{" "}
                             <button
                                 className={s.link}
                                 onClick={() => void pods.refetch()}

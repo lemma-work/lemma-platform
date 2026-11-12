@@ -88,6 +88,8 @@ export function FrameArrival({ email, name, linkedPodId, onEntered }: {
             try {
                 if (invites.length > 0) {
                     for (const invite of invites) await source.acceptInvitation(invite.id);
+                    /* Home offers what is still open; these no longer are. */
+                    queryClient.setQueryData(["my-invitations"], []);
                     captureEvent("onboarding.arrived", { route: "invite" });
                     onEntered(linkedPodId ?? invites.find((invite) => invite.podId)?.podId ?? null);
                     return;

@@ -93,15 +93,19 @@ export function NotYours({
     });
 
     /* The platform reports a pending request or a refused one, so an approved
-       one reads back as none. Pending, then nothing, is being let in. */
+       one reads back as none. Pending, then nothing, is usually being let in
+       — but also a withdrawal from another tab, so the Lemma is opened once to
+       check before walking in. A refusal there leaves the ask on screen. */
     const wasWaiting = useRef(false);
     const pending = standing.data?.standing === "pending";
     const gone = standing.isSuccess && standing.data == null;
     useEffect(() => {
         if (pending) tookBack.current = false;
-        else if (wasWaiting.current && gone && !tookBack.current) arrive();
+        else if (wasWaiting.current && gone && !tookBack.current) {
+            void source.getPod(podId).then((pod) => { if (pod) arrive(); }, () => undefined);
+        }
         wasWaiting.current = pending;
-    }, [pending, gone, arrive]);
+    }, [pending, gone, arrive, podId]);
 
     /* Read from the one query the ask also writes to, so an answer that
        arrives by polling is not outvoted by the click that asked. */

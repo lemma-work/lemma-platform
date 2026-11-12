@@ -18,6 +18,8 @@ test("the role a picker shows is the widest built-in one held", async () => {
     const { heldPodRole } = await import("../src/data/pod-roles.ts");
     assert.equal(heldPodRole(["POD_VIEWER", "POD_ADMIN"]), "POD_ADMIN");
     assert.equal(heldPodRole(["POD_RELEASE_MANAGER"]), "POD_RELEASE_MANAGER");
+    // A custom role beside another: one picker value would drop it, so none.
+    assert.equal(heldPodRole(["POD_USER", "POD_RELEASE_MANAGER"]), null);
     assert.equal(heldPodRole([]), null);
     assert.equal(heldPodRole(undefined), null);
 });

@@ -15,6 +15,7 @@ instead of nobody.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -46,6 +47,9 @@ class JoinRequestEmailPayload(BaseModel):
 
 
 class _JoinRequestEmail(BaseModel):
+    #: Still waiting when the job runs. One the asker withdrew, or somebody
+    #: answered, while this sat in the queue is not sent.
+    pending: bool = True
     pod_name: str
     organization_name: str
     requester_name: str
@@ -61,6 +65,20 @@ def _email_port() -> IdentityEmailPort:
     return build_identity_email_sender()
 
 
+async def _every[T](
+    page: Callable[[str | None], Awaitable[tuple[Sequence[T], str | None]]],
+) -> list[T]:
+    """Every row a cursor-paged list holds: a Lemma or organization with more
+    members than one page must not lose the managers on the later ones."""
+    rows: list[T] = []
+    cursor: str | None = None
+    while True:
+        batch, cursor = await page(cursor)
+        rows.extend(batch)
+        if not cursor:
+            return rows
+
+
 async def _read_email(
     uow: SqlAlchemyUnitOfWork, payload: JoinRequestEmailPayload
 ) -> _JoinRequestEmail | None:
@@ -71,7 +89,9 @@ async def _read_email(
     from app.core.authorization.permissions import Permissions
     from app.modules.identity.contracts import OrganizationRole
     from app.modules.pod.domain.visibility import normalize_role_list
+    from app.modules.pod.domain.pod_entities import PodJoinRequestStatus
     from app.modules.pod.infrastructure.pod_repositories import (
+        PodJoinRequestRepository,
         PodMemberRepository,
         PodRepository,
     )
@@ -79,13 +99,27 @@ async def _read_email(
     pod = await PodRepository(uow).get(payload.pod_id)
     if pod is None:
         return None
+    request = await PodJoinRequestRepository(uow).get(payload.join_request_id)
+    if request is None or request.status != PodJoinRequestStatus.PENDING:
+        return _JoinRequestEmail(
+            pending=False,
+            pod_name=pod.name,
+            organization_name="",
+            requester_name="",
+            requester_email="",
+            admin_emails=[],
+        )
     requester = await build_user_directory(uow).get(payload.requester_user_id)
     if requester is None:
         return None
     organizations = build_organization_membership(uow)
     organization = await organizations.get(payload.organization_id)
     pod_members = PodMemberRepository(uow)
-    members, _ = await pod_members.list_pod_members(payload.pod_id, limit=1000)
+    members = await _every(
+        lambda cursor: pod_members.list_pod_members(
+            payload.pod_id, limit=500, cursor=cursor
+        )
+    )
     managers = [
         member.user_email
         for member in members
@@ -97,8 +131,10 @@ async def _read_email(
         )
     ]
     if not managers:
-        org_members, _ = await organizations.list_organization_members(
-            payload.organization_id, limit=1000
+        org_members = await _every(
+            lambda cursor: organizations.list_organization_members(
+                payload.organization_id, limit=500, cursor=cursor
+            )
         )
         managers = [
             str(member.user.email)
@@ -121,11 +157,17 @@ async def run_join_request_email(
 ) -> None:
     async with ctx.checkpoint() as uow:
         email = await _read_email(uow, payload)
-    if email is None or not email.admin_emails:
+    if email is None or not email.pending or not email.admin_emails:
         logger.info(
             "pod.join_request.email_skipped",
             pod_id=str(payload.pod_id),
-            reason="no_recipient" if email is not None else "pod_or_requester_gone",
+            reason=(
+                "pod_or_requester_gone"
+                if email is None
+                else "no_longer_pending"
+                if not email.pending
+                else "no_recipient"
+            ),
         )
         return
     port = _email_port()
