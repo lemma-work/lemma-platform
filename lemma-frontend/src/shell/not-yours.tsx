@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { MATE } from "@/copy";
-import { isMissing } from "@/session/auth-state";
+import { isForbidden, isMissing } from "@/session/auth-state";
 import { lemma } from "@/session/client";
 import { useSession } from "@/session/session";
 import { LockIcon } from "@/ui/icons";
@@ -80,6 +80,19 @@ export function NotYours({
         onArrived();
     }, [queryClient, onArrived]);
 
+    /* Whether the Lemma opens now. A refusal means the request went away
+       without letting you in (withdrawn elsewhere), and the ask stays. Any
+       other failure is a check that did not happen, so it is said, with a way
+       to run it again — polling has stopped by then, and nothing else would. */
+    const [checkFailed, setCheckFailed] = useState(false);
+    const checkIn = useCallback(() => {
+        setCheckFailed(false);
+        void source.getPod(podId).then(
+            (pod) => { if (pod) arrive(); },
+            (error) => { if (!isForbidden(error) && !isMissing(error)) setCheckFailed(true); },
+        );
+    }, [podId, arrive]);
+
     /* Taking it back also makes the request vanish, which must not read as
        being let in. Cleared by the next ask. */
     const tookBack = useRef(false);
@@ -102,10 +115,10 @@ export function NotYours({
     useEffect(() => {
         if (pending) tookBack.current = false;
         else if (wasWaiting.current && gone && !tookBack.current) {
-            void source.getPod(podId).then((pod) => { if (pod) arrive(); }, () => undefined);
+            checkIn();
         }
         wasWaiting.current = pending;
-    }, [pending, gone, arrive, podId]);
+    }, [pending, gone, checkIn]);
 
     /* Read from the one query the ask also writes to, so an answer that
        arrives by polling is not outvoted by the click that asked. */
@@ -178,6 +191,12 @@ export function NotYours({
             {ask.error && !nowhere && (
                 <p className="ox-door__error" role="alert">
                     {ask.error instanceof Error ? ask.error.message : "Couldn’t send the request. Try again."}
+                </p>
+            )}
+            {checkFailed && (
+                <p className="ox-door__error" role="alert">
+                    Couldn’t check whether you’re in yet.{" "}
+                    <button className="ox-link" onClick={checkIn}>Check again</button>
                 </p>
             )}
             {withdraw.error && (
