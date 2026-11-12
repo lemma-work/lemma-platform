@@ -8,6 +8,8 @@ Doing the work:
 
 - `lemma-setup`: set a Lemma up to own its result: its source, past weeks,
   feed, measure and plan.
+- `lemma-bring-in`: bring a team's stuff in from Notion, Google Drive,
+  Airtable, Google Sheets, Slack, or a file or export.
 - `lemma-user`: day-to-day operation: what needs people, approvals, grants,
   chats and groups, RLS troubleshooting.
 - `lemma-widget`: inline HTML views.

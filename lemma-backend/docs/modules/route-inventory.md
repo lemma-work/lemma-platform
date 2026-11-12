@@ -366,6 +366,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
 | GET | `/organizations/{organization_id}/pods` | `pod.list` | List Pods by Organization |
+| GET | `/organizations/{organization_id}/pods/joinable` | `pod.list_joinable` | List Pods the Caller Can Join |
 | GET | `/pods/{pod_id}` | `pod.get` | Get Pod |
 | GET | `/pods/{pod_id}/join-requests` | `pod.join_request.list` | List Pod Join Requests |
 | GET | `/pods/{pod_id}/join-requests/me` | `pod.join_request.me` | Get My Pod Join Request |

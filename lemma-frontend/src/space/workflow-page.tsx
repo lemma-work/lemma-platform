@@ -18,6 +18,7 @@ import { useSchedules } from "@/schedule/queries";
 import { CADENCES, SCOPE_LABEL, agoOf, healthOf, humanizeName, type StandingJob } from "@/schedule/schedules";
 import { ChevronLeftIcon, ClockIcon, PlayIcon, RefreshIcon, WorkflowIcon } from "@/ui/icons";
 import { samples } from "@/data/samples";
+import { readerZone } from "@/data/time-zone";
 import { usePaneVisible } from "@/shell/pane-visible";
 
 /** One workflow, as a page: what it is and who it runs for, whether it is on
@@ -193,7 +194,7 @@ function TurnOnForm({ pod, name, automation, perPerson }: {
     const offered = connectorsFor(connectors.data ?? [], app);
     const usable = offered.filter((one) => one.status === "READY");
     const chosen = picked || usable[0]?.slug || "";
-    const request = turnOnRequest(name, automation, perPerson, { cron, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, podConnector: chosen });
+    const request = turnOnRequest(name, automation, perPerson, { cron, timezone: readerZone(), podConnector: chosen });
     const turnOn = useMutation({
         mutationFn: () => lemma(pod.id).request("POST", "/pods/" + pod.id + "/schedules", { body: request }),
         onSuccess: () => void cache.invalidateQueries({ queryKey: ["schedules", pod.id] }),

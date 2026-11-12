@@ -13146,6 +13146,96 @@
         "title": "InstalledAppSummary",
         "type": "object"
       },
+      "JoinablePodListResponse": {
+        "description": "Pods the caller may join, a page at a time.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JoinablePodResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "total"
+        ],
+        "title": "JoinablePodListResponse",
+        "type": "object"
+      },
+      "JoinablePodResponse": {
+        "description": "A pod the caller may join and is not in: what to show before they do.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "join_policy": {
+            "$ref": "#/components/schemas/PodJoinPolicy"
+          },
+          "member_count": {
+            "description": "How many people are in the pod now.",
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "join_policy",
+          "member_count"
+        ],
+        "title": "JoinablePodResponse",
+        "type": "object"
+      },
       "JsonObject": {
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
@@ -16881,6 +16971,12 @@
       "PodConfig": {
         "description": "Typed pod-level configuration.",
         "properties": {
+          "auto_join_new_members": {
+            "default": false,
+            "description": "Everyone who joins the organization from now on becomes a member of this pod, as a pod user. Needs join_policy ORG_MEMBERS or PUBLIC, and the authority to change the join policy. People already in the organization are not added.",
+            "title": "Auto Join New Members",
+            "type": "boolean"
+          },
           "contacts": {
             "anyOf": [
               {
@@ -32794,6 +32890,85 @@
           "resource": "pod",
           "result": "collection",
           "verb": "list"
+        }
+      }
+    },
+    "/organizations/{organization_id}/pods/joinable": {
+      "get": {
+        "description": "The organization's pods the caller is not in and may join without asking: those open to the organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty for an organization owner, who already opens every pod. 403 for someone outside the organization.",
+        "operationId": "pod.list_joinable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinablePodListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pods the Caller Can Join",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "pod",
+          "result": "entity",
+          "verb": "list_joinable"
         }
       }
     },

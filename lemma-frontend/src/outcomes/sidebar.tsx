@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useQueries } from "@tanstack/react-query";
 import { source, type ConversationRef, type Org, type Pod } from "@/data";
 import { readableName } from "@/library/reading";
-import { badge, sinceShort } from "@/channels/model";
+import { badge, sinceShort, type Channel } from "@/channels/model";
 import { ChannelMark } from "@/channels/chat-mark";
 import { ChannelIcon, channelName } from "@/shell/channels";
 import { TeammateFace } from "@/space/teammate-face";
@@ -77,7 +77,7 @@ function pinnedRow(pin: Pin, live: ReadonlyMap<string, SideRow>): SideRow | null
  *  the tables it changed lately; under each Lemma, or all together, newest
  *  first. People outside who wrote in are in Needs you while they wait, and
  *  on the Lemma's Contacts tab. */
-export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, me, onFind, onSettings, onPlan, onNewOrg, open, closed, onToggle }: {
+export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, waitingIn, onChannels, me, onFind, onSettings, onPlan, onNewOrg, onNewLemma, open, closed, onToggle }: {
     org: Org | null;
     orgs: readonly Org[];
     onPickOrg: (id: string) => void;
@@ -87,6 +87,11 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     activity: Map<string, ConversationRef[]>;
     /** How many things wait on the reader, across outcomes. */
     needs: number;
+    /** How many of them are in each Lemma: what puts the dot on a folded
+     *  one, whose own chats are not read until it is opened. */
+    waitingIn: ReadonlyMap<string, number>;
+    /** The shared chats read here, handed up for Home to list from. */
+    onChannels: (channels: ReadonlyMap<string, readonly Channel[]>) => void;
     me: string;
     onFind: () => void;
     /** The reader's own settings and the organization's. */
@@ -94,6 +99,8 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     /** The plan, from a warning that the allowance is close or spent. */
     onPlan: () => void;
     onNewOrg: () => void;
+    /** A new Lemma, made in a dialog over the page. */
+    onNewLemma: () => void;
     /** Shown on a narrow screen, over the page. */
     open: boolean;
     /** Put away by the reader: only a rail of its places shows. */
@@ -101,7 +108,6 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     onToggle: () => void;
 }) {
     const reader = useMe();
-    const [channels, feeds] = useChannelsByPod(pods, { live: true });
     const [chosen, setChosen] = useState<Map<string, boolean>>(readChosen);
     const choose = useCallback((podId: string, opened: boolean) => {
         setChosen((was) => new Map(was).set(podId, opened));
@@ -116,6 +122,18 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* kept for this visit only */ }
     }, [settings]);
     const [now] = useState(() => Date.now());
+    /* A Lemma's shared chats are read, and kept live, only while it shows
+       them: unfolded, open in the main area, or holding a pinned chat. A
+       folded Lemma is a name, and reading every Lemma's to draw a list of
+       names cost two requests and a socket apiece. One list for everything
+       needs every Lemma's. */
+    const showsChats = useMemo(() => {
+        if (settings.grouping === "together") return pods;
+        const pinnedIn = new Set(pins.flatMap((pin) => (pin.open ? [pin.open.podId] : [])));
+        return pods.filter((pod) => (chosen.get(pod.id) ?? pod.id === here) || pinnedIn.has(pod.id));
+    }, [pods, settings.grouping, pins, chosen, here]);
+    const [channels, feeds] = useChannelsByPod(showsChats, { live: true });
+    useEffect(() => { onChannels(channels); }, [channels, onChannels]);
     /* Each Lemma's tables, read only once the reader asks to see the ones
        that changed, under the key its own page reads them by. */
     const tableLists = useQueries({
@@ -163,6 +181,7 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
         { view: { name: "apps" }, label: "Apps", icon: "app" },
         { view: { name: "connectors" }, label: "Connectors", icon: "plug" },
         { view: { name: "outcomes" }, label: "Lemmas", icon: "grid" },
+        { view: { name: "history", podId: null }, label: "History", icon: "clock" },
     ];
 
     /* Put away: the places as icons on a rail, and the way to bring the
@@ -226,9 +245,9 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
                 <div className="ox-listhead">
                     <span className="ox-listhead__t">{settings.grouping === "together" ? "Recent" : "Lemmas"}</span>
                     <ListFilter pods={pods} settings={settings} onChange={setSettings} />
-                    <a className="ox-listhead__b" {...to({ name: "hire" }, go)} aria-label="New Lemma" title="New Lemma">
+                    <button type="button" className="ox-listhead__b" onClick={onNewLemma} aria-label="New Lemma" title="New Lemma">
                         <Icon name="plus" size={15} />
-                    </a>
+                    </button>
                 </div>
                 {settings.grouping === "together" ? (
                     <Together rows={together} faces={faces} view={view} go={go} />
@@ -237,7 +256,7 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
                         key={section.pod.id}
                         pod={section.pod}
                         items={section.items}
-                        waiting={section.waiting}
+                        waiting={Math.max(section.waiting, waitingIn.get(section.pod.id) ?? 0)}
                         unfolded={section.open}
                         view={view}
                         here={here === section.pod.id && view.name !== "chats"}
@@ -276,23 +295,29 @@ function Section({ pod, items, waiting, unfolded, view, here, onFold, go }: {
     const { shown, hidden } = all ? { shown: [...items], hidden: 0 } : foldSection(items, view, FOLD);
     const repeated = repeatedTitles(shown);
     const at = writeView(view);
+    /* Only a Lemma that is showing chats stands apart from its neighbours.
+       One with none yet has nothing to unfold, so it reads as a name in the
+       list and offers no chevron. */
+    const showing = unfolded && items.length > 0;
     return (
-        <section className={"ox-group" + (unfolded ? "" : " ox-group--folded")} aria-label={pod.name}>
+        <section className={"ox-group" + (unfolded ? "" : " ox-group--folded") + (showing ? " ox-group--showing" : "")} aria-label={pod.name}>
             <div className="ox-group__head">
                 <a className="ox-group__name" {...to(outcomeView(pod.id), go)} aria-current={here ? "page" : undefined}>
-                    <span className="ox-glyph"><TeammateFace pod={pod} size={18} /></span>
+                    <span className="ox-group__face"><TeammateFace pod={pod} size={26} /></span>
                     <span className="ox-group__t">{pod.name}</span>
                 </a>
-                <button type="button" className="ox-group__chev" aria-expanded={unfolded} aria-label={unfolded ? `Fold ${pod.name}` : `Show ${pod.name}’s chats`} onClick={onFold}>
-                    <Icon name="chevron" size={12} />
-                </button>
+                {items.length > 0 && (
+                    <button type="button" className="ox-group__chev" aria-expanded={unfolded} aria-label={unfolded ? `Fold ${pod.name}` : `Show ${pod.name}’s chats`} onClick={onFold}>
+                        <Icon name="chevron" size={12} />
+                    </button>
+                )}
                 <span className="ox-group__fill" />
                 {!unfolded && waiting > 0 && <i className="ox-sign ox-sign--ask" role="img" aria-label={`${waiting} waiting on you`} />}
                 <a className="ox-group__add" {...to(outcomeView(pod.id), go)} aria-label={`New chat with ${pod.name}`} title="New chat">
                     <Icon name="plus" size={15} />
                 </a>
             </div>
-            {unfolded && (
+            {showing && (
                 <div className="ox-group__rows">
                     {shown.map((row) => <SideLine key={row.key} row={row} here={writeView(row.view) === at} stamped={repeated.has(row.key)} link={to(row.view, go)} />)}
                     {(hidden > 0 || all) && items.length > FOLD && (

@@ -71,6 +71,34 @@ Existing apps shall remain reachable in their own tabs.
 
 **Contracts:** `pod.update`, `pod.get`
 
+### PS-POD-004 — A person makes a pod the way they would make a channel
+**Status:** manual
+
+> **Verified by:** on a stack running this build, choosing + beside Lemmas in
+> the web app's sidebar: a dialog opens over the page, shows every face to
+> pick from, asks for a name, what it is for, who can find it and people, and
+> Create opens the new pod on its empty page (PS-POD-061). Opening `/l/new` opens the same dialog over the
+> list of pods.
+
+- When a member makes a pod in the web app, the system shall require only its
+  name. It shall also offer, and never require: what it is for, who can find
+  it (everyone in the organization, or only the people added), people to add,
+  one sentence the pod should own, and a template to start it with.
+- When the member gives a sentence to own, the system shall keep it as what
+  the pod owns, with no target or measure. If it cannot be kept, then the
+  system shall still make the pod and shall open the pod's plan.
+- When the member picks a template, the system shall bring it into the new
+  pod and open the chat in which the pod sets it up (PS-POD-061). If the
+  template cannot be added, then the system shall still make the pod, which
+  opens on its empty page.
+- The system shall give the new pod a face no other pod in the organization
+  wears, while one is left, and shall show every face so the person can pick
+  another before making it.
+- If a person chosen cannot be added, then the system shall still make the pod,
+  and shall open who has access so the person can try again.
+
+**Contracts:** `pod.create`, `pod.member.add`, `outcome.set`, `pod.bundle.templates`, `pod.bundle.import.start`
+
 ---
 
 ## Capability: Put people in a pod
@@ -200,6 +228,48 @@ Existing apps shall remain reachable in their own tabs.
 
 **Contracts:** `pod.join_request.approve`
 
+### PS-POD-023 — A member finds the pods open to them, and joins one
+**Status:** covered
+
+- When a member of an organization asks which pods they can join, the system
+  shall list every pod there that is open to the organization or to everyone
+  and that they are not in.
+- The system shall say of each pod offered what it is called, what it is for,
+  who may join it, and how many people are in it.
+- The system shall not offer a pod that is invite-only, has been deleted, or
+  already has the person in it.
+- When the person joins a pod they were offered, the system shall make them a
+  pod user in it and stop offering it to them.
+- Where the person owns the organization, the system shall offer them no pod,
+  because they already reach every pod in it.
+- If someone outside the organization asks which of its pods they can join,
+  then the system shall refuse.
+
+**Contracts:** `pod.list_joinable`, `pod.join`
+
+### PS-POD-024 — A pod can take in everyone who joins its organization
+**Status:** covered
+
+- When someone joins an organization, however they joined, the system shall
+  make them a pod user in every pod there that is set to take in new members.
+- The system shall not add the people already in the organization when a pod is
+  set to take in new members; it is among the pods open to them instead
+  (PS-POD-023).
+- The system shall not add an organization owner, who already reaches every
+  pod.
+- If a person sets a pod to take in new members while it is invite-only, or
+  makes invite-only a pod that takes them in, then the system shall refuse and
+  shall say the pod has to be open to the organization.
+- If someone who may not decide who joins a pod attempts to set it to take in
+  new members, then the system shall refuse.
+
+> A pod that takes in everyone who arrives is the organization's front door,
+> and an invite-only pod is a closed one. Refusing the combination, rather than
+> quietly resolving it either way, leaves the choice of which one it is to the
+> person making it.
+
+**Contracts:** `pod.create`, `pod.update`
+
 ---
 
 ## Capability: See the pods you have
@@ -253,6 +323,35 @@ Existing apps shall remain reachable in their own tabs.
   may not see contacts.
 
 **Contracts:** `org.needs_you.list`, `org.recents.get`, `org.apps.list`, `org.home.seen.get`, `org.home.seen.set`
+
+### PS-POD-033 — History shows what a person's pods have been doing
+**Status:** manual
+
+> **Verified by:** opening History from the web app's sidebar on a stack
+> running this build, signed in as a member of two pods: it lists that
+> member's chats with each pod and the schedules and workflows that ran in the
+> last 14 days, newest first under Today, Yesterday and earlier days, and a
+> row opens the chat or the run. Choosing one pod shows only that pod's rows
+> at `/history/{pod}`, which a pod's home also links to. `npm test` in
+> `lemma-frontend` checks the rows, the days, the wording of each status and
+> the addresses (`tests/history.test.ts`).
+
+- When a person opens History, the system shall list what moved in every pod
+  they may open over the last 14 days, newest first, grouped by the day it
+  last moved in their own time zone: each of their chats, and each schedule
+  and workflow that ran, once, with how many times it ran.
+- Each row shall say which pod it is in, what it was, what kind of thing it
+  was, how it ended in plain words, and when; and shall open the chat, the
+  run, or the pod's schedules when nothing was started.
+- A schedule whose filter turned an event away shall read as having had
+  nothing to do, not as having gone wrong.
+- A person shall be able to narrow History to one pod, to chats, to what ran
+  by itself, or to what went wrong. One pod's history shall have an address
+  of its own.
+- History shall show a person nothing the overview would not: no one else's
+  conversation, and nothing from a pod they may not open (PS-POD-032).
+
+**Contracts:** `org.recents.get`
 
 ---
 
@@ -342,6 +441,127 @@ Existing apps shall remain reachable in their own tabs.
   pod's lists without a reload.
 - If a search or a filter finds nothing, then the system shall say that nothing
   matches rather than that the place is empty.
+
+### PS-POD-061 — An empty pod offers ways in, and a template is one of them
+**Status:** manual
+
+> **Verified by:** making a pod with the dialog (PS-POD-004) and opening it on
+> a stack running this build: its page offers asking it, bringing things in, a
+> template and making something. Adding the Support template says it is
+> adding, then opens a chat asking the pod to set the template up, and the
+> pod's Tables tab holds the template's table. `npm test` in `lemma-frontend`
+> checks what counts as empty (`tests/lemma-space.test.ts`).
+
+- While a pod holds no chat, table, app or file a person put there, its home
+  shall offer four ways in: asking its agent, bringing things in from where the
+  work is today, adding a template, and making a page, table or app or
+  uploading files.
+- Choosing a place to bring things in from, a table or an app shall put a
+  request in the chat box for the person to send (PS-POD-060).
+- When a person adds a template, the system shall bring the template's tables,
+  skills and automations into that pod, say how far it has got, and then start
+  a chat asking the pod's agent to set the template up.
+- If a template cannot be added, then the system shall say why.
+
+**Contracts:** `pod.bundle.templates`, `pod.bundle.import.start`, `pod.bundle.import.apply`, `pod.bundle.import.get`
+
+### PS-POD-062 — Every page of a pod carries one header: its face, what it says, and seven tabs
+**Status:** manual
+
+> **Verified by:** opening each tab of a pod on a stack running this build:
+> one header with the pod's face, its name, one sentence in the pod's own
+> voice about how it is doing and whether anything needs the reader, its
+> people, and the tabs Home, Chats, Apps, Tables, Pages, Files and About.
+> `npm test` in `lemma-frontend` checks the row, that each tab has an address
+> that reads back to it, and the sentence (`tests/lemma-space.test.ts`).
+
+- Every page a pod is itself shall carry one header: the pod's face and name,
+  one sentence in the pod's own voice, the people in it, and seven tabs in
+  this order: Home, Chats, Apps, Tables, Pages, Files, About.
+- The sentence shall say how the pod is doing and whether anything is waiting
+  on the reader, counting only chats running now, things waiting on the
+  reader, and its number against what it owns. For a pod that holds nothing
+  it shall say that the pod is new.
+- A pod's home shall show its apps first, then what is waiting on the reader,
+  then what it has been doing.
+- No tab shall repeat the pod's name or its own name under that header.
+- Each tab shall have an address of its own, so it can be linked to and
+  reloaded.
+
+**Contracts:** `pod.get`
+
+### PS-POD-063 — About says what a pod is, and leads to each part of it
+**Status:** manual
+
+> **Verified by:** opening a pod's About tab on a stack running this build:
+> it answers what the pod is for, who is in it, who can talk to it, what it
+> does by itself, what it has been taught and what it is connected to, each in
+> a few lines, and each answer links to the page that holds the rest. Opening
+> the plan from there shows "About" lit in the header and a link back. An old
+> link to `/l/{pod}/about/connections` still opens the pod's connections.
+> `npm test` in `lemma-frontend` checks which pages are parts of About and how
+> old links are read (`tests/lemma-space.test.ts`).
+
+- A pod's About tab shall answer, in this order: what the pod is for and what
+  it owns, who is in it and who can find it, who can talk to it, what it does
+  by itself, what it has been taught, and what it is connected to.
+- Each answer shall be read from what the pod already keeps, shall list at
+  most five things, and shall link to the page where the rest is kept and
+  changed.
+- The pod's plan, its people, its contacts, what it runs and its settings
+  shall be parts of About: each shall keep an address of its own, shall keep
+  About lit in the header, and shall offer the way back to About.
+- A link to a part of the workspace's old About page shall open that part of
+  the pod's settings.
+
+**Contracts:** `pod.get`, `pod.member.list`, `schedule.list`
+
+### PS-POD-064 — A pod says what it can do so far, and the one next step
+**Status:** manual
+
+> **Verified by:** opening, as its maker, a pod that holds a table and a chat,
+> on a stack running this build: its home lists "Knows your stuff" and "Answers
+> questions" as done, "Works by itself" and "Owns a result" as not yet, and
+> one next step with a button for it; its About tab shows the same four.
+> `npm test` in `lemma-frontend` checks the four and which comes next
+> (`tests/lemma-space.test.ts`).
+
+- To whoever made a pod or is an admin of it, the pod's home shall show four
+  things the pod can do, each marked done only when the thing itself is
+  there: it holds a table or a page; the reader has a chat with it; it has a
+  schedule; it owns a result. It shall not show them to anyone else, who may
+  not be able to see what the pod runs.
+- It shall name one next step, for the first of the four not yet done, and
+  offer the way to do it.
+- Once all four are done, the pod's home shall stop showing them. Its About
+  tab shall always show them.
+- The system shall not show a step as not done before what it reads has
+  answered.
+
+**Contracts:** `schedule.list`, `outcome.standing`
+
+### PS-POD-065 — A pod says hello to someone new to it, once
+**Status:** manual
+
+> **Verified by:** signing in as a member who joined a pod somebody else made
+> and has no chat with it, on a stack running this build: the pod's home opens
+> with a few sentences in the pod's own voice saying who it is, what it is
+> for and how many others are in it, above what is waiting on them. "Got it"
+> removes it, and it does not return on that browser. The pod's maker never
+> sees it. `npm test` in `lemma-frontend` checks who counts as new and the
+> words (`tests/lemma-space.test.ts`).
+
+- When a member opens the home of a pod they did not make and have no chat
+  with, the system shall show, once, a greeting in the pod's own voice: its
+  name, what it is for when that has been said, and how many other people are
+  in it.
+- The greeting shall sit above what is waiting on that member in the pod.
+- When the member dismisses it, the system shall not show it again on that
+  browser.
+- The system shall not show it to the pod's maker, or to a member who already
+  has a chat with the pod.
+
+**Contracts:** `pod.get`
 
 ---
 

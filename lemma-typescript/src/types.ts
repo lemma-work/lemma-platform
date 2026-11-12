@@ -26,6 +26,7 @@ import type {
   OrganizationInvitationResponse,
   OrganizationMemberResponse,
   OrganizationResponse,
+  JoinablePodResponse,
   PodJoinRequestCreateResponse,
   PodMemberResponse,
   PodRoleResponse,
@@ -184,6 +185,8 @@ export type DatastoreDirectoryTree = DirectoryTreeResponse;
 export type DatastoreDirectoryTreeNode = DirectoryTreeNode;
 
 export type Pod = PodResponse;
+/** A pod the caller may join and is not in, as `pods.listJoinable` offers it. */
+export type JoinablePod = JoinablePodResponse;
 export type PodMember = PodMemberResponse;
 export type PodJoinRequest = PodJoinRequestCreateResponse;
 export type PodRoleInfo = PodRoleResponse;

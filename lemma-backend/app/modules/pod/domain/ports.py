@@ -11,6 +11,7 @@ from app.modules.identity.contracts import (
     OrganizationMemberEntity,
 )
 from app.modules.pod.domain.pod_entities import (
+    JoinablePod,
     PodEntity,
     PodJoinRequestEntity,
     PodJoinRequestStatus,
@@ -47,6 +48,31 @@ class PodRepositoryPort(Protocol):
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[PodEntity], Optional[str]]: ...
+
+
+class OpenPodsPort(Protocol):
+    """The pods an organization's members may walk into without asking.
+
+    Both reads are of the organization's live pods with an open join policy
+    that this member is not in, a page at a time by id.
+    """
+
+    async def list_joinable(
+        self,
+        organization_id: UUID,
+        organization_member_id: UUID,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> Tuple[Sequence[JoinablePod], Optional[str]]: ...
+
+    #: Of those, the ones set to take in everyone who joins the organization.
+    async def list_auto_join_pod_ids(
+        self,
+        organization_id: UUID,
+        organization_member_id: UUID,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> Tuple[Sequence[UUID], Optional[str]]: ...
 
 
 class PodMemberRepositoryPort(Protocol):
@@ -139,8 +165,9 @@ class OwnedPodsPort(Protocol):
 class OrganizationMembershipPort(Protocol):
     #: The organization itself, for the one pod decision whose effect crosses
     #: the organization boundary: a pod may not open itself wider than the
-    #: organization that holds it (see ``PodService.update_pod``).
-    async def get(self, organization_id: UUID) -> Optional[OrganizationEntity]: ...
+    #: organization that holds it (see ``PodService.update_pod``). Positional,
+    #: so identity's repository -- which names it ``id`` -- satisfies it.
+    async def get(self, organization_id: UUID, /) -> Optional[OrganizationEntity]: ...
 
     async def get_member(
         self, user_id: UUID, organization_id: UUID

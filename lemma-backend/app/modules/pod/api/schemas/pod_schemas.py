@@ -8,6 +8,7 @@ from app.core.authorization.grants import ensure_grant_uses_resource_name
 from app.modules.identity.contracts import OrganizationRole, UserResponse
 from app.modules.pod.domain.pod_entities import (
     PodConfig,
+    PodJoinPolicy,
     PodJoinRequestStatus,
     PodRole,
 )
@@ -51,6 +52,26 @@ class PodListResponse(BaseSchema):
     """Pod list response."""
 
     items: list[PodResponse]
+    limit: int
+    total: int
+    next_page_token: Optional[str] = None
+
+
+class JoinablePodResponse(BaseSchema):
+    """A pod the caller may join and is not in: what to show before they do."""
+
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+    join_policy: PodJoinPolicy
+    member_count: int = Field(description="How many people are in the pod now.")
+
+
+class JoinablePodListResponse(BaseSchema):
+    """Pods the caller may join, a page at a time."""
+
+    items: list[JoinablePodResponse]
     limit: int
     total: int
     next_page_token: Optional[str] = None

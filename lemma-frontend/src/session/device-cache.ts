@@ -48,6 +48,7 @@ const LISTS: ReadonlySet<string> = new Set([
     "pod-detail",
     "workflow-waiting",
     "conversation-asks",
+    "org-recents",
     "outcome-apps",
     "outcome-tables",
     "outcome-schedules",

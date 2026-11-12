@@ -10,9 +10,11 @@ from ..openapi_client.api.pods import (
     pod_delete,
     pod_get,
     pod_list,
+    pod_list_joinable,
     pod_update,
 )
 from ..openapi_client.api.query import outcome_history, outcome_standing
+from ..openapi_client.models.joinable_pod_list_response import JoinablePodListResponse
 from ..openapi_client.models.outcome_history_response import OutcomeHistoryResponse
 from ..openapi_client.models.outcome_input import OutcomeInput
 from ..openapi_client.models.outcome_set_response import OutcomeSetResponse
@@ -45,6 +47,24 @@ class BoundPods(BoundResource):
     ) -> PodListResponse:
         return self._call(
             pod_list,
+            as_uuid(org_id) if org_id else self._org_uuid(),
+            limit=limit,
+            page_token=page_token if page_token is not None else UNSET,
+        )
+
+    def list_joinable(
+        self,
+        *,
+        org_id: str | None = None,
+        limit: int = 100,
+        page_token: str | None = None,
+    ) -> JoinablePodListResponse:
+        """The organization's pods you are not in and may join without asking.
+
+        Empty for an organization owner, who already opens every pod.
+        """
+        return self._call(
+            pod_list_joinable,
             as_uuid(org_id) if org_id else self._org_uuid(),
             limit=limit,
             page_token=page_token if page_token is not None else UNSET,

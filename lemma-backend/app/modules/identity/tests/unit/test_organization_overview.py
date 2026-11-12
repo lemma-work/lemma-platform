@@ -24,7 +24,11 @@ from app.modules.channels.contracts.asked_in_a_line import (
     offered_choices,
 )
 from app.modules.channels.contracts.contacts_waiting import ContactWaiting
-from app.modules.identity.domain.time_zones import known_zone, last_days
+from app.modules.identity.domain.time_zones import (
+    RENAMED_ZONES,
+    known_zone,
+    last_days,
+)
 from app.modules.identity.services.organization_needs_you import (
     NeedsYouKind,
     contact_items,
@@ -294,6 +298,18 @@ def test_a_zone_is_an_iana_name_this_host_knows():
     for bad in ("europe/berlin", "Mars/Olympus", "../etc/passwd"):
         with pytest.raises(ValueError):
             known_zone(bad)
+
+
+def test_a_renamed_zone_is_read_as_its_current_name():
+    """A browser reports India as ``Asia/Calcutta``; a database that ships only
+    current names fails on it, so the name handed on is the current one."""
+    assert str(known_zone("Asia/Calcutta")) == "Asia/Kolkata"
+    assert str(known_zone("Europe/Kiev")) == "Europe/Kyiv"
+    for old, current in RENAMED_ZONES.items():
+        assert str(known_zone(old)) == current
+        assert known_zone(old).utcoffset(datetime(2026, 1, 15)) == ZoneInfo(
+            old
+        ).utcoffset(datetime(2026, 1, 15))
 
 
 def test_the_days_are_the_readers_calendar_days():

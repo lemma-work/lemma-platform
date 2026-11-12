@@ -11,8 +11,9 @@ clients, and resource-level grants for users, roles, and workloads.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Pods, members, roles, effective permissions, join requests, resource access |
-| Work kinds | `pod.provision` (the pod's datastore schema, written with the pod), `pod.join_request.email` (`delivery`) |
+| Work kinds | `pod.provision` (the pod's datastore schema, written with the pod), `pod.join_request.email` (`delivery`), `pod.auto_join.org_member_added` (`events`, FAST: a newcomer to the organization joins its default pods) |
 | Facts emitted | `PodDeleted` and member removal, which agent, schedule, surfaces and MCP access subscribe to; `PodOutcomeChanged`, which datastore subscribes its weekly reading to |
+| Facts consumed | Identity's `OrganizationMemberAdded`, for default pods |
 
 ## Main data model
 
@@ -31,6 +32,7 @@ permission bundles use the shared authorization repositories.
 | Routes | What they do |
 | --- | --- |
 | `/pods` and `/pods/{pod_id}` | Create/read/update/soft-delete pods and list by organization |
+| `/organizations/{organization_id}/pods/joinable` | The organization's pods the caller may join and is not in |
 | `/pods/{pod_id}/members` | Add, find, list, re-role, and remove members |
 | `/pods/{pod_id}/roles` | CRUD custom roles and replace their permission bundles |
 | `/pods/{pod_id}/permissions/*` | Permission catalog and current user's effective permissions |
@@ -59,6 +61,35 @@ grants intersected with the invoking user's, so it can never reach past the
 person who ran it; the default pod agent holds no grants and mirrors its
 invoking user's rights exactly. Destructive operations additionally require
 standing authority or a session approval.
+
+## Who may join, and default pods
+
+`PodConfig.join_policy` says who may walk in: `INVITE_ONLY` (the default; a
+join request instead), `ORG_MEMBERS`, or `PUBLIC`, which also adds a person
+from outside to the organization. Changing it needs `pod.member.manage`, not
+`pod.update`, and `PUBLIC` needs the organization itself to be public.
+
+`GET /organizations/{organization_id}/pods/joinable` is the other half of the
+pod list, which shows a member only the pods they are in: the organization's
+live pods with an open policy that the caller is not in, with each pod's member
+count. An organization owner gets none, because they open every pod and
+`POST /pods/{pod_id}/join` refuses them. The SQL lives in
+`infrastructure/open_pods.py` behind `OpenPodsPort`, apart from
+`pod_repositories.py`, which is at the size ratchet.
+
+`PodConfig.auto_join_new_members` makes a pod a default pod: everyone who joins
+the organization from then on becomes a pod user in it, the membership a
+self-join makes. It is the join policy's to change -- `pod.member.manage` --
+and it is refused with 422 `POD_AUTO_JOIN_NEEDS_OPEN_POLICY` on any create or
+update whose resulting config is invite-only with it on. Identity emits
+`OrganizationMemberAdded` from `OrganizationRepository.add_member`, which every
+way into an organization passes; `events/auto_join_work.py` subscribes a FAST
+item to it under the organization, deduplicated per organization and person,
+and `PodJoinRequestService.join_default_pods` adds the newcomer to every default
+pod still open to members. Owners are skipped, someone gone again before it
+runs is a no-op, and a pod they are already in is never offered, so a rerun
+adds nothing. People in the organization before a pod became a default one are
+not added; they find it in the joinable list.
 
 ## What a pod owns
 
@@ -98,5 +129,5 @@ No infrastructure-job state is stored on the pod aggregate.
 
 ## Tests and operations
 
-Tests cover CRUD, custom roles, join policy, resource grants, authorization
-hardening, delegation, and event behavior.
+Tests cover CRUD, custom roles, join policy, the joinable list and default
+pods, resource grants, authorization hardening, delegation, and event behavior.

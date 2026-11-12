@@ -116,8 +116,10 @@ test("where a word is the workspace's and the app's, it names the same place", (
     assert.deepEqual(readView("/l/p1"), outcomeView("p1"));
     assert.deepEqual(readView("/l/p1/chats"), outcomeView("p1", "chats"));
     assert.deepEqual(readView("/l/p1/apps"), outcomeView("p1", "apps"));
-    assert.deepEqual(readView("/l/p1/files"), outcomeView("p1", "made"));
-    assert.deepEqual(readView("/l/p1/tables"), outcomeView("p1", "made"));
+    assert.deepEqual(readView("/l/p1/files"), outcomeView("p1", "files"));
+    assert.deepEqual(readView("/l/p1/tables"), outcomeView("p1", "tables"));
+    assert.deepEqual(readView("/l/p1/pages"), outcomeView("p1", "pages"));
+    assert.deepEqual(readView("/l/p1/people"), outcomeView("p1", "people"));
     assert.deepEqual(readView("/l/p1/contacts"), outcomeView("p1", "contacts"));
     assert.deepEqual(readView("/l/p1/workflows"), outcomeView("p1", "automations", "workflows"));
     assert.deepEqual(readView("/l/p1/groups"), outcomeView("p1", "chats", "channels"));
@@ -179,7 +181,9 @@ test("a workspace link followed inside the frame stays in the frame where it can
     assert.deepEqual(viewOfAddress(address("record:leads:42")), { name: "record", podId: "p1", table: "leads", recordId: "42" });
     assert.deepEqual(viewOfAddress(address("space:workflows")), outcomeView("p1", "automations"));
     assert.deepEqual(viewOfAddress(address("computer")), { name: "computer", podId: "p1", conversationId: null }, "the machine it works on");
-    assert.deepEqual(viewOfAddress(address("space:all")), outcomeView("p1", "made"), "everything it holds is its files");
+    assert.deepEqual(viewOfAddress(address("space:all")), outcomeView("p1", "files"), "everything it holds is its files");
+    assert.deepEqual(viewOfAddress(address("space:pages")), outcomeView("p1", "pages"));
+    assert.deepEqual(viewOfAddress(address("space:tables")), outcomeView("p1", "tables"));
     assert.equal(viewOfAddress(address("nothing-this-build-knows:1")), null, "what the frame does not show goes to the classic workspace");
     assert.equal(viewOfAddress({ podId: null, tabId: null, conversationId: null }), null);
 });

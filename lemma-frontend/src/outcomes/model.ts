@@ -9,6 +9,7 @@ import type { ConversationRef } from "@/data/types";
 import type { ChatItem, ChatKind } from "@/channels/chat-list";
 import type { Channel } from "@/channels/model";
 import { readableName } from "@/library/reading";
+import type { OriginKind } from "@/thread/conversation-origin";
 import type { AskedRow } from "@/thread/waiting-on-you";
 import type { WaitingRow } from "@/workflow/waiting-inbox";
 
@@ -50,7 +51,9 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "space:about":
             /* Schedules are a part of About in the workspace and a view of
                Automations here. */
-            return address.section === "schedules" ? outcomeView(podId, "automations", "schedules") : outcomeView(podId, "settings", address.section ?? null);
+            if (address.section === "schedules") return outcomeView(podId, "automations", "schedules");
+            /* One part of it is that part of Settings; the page itself is About. */
+            return address.section ? outcomeView(podId, "settings", address.section) : outcomeView(podId, "about");
         case "profile":
             return address.agentName ? { name: "agent", podId, agent: address.agentName } : outcomeView(podId, "settings");
         case "conversation":
@@ -60,12 +63,14 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "space:apps":
         case "apps":
             return outcomeView(podId, "apps");
+        case "space:pages":
+            return outcomeView(podId, "pages");
+        case "space:tables":
+            return outcomeView(podId, "tables");
         case "space:all":
         case "space:files":
-        case "space:pages":
-        case "space:tables":
         case "library":
-            return outcomeView(podId, "made");
+            return outcomeView(podId, "files");
         case "space:workflows":
             return outcomeView(podId, "automations");
         case "computer":
@@ -751,9 +756,10 @@ export function queueFromNeeds(needs: readonly NeedsItem[], waits: readonly Wait
     return items.sort((a, b) => a.sinceMs - b.sinceMs);
 }
 
-/* ── the shelf: what a new Lemma can start from ─────────────────────── */
+/* ── templates ───────────────────────────────────────────────────────── */
 
-/** A template as the shelf shows it (`GET /pods/bundle/templates`). */
+/** A template as the server lists it (`GET /pods/bundle/templates`): a kit
+ *  of tables, skills and automations a Lemma can be given. */
 export interface ShelfCard {
     id: string;
     name: string;
@@ -767,53 +773,6 @@ export interface ShelfCard {
     place: string | null;
     brings: readonly string[];
     never: readonly string[];
-}
-
-/** The templates of one kind of work, as one card on the first shelf. */
-export interface ShelfWork {
-    id: string;
-    label: string;
-    cards: ShelfCard[];
-    /** Where its templates' work usually happens, once each. */
-    places: string[];
-    face: string | null;
-}
-
-/** "support" → "Support"; templates that say no kind of work sit together
- *  under "More". */
-export function workLabel(id: string): string {
-    return id === "more" ? "More" : id.charAt(0).toUpperCase() + id.slice(1);
-}
-
-/** The shelf's first view: the templates grouped by the work they do, in
- *  the order the server ships them -- a group sits where its first template
- *  does. Nothing here names a kind of work the templates do not. */
-export function shelfOf(cards: readonly ShelfCard[]): ShelfWork[] {
-    const groups = new Map<string, ShelfWork>();
-    for (const card of cards) {
-        const id = card.work?.trim().toLowerCase() || "more";
-        const group = groups.get(id) ?? { id, label: workLabel(id), cards: [], places: [], face: card.face };
-        group.cards.push(card);
-        if (card.place && !group.places.includes(card.place)) group.places.push(card.place);
-        groups.set(id, group);
-    }
-    return [...groups.values()];
-}
-
-/** What a finish line says before and after its date is picked. */
-export function sentenceFor(card: Pick<ShelfCard, "sentence">, due: string | null): string {
-    if (!card.sentence.includes("{due}")) return card.sentence;
-    if (!due) return card.sentence.replace("{due}", "a date you pick");
-    const at = new Date(due + "T12:00:00Z");
-    return Number.isNaN(at.getTime()) ? card.sentence.replace("{due}", due) : card.sentence.replace("{due}", at.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" }));
-}
-
-/** A short name for a Lemma started from its owner's own words: the first
- *  word that says what it is about. */
-export function ownName(text: string): string {
-    const words = text.replace(/[^A-Za-z0-9 ]+/g, " ").trim().split(/\s+/).filter(Boolean);
-    const pick = words.find((word) => word.length > 4 && !/^(every|within|before|after|their|there)$/i.test(word)) ?? words[0] ?? "Lemma";
-    return pick.charAt(0).toUpperCase() + pick.slice(1).toLowerCase();
 }
 
 /** "40 min", "26 h", "3 d". */
@@ -909,7 +868,7 @@ export function workRows(input: {
     tables: readonly { name: string; title: string; updated: string | null }[];
     now: number;
 }): SideRow[] {
-    const latest = new Map<string, { row: SideRow; runs: Set<string> }>();
+    const latest = new Map<string, { row: SideRow; runs: Set<string>; counted: number }>();
     for (const conversation of input.conversations) {
         const origin = conversation.origin;
         if (!origin || conversation.waitingOnYou) continue;
@@ -936,14 +895,17 @@ export function workRows(input: {
         };
         const held = latest.get(row.key);
         if (!held) {
-            latest.set(row.key, { row, runs: new Set([run]) });
+            latest.set(row.key, { row, runs: new Set([run]), counted: conversation.runs ?? 0 });
             continue;
         }
         held.runs.add(run);
+        held.counted = Math.max(held.counted, conversation.runs ?? 0);
         if ((row.at ?? 0) > (held.row.at ?? 0)) held.row = { ...row, running: row.running || held.row.running };
         else if (row.running) held.row = { ...held.row, running: true };
     }
-    const automations = [...latest.values()].map(({ row, runs }) => ({ ...row, runs: runs.size }));
+    /* Runs listed one by one are counted here; a source that counted them
+       itself (the organization's overview) says how many there were. */
+    const automations = [...latest.values()].map(({ row, runs, counted }) => ({ ...row, runs: Math.max(runs.size, counted) }));
     const tables = input.tables.flatMap((table): SideRow[] => {
         const at = timeOf(table.updated);
         if (at === null || input.now - at > QUIET_AFTER_MS) return [];
@@ -1065,11 +1027,6 @@ export function repeatedTitles(items: readonly Pick<ChatItem, "key" | "title">[]
     return new Set(items.filter((item) => (counts.get(item.title) ?? 0) > 1).map((item) => item.key));
 }
 
-/** What a Lemma owns, said as it should be read: only a plan's sentence
- *  counts. A description is what it is about, not a result it holds, and
- *  shown as one it read as a fake ("owns: do something cool"). */
-export const NOTHING_OWNED = "Nothing it owns yet. Give it a bar or a finish line.";
-
 /** Whether two opens show the same thing. */
 export function sameOpen(a: ChatOpen, b: ChatOpen): boolean {
     if (a.kind !== b.kind) return false;
@@ -1184,4 +1141,337 @@ export function broughtSaid(steps: readonly { kind: string; name: string }[]): s
     }
     const parts = [...counts.values()].map(({ one, many, count }) => `${count} ${count === 1 ? one : many}`);
     return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/* ── a Lemma as a space ──────────────────────────────────────────────────── */
+
+/** "Notion", "Notion and Airtable", "Notion, Google Drive and Airtable". */
+function listed(names: readonly string[]): string {
+    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** What "Bring it in" sends: the places the person picked, in their words.
+ *  The assistant's bring-in skill takes it from there. */
+export function bringInRequest(places: readonly string[]): string {
+    return `Bring in ${listed(places)}.`;
+}
+
+/** What a Lemma is asked once a template it was given has landed in it. */
+export function templateSetupRequest(name: string): string {
+    return `Set up the ${name} template I just added. Follow its set-up skill.`;
+}
+
+/** Who can find a Lemma, as its header says it; nothing until it is known. */
+export function reachSaid(reach: "invited" | "org" | "anyone" | null, orgName: string): string {
+    if (reach === null) return "";
+    if (reach === "anyone") return "Anyone with a Lemma account can join";
+    if (reach === "org") return `Everyone at ${orgName.trim() || "this organization"} can find it`;
+    return "Only the people in it can find it";
+}
+
+/** What a Lemma says at the top of its pages, in its own voice: how it is
+ *  doing, then whether it needs the reader. It counts only what the frame
+ *  can show -- chats running now, things waiting on the reader, the number
+ *  against what it owns -- so it never claims work nobody can open. */
+export function lemmaSays(now: { empty: boolean; running: number; needs: number; standing: "on" | "behind" | null }): string {
+    if (now.empty) return "I’m new here. I don’t have anything to work with yet.";
+    const doing = now.running > 0
+        ? `I’m working on ${now.running} ${now.running === 1 ? "thing" : "things"} right now.`
+        : now.standing === "behind" ? "I’m behind on what I own."
+        : now.standing === "on" ? "I’m on track."
+        : "All quiet.";
+    const needs = now.needs > 0
+        ? `${now.needs} ${now.needs === 1 ? "thing needs" : "things need"} you.`
+        : "Nothing needs you.";
+    return doing + " " + needs;
+}
+
+/* ── history ──────────────────────────────────────────────────────────── */
+
+/** What moved in one Lemma lately, as the organization's overview answers it
+ *  (`org.recents.get`): the reader's chats there, and the schedules and
+ *  workflows that ran. Only the fields History reads. */
+export interface RecentsPod {
+    pod_id: string;
+    pod_name: string;
+    chats: readonly {
+        conversation_id: string;
+        title?: string | null;
+        origin: string;
+        status?: string | null;
+        agent_id?: string | null;
+        last_activity_at: string;
+        waiting_on_you: boolean;
+        platform?: string | null;
+        channel_name?: string | null;
+    }[];
+    automations: readonly {
+        kind: string;
+        id: string;
+        name?: string | null;
+        run_count: number;
+        latest_status: string;
+        latest_at: string;
+        workflow_run_id?: string | null;
+        conversation_id?: string | null;
+    }[];
+    /** One count per day of the window, oldest first. */
+    activity?: readonly { day: string; by_agent: number; by_people: number }[];
+}
+
+const ORIGIN_KINDS: ReadonlySet<string> = new Set(["chat", "channel", "notification", "schedule", "workflow", "resource", "task", "ask"]);
+
+/** Every Lemma's recent chats and automation runs from the organization's
+ *  one overview read, in the shape the frame reads a Lemma's own list in, so
+ *  the sidebar, Home and a Lemma's page draw the same rows from one request
+ *  that they drew from one request per Lemma.
+ *
+ *  A chat is itself. A schedule or a workflow that ran is one entry -- its
+ *  newest run, carrying how many times it ran -- for the line `workRows`
+ *  gives each automation. One that started nothing has nothing to open and
+ *  is left out; one whose newest run is waiting on the reader is already
+ *  listed as that chat, and is not listed twice. `stamp` says a time the way
+ *  the frame's lists do. */
+export function activityOfRecents(pods: readonly RecentsPod[], stamp: (iso: string) => string): Map<string, ConversationRef[]> {
+    const byPod = new Map<string, ConversationRef[]>();
+    for (const pod of pods) {
+        const waiting = new Set(pod.chats.filter((chat) => chat.waiting_on_you).map((chat) => chat.conversation_id));
+        const chats = pod.chats.map((chat): ConversationRef => {
+            const kind = ORIGIN_KINDS.has(chat.origin) ? chat.origin as OriginKind : "chat";
+            return {
+                id: chat.conversation_id,
+                title: chat.title?.trim() || "Untitled",
+                at: stamp(chat.last_activity_at),
+                activityAt: chat.last_activity_at,
+                kind: "CHAT",
+                /* The overview does not say which thing a chat about a page
+                   or a table is bound to, only that it is: enough to keep it
+                   out of the chats, where its own list never put it. */
+                boundTo: kind === "resource" ? "resource" : null,
+                origin: kind === "chat" ? undefined : { kind, label: chat.channel_name?.trim() || STARTED_BY[kind] || "", platform: chat.platform ?? undefined },
+                agentId: chat.agent_id ?? null,
+                status: chat.status ?? null,
+                waitingOnYou: chat.waiting_on_you,
+            };
+        });
+        const ran = pod.automations.flatMap((each): ConversationRef[] => {
+            const opens = each.conversation_id ?? each.workflow_run_id;
+            if (!opens || (each.conversation_id && waiting.has(each.conversation_id))) return [];
+            const workflow = each.kind.toUpperCase() === "WORKFLOW";
+            const name = each.name?.trim() ? readableName(each.name.trim()) : workflow ? "A workflow" : "A schedule";
+            return [{
+                id: opens,
+                title: name,
+                at: stamp(each.latest_at),
+                activityAt: each.latest_at,
+                kind: "CHAT",
+                boundTo: null,
+                origin: { kind: workflow ? "workflow" : "schedule", label: (workflow ? "Workflow · " : "Schedule · ") + name, runId: each.workflow_run_id ?? undefined },
+                agentId: null,
+                status: ranSaid(each.latest_status).tone === "live" ? "RUNNING" : null,
+                waitingOnYou: false,
+                runs: Math.max(1, each.run_count),
+            }];
+        });
+        byPod.set(pod.pod_id, [...chats, ...ran]);
+    }
+    return byPod;
+}
+
+/** Each Lemma's work a day, from the overview's own count: every
+ *  conversation of the reader's, not only the latest few it lists. */
+export function daysOfRecents(pods: readonly RecentsPod[]): Map<string, DayCount[]> {
+    return new Map(pods.map((pod) => [pod.pod_id, (pod.activity ?? []).map((day) => ({ day: day.day, lemma: day.by_agent, people: day.by_people }))]));
+}
+
+export type HistoryTone = "live" | "wait" | "bad" | "done" | null;
+
+/** One row of History: a chat, or everything one schedule or workflow did
+ *  in the window, said once with a count. */
+export interface HistoryRow {
+    key: string;
+    podId: string;
+    podName: string;
+    kind: "chat" | "schedule" | "workflow";
+    title: string;
+    /** What kind of thing it is, as a person would say it. */
+    what: string;
+    /** How it ended, or how it stands; empty when there is nothing to say. */
+    said: string;
+    tone: HistoryTone;
+    /** How many times it ran in the window; 1 for a chat. */
+    count: number;
+    /** When it last moved, epoch ms. */
+    at: number;
+    view: View;
+}
+
+/** A run's status as the server names it, in a person's words. A schedule's
+ *  fire that its filter turned away is not a failure: it looked, and there
+ *  was nothing to do. */
+export function ranSaid(status: string): { said: string; tone: HistoryTone } {
+    const state = status.toUpperCase();
+    if (state === "COMPLETED") return { said: "Done", tone: "done" };
+    if (state === "WAITING") return { said: "Waiting on someone", tone: "wait" };
+    if (state.includes("FAIL") || state === "ERROR") return { said: "Went wrong", tone: "bad" };
+    if (state === "CANCELLED") return { said: "Stopped", tone: null };
+    if (state === "FILTERED") return { said: "Nothing to do", tone: null };
+    if (["PENDING", "RUNNING", "RECEIVED", "FILTERING", "PROCESSING", "DISPATCHED"].includes(state)) return { said: "Running", tone: "live" };
+    return { said: state ? state.charAt(0) + state.slice(1).toLowerCase().replace(/_/g, " ") : "", tone: null };
+}
+
+/** What started a chat, for a reader who was not there. */
+const STARTED_BY: Readonly<Record<string, string>> = {
+    chat: "Chat",
+    channel: "Shared chat",
+    notification: "It told you something",
+    schedule: "Started on a schedule",
+    workflow: "Started by a workflow",
+    resource: "About something it holds",
+    task: "A task it was given",
+    ask: "Asked by another Lemma",
+};
+
+/** Everything that moved, across the Lemmas given, newest first. A chat opens
+ *  itself; a workflow opens its newest run; a schedule opens what its newest
+ *  fire started, or the list of schedules when it started nothing. */
+export function historyRows(pods: readonly RecentsPod[]): HistoryRow[] {
+    const rows: HistoryRow[] = [];
+    for (const pod of pods) {
+        for (const chat of pod.chats) {
+            const running = (chat.status ?? "").toUpperCase() === "RUNNING";
+            rows.push({
+                key: "c:" + chat.conversation_id,
+                podId: pod.pod_id,
+                podName: pod.pod_name,
+                kind: "chat",
+                title: chat.title?.trim() || "A chat with no name",
+                what: STARTED_BY[chat.origin] ?? "Chat",
+                said: chat.waiting_on_you ? "Waiting on you" : running ? "Working now" : "",
+                tone: chat.waiting_on_you ? "wait" : running ? "live" : null,
+                count: 1,
+                at: Date.parse(chat.last_activity_at) || 0,
+                view: chatView({ kind: "chat", podId: pod.pod_id, id: chat.conversation_id }),
+            });
+        }
+        for (const ran of pod.automations) {
+            const workflow = ran.kind.toUpperCase() === "WORKFLOW";
+            const view: View = ran.workflow_run_id ? { name: "run", podId: pod.pod_id, runId: ran.workflow_run_id }
+                : ran.conversation_id ? chatView({ kind: "chat", podId: pod.pod_id, id: ran.conversation_id })
+                : outcomeView(pod.pod_id, "automations", workflow ? "workflows" : "schedules");
+            rows.push({
+                key: (workflow ? "w:" : "s:") + ran.id,
+                podId: pod.pod_id,
+                podName: pod.pod_name,
+                kind: workflow ? "workflow" : "schedule",
+                /* The server answers with the name it stores (`friday_number`);
+                   a person reads it the way the rest of the app writes it. */
+                title: ran.name?.trim() ? readableName(ran.name.trim()) : workflow ? "A workflow" : "A schedule",
+                what: workflow ? "Workflow" : "On a schedule",
+                ...ranSaid(ran.latest_status),
+                count: Math.max(1, ran.run_count),
+                at: Date.parse(ran.latest_at) || 0,
+                view,
+            });
+        }
+    }
+    return rows.sort((a, b) => b.at - a.at);
+}
+
+/** History's rows under the day each last moved: Today, Yesterday, then the
+ *  day by name. Rows keep their order, so days come newest first. */
+export function historyDays(rows: readonly HistoryRow[], now: number): { label: string; rows: HistoryRow[] }[] {
+    const startOf = (at: number) => { const day = new Date(at); day.setHours(0, 0, 0, 0); return day.getTime(); };
+    const today = startOf(now);
+    const days: { key: number; label: string; rows: HistoryRow[] }[] = [];
+    for (const row of rows) {
+        const key = startOf(row.at);
+        let day = days.find((one) => one.key === key);
+        if (!day) {
+            const ago = Math.round((today - key) / 86_400_000);
+            const label = ago <= 0 ? "Today" : ago === 1 ? "Yesterday" : new Date(key).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+            days.push(day = { key, label, rows: [] });
+        }
+        day.rows.push(row);
+    }
+    return days.map(({ label, rows: held }) => ({ label, rows: held }));
+}
+
+/** History in one sentence: how much moved, and whether anything went wrong. */
+export function historySaid(rows: readonly HistoryRow[], days: number): string {
+    if (rows.length === 0) return `Nothing has moved in the last ${days} days.`;
+    const chats = rows.filter((row) => row.kind === "chat").length;
+    const ran = rows.length - chats;
+    const wrong = rows.filter((row) => row.tone === "bad").length;
+    const parts = [
+        chats ? `${chats} ${chats === 1 ? "chat" : "chats"}` : "",
+        ran ? `${ran} ${ran === 1 ? "thing" : "things"} that ran by ${ran === 1 ? "itself" : "themselves"}` : "",
+    ].filter(Boolean).join(" and ");
+    return `${parts} in the last ${days} days.` + (wrong ? ` ${wrong} went wrong.` : "");
+}
+
+export interface CanDoStep {
+    key: "knows" | "answers" | "works" | "owns";
+    label: string;
+    done: boolean;
+    /** What would make it true, said as the one next thing to do. */
+    next: string;
+}
+
+/** What a Lemma can do so far: four things a person can check for
+ *  themselves, in the order they usually come. Nothing here is a setting or
+ *  a score -- each is true once the thing itself is there. */
+export function canDo(has: { stuff: boolean; chats: boolean; runs: boolean; owns: boolean }): CanDoStep[] {
+    return [
+        { key: "knows", label: "Knows your stuff", done: has.stuff, next: "bring in what it should know: your pages, tables or files." },
+        { key: "answers", label: "Answers questions", done: has.chats, next: "ask it something in the box below. It answers from what it holds." },
+        { key: "works", label: "Works by itself", done: has.runs, next: "give it something to do regularly, like a check every morning." },
+        { key: "owns", label: "Owns a result", done: has.owns, next: "give it one thing to own, so you can see how it is doing each week." },
+    ];
+}
+
+/** Whether the reader looks after a Lemma: made it, or is an admin of it.
+ *  What it can do so far, and the next step, are theirs to see -- the steps
+ *  are theirs to take, and what a Lemma runs is listed only to whoever may
+ *  read it, so anyone else would be told it runs nothing. */
+export function looksAfter(pod: { hiredBy?: string | null; members: readonly { userId?: string; role: string }[] }, me: string | null): boolean {
+    if (!me) return false;
+    if (pod.hiredBy === me) return true;
+    return pod.members.some((member) => member.userId === me && /admin/i.test(member.role));
+}
+
+/** Whether the reader is new to a Lemma somebody else made: in it, and not
+ *  yet in a chat with it. That is who it introduces itself to, once. Its
+ *  maker met it by making it, and anyone with a chat has met it already. */
+export function isNewcomer(who: { madeBy: string | null; me: string | null; chats: number }): boolean {
+    return Boolean(who.me) && Boolean(who.madeBy) && who.madeBy !== who.me && who.chats === 0;
+}
+
+/** A Lemma's first words to someone new to it, in its own voice. */
+export function welcomeSaid(pod: { name: string; description?: string | null }, reader: string, people: number): string {
+    /* By their first name when they have given one. Someone with no profile
+       yet goes by the start of their address, which is not a name to say. */
+    const named = reader && reader !== "You" ? reader.split(" ")[0] : "";
+    const first = /^\p{L}+$/u.test(named) ? named : "";
+    const others = people - 1;
+    return [
+        first ? `Hi ${first}. I’m ${pod.name}.` : `Hi. I’m ${pod.name}.`,
+        pod.description?.trim() ? `What I’m for: ${pod.description.trim().replace(/[.\s]+$/, "")}.` : "",
+        others > 0 ? `${others} other ${others === 1 ? "person works" : "people work"} with me.` : "",
+        "Anything waiting for you is listed below, and you can ask me anything in the box at the bottom.",
+    ].filter(Boolean).join(" ");
+}
+
+/** A page's title: its file's name without the extension. */
+export function pageTitle(name: string): string {
+    return name.replace(/\.md$/i, "");
+}
+
+/** What a Lemma's root holds before anyone puts anything there: dot-names,
+ *  its plan, its skills, and each person's own folder (`me`), made for them. */
+const KEPT_FOR_ITSELF = new Set(["plan.md", "skills", "system", "me"]);
+
+/** Whether a Lemma's root, by name, holds nothing a person would call theirs. */
+export function holdsNothing(rootNames: readonly string[]): boolean {
+    return rootNames.every((name) => name.startsWith(".") || KEPT_FOR_ITSELF.has(name));
 }

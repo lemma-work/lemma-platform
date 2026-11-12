@@ -16442,6 +16442,31 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Pods the Caller Can Join
+     * The organization's pods the caller is not in and may join without asking: those open to the organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty for an organization owner, who already opens every pod. 403 for someone outside the organization.
+     * @param organizationId
+     * @param limit
+     * @param pageToken
+     * @returns JoinablePodListResponse Successful Response
+     * @throws ApiError
+     */
+    static podListJoinable(organizationId, limit = 100, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/pods/joinable",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Create Pod
      * Create a new pod
      * @param requestBody
@@ -16688,9 +16713,28 @@ var LemmaClient = (() => {
         }
       );
     }
+    /**
+     * The organization's pods you are not in and may join without asking: those
+     * open to the organization (`ORG_MEMBERS`) or to everyone (`PUBLIC`). Join
+     * one with `join(podId)`. Empty for an organization owner, who already opens
+     * every pod.
+     */
+    listJoinable(organizationId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b;
+          return PodsService.podListJoinable(organizationId, (_a = options.limit) != null ? _a : 100, (_b = options.pageToken) != null ? _b : options.cursor);
+        }
+      );
+    }
     get(podId) {
       return this.client.request(() => PodsService.podGet(podId));
     }
+    /**
+     * Make a pod. `config.join_policy` says who may join it (invite-only unless
+     * set); `config.auto_join_new_members` makes everyone who joins the
+     * organization from now on a member, and needs `ORG_MEMBERS` or `PUBLIC`.
+     */
     create(payload) {
       return this.client.request(() => PodsService.podCreate(payload));
     }

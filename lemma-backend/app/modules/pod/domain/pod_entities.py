@@ -28,6 +28,14 @@ class PodJoinPolicy(str, Enum):
     PUBLIC = "PUBLIC"  # any Lemma user may self-join (auto-added to the org)
 
 
+#: The policies a member of the organization may join under without asking:
+#: what a pod must be for it to be offered to them, and for it to take in the
+#: people who join the organization after it.
+OPEN_JOIN_POLICIES: frozenset[PodJoinPolicy] = frozenset(
+    {PodJoinPolicy.ORG_MEMBERS, PodJoinPolicy.PUBLIC}
+)
+
+
 class PodCreationSource(str, Enum):
     """Whether somebody asked for a pod, or the platform made it for them.
 
@@ -231,6 +239,18 @@ class PodConfig(BaseModel):
     default_profile_id: str | None = Field(default=None, min_length=1)
     default_runtime: AgentRuntimeConfig | None = None
     join_policy: PodJoinPolicy = PodJoinPolicy.INVITE_ONLY
+    #: Always serialized, unlike the empty defaults below: an update merges the
+    #: config it is sent key by key, so a ``false`` dropped on the way in could
+    #: never turn this off again.
+    auto_join_new_members: bool = Field(
+        default=False,
+        description=(
+            "Everyone who joins the organization from now on becomes a member "
+            "of this pod, as a pod user. Needs join_policy ORG_MEMBERS or "
+            "PUBLIC, and the authority to change the join policy. People "
+            "already in the organization are not added."
+        ),
+    )
     # Bundles installed into this pod, appended on each successful import. Omitted
     # from the serialized config when empty so legacy config blobs are unchanged.
     recipes: list[PodRecipe] = Field(default_factory=list)
@@ -363,6 +383,21 @@ class PodUpdateEntity(BaseModel):
     description: Optional[str] = None
     icon_url: Optional[str] = None
     config: PodConfig | None = None
+
+
+class JoinablePod(BaseModel):
+    """A pod a member of its organization may join and is not in, as offered.
+
+    What someone deciding whether to walk in needs to see, and nothing they
+    could only read from inside: no config beyond who may join, no owner.
+    """
+
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+    join_policy: PodJoinPolicy
+    member_count: int
 
 
 class PodMemberEntity(AggregateRoot):

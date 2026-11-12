@@ -6,6 +6,7 @@ from typing import Any
 
 from harness.run import a_name_for, must_be_traceable
 from harness.drivers.api import every_item, items_of
+from harness.waiting import UNTIL_BACKGROUND_WORK_LANDS, eventually
 
 JSON = dict[str, Any]
 
@@ -38,7 +39,9 @@ class PodSteps:
         named: str | None = None,
         pod_type: str = "HYBRID",
         standing: bool = False,
+        settings: JSON | None = None,
     ) -> JSON:
+        """Make a pod; ``settings`` is its config as the person chose it on the way in."""
         organization = in_organization or self.organization
         if organization is None:
             raise AssertionError(
@@ -48,14 +51,15 @@ class PodSteps:
         name = named or a_name_for(f"{self.label}_pod")
         if not standing:
             must_be_traceable(name, what="pod")
+        body: JSON = {
+            "organization_id": str(organization["id"]),
+            "name": name,
+            "type": pod_type,
+        }
+        if settings is not None:
+            body["config"] = settings
         pod = await self.api.post(
-            "/pods",
-            what=f"{self.label} creating pod {name!r}",
-            json={
-                "organization_id": str(organization["id"]),
-                "name": name,
-                "type": pod_type,
-            },
+            "/pods", what=f"{self.label} creating pod {name!r}", json=body
         )
         self.pod = pod
         return pod
@@ -170,6 +174,83 @@ class PodSteps:
                 f"{pod.get('name')!r}, but joined ({response.status_code})"
             )
         return response.status_code
+
+    async def pods_they_can_join(self, organization: JSON | None = None) -> list[JSON]:
+        """Every pod in the organization they may walk into and are not in yet.
+
+        Follows the pages, as `pods_in` does and for the same reason: on a
+        tenant that stands between runs, the pod this run opened is on the last
+        page, and "it is not offered" read from the first one fails open.
+        """
+        organization = organization or self.organization
+        if organization is None:
+            raise AssertionError(
+                f"{self.label} has no organization to look for pods to join in"
+            )
+        return await every_item(
+            lambda params: self.api.get(
+                f"/organizations/{organization['id']}/pods/joinable", params=params
+            )
+        )
+
+    async def is_refused_the_pods_open_in(self, organization: JSON) -> int:
+        response = await self.api.call(
+            "GET", f"/organizations/{organization['id']}/pods/joinable"
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused the pods open in "
+                f"{organization.get('name')!r}, but was shown them "
+                f"({response.status_code})"
+            )
+        return response.status_code
+
+    async def makes_new_members_join(self, pod: JSON) -> JSON:
+        """Have everyone who joins the organization from now on join this pod."""
+        return await self.api.put(
+            f"/pods/{pod['id']}",
+            what=f"{self.label} making new members join {pod.get('name')!r}",
+            json={"config": {"auto_join_new_members": True}},
+        )
+
+    async def is_refused_making_new_members_join(self, pod: JSON) -> str:
+        """Attempt it, and return *why* the system refused.
+
+        The reason, because two refusals look alike from outside: a pod that
+        cannot take people in as it stands, and a person who may not decide
+        who joins it.
+        """
+        response = await self.api.call(
+            "PUT",
+            f"/pods/{pod['id']}",
+            json={"config": {"auto_join_new_members": True}},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused making new members "
+                f"join {pod.get('name')!r}, but it was set ({response.status_code})"
+            )
+        code = response.json().get("code")
+        if not code:
+            raise AssertionError(
+                f"refusal for {pod.get('name')!r} carried no code: {response.text}"
+            )
+        return str(code)
+
+    async def ends_up_in(
+        self, pod: JSON, *, timeout: float = UNTIL_BACKGROUND_WORK_LANDS
+    ) -> None:
+        """Wait for a pod they did nothing to join to appear in their pod list.
+
+        For a membership the product makes on someone's behalf, after the
+        request that caused it has already answered.
+        """
+        await eventually(
+            lambda: self.pods_in({"id": pod["organization_id"]}),
+            lambda pods: any(str(found["id"]) == str(pod["id"]) for found in pods),
+            describe=f"{self.label} to be in pod {pod.get('name')!r}",
+            timeout=timeout,
+        )
 
     async def requests_to_join(self, pod: JSON) -> JSON:
         return await self.api.post(

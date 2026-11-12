@@ -2,12 +2,11 @@
 
 import { useMemo, useState } from "react";
 import type { ConversationRef, Org, Pod } from "@/data";
-import { sinceShort } from "@/channels/model";
+import { sinceShort, type Channel } from "@/channels/model";
 import { useMe } from "@/session/use-me";
 import { chatItems, chatView, inSidebar, rowOfChat, type Ask, type Go, type QueueItem } from "./model";
 import { NeedRow } from "./answer";
 import { AskBox } from "./ask";
-import { useChannelsByPod } from "./chats";
 import { markOf, readsAhead } from "./sidebar";
 import { Empty, to } from "./parts";
 
@@ -29,10 +28,13 @@ function greeting(now: number): string {
  *  chats to pick up again, across every Lemma -- the sidebar folds each
  *  Lemma to its name, so this is where the latest of them are. A failed
  *  read of what waits says so, rather than greeting over it. */
-export function Today({ org, pods, activity, queue, queueFailed, onRetryQueue, me, go, onAsk }: {
+export function Today({ org, pods, activity, channels, queue, queueFailed, onRetryQueue, me, go, onAsk }: {
     org: Org;
     pods: readonly Pod[];
     activity: Map<string, ConversationRef[]>;
+    /** The shared chats the sidebar has read: those of the Lemmas it is
+     *  showing. Home does not read every Lemma's to list a few. */
+    channels: ReadonlyMap<string, readonly Channel[]>;
     queue: readonly QueueItem[];
     queueFailed: boolean;
     onRetryQueue: () => void;
@@ -42,7 +44,6 @@ export function Today({ org, pods, activity, queue, queueFailed, onRetryQueue, m
 }) {
     const [now] = useState(() => Date.now());
     const reader = useMe();
-    const [channels, feeds] = useChannelsByPod(pods);
     const recent = useMemo(() => {
         const { rest } = chatItems({ pods, conversations: activity, channels, me: reader });
         return rest.filter(inSidebar).slice(0, RECENT_SHOWN);
@@ -66,7 +67,6 @@ export function Today({ org, pods, activity, queue, queueFailed, onRetryQueue, m
 
     return (
         <div className="ox-page ox-home">
-            {feeds}
             <h1 className="ox-home__t">{headline}</h1>
             <AskBox pods={pods} onAsk={onAsk} autoFocus />
             {queueFailed && queue.length === 0 && (

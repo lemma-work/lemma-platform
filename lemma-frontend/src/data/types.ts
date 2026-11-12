@@ -366,6 +366,10 @@ export interface ConversationRef {
      *  you. Not the same as WAITING: a run can wait on a timer, and an agent
      *  asking permission on your computer is still running. */
     waitingOnYou?: boolean;
+    /** How many times it ran lately, when this stands for an automation's
+     *  newest run and the source counted the rest (the organization's
+     *  overview). Absent where each run is listed on its own. */
+    runs?: number;
 }
 
 /** One page of a teammate's conversations, most recently active first.

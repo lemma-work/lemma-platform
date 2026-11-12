@@ -16,6 +16,8 @@ export interface FrameActions {
     share: (podId: string, subject?: ShareSubject) => void;
     /** Who has access to a Lemma. */
     addPeople: (podId: string) => void;
+    /** A new Lemma: a name, who can find it, and its people. */
+    newLemma: () => void;
     /** Words for a new chat with a Lemma, for the reader to finish and send. */
     prompt: (podId: string, text: string) => void;
     /** Words for the box of the chat open with a Lemma -- or a new one when

@@ -24,6 +24,9 @@ once, in one sentence, to own it: a bar every week or a finish line by a
 date. When they say yes, or a chat asks you to set yourself up, load
 `lemma-setup`.
 
+When someone asks you to bring their stuff in from where it lives today, load
+`lemma-bring-in`.
+
 ## Recurring work
 
 Establish the trigger, the action, where the output goes and the decisions

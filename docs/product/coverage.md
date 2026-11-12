@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 176 |
+| `covered` | 178 |
 | `gap` | 4 |
-| `manual` | 24 |
+| `manual` | 33 |
 | `planned` | 36 |
 | `withdrawn` | 0 |
-| **total** | **240** |
+| **total** | **251** |
 
-Scenario tests declaring a promise: 454.
+Scenario tests declaring a promise: 459.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 259 | 384 |
+| OpenAPI operations | 260 | 385 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -115,6 +115,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-001` A member of an organization creates a pod and administers it | `covered` | `test_pod_creator_administers_it`, `test_outsider_cannot_create_a_pod` |
 | `PS-POD-002` A pod's name identifies it within its organization | `covered` | `test_pod_names_are_unique_within_an_organization`, `test_a_pod_name_is_scoped_to_its_organization`, `test_a_deleted_pods_name_is_reusable` |
 | `PS-POD-003` A pod carries the settings its work depends on | `covered` | `test_a_partial_update_leaves_the_rest_of_the_settings`, `test_an_icon_round_trips` |
+| `PS-POD-004` A person makes a pod the way they would make a channel | `manual` | — |
 | `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_an_organization_owner_administers_a_pod_they_are_not_in`, `test_a_member_can_be_found`, `test_adding_an_existing_member_again_is_refused`, `test_a_pod_cannot_widen_its_organization`, `test_admin_adds_an_organization_member` |
 | `PS-POD-011` A person's pod role decides what they may do inside it | `covered` | `test_an_outsider_cannot_create_a_workflow`, `test_a_viewer_reads_but_does_not_write`, `test_a_role_change_applies_to_the_next_request` |
 | `PS-POD-012` A person can find out what they may do, before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
@@ -122,14 +123,22 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-020` A pod decides who may walk in | `covered` | `test_a_new_pod_is_invite_only`, `test_an_org_open_pod_admits_members`, `test_an_outsider_cannot_join_an_org_open_pod` |
 | `PS-POD-021` A person asks for access and an admin decides | `covered` | `test_an_organization_editor_cannot_make_themselves_a_pod_administrator`, `test_a_person_sees_their_own_request`, `test_a_join_request_is_approved` |
 | `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions`, `test_an_organization_editor_cannot_make_themselves_a_pod_administrator`, `test_an_invitation_cannot_smuggle_a_pod_administrator` |
+| `PS-POD-023` A member finds the pods open to them, and joins one | `covered` | `test_a_member_finds_the_pods_open_to_them`, `test_an_owner_is_offered_nothing_and_an_outsider_is_refused` |
+| `PS-POD-024` A pod can take in everyone who joins its organization | `covered` | `test_an_invite_only_pod_cannot_take_in_new_members`, `test_a_pod_editor_cannot_make_new_members_join`, `test_a_newcomer_joins_the_pods_set_to_take_them_in` |
 | `PS-POD-030` A person sees exactly the pods they may open | `covered` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
 | `PS-POD-032` A person sees what waits on them, and what moved, across every pod at once | `planned` | — |
+| `PS-POD-033` History shows what a person's pods have been doing | `manual` | — |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
 | `PS-POD-041` A pod always has at least one admin | `covered` | `test_the_last_pod_admin_cannot_step_down`, `test_the_last_pod_admin_cannot_remove_themselves`, `test_an_organization_owner_cannot_be_the_admin_who_steps_down` |
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_repeated_deletion_still_reports_success`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-POD-060` An empty place says what belongs there and offers a way to start | `manual` | — |
+| `PS-POD-061` An empty pod offers ways in, and a template is one of them | `manual` | — |
+| `PS-POD-062` Every page of a pod carries one header: its face, what it says, and seven tabs | `manual` | — |
+| `PS-POD-063` About says what a pod is, and leads to each part of it | `manual` | — |
+| `PS-POD-064` A pod says what it can do so far, and the one next step | `manual` | — |
+| `PS-POD-065` A pod says hello to someone new to it, once | `manual` | — |
 | `PS-POD-070` A person starts a pod that owns something, in one step | `planned` | — |
 | `PS-POD-071` Everyone in a pod sees the same number, week by week | `planned` | — |
 | `PS-POD-072` Only someone who can read every row a measure counts may set it | `planned` | — |
@@ -170,6 +179,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
+| `PS-ONB-015` A new organization opens in a Lemma everyone in it can find | `manual` | — |
+| `PS-ONB-016` An organization's own Lemma starts by bringing the team's stuff in | `manual` | — |
 | `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_editor_invites_up_to_their_own_level`, `test_an_invitation_is_addressed` |
 | `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_cannot_smuggle_a_pod_administrator`, `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |

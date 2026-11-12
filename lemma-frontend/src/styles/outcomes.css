@@ -449,27 +449,22 @@
     font-size: 13px;
 }
 
-/* An outcome: its face and name, the one weight-500 line in the list, with
-   space above it. Folded ones pack together into a list of names. */
-.ox-group {
-    margin-top: 14px;
-}
-
-.ox-group--folded {
-    margin-top: 6px;
-}
-
-.ox-group--folded + .ox-group--folded {
-    margin-top: 0;
+/* A Lemma: its face and name, the one weight-500 line in the list. Names
+   pack together, one row each. Only a Lemma showing its chats stands apart,
+   by the same space above and below, so the gaps in the list always mean
+   "these chats belong to that name" and never depend on what was unfolded
+   around it. */
+.ox-group--showing {
+    margin: 8px 0;
 }
 
 .ox-group__head {
     display: flex;
     align-items: center;
     gap: 0;
-    height: 32px;
+    height: 38px;
     padding-right: 3px;
-    border-radius: 8px;
+    border-radius: 9px;
 }
 
 /* The name opens its Lemma; the chevron after it folds and unfolds the
@@ -478,13 +473,28 @@
 .ox-group__name {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-width: 0;
-    height: 32px;
-    padding: 0 4px 0 10px;
+    height: 38px;
+    padding: 0 4px 0 8px;
     color: var(--ink);
-    font-size: 13.5px;
+    font-size: 14.5px;
     font-weight: 500;
+}
+
+/* A Lemma's character, large enough to tell one from another at a glance:
+   the list of Lemmas is a list of faces, and the chats under each sit in
+   from it, under its name. */
+.ox-group__face {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 26px;
+    height: 26px;
+}
+
+.ox-group__rows .ox-srow {
+    padding-left: 18px;
 }
 
 .ox-group__t {
@@ -648,7 +658,7 @@
 .ox-group__more {
     align-self: flex-start;
     height: 28px;
-    padding: 0 10px 0 36px;
+    padding: 0 10px 0 44px;
     border: 0;
     background: none;
     color: var(--ink-2);
@@ -2772,14 +2782,20 @@ a.ox-piece:hover .ox-piece__t {
 
 /* What it owns, or the way to give it something to own: one line under
    its name, not a card of its own. */
-.ox-lsum__id .ox-lsum__owns {
+.ox-lsum__owns {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: 4px 8px;
-    margin-top: 12px;
+    gap: 4px 10px;
+    margin: 0;
     color: var(--ink);
-    font-size: 14px;
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+/* The word before the sentence: a caption, set apart from it. */
+.ox-lsum__owns > .ox-vs:first-child {
+    font-size: 13px;
 }
 
 /* A button that reads as a link in a sentence. */
@@ -3679,4 +3695,939 @@ a.ox-piece:hover .ox-piece__t {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+}
+
+/* ── a Lemma as a space ─────────────────────────────────────────────────── */
+
+/* A Lemma's own pages wear one header: its character, its name and what it
+   says about itself, its people, and its tabs. It is the bar, so it sits
+   where the bar does, on the main side's edges. */
+.ox-lhead {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 20px 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+}
+
+.ox-lhead__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ox-lhead__id {
+    display: flex;
+    flex: 1 1 280px;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    border-radius: 10px;
+}
+
+.ox-lhead__t {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.ox-lhead__name {
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.25;
+}
+
+/* What it says, in its own voice: the first thing read on any of its pages,
+   so it is set larger than a caption and allowed a second line. */
+.ox-lhead__says {
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.4;
+    text-wrap: pretty;
+}
+
+.ox-lhead__acts {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+}
+
+.ox-lhead__faces {
+    display: flex;
+    align-items: center;
+    padding-left: 6px;
+}
+
+.ox-lhead__faces .ox-avatar {
+    margin-left: -6px;
+    box-shadow: 0 0 0 2px var(--paper);
+}
+
+.ox-lhead__more {
+    margin-left: 6px;
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+.ox-tabs {
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    margin-bottom: -1px;
+}
+
+.ox-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    padding: 8px 10px;
+    border-bottom: 2px solid transparent;
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.ox-tab:hover {
+    color: var(--ink);
+}
+
+.ox-tab[aria-current="page"] {
+    border-bottom-color: var(--ink);
+    color: var(--ink);
+}
+
+.ox-tab__n {
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+/* History: what moved, a day at a time. One row each -- whose it is, what
+   it was, what kind of thing, how it ended, when -- on the edges the frame's
+   other lists use. */
+.ox-hist__bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    margin-top: 22px;
+}
+
+.ox-hist__pick select {
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+}
+
+.ox-hist__show {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ox-hist__chip {
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--paper);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-hist__chip[aria-pressed="true"] {
+    border-color: var(--ink);
+    color: var(--ink);
+}
+
+.ox-hist__rows {
+    display: flex;
+    flex-direction: column;
+    margin: 0 -10px;
+}
+
+.ox-hist__row {
+    display: grid;
+    grid-template-columns: minmax(0, 170px) minmax(0, 1fr) minmax(0, 200px) minmax(0, 150px) 68px;
+    align-items: center;
+    gap: 12px;
+    min-height: 40px;
+    padding: 2px 10px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.ox-hist__row:hover {
+    background: var(--wash-b);
+}
+
+.ox-hist__who {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+}
+
+.ox-hist__name,
+.ox-hist__t,
+.ox-hist__what {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-hist__name,
+.ox-hist__what,
+.ox-hist__said {
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-hist__said--live {
+    color: var(--lemma-ink);
+}
+
+.ox-hist__said--wait,
+.ox-hist__said--bad {
+    color: var(--behind-ink);
+}
+
+.ox-hist__when {
+    color: var(--ink-2);
+    font-family: var(--ui);
+    font-size: 12px;
+    text-align: right;
+}
+
+.ox-hist__again {
+    margin: 18px 0 0;
+}
+
+@media (max-width: 860px) {
+    .ox-hist__row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 2px 12px;
+        padding: 8px 10px;
+    }
+
+    .ox-hist__who,
+    .ox-hist__t,
+    .ox-hist__what {
+        grid-column: 1;
+    }
+
+    .ox-hist__said,
+    .ox-hist__when {
+        grid-column: 2;
+        text-align: right;
+    }
+}
+
+/* What it can do so far: four things, ticked as each becomes true, and the
+   one step that would add the next. */
+.ox-cando__steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 22px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-cando__step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-cando__step--done {
+    color: var(--ink);
+}
+
+.ox-cando__mark {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--line);
+    border-radius: 50%;
+}
+
+.ox-cando__step--done .ox-cando__mark {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.ox-cando__next {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin: 12px 0 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+/* A Lemma saying hello to someone new to it: its face, and a few sentences
+   in its own voice. Once, and then gone. */
+.ox-meet {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 8px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--lemma-wash);
+}
+
+.ox-meet__t {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    font-size: 14.5px;
+}
+
+.ox-meet__t p {
+    margin: 0;
+}
+
+.ox-meet__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+}
+
+/* A part of About names itself under the way back to About. */
+.ox-section__head--part {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+/* A Lemma's apps on its own home: the first thing on the page, three wide. */
+.ox-apps--lead {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.ox-apps--lead .ox-apptile__name {
+    font-size: 15px;
+}
+
+/* About: one question a part, its short answer beside it, and under the
+   answer the way to the page that holds the rest. */
+.ox-about {
+    display: flex;
+    flex-direction: column;
+    max-width: 880px;
+}
+
+.ox-about__part {
+    display: grid;
+    grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+    gap: 6px 28px;
+    padding: 20px 0;
+    border-top: 1px solid var(--line-2);
+}
+
+.ox-about__part:first-child {
+    padding-top: 0;
+    border-top: 0;
+}
+
+.ox-about__q {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.ox-about__a {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ox-about__a p {
+    margin: 0;
+}
+
+.ox-about__lead {
+    font-size: 15.5px;
+}
+
+.ox-about__owns {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+}
+
+.ox-about__more {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    padding-top: 2px;
+}
+
+.ox-about__people,
+.ox-about__rows {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-about__people li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+}
+
+.ox-about__rows li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 2px 16px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-2);
+}
+
+.ox-about__rows li:last-child {
+    border-bottom: 0;
+}
+
+@media (max-width: 720px) {
+    .ox-about__part {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* What a tab holds: a line of what is there and how to add to it, then one
+   row each, as the frame lists things elsewhere. */
+.ox-held__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.ox-heldrows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-heldrow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 2px 10px;
+    border-radius: 8px;
+    color: var(--ink);
+    font-size: 14px;
+}
+
+.ox-heldrow:hover {
+    background: var(--wash-b);
+}
+
+.ox-heldrow .ox-icon {
+    color: var(--ink-2);
+}
+
+.ox-heldrow__t {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ox-heldrow__d,
+.ox-heldrow__when {
+    flex: none;
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.ox-held--people {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+/* An empty Lemma's first page. */
+.ox-start,
+.ox-welcome {
+    padding-top: 40px;
+    padding-bottom: 40px;
+}
+
+.ox-start__t,
+.ox-welcome__t {
+    margin: 0 0 18px;
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.ox-welcome__t {
+    margin: 6px 0 4px;
+    font-size: 27px;
+    line-height: 1.2;
+}
+
+.ox-ways {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+    gap: 12px;
+}
+
+.ox-way {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+}
+
+.ox-way h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.ox-way p {
+    margin: 0;
+}
+
+.ox-way__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ox-way__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 0 12px 0 8px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-way__chip:hover {
+    background: var(--wash-b);
+}
+
+.ox-mono {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-family: var(--ui);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.ox-kits {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-kits li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ox-kits__t {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+/* The organization's own Lemma, on the first day: where the team's stuff
+   is today, picked from tiles. */
+.ox-places {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+    gap: 10px;
+    margin: 18px 0;
+}
+
+.ox-place-tile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 64px;
+    padding: 12px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-place-tile:hover {
+    background: var(--wash-b);
+}
+
+.ox-place-tile[aria-pressed="true"] {
+    border-color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.ox-place-tile .ox-mono {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.ox-place-tile__t {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.ox-place-tile__tick {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    border: 1px solid var(--line-2);
+    border-radius: 50%;
+    color: transparent;
+}
+
+.ox-place-tile[aria-pressed="true"] .ox-place-tile__tick {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.ox-welcome__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* A new Lemma: the dialog a chat app makes a channel with. */
+.ox-newl {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.ox-newl__name {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+/* Its face: every character, to pick one. The one picked stands larger
+   beside the name, alive. */
+.ox-newl__faces {
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.ox-newl__faces legend {
+    margin-bottom: 6px;
+    padding: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-newl__cast {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ox-newl__pick {
+    display: grid;
+    place-items: center;
+    padding: 3px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: none;
+    cursor: pointer;
+}
+
+/* A choice among a few, as words: a job to start with, a goal or none. */
+.ox-newl__jobs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ox-newl__job {
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--paper);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-newl__job:hover {
+    color: var(--ink);
+}
+
+.ox-newl__job[aria-pressed="true"] {
+    border-color: var(--ink);
+    color: var(--ink);
+}
+
+.ox-newl__said {
+    margin: 8px 0 0;
+}
+
+.ox-newl__pick:hover {
+    border-color: var(--line);
+}
+
+.ox-newl__pick[aria-pressed="true"] {
+    border-color: var(--ink);
+}
+
+.ox-newl__field {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    color: var(--ink);
+    font-size: 13px;
+}
+
+.ox-newl__field input,
+.ox-newl__people {
+    width: 100%;
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.ox-newl__reach {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.ox-newl__reach legend {
+    margin-bottom: 6px;
+    padding: 0;
+    font-size: 13px;
+}
+
+.ox-newl__radio {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    cursor: pointer;
+}
+
+.ox-newl__radio:has(input:checked) {
+    border-color: var(--ink);
+}
+
+.ox-newl__radio input {
+    margin: 3px 0 0;
+    accent-color: var(--ink);
+}
+
+.ox-newl__radio > span {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.ox-newl__people {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+}
+
+.ox-newl__people input {
+    flex: 1;
+    min-width: 120px;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    outline: none;
+    background: none;
+}
+
+.ox-newl__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px 2px 10px;
+    border-radius: 14px;
+    background: var(--wash-a);
+    font-size: 13px;
+}
+
+.ox-newl__chip button {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.ox-newl__offer {
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+}
+
+.ox-newl__offer button {
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-newl__offer button:hover {
+    background: var(--wash-b);
+}
+
+.ox-newl__acts {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.ox-newl__shared {
+    margin-top: 14px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-newl__shared summary {
+    cursor: pointer;
+}
+
+.ox-newl__note {
+    margin: 0;
+    color: var(--ink-2);
+}
+
+/* The Lemmas open to the reader that they are not in, each a Join away. */
+.ox-joinable {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-joinable li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+}
+
+.ox-joinable li:first-child {
+    border-top: 0;
+}
+
+.ox-joinable__t {
+    display: flex;
+    flex: 1 1 260px;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+/* In a Lemma's Files tab there is no section title for the Library's own
+   buttons to sit on, so they keep a line of their own, at its end. */
+.ox-section[data-section="files"] .library-heading {
+    position: static;
+    justify-content: flex-end;
+    margin: 0 0 12px;
 }

@@ -1,0 +1,219 @@
+from http import HTTPStatus
+from typing import Any
+from urllib.parse import quote
+from uuid import UUID
+
+import httpx
+
+from ... import errors
+from ...client import AuthenticatedClient, Client
+from ...models.error_response import ErrorResponse
+from ...models.joinable_pod_list_response import JoinablePodListResponse
+from ...types import UNSET, Response, Unset
+
+
+def _get_kwargs(
+    organization_id: UUID,
+    *,
+    limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
+) -> dict[str, Any]:
+
+    params: dict[str, Any] = {}
+
+    params["limit"] = limit
+
+    json_page_token: None | str | Unset
+    if isinstance(page_token, Unset):
+        json_page_token = UNSET
+    else:
+        json_page_token = page_token
+    params["page_token"] = json_page_token
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
+
+    _kwargs: dict[str, Any] = {
+        "method": "get",
+        "url": "/organizations/{organization_id}/pods/joinable".format(
+            organization_id=quote(str(organization_id), safe=""),
+        ),
+        "params": params,
+    }
+
+    return _kwargs
+
+
+def _parse_response(
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> ErrorResponse | JoinablePodListResponse | None:
+    if response.status_code == 200:
+        response_200 = JoinablePodListResponse.from_dict(response.json())
+
+        return response_200
+
+    if response.status_code == 422:
+        response_422 = ErrorResponse.from_dict(response.json())
+
+        return response_422
+
+    if client.raise_on_unexpected_status:
+        raise errors.UnexpectedStatus(response.status_code, response.content)
+    else:
+        return None
+
+
+def _build_response(
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Response[ErrorResponse | JoinablePodListResponse]:
+    return Response(
+        status_code=HTTPStatus(response.status_code),
+        content=response.content,
+        headers=response.headers,
+        parsed=_parse_response(client=client, response=response),
+    )
+
+
+def sync_detailed(
+    organization_id: UUID,
+    *,
+    client: AuthenticatedClient | Client,
+    limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
+) -> Response[ErrorResponse | JoinablePodListResponse]:
+    """List Pods the Caller Can Join
+
+     The organization's pods the caller is not in and may join without asking: those open to the
+    organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty
+    for an organization owner, who already opens every pod. 403 for someone outside the organization.
+
+    Args:
+        organization_id (UUID):
+        limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[ErrorResponse | JoinablePodListResponse]
+    """
+
+    kwargs = _get_kwargs(
+        organization_id=organization_id,
+        limit=limit,
+        page_token=page_token,
+    )
+
+    response = client.get_httpx_client().request(
+        **kwargs,
+    )
+
+    return _build_response(client=client, response=response)
+
+
+def sync(
+    organization_id: UUID,
+    *,
+    client: AuthenticatedClient | Client,
+    limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
+) -> ErrorResponse | JoinablePodListResponse | None:
+    """List Pods the Caller Can Join
+
+     The organization's pods the caller is not in and may join without asking: those open to the
+    organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty
+    for an organization owner, who already opens every pod. 403 for someone outside the organization.
+
+    Args:
+        organization_id (UUID):
+        limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        ErrorResponse | JoinablePodListResponse
+    """
+
+    return sync_detailed(
+        organization_id=organization_id,
+        client=client,
+        limit=limit,
+        page_token=page_token,
+    ).parsed
+
+
+async def asyncio_detailed(
+    organization_id: UUID,
+    *,
+    client: AuthenticatedClient | Client,
+    limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
+) -> Response[ErrorResponse | JoinablePodListResponse]:
+    """List Pods the Caller Can Join
+
+     The organization's pods the caller is not in and may join without asking: those open to the
+    organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty
+    for an organization owner, who already opens every pod. 403 for someone outside the organization.
+
+    Args:
+        organization_id (UUID):
+        limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[ErrorResponse | JoinablePodListResponse]
+    """
+
+    kwargs = _get_kwargs(
+        organization_id=organization_id,
+        limit=limit,
+        page_token=page_token,
+    )
+
+    response = await client.get_async_httpx_client().request(**kwargs)
+
+    return _build_response(client=client, response=response)
+
+
+async def asyncio(
+    organization_id: UUID,
+    *,
+    client: AuthenticatedClient | Client,
+    limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
+) -> ErrorResponse | JoinablePodListResponse | None:
+    """List Pods the Caller Can Join
+
+     The organization's pods the caller is not in and may join without asking: those open to the
+    organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty
+    for an organization owner, who already opens every pod. 403 for someone outside the organization.
+
+    Args:
+        organization_id (UUID):
+        limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        ErrorResponse | JoinablePodListResponse
+    """
+
+    return (
+        await asyncio_detailed(
+            organization_id=organization_id,
+            client=client,
+            limit=limit,
+            page_token=page_token,
+        )
+    ).parsed

@@ -197,10 +197,11 @@ export function useApps(pods: readonly Pod[]): { apps: PodApp[]; pending: boolea
 }
 
 /** Apps as tiles: a cover, a name and -- across Lemmas -- whose it is. Each
- *  opens here, framed, in the Lemma that runs it. */
-export function AppTiles({ apps, go, showWhose = true }: { apps: readonly PodApp[]; go: Go; showWhose?: boolean }) {
+ *  opens here, framed, in the Lemma that runs it. `large` on a Lemma's own
+ *  home, where its apps lead the page. */
+export function AppTiles({ apps, go, showWhose = true, large = false }: { apps: readonly PodApp[]; go: Go; showWhose?: boolean; large?: boolean }) {
     return (
-        <div className="ox-apps ox-apps--home">
+        <div className={"ox-apps " + (large ? "ox-apps--lead" : "ox-apps--home")}>
             {apps.map(({ pod, app }) => (
                 <a key={pod.id + app.id} className="ox-apptile" {...to({ name: "app", podId: pod.id, app: app.id.replace(/^app:/, "") }, go)}>
                     <span className="ox-app__cover"><AppCover url={app.url} fallback={<span className="ox-app__blank"><Icon name="app" size={20} /></span>} /></span>

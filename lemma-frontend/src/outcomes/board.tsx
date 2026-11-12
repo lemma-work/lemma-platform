@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
-import { ageOf, dailyActivity, formatMeasure, isRunning, outcomeView, readMeasure, standingOf, type Go, type Plan, type QueueItem } from "./model";
+import { ageOf, dailyActivity, formatMeasure, isRunning, outcomeView, readMeasure, standingOf, type Go, type Plan, type QueueItem, type DayCount } from "./model";
 import { ActivityChart, to } from "./parts";
 import { TeammateFace } from "@/space/teammate-face";
 
@@ -54,9 +54,13 @@ function rightNow(conversations: readonly ConversationRef[], now: number): { liv
 /** Every Lemma as a lane, the busiest first: its face and what it owns, two weeks of
  *  work a bar a day, its number against its target, what it is doing right
  *  now and what waits on you there. */
-export function Board({ pods, activity, plans, queue, go }: {
+export function Board({ pods, activity, days, plans, queue, go }: {
     pods: readonly Pod[];
     activity: Map<string, ConversationRef[]>;
+    /** Each Lemma's work a day as the organization counted it -- every
+     *  conversation, not only the latest the frame lists. Without it the
+     *  bars are counted from the list. */
+    days: Map<string, DayCount[]> | null;
     plans: Map<string, Plan | null | undefined>;
     queue: readonly QueueItem[];
     go: Go;
@@ -83,13 +87,15 @@ export function Board({ pods, activity, plans, queue, go }: {
                         <a key={pod.id} className="ox-lane" {...to(outcomeView(pod.id), go)}>
                             <span className="ox-lane__who">
                                 <span className="ox-lane__name"><TeammateFace pod={pod} size={22} />{pod.name}{owner && <span className="ox-lane__owner">{owner}</span>}</span>
-                                <span className={"ox-lane__owns" + (owns ? "" : " ox-lane__owns--none")}>{owns || pod.description || "Nothing it owns yet"}</span>
+                                {/* What it owns when it owns something, else what it is for: owning a
+                                    result is something a Lemma takes on, not a gap to point at. */}
+                                {(owns || pod.description) && <span className={"ox-lane__owns" + (owns ? "" : " ox-lane__owns--none")}>{owns || pod.description}</span>}
                             </span>
-                            <span className="ox-lane__chart"><ActivityChart days={dailyActivity(conversations, new Date(now))} /></span>
+                            <span className="ox-lane__chart"><ActivityChart days={days?.get(pod.id) ?? dailyActivity(conversations, new Date(now))} /></span>
                             <span className="ox-lane__num">
                                 {value !== null && value !== undefined && plan
                                     ? <><span className="ox-big ox-num">{formatMeasure(value, plan.unit)}</span>{plan.target && <span className="ox-vs">target {plan.target}</span>}{standing && <span className={"ox-pill" + (standing === "behind" ? " ox-pill--behind" : "")}>{standing === "behind" ? "Behind" : "On track"}</span>}</>
-                                    : <span className="ox-vs">{plan ? "No number yet" : "No plan yet"}</span>}
+                                    : owns ? <span className="ox-vs">No number yet</span> : null}
                             </span>
                             <span className={"ox-now" + (live.live ? " ox-now--live" : "")}>{live.live && <i aria-hidden="true" />}<span>{live.text}</span></span>
                             <span className="ox-wait">{mine > 0 ? <><span className="ox-count ox-count--quiet">{mine}</span>{mine === 1 ? "thing" : "things"}</> : <span className="ox-vs">Nothing</span>}</span>

@@ -66,3 +66,27 @@ def test_from_raw_ignores_unknown_keys():
     )
     runtime = config.resolved_default_runtime()
     assert runtime is not None and runtime.profile_id == "p1"
+
+
+def test_auto_join_new_members_is_off_by_default_and_always_written():
+    """Unlike the empty defaults above, it is serialized even when off."""
+    config = PodConfig()
+
+    assert config.auto_join_new_members is False
+    assert config.model_dump()["auto_join_new_members"] is False
+
+
+def test_an_explicit_auto_join_off_survives_a_partial_dump():
+    """`update_pod` merges `model_dump(exclude_unset=True)` key by key. A false
+    dropped there, the way an unset runtime is, would leave a stored true in
+    place and the setting could never be turned off again."""
+    sent = PodConfig.model_validate({"auto_join_new_members": False})
+
+    assert sent.model_dump(exclude_unset=True) == {"auto_join_new_members": False}
+
+
+def test_a_stored_config_without_auto_join_reads_as_off():
+    config = PodConfig.from_raw({"join_policy": "ORG_MEMBERS"})
+
+    assert config.auto_join_new_members is False
+    assert config.join_policy.value == "ORG_MEMBERS"
