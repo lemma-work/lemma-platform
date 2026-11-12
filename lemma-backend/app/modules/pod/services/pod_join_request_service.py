@@ -380,7 +380,12 @@ class PodJoinRequestService:
             requester_user_id=requester_user_id,
         )
 
-        join_request = await self.pod_join_request_repository.get(join_request_id)
+        # Locked until this decision commits, so a second one -- an approve and
+        # a decline, or a withdrawal -- waits and then finds it already answered,
+        # rather than both acting and leaving membership and status disagreeing.
+        join_request = await self.pod_join_request_repository.get(
+            join_request_id, lock=True
+        )
         if not join_request or join_request.pod_id != pod_id:
             raise PodJoinRequestNotFoundError()
 
@@ -465,7 +470,12 @@ class PodJoinRequestService:
             requester_user_id=requester_user_id,
         )
 
-        join_request = await self.pod_join_request_repository.get(join_request_id)
+        # Locked until this decision commits, so a second one -- an approve and
+        # a decline, or a withdrawal -- waits and then finds it already answered,
+        # rather than both acting and leaving membership and status disagreeing.
+        join_request = await self.pod_join_request_repository.get(
+            join_request_id, lock=True
+        )
         if not join_request or join_request.pod_id != pod_id:
             raise PodJoinRequestNotFoundError()
         if join_request.status != PodJoinRequestStatus.PENDING:
@@ -488,7 +498,7 @@ class PodJoinRequestService:
 
         join_request = (
             await self.pod_join_request_repository.get_pending_by_pod_and_user(
-                pod_id, requester_user_id
+                pod_id, requester_user_id, lock=True
             )
         )
         if not join_request:

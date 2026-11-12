@@ -521,12 +521,16 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         await self._collect_events(entity)
         return instance.to_entity()
 
-    async def get(self, id: UUID) -> Optional[PodJoinRequestEntity]:
+    async def get(
+        self, id: UUID, *, lock: bool = False
+    ) -> Optional[PodJoinRequestEntity]:
         stmt = (
             select(PodJoinRequest, User)
             .outerjoin(User, PodJoinRequest.user_id == User.id)
             .where(PodJoinRequest.id == id)
         )
+        if lock:  # the request row only: the user side of the join may be null
+            stmt = stmt.with_for_update(of=PodJoinRequest)
         row = (await self.session.execute(stmt)).first()
         if not row:
             return None
@@ -534,10 +538,10 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         return self._entity_with_user(instance, user)
 
     async def get_pending_by_pod_and_user(
-        self, pod_id: UUID, user_id: UUID
+        self, pod_id: UUID, user_id: UUID, *, lock: bool = False
     ) -> Optional[PodJoinRequestEntity]:
         return await self.get_latest_by_pod_and_user(
-            pod_id, user_id, status=PodJoinRequestStatus.PENDING
+            pod_id, user_id, status=PodJoinRequestStatus.PENDING, lock=lock
         )
 
     async def get_latest_by_pod_and_user(
@@ -546,6 +550,7 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         user_id: UUID,
         *,
         status: PodJoinRequestStatus | None = None,
+        lock: bool = False,
     ) -> Optional[PodJoinRequestEntity]:
         stmt = (
             select(PodJoinRequest, User)
@@ -555,6 +560,8 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         )
         if status is not None:
             stmt = stmt.where(PodJoinRequest.status == status)
+        if lock:
+            stmt = stmt.with_for_update(of=PodJoinRequest)
         row = (await self.session.execute(stmt)).first()
         if not row:
             return None

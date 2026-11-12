@@ -819,7 +819,9 @@ async def test_withdraw_takes_back_my_pending_request_quietly():
 
     assert result.status == PodJoinRequestStatus.WITHDRAWN
     assert _decided_events(result) == []
-    join_repo.get_pending_by_pod_and_user.assert_awaited_once_with(pod_id, user_id)
+    join_repo.get_pending_by_pod_and_user.assert_awaited_once_with(
+        pod_id, user_id, lock=True
+    )
 
 
 @pytest.mark.asyncio
@@ -841,3 +843,17 @@ async def test_withdraw_with_nothing_pending_is_not_found():
     with pytest.raises(PodJoinRequestNotFoundError):
         await service.withdraw_my_join_request(pod_id, uuid4())
     join_repo.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_decision_reads_the_request_locked():
+    """Two decisions on one request must not both act: each reads it locked,
+    so the second waits for the first and then finds it answered."""
+    service, join_request, approver_id, _ = _approve_setup(
+        approver_role=OrganizationRole.ORG_OWNER
+    )
+    join_repo = service.pod_join_request_repository
+
+    await service.reject_join_request(join_request.pod_id, join_request.id, approver_id)
+
+    join_repo.get.assert_awaited_once_with(join_request.id, lock=True)
