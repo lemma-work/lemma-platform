@@ -592,6 +592,65 @@ Unset means `open` on Lemma Desktop too. Desktop sets `SIGNUP_MODE` only while
 the installation is shared, from its *Who can join* choice; see
 [Desktop security](architecture/desktop-security.md).
 
+### Signing in with Google, Microsoft or Apple
+
+A provider is registered only when every value it needs is set, and the
+sign-in page draws a button only for the providers the backend registered (it
+asks SuperTokens' `/loginmethods`), so a button never leads somewhere
+unconfigured.
+
+```dotenv
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+MICROSOFT_CLIENT_ID=
+MICROSOFT_CLIENT_SECRET=
+# Unset is `common`: personal and work accounts both.
+MICROSOFT_TENANT_ID=
+# Sign in with Apple: the Services ID (not the app's bundle id), the team
+# that owns it, and the Sign in with Apple key.
+APPLE_CLIENT_ID=com.example.signin
+APPLE_TEAM_ID=
+APPLE_KEY_ID=
+# The .p8 file's contents, BEGIN and END lines included. Newlines may be
+# written as \n. A value that is not an EC private key leaves Apple
+# unregistered and logs identity.apple_sign_in.private_key_unusable.
+APPLE_PRIVATE_KEY=
+```
+
+Google and Microsoft send the browser straight back to the sign-in page, so
+their consoles list `<AUTH_FRONTEND_URL>/auth/callback/google` and
+`<AUTH_FRONTEND_URL>/auth/callback/active-directory`.
+
+Apple answers with a form POST, which only the API can take. Its return URL
+is `<API_URL>/st/auth/callback/apple`; the API forwards the browser to
+`<AUTH_FRONTEND_URL>/auth/callback/apple`, and only ever to that origin, so a
+sign-in with Apple has to start from the sign-in page on `AUTH_FRONTEND_URL`.
+In the Services ID, list the hosts of both URLs as its domains and the API's
+URL as its return URL. Apple shows the person's name to Lemma once, on the
+first sign-in, and Lemma keeps it then.
+
+When someone who signs in with Apple deletes their account, Lemma asks Apple
+to revoke that sign-in, as Apple asks of apps that offer it. Each Apple
+sign-in's refresh token is kept for this, sealed with the secret cipher in the
+SuperTokens user's metadata, and the deletion's work item spends it just
+before it removes the user. While Apple is unreachable the item waits and
+tries again; anything Apple answers is final, and the deletion finishes.
+Revoking signs a client secret with the same key, so keep the `APPLE_*`
+values set for as long as any account was made with Apple.
+
+**Register your sending domains with Apple before turning it on.** Someone who
+chooses *Hide My Email* signs up as an `@privaterelay.appleid.com` address,
+and Apple forwards mail to it only from senders registered under *Sign in with
+Apple for Email Communication* in the Apple Developer account, authenticated
+by SPF for the envelope sender or DKIM for the From domain. Until the From
+domain of `SMTP_FROM_EMAIL` or `RESEND_FROM_EMAIL` is registered (and the
+envelope-sender domain too, if your provider uses its own), the welcome mail,
+invitations and codes to those people bounce, and with the bounce webhook set
+up a hard bounce switches the account off. An address on the relay that has
+no account here is sent to Apple from the email box rather than mailed a
+code: the code would bounce, or make an account that Apple could not then
+sign in to.
+
 **Resend is not a transport.** To send through Resend, leave
 `EMAIL_TRANSPORT=smtp`, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL`, and leave
 `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` and `SMTP_FROM_EMAIL` unset — the
