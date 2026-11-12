@@ -2,12 +2,16 @@
 
 A message is said in a place -- a person's private chat, a group, an email
 thread -- and every place is a source of a channel (``channel_places``). A
-person has one conversation per agent in a channel, however many threads,
-numbers, platforms or days they write across: the thread is new, the place
-and the person are not. So binding is three steps -- place the message, note
-what was heard there (how to answer it), and find or open the person's
-conversation -- and only a different agent, or a different person, opens
-another.
+person has one conversation per agent on each platform of a channel, however
+many threads, numbers or days they write across there. Their WhatsApp chat
+and their email are two places of their one DIRECT channel, and two
+conversations: what is asked on one is neither read nor answered on the
+other, and neither waits for the other's run. A chat that moves to another
+number of the pool, or another of the pod's bots on the platform, is still
+theirs on that platform and continues it. So binding is three steps -- place
+the message, note what was heard there (how to answer it), and find or open
+the person's conversation on its platform -- and only a different platform,
+agent or person opens another.
 """
 
 from __future__ import annotations
@@ -147,7 +151,7 @@ class ConversationBinder:
         contact_id: UUID | None,
         route: ResolvedSurfaceRoute,
     ) -> tuple[UUID, str | None]:
-        """The person's conversation with this agent in the channel, opened if new.
+        """The person's conversation with this agent on this platform, opened if new.
 
         Opening is serialised on the person and the channel, so two first
         messages open one. The lock lasts only the transaction, and
@@ -187,6 +191,7 @@ class ConversationBinder:
                     user_id=user_id,
                     contact_id=contact_id,
                     channel_id=source.channel_id,
+                    platform=source.platform,
                     title=_title(
                         parsed, fallback=f"{surface.surface_type.value} Conversation"
                     ),
@@ -200,6 +205,7 @@ class ConversationBinder:
             return await find_or_open(
                 self.seats,
                 channel_id=source.channel_id,
+                platform=source.platform,
                 pod_id=route.pod_id,
                 agent_id=route.agent_id,
                 user_id=user_id,
@@ -218,7 +224,7 @@ class ConversationBinder:
         contact_id: UUID | None,
         route: ResolvedSurfaceRoute,
     ) -> UUID | None:
-        """The person's conversation with this agent in the channel, if any.
+        """The person's conversation with this agent on this platform, if any.
 
         A contact's found conversation must still be kept by ``user_id`` -- or
         move to them -- or one keeper's history would be handed to another.
@@ -229,6 +235,7 @@ class ConversationBinder:
             agent_id=route.agent_id,
             user_id=user_id,
             contact_id=contact_id,
+            platform=source.platform,
         )
         if found is None:
             return None

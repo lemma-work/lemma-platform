@@ -161,7 +161,9 @@ async def test_a_chat_that_arrives_on_another_number_is_the_same_conversation(po
 
 
 async def test_one_person_on_two_platforms_is_one_relationship(pod):
-    """Two bots, two sources, one direct channel -- and one conversation."""
+    """Two bots, two sources, one direct channel -- and a conversation on
+    each platform, so what is asked on one is never answered on the other.
+    Writing again on the first continues the first."""
     telegram = await pod.bot(SurfacePlatform.TELEGRAM)
     whatsapp = await pod.bot(SurfacePlatform.WHATSAPP)
     on_telegram = await pod.says(telegram, chat="100")
@@ -170,8 +172,11 @@ async def test_one_person_on_two_platforms_is_one_relationship(pod):
 
     assert on_whatsapp.source_id != on_telegram.source_id
     assert on_whatsapp.channel_id == on_telegram.channel_id
-    assert on_whatsapp.conversation_id == on_telegram.conversation_id
-    assert len(await pod.conversations()) == 1
+    assert on_whatsapp.conversation_id != on_telegram.conversation_id
+    assert len(await pod.conversations()) == 2
+    again = await pod.says(telegram, chat="100")
+    assert again.conversation_id == on_telegram.conversation_id
+    assert not again.created
 
 
 async def test_another_agent_is_another_conversation_in_the_same_channel(

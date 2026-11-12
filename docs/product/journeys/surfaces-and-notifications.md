@@ -249,10 +249,13 @@ it is asked, not skipped.
 ### PS-SURF-013 — A thread on the platform is a conversation in the pod
 **Status:** covered
 
-- When a person writes to an agent again -- in the same thread or a new one,
-  from another of the pod's numbers or bots, on another platform, after any
-  length of quiet -- the system shall continue their one conversation with
-  that agent rather than starting a new one.
+- When a person writes to an agent again on the same platform -- in the same
+  thread or a new one, from another of the pod's numbers or bots there, after
+  any length of quiet -- the system shall continue their conversation with
+  that agent there rather than starting a new one.
+- When the same person writes to the agent on another platform, or in Lemma
+  itself, the system shall keep a separate conversation there, so that what
+  is asked on one is neither read nor answered on another.
 - When a different agent answers them, the system shall keep that agent's
   conversation with them apart.
 - In a group, the system shall give each person their own conversation with

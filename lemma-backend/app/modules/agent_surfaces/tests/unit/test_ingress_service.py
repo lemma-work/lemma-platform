@@ -439,6 +439,7 @@ async def _seated(service, surface, *, user_id, conversation_id, agent_id) -> So
     service.seats.seat(
         conversation_id,
         channel_id=place.channel_id,
+        platform=place.platform,
         pod_id=surface.pod_id,
         agent_id=agent_id,
         person=user_id,
