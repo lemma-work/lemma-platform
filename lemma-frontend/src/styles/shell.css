@@ -2389,6 +2389,20 @@
     color: var(--ink);
 }
 .addpeople__email:focus { outline: none; border-color: var(--accent); }
+
+.addpeople__note {
+    width: 100%;
+    margin-top: 8px;
+    font: inherit;
+    font-size: var(--t-ui);
+    padding: 8px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+}
+
+.addpeople__note:focus { outline: none; border-color: var(--accent); }
 .addpeople__bar .btn:disabled { opacity: .45; cursor: default; }
 .addpeople__bar .addpeople__role { padding: 8px 9px; border-radius: var(--r-md); font-size: var(--t-ui); }
 @media (max-width: 560px) { .addpeople__bar { flex-wrap: wrap; } }

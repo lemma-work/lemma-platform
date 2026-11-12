@@ -1822,6 +1822,254 @@ a.ox-piece:hover .ox-piece__t {
     border-color: var(--ink-2);
 }
 
+/* ── the shelf: where a new Lemma starts ─────────────────────────────── */
+
+/* Kinds of work first, as big plain choices; then one kind's templates as a
+   list to pick from, with what the picked one brings beside a start button
+   that stays in view. */
+
+.ox-shelf__works {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 24px;
+}
+
+.ox-shelf__work,
+.ox-shelf__opt {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 72px;
+    padding: 14px 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-shelf__work:hover,
+.ox-shelf__opt:hover {
+    background: var(--wash-b);
+}
+
+.ox-shelf__work--own {
+    border-style: dashed;
+}
+
+.ox-shelf__face {
+    display: grid;
+    place-items: center;
+    flex: none;
+    border-radius: 10px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+
+.ox-shelf__t {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.ox-shelf__name {
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.ox-shelf__line {
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.ox-shelf__n {
+    align-self: flex-start;
+    white-space: nowrap;
+}
+
+.ox-shelf__shared {
+    margin-top: 12px;
+}
+
+.ox-shelf__shared .ox-own {
+    margin: 0 0 8px;
+}
+
+.ox-shelf__cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 32px;
+    align-items: start;
+    margin-top: 18px;
+}
+
+.ox-shelf__head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.ox-shelf__opts {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ox-shelf__opt[aria-checked="true"] {
+    border-color: var(--lemma);
+    box-shadow: 0 0 0 3px var(--lemma-wash);
+}
+
+.ox-shelf__radio {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--ink-3);
+    border-radius: 50%;
+}
+
+.ox-shelf__opt[aria-checked="true"] .ox-shelf__radio {
+    border: 5px solid var(--lemma);
+}
+
+.ox-shelf__said {
+    margin: 0;
+    max-width: 64ch;
+    font-size: 14px;
+}
+
+.ox-shelf__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding-left: 18px;
+    font-size: 14px;
+}
+
+.ox-shelf__start {
+    position: sticky;
+    top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 18px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+}
+
+.ox-shelf__start p {
+    margin: 0;
+}
+
+.ox-shelf__due,
+.ox-shelf__form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-shelf__due input,
+.ox-shelf__form input {
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14.5px;
+}
+
+.ox-shelf__go {
+    width: 100%;
+    height: 38px;
+}
+
+.ox-shelf__form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 560px;
+    margin-top: 24px;
+}
+
+/* ── a Lemma setting itself up ───────────────────────────────────────── */
+
+.ox-setup {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    margin: 0 0 12px;
+    padding: 10px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    background: var(--wash-b);
+    font-size: 13px;
+}
+
+.ox-setup__t {
+    color: var(--ink);
+}
+
+.ox-setup__items {
+    color: var(--ink-2);
+}
+
+/* ── a question in your chat, answered from Needs you ────────────────── */
+
+.ox-lineask {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ox-lineask__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* A long question scrolls in place, so its answers stay in view. */
+.ox-lineask__q {
+    max-height: 240px;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+}
+
+/* ── a Lemma's weeks against what it owns ────────────────────────────── */
+
+.ox-weeks {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    height: 28px;
+}
+
+.ox-weeks__b {
+    width: 10px;
+    min-height: 2px;
+    border-radius: 3px 3px 1px 1px;
+    background: var(--lemma-wash);
+}
+
+.ox-weeks__b--now {
+    background: var(--lemma);
+}
+
+.ox-weeks__b--none {
+    background: var(--line);
+}
+
 /* ── palette ─────────────────────────────────────────────────────────── */
 
 .ox-scrim {
@@ -2095,6 +2343,8 @@ a.ox-piece:hover .ox-piece__t {
 
 .ox-askbox__in select {
     appearance: none;
+    /* Shrinks, ellipsised, when the bar is too narrow for it, as on a phone. */
+    min-width: 0;
     max-width: 240px;
     height: 30px;
     padding: 0 16px 0 0;
@@ -2108,6 +2358,10 @@ a.ox-piece:hover .ox-piece__t {
     outline: none;
     /* As wide as the name picked, not the longest one in the list. */
     field-sizing: content;
+}
+
+.ox-askbox__in > svg {
+    flex: none;
 }
 
 .ox-askbox__in:focus-within {
@@ -3114,6 +3368,15 @@ a.ox-piece:hover .ox-piece__t {
 
     .ox-cards {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ox-shelf__works,
+    .ox-shelf__cols {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ox-shelf__start {
+        position: static;
     }
 
     .ox-xray {

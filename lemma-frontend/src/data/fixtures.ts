@@ -2958,6 +2958,12 @@ export const fixtureSource: PodSource = {
         RUNTIMES = RUNTIMES.map((raw) =>
             (raw as { id?: string }).id === runtimeId ? { ...(raw as object), status: "ACTIVE" } : raw);
     },
+    async listChatRepositories() {
+        /* The sample has no GitHub installation, and its chats are not
+           created with a repository, so it offers none. */
+        await wait(60);
+        return { items: [], complete: true };
+    },
     async getConversationRuntime(podId: string, conversationId: string) {
         await wait(60);
         return readChoice(CONVERSATION_RUNTIME[conversationKey(podId, conversationId)]);
@@ -3584,6 +3590,28 @@ export const fixtureSource: PodSource = {
         };
         runs.unshift(redrive);
         return readRun(redrive);
+    },
+    async runScheduleNow(_podId: string, scheduleId: string) {
+        await wait(420);
+        const runs = (SCHEDULE_RUNS[scheduleId] ??= []);
+        const started = {
+            id: "manual-" + Date.now(),
+            schedule_id: scheduleId,
+            status: "PROCESSING",
+            attempts: 0,
+            source_event_id: "manual:" + Date.now(),
+            created_at: new Date().toISOString(),
+            started_at: null,
+            completed_at: null,
+        };
+        runs.unshift(started);
+        /* The sample has no worker: the run finishes on its own a moment
+           later, so the history's next read shows it done, not running. */
+        setTimeout(() => {
+            const at = new Date().toISOString();
+            Object.assign(started, { status: "COMPLETED", attempts: 1, started_at: at, completed_at: at });
+        }, 1500);
+        return readRun(started);
     },
     async createSchedule(_podId: string, draft: ScheduleDraft) {
         await wait(520);

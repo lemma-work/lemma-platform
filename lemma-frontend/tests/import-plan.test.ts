@@ -14,6 +14,7 @@ import {
     installedApp,
     landingPath,
     needsAnswer,
+    ownsLine,
     suggestedValue,
     teammateName,
 } from "../src/site/import/plan.ts";
@@ -234,4 +235,23 @@ test("a connector the pod already has is kept; a clashing slug blocks", () => {
     assert.equal(blockedBy(kept, defaultPick(kept)), null);
     assert.equal(blockedBy(clash, defaultPick(clash)), "taken");
     assert.deepEqual(connectorChoices([kept], {}), {});
+});
+
+test("the review says what the install will own, and stays quiet when nothing changes", () => {
+    const outcome = {
+        sentence: "Every lead hears back within two days.",
+        kind: "week" as const,
+        has_measure: true,
+    };
+    assert.equal(
+        ownsLine({ ...outcome, action: "SET" }),
+        "It will own: “Every lead hears back within two days.”",
+    );
+    assert.equal(
+        ownsLine({ ...outcome, action: "KEEP" }),
+        "Keeps what this Lemma already owns; the bundle's “Every lead hears back within two days.” is not set",
+    );
+    assert.equal(ownsLine({ ...outcome, action: "SAME" }), null);
+    assert.equal(ownsLine(null), null);
+    assert.equal(ownsLine(undefined), null);
 });

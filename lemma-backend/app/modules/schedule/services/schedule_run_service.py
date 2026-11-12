@@ -1,4 +1,4 @@
-"""Schedule run-history and manual-redrive application service."""
+"""Schedule run history, runs started by hand, and manual redrives."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
 from app.modules.schedule.domain.errors import (
+    ScheduleAccessDeniedError,
     ScheduleNotFoundError,
     ScheduleRunNotRetryableError,
 )
@@ -22,6 +23,7 @@ from app.modules.schedule.domain.interfaces import (
 )
 from app.modules.schedule.domain.schedule import (
     DatastoreScheduleConfig,
+    ScheduleRunEntity,
     ScheduleRunStatus,
     ScheduleType,
 )
@@ -31,6 +33,11 @@ from app.modules.schedule.repositories.schedule_run_repository import (
 from app.modules.schedule.repositories.trigger_records import (
     SkipRecord,
     TriggerRecords,
+)
+from app.modules.schedule.services.manual_run import (
+    fire_manual_run,
+    refuse_manual_run,
+    require_may_run_target,
 )
 from app.modules.schedule.services.trigger_fire import add_start_work
 
@@ -142,6 +149,29 @@ class ScheduleRunService:
         if created:
             await add_start_work(WorkWriter.of(self.uow), schedule, schedule_run.id)
         return schedule_run
+
+    async def start_manual_run(
+        self, *, pod_id: UUID, schedule_id: UUID, ctx: Context
+    ) -> ScheduleRunEntity:
+        """Start one run of the schedule now, outside its timing, as the person asking.
+
+        Whoever may change the schedule may run it, as for a retry -- and they
+        run its target, so they must be allowed to run that too.
+        """
+        schedule = await self.schedule_repository.get(schedule_id, ctx=ctx)
+        if schedule is None or schedule.pod_id != pod_id:
+            raise ScheduleNotFoundError()
+        await ctx.require(
+            Permissions.SCHEDULE_UPDATE, ResourceRef.schedule(pod_id, schedule_id)
+        )
+        refuse_manual_run(schedule)
+        if ctx.user_id is None:
+            raise ScheduleAccessDeniedError(
+                "A run started by hand runs as the person who starts it, and "
+                "this request is not on a person's behalf."
+            )
+        await require_may_run_target(ctx, schedule, pod_id=pod_id)
+        return await fire_manual_run(self.uow, schedule, person=ctx.user_id)
 
 
 def encode_skip_page_token(skip: SkipRecord) -> str:

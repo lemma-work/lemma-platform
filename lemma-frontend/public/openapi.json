@@ -12384,6 +12384,79 @@
         "title": "ImpactedPodConnector",
         "type": "object"
       },
+      "ImportPlanOutcome": {
+        "description": "What the bundle's pod owned, and what the import does with it.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/OutcomePlanAction",
+            "description": "SET: the pod owns nothing yet, and the import sets this. KEEP: the pod already owns something else and keeps it; this is not set. SAME: the pod already owns this (same sentence, kind, target, unit and due)."
+          },
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The finish line's date.",
+            "title": "Due"
+          },
+          "has_measure": {
+            "default": false,
+            "description": "Whether the bundle carries a measure. It is read as the person importing when the import applies; one they cannot read is left off, with a warning, and the rest is still set.",
+            "title": "Has Measure",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "week: a bar held every week. date: a finish line by `due`.",
+            "enum": [
+              "week",
+              "date"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sentence": {
+            "description": "What it owns, as one sentence.",
+            "title": "Sentence",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The number its measure is held to, if set.",
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'%' for a share; otherwise what it counts.",
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind",
+          "action"
+        ],
+        "title": "ImportPlanOutcome",
+        "type": "object"
+      },
       "ImportPlanResponse": {
         "properties": {
           "bundle_name": {
@@ -12413,6 +12486,17 @@
             "default": false,
             "title": "Has Destructive Steps",
             "type": "boolean"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportPlanOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the bundle's pod owned (`pod.json -> outcome`) and whether the import sets it on this pod, which it does only when the pod owns nothing yet. Null when the bundle's pod owned nothing, when its block is invalid (said in `warnings`), or for a template import, whose start sets it."
           },
           "steps": {
             "items": {
@@ -14207,7 +14291,7 @@
         "type": "object"
       },
       "NeedsYouItemResponse": {
-        "description": "One thing waiting on the member, and where to answer it.\n\nExactly one of ``conversation_id``, ``workflow_run_id`` and ``channel_id``\nis set, by kind: a conversation for QUESTION, APPROVAL and PERMISSION; a\nworkflow run for FORM and DECISION; a contact's channel for CONTACT.",
+        "description": "One thing waiting on the member, and where to answer it.\n\nExactly one of ``conversation_id``, ``workflow_run_id`` and ``channel_id``\nis set, by kind: a conversation for QUESTION, APPROVAL and PERMISSION; a\nworkflow run for FORM and DECISION; a contact's channel for CONTACT; the\nmember's own line for MESSAGE, with the line in ``message_id``.",
         "properties": {
           "channel_id": {
             "anyOf": [
@@ -14220,6 +14304,14 @@
               }
             ],
             "title": "Channel Id"
+          },
+          "choices": {
+            "description": "MESSAGE: the answers it offered, each sent as `{choice}`. An answer in words, `{text}`, is always allowed too.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Choices",
+            "type": "array"
           },
           "conversation_id": {
             "anyOf": [
@@ -14242,16 +14334,29 @@
                 "type": "null"
               }
             ],
-            "description": "Where it is. The conversation's title when `title` is the question; the workflow's name; or why the contact asked for a person.",
+            "description": "Where it is. The conversation's title when `title` is the question; the workflow's name; or why the contact asked for a person. MESSAGE: the whole question, when `title` had to cut it.",
             "title": "Detail"
           },
           "key": {
-            "description": "Stable across reads: `conversation:<id>`, `wait:<id>` or `contact:<channel id>`.",
+            "description": "Stable across reads: `conversation:<id>`, `wait:<id>`, `contact:<channel id>` or `message:<line id>`.",
             "title": "Key",
             "type": "string"
           },
           "kind": {
             "$ref": "#/components/schemas/NeedsYouKind"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "MESSAGE: the line it was asked on. Answer it with `POST /pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer`.",
+            "title": "Message Id"
           },
           "pod_id": {
             "format": "uuid",
@@ -14277,7 +14382,7 @@
                 "type": "null"
               }
             ],
-            "description": "What is asked. QUESTION/APPROVAL/PERMISSION: the question or what the agent wants to do, else the conversation's title. FORM/DECISION: the decision's question or the form's title, else the workflow's name. CONTACT: the contact's name.",
+            "description": "What is asked. QUESTION/APPROVAL/PERMISSION: the question or what the agent wants to do, else the conversation's title. FORM/DECISION: the decision's question or the form's title, else the workflow's name. CONTACT: the contact's name. MESSAGE: the first line of what the agent asked.",
             "title": "Title"
           },
           "tool_call_id": {
@@ -14323,7 +14428,8 @@
           "PERMISSION",
           "FORM",
           "DECISION",
-          "CONTACT"
+          "CONTACT",
+          "MESSAGE"
         ],
         "title": "NeedsYouKind",
         "type": "string"
@@ -15104,6 +15210,19 @@
             "title": "Email",
             "type": "string"
           },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A few words from the inviter, quoted in the invitation email: why they are being asked in. The invitation record does not keep it; it travels with the email until the email is sent.",
+            "title": "Note"
+          },
           "pod_id": {
             "anyOf": [
               {
@@ -15769,6 +15888,16 @@
         "title": "OutcomeKind",
         "type": "string"
       },
+      "OutcomePlanAction": {
+        "description": "What an import does with what its bundle's pod owned.",
+        "enum": [
+          "SET",
+          "KEEP",
+          "SAME"
+        ],
+        "title": "OutcomePlanAction",
+        "type": "string"
+      },
       "OutcomeSetResponse": {
         "properties": {
           "measured_at": {
@@ -15894,6 +16023,18 @@
             ],
             "description": "Which character's face it wears.",
             "title": "Face"
+          },
+          "function": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The kind of work it does, as a shelf groups it: support, sales, engineering, marketing or ops.",
+            "title": "Function"
           },
           "id": {
             "description": "The template's name, passed as `template` to start one.",
@@ -48374,6 +48515,88 @@
           "resource": "schedule.run",
           "result": "collection",
           "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Start one run of a TIME schedule now, outside its timing.\n\nTakes no body. The run carries what the schedule's own firing would, is\nheld to the same daily ceiling and `max_concurrent_runs`, and its target\nis started by the same job, so the run answers `PROCESSING` until it is\nhanded over. It runs as the person asking, who must be able to change the\nschedule and run its target; its metadata says `manual: true` and who\nstarted it. Refused with 422 for a WEBHOOK or DATASTORE schedule, which\nhas no event to carry, and with 409 while the schedule is paused, has no\ntarget, is full, or has reached its daily ceiling.",
+        "operationId": "schedule.run.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such schedule in this pod."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The schedule is paused, has no target, is full, or has reached its daily ceiling."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A WEBHOOK or DATASTORE schedule, which has no event to carry."
+          }
+        },
+        "summary": "Create Schedule Run",
+        "tags": [
+          "Schedules"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "schedule.run"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "schedule.run",
+          "result": "entity",
+          "verb": "create"
         }
       }
     },

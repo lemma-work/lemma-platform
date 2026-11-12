@@ -13,4 +13,4 @@ SDK and the server it is talking to.
 from __future__ import annotations
 
 API_VERSION = "0.10.1"
-SPEC_SHA256 = "87a3c8ba414bc290ce5c801ee131a0e6c7ea13aec7b75b4677b04740479860a2"
+SPEC_SHA256 = "5d3052c64dc24773797b570b2d3a34bb383f93a4f2c453818fbe91dd3e5200fe"

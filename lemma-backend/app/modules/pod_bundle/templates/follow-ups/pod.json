@@ -4,6 +4,7 @@
   "description": "Makes sure every lead hears from you within two days.",
   "lemma": {
     "position": 2,
+    "function": "sales",
     "face": "loop",
     "place": "HubSpot",
     "brings": [
@@ -26,7 +27,7 @@
     "kind": "week",
     "target": 95,
     "unit": "%",
-    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE followed_up_in_time) / nullif(count(*), 0), 1) FROM leads WHERE came_in_at >= date_trunc('week', now())"
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE followed_up_in_time) / nullif(count(*) FILTER (WHERE followed_up_at IS NOT NULL OR came_in_at < now() - interval '2 days'), 0), 1) FROM leads WHERE came_in_at + interval '2 days' >= date_trunc('week', now()) AND came_in_at + interval '2 days' < date_trunc('week', now()) + interval '1 week'"
   },
   "variables": {}
 }

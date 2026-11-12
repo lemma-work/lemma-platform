@@ -15,6 +15,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `schedule.event.list` | GET | `/pods/{pod_id}/events` | List Events |
 | `schedule.get` | GET | `/pods/{pod_id}/schedules/{schedule_id}` | Get Schedule |
 | `schedule.list` | GET | `/pods/{pod_id}/schedules` | List Schedules |
+| `schedule.run.create` | POST | `/pods/{pod_id}/schedules/{schedule_id}/runs` | Create Schedule Run |
 | `schedule.run.list` | GET | `/pods/{pod_id}/schedules/{schedule_id}/runs` | List Schedule Runs |
 | `schedule.run.retry` | POST | `/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry` | Retry Schedule Run |
 | `schedule.skip.list` | GET | `/pods/{pod_id}/schedules/{schedule_id}/skips` | List Schedule Skips |
@@ -46,3 +47,32 @@ not offer, or for missing arguments, it is refused (400) and nothing is left
 subscribed. Editing the event or its arguments subscribes anew and drops the
 old one after commit; deleting the schedule unsubscribes. An agent target only:
 a workflow listens to the event its own start names.
+
+## `schedule.run.create`
+
+Starts one run of a TIME schedule now, outside its timing. No body; answers
+`202` with the run, `PROCESSING` and `attempts: 0` until the
+`schedule.start_target` job -- written in the same transaction as the run --
+hands it to its target.
+
+- **Who may:** the holder of `schedule.update` on the schedule, the same gate
+  as `schedule.run.retry`, who must also be able to execute its agent or
+  workflow. The run is theirs: `user_id` is the caller, never the owner, and
+  the start job checks their access to the target again when it starts.
+- **Same limits as a firing:** it counts toward and is stopped by the daily
+  ceiling (`trigger_fire_day`) and `max_concurrent_runs`, and its start draws
+  on the per-trigger `trigger_fire` rate. The target's own start applies
+  whatever it applies to any run, the pod's spend included.
+- **What it carries:** the config's `payload`, as a timer's occurrence does;
+  `metadata` is `{"manual": true, "started_by_user_id": "<caller>"}`;
+  `source_event_id` is `manual:<uuid>`, new on every call. A schedule's filter
+  is not asked.
+- **Leaves the timer alone:** `next_fire_at` and its pending fire are
+  unchanged.
+- **Refuses:** 404 for a schedule the caller cannot see; 403 without
+  `schedule.update` or execute on the target; 422 `SCHEDULE_RUN_NEEDS_EVENT`
+  for WEBHOOK and DATASTORE schedules; 409 `SCHEDULE_INACTIVE` while paused,
+  `SCHEDULE_TARGET_MISSING` once the target is deleted, `SCHEDULE_AT_CAPACITY`
+  when full, `SCHEDULE_FIRE_CAP_REACHED` past the ceiling. The last two commit
+  what a firing records there first: a skipped run, or the pause, the
+  `fire_cap` skip and the owner's notice.

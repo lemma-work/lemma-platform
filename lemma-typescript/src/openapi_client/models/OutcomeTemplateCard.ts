@@ -16,6 +16,10 @@ export type OutcomeTemplateCard = {
      */
     face?: (string | null);
     /**
+     * The kind of work it does, as a shelf groups it: support, sales, engineering, marketing or ops.
+     */
+    function?: (string | null);
+    /**
      * The template's name, passed as `template` to start one.
      */
     id: string;
