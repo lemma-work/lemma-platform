@@ -13,6 +13,7 @@ import { PodConnections } from "@/connect/pod-connections";
 import { useSearchParams } from "next/navigation";
 import { WhoCanJoin } from "@/shell/who-can-join";
 import { AtTheDoor } from "@/shell/at-the-door";
+import { MATE } from "@/copy";
 import { AddPeople } from "@/shell/add-people";
 import type { SettingsSection } from "@/settings/settings-modal";
 import {
@@ -68,14 +69,13 @@ const PARTS: readonly Part[] = [
         note: (name) => "Add " + name + " to any AI app that speaks MCP, and use it from there.", blurb: "Use it from other AI apps" },
     { id: "people", label: "People", icon: PeopleIcon,
         note: (name) => "Everyone here can open what is in " + name + "’s space.", blurb: "Who can open its space" },
-    { id: "works-with", label: "Teammates", icon: AskIcon, title: (name) => "Teammates " + name + " works with",
-        note: (name) => "As you: " + name + " asks with your access there, and checks with you first. Allowed: that teammate lets " + name + " ask it with nobody present, reading only what it shared.",
-        blurb: "Other teammates it can ask" },
+    { id: "works-with", label: "Other Lemmas", icon: AskIcon, title: (name) => "Other Lemmas " + name + " works with",
+        note: (name) => "As you: " + name + " asks with your access there, and checks with you first. Allowed: that Lemma lets " + name + " ask it with nobody present, reading only what it shared.",
+        blurb: "Other Lemmas it can ask" },
 ];
 
 /** A part's heading on its own page. */
-/** In the app (`/t`) a pod is a Lemma, and the pods it works with are other
- *  Lemmas; in the classic workspace they are still teammates. */
+/** A pod is a Lemma, and the pods it works with are other Lemmas. */
 function labelOf(part: Part, framed: boolean): string {
     return framed && part.id === "works-with" ? "Other Lemmas" : part.label;
 }
@@ -83,11 +83,6 @@ function labelOf(part: Part, framed: boolean): string {
 function titleOf(part: Part, name: string, framed = false): string {
     if (framed && part.id === "works-with") return "Other Lemmas " + name + " works with";
     return part.title ? part.title(name) : part.label;
-}
-
-/** What one of the other pods is called, in a part's words. */
-function mateOf(framed: boolean): string {
-    return framed ? "Lemma" : "teammate";
 }
 
 function noteOf(part: Part, name: string, framed = false): string {
@@ -249,11 +244,11 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
         case "works-with":
             action = manageLinks ? (
                 <button className="aboutpage__action aboutpage__action--long" onClick={() => setConnecting({})}>
-                    <PlusIcon size={14} /> Let another {mateOf(framed)} ask {pod.name}
+                    <PlusIcon size={14} /> Let another {MATE} ask {pod.name}
                 </button>
             ) : null;
             body = <>
-                <WorksWith pod={pod} framed={framed} onOpen={onOpenTeammate} />
+                <WorksWith pod={pod} onOpen={onOpenTeammate} />
                 <AskedBy pod={pod} onOpen={onOpenTeammate} onEdit={(asker) => setConnecting({ asker })} />
                 {connecting && <ConnectTeammate pod={pod} asker={connecting.asker} onClose={() => setConnecting(null)} />}
             </>;
@@ -430,7 +425,7 @@ function AgentList({ pod, onOpen }: { pod: Pod; onOpen: (name: string) => void }
  *  Partly yours: through you means you are in both, so someone else opening
  *  this page sees their own. The same list the teammate reads before it asks,
  *  so nothing here is something it would be refused. */
-function WorksWith({ pod, framed = false, onOpen }: { pod: Pod; framed?: boolean; onOpen: (podId: string) => void }) {
+function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void }) {
     const askable = useQuery({
         queryKey: ["askable-pods", pod.id],
         queryFn: () => source.askablePods(pod.id),
@@ -446,7 +441,7 @@ function WorksWith({ pod, framed = false, onOpen }: { pod: Pod; framed?: boolean
         );
     }
     if (askable.data.length === 0) {
-        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other {mateOf(framed)} you’re in, or one that lets it.</p>;
+        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other {MATE} you’re in, or one that lets it.</p>;
     }
     return (
         <ul className="agentlist">

@@ -57,7 +57,7 @@ function Connecting() {
         return (
             <Screen
                 title="You're connected"
-                lead="Lemma knows it's you in Slack now. Your teammates are on Lemma's Home tab there."
+                lead="Lemma knows it's you in Slack now. Your Lemmas are on Lemma's Home tab there."
                 looking={false}
             >
                 <a className="btn btn--primary" href="https://app.slack.com/client">Back to Slack</a>

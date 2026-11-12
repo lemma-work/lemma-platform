@@ -1,13 +1,21 @@
-"""Telling a pod's admins that someone asked to join, as a delivery work item.
+"""Telling whoever can let people into a pod that someone asked to join, as
+a delivery work item.
 
 Written in the transaction that records the request, keyed by the request, so
 the email exists exactly when the request does and asking twice while the
 first is still queued sends one. A ``delivery`` JOB because it sends mail: the
 admins are read in a short transaction, and the sends happen after it closes.
+
+"Whoever can let people in" is read the way the approve route checks it: a
+member whose roles grant ``pod.member.manage``, not only one holding ADMIN by
+name. A pod nobody inside can manage -- its last admin left -- still has its
+organization's owners, who may approve any request, so they are written to
+instead of nobody.
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -39,6 +47,9 @@ class JoinRequestEmailPayload(BaseModel):
 
 
 class _JoinRequestEmail(BaseModel):
+    #: Still waiting when the job runs. One the asker withdrew, or somebody
+    #: answered, while this sat in the queue is not sent.
+    pending: bool = True
     pod_name: str
     organization_name: str
     requester_name: str
@@ -54,6 +65,20 @@ def _email_port() -> IdentityEmailPort:
     return build_identity_email_sender()
 
 
+async def _every[T](
+    page: Callable[[str | None], Awaitable[tuple[Sequence[T], str | None]]],
+) -> list[T]:
+    """Every row a cursor-paged list holds: a Lemma or organization with more
+    members than one page must not lose the managers on the later ones."""
+    rows: list[T] = []
+    cursor: str | None = None
+    while True:
+        batch, cursor = await page(cursor)
+        rows.extend(batch)
+        if not cursor:
+            return rows
+
+
 async def _read_email(
     uow: SqlAlchemyUnitOfWork, payload: JoinRequestEmailPayload
 ) -> _JoinRequestEmail | None:
@@ -61,9 +86,12 @@ async def _read_email(
         build_organization_membership,
         build_user_directory,
     )
-    from app.modules.pod.domain.pod_entities import PodRole
-    from app.modules.pod.domain.visibility import roles_allow_required
+    from app.core.authorization.permissions import Permissions
+    from app.modules.identity.contracts import OrganizationRole
+    from app.modules.pod.domain.visibility import normalize_role_list
+    from app.modules.pod.domain.pod_entities import PodJoinRequestStatus
     from app.modules.pod.infrastructure.pod_repositories import (
+        PodJoinRequestRepository,
         PodMemberRepository,
         PodRepository,
     )
@@ -71,13 +99,48 @@ async def _read_email(
     pod = await PodRepository(uow).get(payload.pod_id)
     if pod is None:
         return None
+    request = await PodJoinRequestRepository(uow).get(payload.join_request_id)
+    if request is None or request.status != PodJoinRequestStatus.PENDING:
+        return _JoinRequestEmail(
+            pending=False,
+            pod_name=pod.name,
+            organization_name="",
+            requester_name="",
+            requester_email="",
+            admin_emails=[],
+        )
     requester = await build_user_directory(uow).get(payload.requester_user_id)
     if requester is None:
         return None
-    organization = await build_organization_membership(uow).get(payload.organization_id)
-    members, _ = await PodMemberRepository(uow).list_pod_members(
-        payload.pod_id, limit=1000
+    organizations = build_organization_membership(uow)
+    organization = await organizations.get(payload.organization_id)
+    pod_members = PodMemberRepository(uow)
+    members = await _every(
+        lambda cursor: pod_members.list_pod_members(
+            payload.pod_id, limit=500, cursor=cursor
+        )
     )
+    managers = [
+        member.user_email
+        for member in members
+        if member.user_email
+        and await pod_members.roles_grant_permission(
+            payload.pod_id,
+            normalize_role_list(member.roles),
+            Permissions.POD_MEMBER_MANAGE,
+        )
+    ]
+    if not managers:
+        org_members = await _every(
+            lambda cursor: organizations.list_organization_members(
+                payload.organization_id, limit=500, cursor=cursor
+            )
+        )
+        managers = [
+            str(member.user.email)
+            for member in org_members
+            if member.role == OrganizationRole.ORG_OWNER and member.user is not None
+        ]
     return _JoinRequestEmail(
         pod_name=pod.name,
         organization_name=organization.name if organization else "",
@@ -85,11 +148,7 @@ async def _read_email(
             part for part in (requester.first_name, requester.last_name) if part
         ),
         requester_email=str(requester.email),
-        admin_emails=[
-            member.user_email
-            for member in members
-            if member.user_email and roles_allow_required(member.roles, PodRole.ADMIN)
-        ],
+        admin_emails=managers,
     )
 
 
@@ -98,17 +157,24 @@ async def run_join_request_email(
 ) -> None:
     async with ctx.checkpoint() as uow:
         email = await _read_email(uow, payload)
-    if email is None or not email.admin_emails:
+    if email is None or not email.pending or not email.admin_emails:
         logger.info(
             "pod.join_request.email_skipped",
             pod_id=str(payload.pod_id),
-            reason="no_recipient" if email is not None else "pod_or_requester_gone",
+            reason=(
+                "pod_or_requester_gone"
+                if email is None
+                else "no_longer_pending"
+                if not email.pending
+                else "no_recipient"
+            ),
         )
         return
     port = _email_port()
     for admin_email in email.admin_emails:
         await port.send_pod_join_request_email(
             to_email=admin_email,
+            pod_id=payload.pod_id,
             pod_name=email.pod_name,
             organization_name=email.organization_name,
             requester_name=email.requester_name,

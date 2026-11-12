@@ -321,10 +321,19 @@ class PodJoinRequestService:
         if not pod:
             raise PodNotFoundError()
 
-        return await self.pod_join_request_repository.get_pending_by_pod_and_user(
+        # Pending, or the refusal of the last one: a page left open on "request
+        # sent" has to be able to learn it was turned down, and an approval is
+        # learned by the pod appearing in your list instead.
+        latest = await self.pod_join_request_repository.get_latest_by_pod_and_user(
             pod_id,
             requester_user_id,
         )
+        if latest and latest.status in (
+            PodJoinRequestStatus.PENDING,
+            PodJoinRequestStatus.REJECTED,
+        ):
+            return latest
+        return None
 
     async def list_join_requests(
         self,
@@ -371,7 +380,12 @@ class PodJoinRequestService:
             requester_user_id=requester_user_id,
         )
 
-        join_request = await self.pod_join_request_repository.get(join_request_id)
+        # Locked until this decision commits, so a second one -- an approve and
+        # a decline, or a withdrawal -- waits and then finds it already answered,
+        # rather than both acting and leaving membership and status disagreeing.
+        join_request = await self.pod_join_request_repository.get(
+            join_request_id, lock=True
+        )
         if not join_request or join_request.pod_id != pod_id:
             raise PodJoinRequestNotFoundError()
 
@@ -437,4 +451,60 @@ class PodJoinRequestService:
             org_role=target_org_member.role,
             pod_role=pod_role,
         )
+        return await self.pod_join_request_repository.update(join_request)
+
+    async def reject_join_request(
+        self,
+        pod_id: UUID,
+        join_request_id: UUID,
+        requester_user_id: UUID,
+    ) -> PodJoinRequestEntity:
+        """Turn a pending request down. Whoever may approve one may refuse it."""
+        pod = await self.pod_repository.get(pod_id)
+        if not pod:
+            raise PodNotFoundError()
+
+        await self._require_manage_permission(
+            pod_id=pod.id,
+            organization_id=pod.organization_id,
+            requester_user_id=requester_user_id,
+        )
+
+        # Locked until this decision commits, so a second one -- an approve and
+        # a decline, or a withdrawal -- waits and then finds it already answered,
+        # rather than both acting and leaving membership and status disagreeing.
+        join_request = await self.pod_join_request_repository.get(
+            join_request_id, lock=True
+        )
+        if not join_request or join_request.pod_id != pod_id:
+            raise PodJoinRequestNotFoundError()
+        if join_request.status != PodJoinRequestStatus.PENDING:
+            raise PodConflictError(
+                f"Join request is already {join_request.status.value.lower()}"
+            )
+
+        join_request.mark_rejected(rejected_by_user_id=requester_user_id)
+        return await self.pod_join_request_repository.update(join_request)
+
+    async def withdraw_my_join_request(
+        self,
+        pod_id: UUID,
+        requester_user_id: UUID,
+    ) -> PodJoinRequestEntity:
+        """Take back your own pending request, before anybody has answered it."""
+        pod = await self.pod_repository.get(pod_id)
+        if not pod:
+            raise PodNotFoundError()
+
+        join_request = (
+            await self.pod_join_request_repository.get_pending_by_pod_and_user(
+                pod_id, requester_user_id, lock=True
+            )
+        )
+        if not join_request:
+            raise PodJoinRequestNotFoundError(
+                "There is no pending request of yours to take back"
+            )
+
+        join_request.mark_withdrawn()
         return await self.pod_join_request_repository.update(join_request)

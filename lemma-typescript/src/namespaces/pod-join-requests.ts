@@ -16,6 +16,11 @@ export class PodJoinRequestsNamespace {
     return this.client.request(() => PodJoinRequestsService.podJoinRequestMe(podId));
   }
 
+  /** Take back your own pending request, before anybody answers it. */
+  withdraw(podId: string) {
+    return this.client.request(() => PodJoinRequestsService.podJoinRequestWithdraw(podId));
+  }
+
   list(
     podId: string,
     options: {
@@ -45,6 +50,13 @@ export class PodJoinRequestsNamespace {
         org_role: payload.org_role ?? OrganizationRole.ORG_MEMBER,
         pod_role: payload.pod_role ?? PodRole.POD_USER,
       }),
+    );
+  }
+
+  /** Turn a pending request down; the asker is told by email. */
+  reject(podId: string, joinRequestId: string) {
+    return this.client.request(() =>
+      PodJoinRequestsService.podJoinRequestReject(podId, joinRequestId),
     );
   }
 }

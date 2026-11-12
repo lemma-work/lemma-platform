@@ -124,7 +124,7 @@ async def test_usage_limit_exceeded_emits_sanitized_ui_message(monkeypatch) -> N
     assert events[0].type == AgentEventType.ERROR
     assert "abc123" not in events[0].data
     assert (
-        "Check the model settings for this teammate (Settings \u2192 Models)."
+        "Check the model settings for this Lemma (Settings \u2192 Models)."
         in events[0].data
     )
 
@@ -161,7 +161,7 @@ async def test_generic_exception_emits_sanitized_ui_message(monkeypatch) -> None
     assert "sk-secret-key" not in events[0].data
     assert "Authorization" not in events[0].data
     assert (
-        "Check the model settings for this teammate (Settings \u2192 Models)."
+        "Check the model settings for this Lemma (Settings \u2192 Models)."
         in events[0].data
     )
 
@@ -287,7 +287,7 @@ class TestAProviderRefusalSaysWhichRefusalItWas:
 
         assert "HTTP 400" in message
         assert (
-            "Check the model settings for this teammate (Settings \u2192 Models)."
+            "Check the model settings for this Lemma (Settings \u2192 Models)."
             in message
         )
 

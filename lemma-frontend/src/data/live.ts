@@ -5,7 +5,7 @@ import { NEW_CONVERSATION } from "./types";
 import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
 import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
-import { readPodRoles } from "./pod-roles";
+import { heldPodRole, readPodRoles } from "./pod-roles";
 import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
@@ -136,6 +136,7 @@ async function membersOf(podId: string): Promise<Member[]> {
                 initials: initialsOf(name),
                 kind: "person" as const,
                 ...readPodRoles(m.roles),
+                podRole: heldPodRole(m.roles),
             };
         });
     } catch {
@@ -364,7 +365,7 @@ async function shareOwnAccount(podId: string, accountId: string): Promise<string
     if (running) return (await shareAs(podId, account.id, running.slug, running.purpose)).slug;
     const named = account.connectorId || "account";
     return (await shareAs(podId, account.id, freshSlug(named, connectors.map((one) => one.slug)),
-        "A teammate's own " + named + (account.label ? ", " + account.label : ""))).slug;
+        "A Lemma's own " + named + (account.label ? ", " + account.label : ""))).slug;
 }
 
 /** Use one of my pod accounts for everyone as <slug>: one request, which the
@@ -454,6 +455,12 @@ export const liveSource: PodSource = {
 
     async acceptInvitation(invitationId: string): Promise<void> {
         await lemma().organizations.invitations.accept(invitationId);
+    },
+
+    async declineInvitation(invitationId: string): Promise<void> {
+        /* The revoke route, which lets the invitee through as well as the
+           people who manage invitations. */
+        await lemma().organizations.invitations.revoke(invitationId);
     },
 
     /** Organizations this person's email domain may walk into.
@@ -1100,14 +1107,23 @@ export const liveSource: PodSource = {
             .filter((entry): entry is JoinRequest => entry !== null);
     },
 
-    async admitToPod(podId: string, requestId: string): Promise<JoinRequest> {
-        /* No roles named. The platform picks its own defaults for somebody
-           admitted this way, and choosing here would mean this screen deciding
-           what a new member may do — which is the roster's question, asked
-           where the roster is, after they are in. */
-        const said = await lemma(podId).podJoinRequests.approve(podId, requestId);
+    async admitToPod(podId: string, requestId: string, role?: string): Promise<JoinRequest> {
+        const said = await lemma(podId).podJoinRequests.approve(podId, requestId, role ? { pod_role: role as never } : {});
         const request = readJoinRequest(said);
         if (!request) throw new Error("They may be in; the answer could not be read. Reload the roster to check.");
+        return request;
+    },
+
+    async declineJoinRequest(podId: string, requestId: string): Promise<JoinRequest> {
+        const request = readJoinRequest(await lemma(podId).podJoinRequests.reject(podId, requestId));
+        if (!request) throw new Error("It may have been declined; the answer could not be read. Reload to check.");
+        return request;
+    },
+
+    async withdrawJoinRequest(podId: string): Promise<JoinRequest> {
+        /* Unscoped, like asking: the asker is outside the pod. */
+        const request = readJoinRequest(await lemma().podJoinRequests.withdraw(podId));
+        if (!request) throw new Error("It may have been withdrawn; the answer could not be read. Reload to check.");
         return request;
     },
 

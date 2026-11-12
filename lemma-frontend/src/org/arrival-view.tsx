@@ -6,7 +6,7 @@ import { source } from "@/data";
 import type { Invitation, NewOrg, Org } from "@/data";
 import { ArrowRightIcon, GlobeIcon, LockIcon, OrgIcon, RefreshIcon, UserIcon, WarningIcon } from "@/ui/icons";
 import { LemmaLogo } from "@/ui/icons";
-import { AI_MATES, ORG } from "@/copy";
+import { MATES, ORG } from "@/copy";
 import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, isDomainTaken, personalNameFor } from "./arrival";
 import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
@@ -14,7 +14,7 @@ import { ResumeInstall } from "@/site/import/resume-install";
 import { captureEvent } from "@/site/analytics/client";
 
 /** Which way somebody got into an organization, for `onboarding.arrived`. */
-type ArrivalRoute = "invite" | "domain" | "new_org";
+type ArrivalRoute = "invite" | "domain" | "new_org" | "link";
 
 /** The first morning.
  *
@@ -141,7 +141,7 @@ export function ArrivalView({
                                 ? "Accept an invitation to join your team."
                                 : matches.length
                                     ? "You can join with your verified work email."
-                                    : "This decides who else can see your " + AI_MATES + " and the work they do."}
+                                    : "This decides who else can see your " + MATES + " and the work they do."}
                         </p>
 
                         {unread && (
@@ -393,7 +393,7 @@ export function MakeOne({
                 >
                     <OrgIcon size={18} />
                     <b>My team</b>
-                    <span>Create AI teammates for your team and choose who can access each one.</span>
+                    <span>Start Lemmas for your team and choose who can open each one.</span>
                 </button>
             </div>
 

@@ -216,7 +216,7 @@ export function ConnectBanner({ pod }: { pod: Pod }) {
     if (preview || dismissed || missing.length === 0) return null;
     const name = (id: string) => titles.get(id)?.title ?? "";
     return (
-        <aside className="connectbanner" role="status" aria-label="Connections this teammate needs">
+        <aside className="connectbanner" role="status" aria-label="Connections this Lemma needs">
             <PlugIcon size={16} aria-hidden="true" />
             <span className="connectbanner__say">
                 {bannerLine(missing, name, pod.name)}

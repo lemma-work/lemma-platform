@@ -28,7 +28,7 @@ class OpenCallRequest(BaseModel):
         ),
     )
     display_name: str = Field(
-        default="your teammate",
+        default="your Lemma",
         min_length=1,
         max_length=120,
         description="What the agent is called in a new call's title.",

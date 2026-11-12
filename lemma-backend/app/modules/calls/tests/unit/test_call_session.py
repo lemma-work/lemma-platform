@@ -458,7 +458,7 @@ async def test_a_request_the_team_cannot_take_says_why_instead_of_asking_again()
     from app.core.domain.errors import DomainError
 
     caller, voice = Caller(), Voice()
-    reason = "This teammate runs on Deepak's own Claude Code, which only they can use."
+    reason = "This Lemma runs on Deepak's own Claude Code, which only they can use."
 
     class Refusing(Agents):
         async def send_turn(self, content: str) -> None:

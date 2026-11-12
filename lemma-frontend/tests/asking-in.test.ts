@@ -4,7 +4,7 @@ import { askerName, readJoinRequest } from "../src/data/joining.ts";
 import { isForbidden, isMissing, isUnauthorized } from "../src/session/auth-state.ts";
 
 /** Reading an ask, and telling the three refusals apart. Both of these decide
- *  what somebody standing outside a teammate is told, and the wrong answer to
+ *  what somebody standing outside a Lemma is told, and the wrong answer to
  *  either sends them to wait for something that is not coming. */
 
 test("an ask is read off the wire", () => {
@@ -26,12 +26,14 @@ test("an ask is read off the wire", () => {
     });
 });
 
-test("the three standings are named in this app's words", () => {
+test("the four standings are named in this app's words", () => {
     assert.equal(readJoinRequest({ id: "a", status: "PENDING" })?.standing, "pending");
     assert.equal(readJoinRequest({ id: "a", status: "APPROVED" })?.standing, "approved");
-    // `REJECTED` on the wire; "refused" here, because nothing in this app
-    // rejects anything — there is no endpoint that sets it.
+    // `REJECTED` on the wire; "refused" here, the word the declined screen
+    // is written around.
     assert.equal(readJoinRequest({ id: "a", status: "REJECTED" })?.standing, "refused");
+    // Taken back by the asker, which is neither an answer nor still waiting.
+    assert.equal(readJoinRequest({ id: "a", status: "WITHDRAWN" })?.standing, "withdrawn");
 });
 
 test("a status this build does not know reads as still waiting", () => {
@@ -89,4 +91,22 @@ test("the three do not answer for each other", () => {
     // what makes the queue draw nothing rather than an error.
     assert.equal(isForbidden({ statusCode: 403 }), true);
     assert.equal(isMissing({ statusCode: 403 }), false);
+});
+
+test("the sample door can be answered both ways, and an ask taken back", async () => {
+    const { fixtureSource: sampleSource } = await import("../src/data/fixtures.ts");
+    const queue = await sampleSource.listJoinRequests("marketing");
+    assert.ok(queue.length >= 2, "the sample queue starts with two asks");
+
+    const declined = await sampleSource.declineJoinRequest("marketing", queue[0].id);
+    assert.equal(declined.standing, "refused");
+    const left = await sampleSource.listJoinRequests("marketing");
+    assert.ok(!left.some((one) => one.id === queue[0].id), "a declined ask leaves the queue");
+
+    const asked = await sampleSource.askToJoin("closed-door");
+    assert.equal(asked.standing, "pending");
+    const withdrawn = await sampleSource.withdrawJoinRequest("closed-door");
+    assert.equal(withdrawn.standing, "withdrawn");
+    assert.equal(await sampleSource.myJoinRequest("closed-door"), null);
+    await assert.rejects(sampleSource.withdrawJoinRequest("closed-door"));
 });

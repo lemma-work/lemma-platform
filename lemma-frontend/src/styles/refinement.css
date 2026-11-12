@@ -1456,6 +1456,8 @@ button svg, a svg { flex-shrink:0; }
    are the same question a beat apart, and drawing them differently would make
    the queue look like it belongs to something else. */
 .knocking { margin-top:14px;padding-top:14px;border-top:1px solid var(--line); }
+/* First in a dialog, above the roster: nothing above it to separate from. */
+.knocking:first-child { margin-top:0;padding-top:0;border-top:0; }
 .knocking__ask {
     margin:0 0 8px;color:var(--ink-3);
     font-family:var(--mono);font-size:var(--t-micro);letter-spacing:var(--track-micro);text-transform:uppercase;
@@ -1470,6 +1472,8 @@ button svg, a svg { flex-shrink:0; }
 .knocking__who { font-size:var(--t-ui); }
 .knocking__mail { font-size:11.5px;color:var(--ink-3); }
 .knocking__note { margin:8px 0 0;font-size:12px;line-height:1.5;color:var(--ink-3);max-width:58ch; }
+.knocking__acts { display:flex;align-items:center;gap:6px; }
+@media (max-width: 560px) { .knocking__list li { grid-template-columns:minmax(0,1fr); } }
 
 .joins { margin-top:14px;padding-top:14px;border-top:1px solid var(--line); }
 .joins__ask {

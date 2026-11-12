@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 
 from app.modules.identity.domain.organization_entities import OrganizationRole
@@ -6,6 +8,8 @@ from app.core.email.transactional import render_transactional_email
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
     invitation_note,
+    join_decided_email,
+    member_added_email,
 )
 from app.modules.identity.services.email_policy import (
     EmailPolicyError,
@@ -142,17 +146,18 @@ async def test_workspace_invitation_email_uses_shared_layout(monkeypatch):
     )
 
     html = sent["html_content"]
-    assert "Workspace invitation" in html
+    assert "Invitation" in html
     assert sent["subject"] == "Invitation to join Acme Corp"
     assert "Join Acme Corp on Lemma." in html
     assert "Accept invitation" in html
-    assert "Shared agents, data, and workspace apps" in html
+    assert "Lemmas that own a piece of the work" in html
 
 
 @pytest.mark.asyncio
 async def test_pod_join_request_email_humanizes_and_includes_requester(monkeypatch):
     adapter = SmtpIdentityEmailAdapter()
     sent: dict[str, str] = {}
+    pod_id = uuid4()
 
     async def capture_send(**kwargs):
         sent.update(kwargs)
@@ -162,6 +167,7 @@ async def test_pod_join_request_email_humanizes_and_includes_requester(monkeypat
 
     result = await adapter.send_pod_join_request_email(
         to_email="admin@acme.com",
+        pod_id=pod_id,
         pod_name="support_app",
         organization_name="acme_corp",
         requester_name="Jane Doe",
@@ -177,6 +183,9 @@ async def test_pod_join_request_email_humanizes_and_includes_requester(monkeypat
     assert "Jane Doe" in sent["html_content"]
     assert "jane@acme.com" in sent["html_content"]
     assert "Jane Doe" in sent["text_content"]
+    # The button opens the Lemma's People settings, where the request is.
+    assert f"/l/{pod_id}/settings/people" in sent["html_content"]
+    assert "pod" not in sent["text_content"].lower()
 
 
 @pytest.mark.asyncio
@@ -220,4 +229,55 @@ async def test_invitation_accepted_email_humanizes_workspace(monkeypatch):
 
     assert sent["subject"] == "You joined Customer Success Team"
     assert "Customer Success Team" in sent["html_content"]
-    assert "Active workspace: Customer Success Team" in sent["text_content"]
+    assert "Organization: Customer Success Team" in sent["text_content"]
+
+
+def test_join_approved_email_opens_the_lemma():
+    pod_id = uuid4()
+
+    subject, rendered = join_decided_email(
+        to_email="jane@acme.com",
+        pod_id=pod_id,
+        pod_name="support_app",
+        organization_name="acme_corp",
+        approved=True,
+        decided_by_name="Ada Lovelace",
+    )
+
+    assert subject == "You're in Support App"
+    assert "Ada Lovelace let you into Support App" in rendered.text
+    assert f"/l/{pod_id}" in rendered.html
+    assert "pod" not in rendered.text.lower()
+
+
+def test_join_declined_email_says_so_and_offers_no_door():
+    pod_id = uuid4()
+
+    subject, rendered = join_decided_email(
+        to_email="jane@acme.com",
+        pod_id=pod_id,
+        pod_name="support_app",
+        organization_name="acme_corp",
+        approved=False,
+        decided_by_name="",
+    )
+
+    assert subject == "Your request to join Support App"
+    assert "was declined" in rendered.text
+    assert "Someone who runs it declined it" in rendered.text
+    assert f"/l/{pod_id}" not in rendered.html
+
+
+def test_member_added_email_names_who_added_you():
+    pod_id = uuid4()
+
+    subject, rendered = member_added_email(
+        to_email="jane@acme.com",
+        pod_id=pod_id,
+        pod_name="support_app",
+        organization_name="acme_corp",
+        added_by_name="Ada Lovelace",
+    )
+
+    assert subject == "Ada Lovelace added you to Support App"
+    assert f"/l/{pod_id}" in rendered.html

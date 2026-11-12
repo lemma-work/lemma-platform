@@ -193,7 +193,7 @@ def _not_shareable():
     from app.modules.agent.contracts import RuntimeUnavailableError
 
     return RuntimeUnavailableError(
-        "This teammate runs on Ada's own Claude Code, which only they can use.",
+        "This Lemma runs on Ada's own Claude Code, which only they can use.",
         code="runtime_profile_not_shareable",
     )
 

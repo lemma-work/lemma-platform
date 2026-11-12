@@ -122,6 +122,7 @@ class PodMemberService:
                     email=org_member_added.user.email,
                     first_name=org_member_added.user.first_name,
                     last_name=org_member_added.user.last_name,
+                    added_by_user_id=requester_user_id,
                 )
             else:
                 logger.debug(

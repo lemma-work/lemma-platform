@@ -25,7 +25,7 @@ from app.modules.agent.domain.value_objects import HarnessKind
 class RuntimeHolder(StrEnum):
     """What a runtime is being saved on, in the words the refusal uses."""
 
-    TEAMMATE = "teammate"
+    TEAMMATE = "Lemma"
     CONVERSATION = "conversation"
 
 
@@ -109,7 +109,7 @@ def model_unavailable_error(
     # either can be the stale one -- so the remedy names both.
     return RuntimeUnavailableError(
         f"{profile_name} no longer offers {model_name}, the model this "
-        "conversation is set to use. Pick another model for the teammate or "
+        "conversation is set to use. Pick another model for the Lemma or "
         "the conversation, or refresh the model list in Settings → Models."
     )
 

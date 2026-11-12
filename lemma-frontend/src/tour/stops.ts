@@ -36,13 +36,13 @@ export function tourStops({ name, org }: { name: string; org: string }): Stop[] 
     return [
         {
             id: "welcome", target: null, area: "none", side: "center",
-            title: name + " is an AI teammate. This is its space.",
+            title: name + " is a Lemma. This is its space.",
             line: "Give it work in a sentence; what it makes stays here, and everyone you let in works on it too.",
         },
         {
             id: "rail", target: "rail", area: "sidebar", side: "right",
-            title: "Your teammates",
-            line: "Each face is an AI teammate in " + org + ", and the mark at the top shows every one of them at once.",
+            title: "Your Lemmas",
+            line: "Each face is a Lemma in " + org + ", and the mark at the top shows every one of them at once.",
         },
         {
             id: "places", target: "places", area: "sidebar", side: "right",

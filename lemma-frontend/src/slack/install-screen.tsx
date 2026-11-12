@@ -72,7 +72,7 @@ function Installing() {
         return (
             <Screen
                 title="Add Lemma to Slack"
-                lead="Lemma sets you up first — an organization and a first teammate — then Slack asks whether Lemma may join your workspace."
+                lead="Lemma sets you up first — an organization and a first Lemma — then Slack asks whether Lemma may join your workspace."
                 looking={false}
             >
                 {problem}
@@ -84,7 +84,7 @@ function Installing() {
     return (
         <Screen
             title="Add Lemma to Slack"
-            lead={`Lemma joins your Slack workspace for ${name}, and sets your teammates up there. Slack asks you to allow it next.`}
+            lead={`Lemma joins your Slack workspace for ${name}, and sets your Lemmas up there. Slack asks you to allow it next.`}
             looking={false}
         >
             {step.picker && (

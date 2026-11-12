@@ -224,7 +224,7 @@ export function HiringView({
             setMade({ id: pod.id, name: pod.name, variant, faceSaved });
             setStage("met");
         } catch (problem) {
-            setError(problem instanceof Error ? problem.message : "Couldn’t finish setting up this teammate. Check your teammate list before trying again.");
+            setError(problem instanceof Error ? problem.message : "Couldn’t finish setting up this Lemma. Check your Lemmas before trying again.");
             if (chosen.id === "blank") { setDescribing(true); setStage("shelf"); }
             else setStage("candidate");
         }
@@ -359,7 +359,7 @@ function Shelf({
                 <ResumeInstall />
                 <div className="shelf__head">
                     <h1>What needs doing?</h1>
-                    <p>Give a teammate its first responsibility. Choose a starting role or describe the job yourself.</p>
+                    <p>Give a Lemma its first responsibility. Choose a starting role or describe the job yourself.</p>
                 </div>
 
                 <form
@@ -391,7 +391,7 @@ function Shelf({
                     page, and before this the only blank start was the
                     seventh card, below the fold, behind a name field. */}
                 <button type="button" className="shelf__explore" onClick={onExplore}>
-                    Just exploring? Start with a blank teammate <ArrowRightIcon size={14} />
+                    Just exploring? Start with a blank Lemma <ArrowRightIcon size={14} />
                 </button>
 
                 <div className="shelf__or">or start with a role</div>

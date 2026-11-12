@@ -28,6 +28,9 @@ export interface Member {
     role: string;
     /** What this member is allowed to do, in a person's words. */
     can: string;
+    /** The role behind `can`, as the wire spells it (`POD_ADMIN`), for a
+     *  picker that changes it. Absent where the source cannot say. */
+    podRole?: string | null;
     iconUrl?: string | null;
     /** The account behind the membership — what a run or a schedule names as
      *  its owner (`user_id`), which is not the membership id above. */
@@ -65,7 +68,7 @@ export interface Invitation {
     id: string;
     orgId: string;
     orgName: string;
-    /** The teammate it names, when it names one. */
+    /** The Lemma it names, when it names one. */
     podId: string | null;
     podName: string | null;
     podAbout: string | null;
@@ -505,6 +508,8 @@ export interface PodSource {
     myInvitations(): Promise<Invitation[]>;
     /** Take one up. The organization appears in `listOrgs` afterwards. */
     acceptInvitation(invitationId: string): Promise<void>;
+    /** Turn one down. Nobody is added, and it stops being offered. */
+    declineInvitation(invitationId: string): Promise<void>;
     /** Organizations this person's email domain is allowed to let itself into.
      *  Empty is the common answer and not an error. */
     suggestedOrgs(): Promise<Org[]>;
@@ -669,10 +674,13 @@ export interface PodSource {
      *  platform does with an unset policy. */
     getPodJoin(podId: string): Promise<JoinPolicy>;
     setPodJoin(podId: string, policy: JoinPolicy): Promise<void>;
-    /** Whether the signed-in person has already knocked on this teammate's
+    /** Whether the signed-in person has already knocked on this Lemma's
      *  door, so a second visit says "waiting" instead of offering the ask
-     *  again. Null when they have never asked. */
+     *  again — or "declined", when the last ask was turned down. Null when
+     *  they have never asked, or took it back. */
     myJoinRequest(podId: string): Promise<JoinRequest | null>;
+    /** Take back your own pending ask. */
+    withdrawJoinRequest(podId: string): Promise<JoinRequest>;
     /** Knock. What this becomes is the pod's own policy and not this app's
      *  call: a door already open to the asker admits them on the spot and
      *  answers `approved`, a shut one answers `pending` and emails whoever
@@ -682,16 +690,13 @@ export interface PodSource {
      *  alternative leaves the one route into a pod open only to people already
      *  inside it. */
     askToJoin(podId: string): Promise<JoinRequest>;
-    /** Who is waiting at this teammate's door, for whoever runs it. */
+    /** Who is waiting at this Lemma's door, for whoever runs it. */
     listJoinRequests(podId: string): Promise<JoinRequest[]>;
-    /** Let somebody in.
-     *
-     *  There is no matching refusal, and that is the platform's shape rather
-     *  than an omission here: `REJECTED` exists as a status and no endpoint
-     *  sets it. So the UI offers admitting and says plainly that declining is
-     *  not something it can do, instead of drawing a Decline button that would
-     *  have to fail. */
-    admitToPod(podId: string, requestId: string): Promise<JoinRequest>;
+    /** Let somebody in, as `role` (a pod role, `POD_USER` when not said).
+     *  The asker is emailed either way the answer goes. */
+    admitToPod(podId: string, requestId: string, role?: string): Promise<JoinRequest>;
+    /** Turn somebody down. */
+    declineJoinRequest(podId: string, requestId: string): Promise<JoinRequest>;
     /** And the same question one level up. An organization that has never been
      *  told answers `"invited"` — and so does one set to admit an email domain
      *  without having been given one, because that rule admits nobody. */

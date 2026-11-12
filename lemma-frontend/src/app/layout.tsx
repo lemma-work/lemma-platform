@@ -28,7 +28,7 @@ import "@/styles/empty.css";
 import "@/styles/tour.css";
 import "@/styles/space-mobile.css";
 
-export const metadata: Metadata = { metadataBase: new URL(publicSiteUrl()), title: {default: 'Lemma', template: '%s | Lemma'}, description: 'Your teammates and the work they are doing.', manifest: '/manifest.webmanifest', alternates: {types: {'application/rss+xml':'/feed.xml'}} };
+export const metadata: Metadata = { metadataBase: new URL(publicSiteUrl()), title: {default: 'Lemma', template: '%s | Lemma'}, description: 'Your Lemmas and the work they are doing.', manifest: '/manifest.webmanifest', alternates: {types: {'application/rss+xml':'/feed.xml'}} };
 
 // Apply saved appearance before paint. The app reads the same preferences.
 // `CARRY_SCRIPT` runs first and must: it carries these keys over from the

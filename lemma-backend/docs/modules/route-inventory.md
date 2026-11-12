@@ -361,6 +361,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}` | `pod.delete` | Delete Pod |
+| DELETE | `/pods/{pod_id}/join-requests/me` | `pod.join_request.withdraw` | Withdraw My Pod Join Request |
 | DELETE | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.remove` | Remove Pod Member |
 | DELETE | `/pods/{pod_id}/outcome` | `outcome.clear` | Clear what the pod owns |
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
@@ -385,6 +386,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/join` | `pod.join` | Join Pod |
 | POST | `/pods/{pod_id}/join-requests` | `pod.join_request.create` | Create Pod Join Request |
 | POST | `/pods/{pod_id}/join-requests/{join_request_id}/approve` | `pod.join_request.approve` | Approve Pod Join Request |
+| POST | `/pods/{pod_id}/join-requests/{join_request_id}/reject` | `pod.join_request.reject` | Reject Pod Join Request |
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
 | PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |

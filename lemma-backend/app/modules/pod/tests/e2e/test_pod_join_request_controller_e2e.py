@@ -241,3 +241,65 @@ async def test_request_join_auto_approves_when_policy_allows(
     assert any(
         item["id"] == public_pod["id"] for item in visible_pods.json().get("items", [])
     )
+
+
+@pytest.mark.asyncio
+async def test_a_join_request_can_be_declined_or_withdrawn(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+):
+    pod_response = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"Decline {uuid4().hex[:6]}",
+            "organization_id": fixed_test_org["id"],
+        },
+    )
+    assert pod_response.status_code == 201, pod_response.text
+    pod_id = pod_response.json()["id"]
+    _, token = await _signup_user(async_client)
+    asker = {"Authorization": f"Bearer {token}"}
+
+    # Withdrawn: gone from the queue, and nothing left for the asker to see.
+    asked = await async_client.post(f"/pods/{pod_id}/join-requests", headers=asker)
+    assert asked.status_code == 201, asked.text
+    withdrawn = await async_client.delete(
+        f"/pods/{pod_id}/join-requests/me", headers=asker
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert withdrawn.json()["status"] == "WITHDRAWN"
+    mine = await async_client.get(f"/pods/{pod_id}/join-requests/me", headers=asker)
+    assert mine.status_code == 200, mine.text
+    assert mine.json() is None
+    again = await async_client.delete(f"/pods/{pod_id}/join-requests/me", headers=asker)
+    assert again.status_code == 404, again.text
+
+    # Declined: the asker reads the refusal, and is still not a member.
+    asked = await async_client.post(f"/pods/{pod_id}/join-requests", headers=asker)
+    assert asked.status_code == 201, asked.text
+    request_id = asked.json()["id"]
+    refused = await async_client.post(
+        f"/pods/{pod_id}/join-requests/{request_id}/reject", headers=asker
+    )
+    assert refused.status_code == 403, "an asker cannot decline their own request"
+    declined = await authenticated_client.post(
+        f"/pods/{pod_id}/join-requests/{request_id}/reject"
+    )
+    assert declined.status_code == 200, declined.text
+    assert declined.json()["status"] == "REJECTED"
+    mine = await async_client.get(f"/pods/{pod_id}/join-requests/me", headers=asker)
+    assert mine.json()["status"] == "REJECTED"
+    queue = await authenticated_client.get(f"/pods/{pod_id}/join-requests")
+    assert all(item["id"] != request_id for item in queue.json()["items"])
+    twice = await authenticated_client.post(
+        f"/pods/{pod_id}/join-requests/{request_id}/reject"
+    )
+    assert twice.status_code == 409, twice.text
+
+    # Asking again after a refusal is a fresh, pending request.
+    asked = await async_client.post(f"/pods/{pod_id}/join-requests", headers=asker)
+    assert asked.status_code == 201, asked.text
+    assert asked.json()["status"] == "PENDING"
+    mine = await async_client.get(f"/pods/{pod_id}/join-requests/me", headers=asker)
+    assert mine.json()["id"] == asked.json()["id"]

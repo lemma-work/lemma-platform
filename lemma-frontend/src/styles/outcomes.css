@@ -883,6 +883,84 @@
     margin: 0 0 14px;
 }
 
+/* The door on its own, before there is a frame around it: somebody with no
+   organization yet who opened a Lemma's link. */
+.ox-alone {
+    --ox-col: 1040px;
+    --ox-gutter: 28px;
+    min-height: 100dvh;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-outcomes), var(--ui);
+}
+
+.ox-door__aside {
+    margin: 10px 0 0;
+}
+
+/* A Lemma you are not in: what happened, the one thing to do, and which
+   account you are looking from. On the page's own column, like every other
+   page, but a measure narrow, because it is a sentence and a button. */
+.ox-door {
+    padding-top: 72px;
+}
+
+.ox-door > * {
+    max-width: 460px;
+}
+
+.ox-door__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+
+.ox-door__t {
+    margin: 18px 0 0;
+    font-size: 22px;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+}
+
+.ox-door__body p {
+    margin: 8px 0 0;
+    color: var(--ink-2);
+    font-size: 15px;
+    line-height: 1.5;
+}
+
+.ox-door__actions {
+    margin-top: 20px;
+}
+
+.ox-door__error {
+    margin: 12px 0 0;
+    color: var(--bad, var(--ink));
+    font-size: 13px;
+}
+
+.ox-door__who {
+    margin: 28px 0 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+}
+
+.ox-door__who .ox-link {
+    font-size: inherit;
+}
+
+.ox-door__which {
+    margin: 6px 0 0;
+    color: var(--ink-3);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+}
+
 .ox-pill,
 .ox-tag,
 .ox-kind {
@@ -2974,6 +3052,31 @@ a.ox-piece:hover .ox-piece__t {
     display: flex;
     flex-direction: column;
     margin: 0 -10px;
+}
+
+/* Invitations waiting on you, above what needs you: one line each, its
+   two answers at the end. */
+.ox-invited__row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 2px 10px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.ox-invited__t {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-invited__acts {
+    display: flex;
+    gap: 6px;
 }
 
 .ox-recent__row {

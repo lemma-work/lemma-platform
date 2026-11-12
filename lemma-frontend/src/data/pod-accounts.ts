@@ -174,7 +174,7 @@ export function readAccountUsage(raw: unknown): AccountUsage[] {
 /** One line per pod an account is in: "Kit · shared with everyone · runs
  *  support-inbox". `podName` names a pod id; an unknown one is said as such. */
 export function usageLine(usage: AccountUsage, podName: (podId: string) => string): string {
-    const name = podName(usage.podId) || "A teammate you cannot open";
+    const name = podName(usage.podId) || "A Lemma you cannot open";
     const who = usage.visibility === "PERSONAL" ? "your own calls" : usage.visibility === "POD" ? "shared with everyone" : "shared with some people";
     const runs = usage.usedBy.length ? " · runs " + usage.usedBy.join(", ") : "";
     return name + " · " + who + runs;
@@ -282,18 +282,18 @@ export function impactLines(impact: InstallationImpact, podName: (podId: string)
             ...(pod.scheduleCount ? [plural(pod.scheduleCount, "schedule", "schedules")] : []),
             ...(pod.eventSubscriptionCount ? [plural(pod.eventSubscriptionCount, "subscription", "subscriptions")] : []),
         ] : [];
-        lines.push((pod?.name || podName(podId) || "A teammate you cannot open") + " loses " + slugs.join(", ") + (what.length ? ": " + what.join(", ") : "") + ".");
+        lines.push((pod?.name || podName(podId) || "A Lemma you cannot open") + " loses " + slugs.join(", ") + (what.length ? ": " + what.join(", ") : "") + ".");
     }
     if (impact.unnamedPodCount) {
         const connectors = impact.unnamedPodConnectorCount === 1 ? "a connector" : plural(impact.unnamedPodConnectorCount, "connector", "connectors");
         /* Unfinished, the server never learned which of them I may open. */
         const who = impact.complete
-            ? plural(impact.unnamedPodCount, "teammate you cannot open loses", "teammates you cannot open lose")
-            : plural(impact.unnamedPodCount, "more teammate loses", "more teammates lose");
+            ? plural(impact.unnamedPodCount, "Lemma you cannot open loses", "Lemmas you cannot open lose")
+            : plural(impact.unnamedPodCount, "more Lemma loses", "more Lemmas lose");
         lines.push(who + " " + connectors + ".");
     }
     if (impact.podAccountCount && !impact.podConnectors.length && !impact.unnamedPodCount) {
-        lines.push(plural(impact.podAccountCount, "teammate's use", "teammates' uses") + " of these accounts stop.");
+        lines.push(plural(impact.podAccountCount, "Lemma's use", "Lemmas' uses") + " of these accounts stop.");
     }
     if (!impact.complete) lines.push("Couldn’t read everything this affects.");
     else if (lines.length === 0) lines.push("Nothing uses it yet. Nobody loses anything.");
