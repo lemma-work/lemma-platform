@@ -7,6 +7,7 @@ from app.core.email.email_sender import EmailNotConfiguredError, EmailSender
 from app.core.email.transactional import (
     EmailAction,
     EmailDetail,
+    RenderedEmail,
     render_transactional_email,
 )
 from app.core.helpers.humanize import humanize_name
@@ -344,9 +345,6 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             text_content=rendered.text,
         )
 
-    def _lemma_url(self, pod_id: UUID) -> str:
-        return f"{settings.frontend_url.rstrip('/')}/l/{pod_id}"
-
     async def send_pod_join_decided_email(
         self,
         *,
@@ -357,50 +355,14 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         approved: bool,
         decided_by_name: str,
     ) -> bool:
-        """The answer to a request to join, sent to whoever asked.
-
-        Approval opens the Lemma; a refusal says so plainly and offers nothing
-        to click, because there is nothing on the other side of a closed door
-        to open.
-        """
-        display_pod_name = _humanize_pod_name(pod_name)
-        display_organization_name = humanize_name(organization_name)
-        by = decided_by_name or "Someone who runs it"
-        if approved:
-            rendered = render_transactional_email(
-                preheader=f"You're in {display_pod_name}.",
-                eyebrow="Request approved",
-                heading=f"You're in {display_pod_name}.",
-                body=(
-                    f"{by} let you into {display_pod_name} at {display_organization_name}.",
-                ),
-                action=EmailAction(f"Open {display_pod_name}", self._lemma_url(pod_id)),
-                details=(
-                    EmailDetail("Lemma", display_pod_name),
-                    EmailDetail("Organization", display_organization_name),
-                ),
-                footer=(
-                    f"This was sent to {to_email} because you asked to join {display_pod_name}.",
-                ),
-            )
-            subject = f"You're in {display_pod_name}"
-        else:
-            rendered = render_transactional_email(
-                preheader=f"Your request to join {display_pod_name} was declined.",
-                eyebrow="Request declined",
-                heading=f"Your request to join {display_pod_name} was declined.",
-                body=(
-                    f"{by} declined it. If you still need access, ask them directly.",
-                ),
-                details=(
-                    EmailDetail("Lemma", display_pod_name),
-                    EmailDetail("Organization", display_organization_name),
-                ),
-                footer=(
-                    f"This was sent to {to_email} because you asked to join {display_pod_name}.",
-                ),
-            )
-            subject = f"Your request to join {display_pod_name}"
+        subject, rendered = join_decided_email(
+            to_email=to_email,
+            pod_id=pod_id,
+            pod_name=pod_name,
+            organization_name=organization_name,
+            approved=approved,
+            decided_by_name=decided_by_name,
+        )
         return await self._send(
             kind="pod_join_decided",
             to_email=to_email,
@@ -418,30 +380,96 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         organization_name: str,
         added_by_name: str,
     ) -> bool:
-        """Somebody added you to a Lemma directly, with no invitation to accept."""
-        display_pod_name = _humanize_pod_name(pod_name)
-        display_organization_name = humanize_name(organization_name)
-        by = added_by_name or "Someone"
-        rendered = render_transactional_email(
-            preheader=f"{by} added you to {display_pod_name}.",
-            eyebrow="Added to a Lemma",
-            heading=f"You're in {display_pod_name}.",
-            body=(
-                f"{by} added you to {display_pod_name} at {display_organization_name}.",
-            ),
-            action=EmailAction(f"Open {display_pod_name}", self._lemma_url(pod_id)),
-            details=(
-                EmailDetail("Lemma", display_pod_name),
-                EmailDetail("Organization", display_organization_name),
-            ),
-            footer=(
-                f"This was sent to {to_email} because you were added to {display_pod_name}.",
-            ),
+        subject, rendered = member_added_email(
+            to_email=to_email,
+            pod_id=pod_id,
+            pod_name=pod_name,
+            organization_name=organization_name,
+            added_by_name=added_by_name,
         )
         return await self._send(
             kind="pod_member_added",
             to_email=to_email,
-            subject=f"{by} added you to {display_pod_name}",
+            subject=subject,
             html_content=rendered.html,
             text_content=rendered.text,
         )
+
+
+def _lemma_url(pod_id: UUID) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/l/{pod_id}"
+
+
+def join_decided_email(
+    *,
+    to_email: str,
+    pod_id: UUID,
+    pod_name: str,
+    organization_name: str,
+    approved: bool,
+    decided_by_name: str,
+) -> tuple[str, RenderedEmail]:
+    """The answer to a request to join, for whoever asked: subject and body.
+
+    Approval opens the Lemma; a refusal says so plainly and offers nothing to
+    click, because there is nothing on the other side of a closed door to
+    open. Built apart from sending, so the words are tested without a sender.
+    """
+    display_pod_name = _humanize_pod_name(pod_name)
+    display_organization_name = humanize_name(organization_name)
+    by = decided_by_name or "Someone who runs it"
+    details = (
+        EmailDetail("Lemma", display_pod_name),
+        EmailDetail("Organization", display_organization_name),
+    )
+    footer = (
+        f"This was sent to {to_email} because you asked to join {display_pod_name}.",
+    )
+    if approved:
+        return f"You're in {display_pod_name}", render_transactional_email(
+            preheader=f"You're in {display_pod_name}.",
+            eyebrow="Request approved",
+            heading=f"You're in {display_pod_name}.",
+            body=(
+                f"{by} let you into {display_pod_name} at {display_organization_name}.",
+            ),
+            action=EmailAction(f"Open {display_pod_name}", _lemma_url(pod_id)),
+            details=details,
+            footer=footer,
+        )
+    return f"Your request to join {display_pod_name}", render_transactional_email(
+        preheader=f"Your request to join {display_pod_name} was declined.",
+        eyebrow="Request declined",
+        heading=f"Your request to join {display_pod_name} was declined.",
+        body=(f"{by} declined it. If you still need access, ask them directly.",),
+        details=details,
+        footer=footer,
+    )
+
+
+def member_added_email(
+    *,
+    to_email: str,
+    pod_id: UUID,
+    pod_name: str,
+    organization_name: str,
+    added_by_name: str,
+) -> tuple[str, RenderedEmail]:
+    """Somebody added you to a Lemma directly, with no invitation to accept."""
+    display_pod_name = _humanize_pod_name(pod_name)
+    display_organization_name = humanize_name(organization_name)
+    by = added_by_name or "Someone"
+    return f"{by} added you to {display_pod_name}", render_transactional_email(
+        preheader=f"{by} added you to {display_pod_name}.",
+        eyebrow="Added to a Lemma",
+        heading=f"You're in {display_pod_name}.",
+        body=(f"{by} added you to {display_pod_name} at {display_organization_name}.",),
+        action=EmailAction(f"Open {display_pod_name}", _lemma_url(pod_id)),
+        details=(
+            EmailDetail("Lemma", display_pod_name),
+            EmailDetail("Organization", display_organization_name),
+        ),
+        footer=(
+            f"This was sent to {to_email} because you were added to {display_pod_name}.",
+        ),
+    )

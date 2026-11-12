@@ -8,6 +8,8 @@ from app.core.email.transactional import render_transactional_email
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
     invitation_note,
+    join_decided_email,
+    member_added_email,
 )
 from app.modules.identity.services.email_policy import (
     EmailPolicyError,
@@ -230,24 +232,10 @@ async def test_invitation_accepted_email_humanizes_workspace(monkeypatch):
     assert "Organization: Customer Success Team" in sent["text_content"]
 
 
-async def _capture(monkeypatch, adapter: SmtpIdentityEmailAdapter) -> dict[str, str]:
-    sent: dict[str, str] = {}
-
-    async def capture_send(**kwargs):
-        sent.update(kwargs)
-        return True
-
-    monkeypatch.setattr(adapter, "_send", capture_send)
-    return sent
-
-
-@pytest.mark.asyncio
-async def test_join_approved_email_opens_the_lemma(monkeypatch):
-    adapter = SmtpIdentityEmailAdapter()
-    sent = await _capture(monkeypatch, adapter)
+def test_join_approved_email_opens_the_lemma():
     pod_id = uuid4()
 
-    await adapter.send_pod_join_decided_email(
+    subject, rendered = join_decided_email(
         to_email="jane@acme.com",
         pod_id=pod_id,
         pod_name="support_app",
@@ -256,19 +244,16 @@ async def test_join_approved_email_opens_the_lemma(monkeypatch):
         decided_by_name="Ada Lovelace",
     )
 
-    assert sent["subject"] == "You're in Support App"
-    assert "Ada Lovelace let you into Support App" in sent["text_content"]
-    assert f"/l/{pod_id}" in sent["html_content"]
-    assert "pod" not in sent["text_content"].lower()
+    assert subject == "You're in Support App"
+    assert "Ada Lovelace let you into Support App" in rendered.text
+    assert f"/l/{pod_id}" in rendered.html
+    assert "pod" not in rendered.text.lower()
 
 
-@pytest.mark.asyncio
-async def test_join_declined_email_says_so_and_offers_no_door(monkeypatch):
-    adapter = SmtpIdentityEmailAdapter()
-    sent = await _capture(monkeypatch, adapter)
+def test_join_declined_email_says_so_and_offers_no_door():
     pod_id = uuid4()
 
-    await adapter.send_pod_join_decided_email(
+    subject, rendered = join_decided_email(
         to_email="jane@acme.com",
         pod_id=pod_id,
         pod_name="support_app",
@@ -277,19 +262,16 @@ async def test_join_declined_email_says_so_and_offers_no_door(monkeypatch):
         decided_by_name="",
     )
 
-    assert sent["subject"] == "Your request to join Support App"
-    assert "was declined" in sent["text_content"]
-    assert "Someone who runs it declined it" in sent["text_content"]
-    assert f"/l/{pod_id}" not in sent["html_content"]
+    assert subject == "Your request to join Support App"
+    assert "was declined" in rendered.text
+    assert "Someone who runs it declined it" in rendered.text
+    assert f"/l/{pod_id}" not in rendered.html
 
 
-@pytest.mark.asyncio
-async def test_member_added_email_names_who_added_you(monkeypatch):
-    adapter = SmtpIdentityEmailAdapter()
-    sent = await _capture(monkeypatch, adapter)
+def test_member_added_email_names_who_added_you():
     pod_id = uuid4()
 
-    await adapter.send_pod_member_added_email(
+    subject, rendered = member_added_email(
         to_email="jane@acme.com",
         pod_id=pod_id,
         pod_name="support_app",
@@ -297,5 +279,5 @@ async def test_member_added_email_names_who_added_you(monkeypatch):
         added_by_name="Ada Lovelace",
     )
 
-    assert sent["subject"] == "Ada Lovelace added you to Support App"
-    assert f"/l/{pod_id}" in sent["html_content"]
+    assert subject == "Ada Lovelace added you to Support App"
+    assert f"/l/{pod_id}" in rendered.html
