@@ -229,6 +229,8 @@ class InMemoryChannelSeats:
         contact_id: UUID | None,
         platform: str | None,
     ) -> UUID | None:
+        """The person's seated conversation on this platform, as the unique
+        index keys it."""
         agent = effective_agent_id(agent_id, pod_id=pod_id)
         return self._seated.get((channel_id, platform, agent, contact_id or user_id))
 

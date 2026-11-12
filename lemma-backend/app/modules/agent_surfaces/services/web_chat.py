@@ -345,6 +345,8 @@ class WebChat:
         contact_id: UUID,
         kept: UUID | None,
     ) -> UUID:
+        """The visitor's conversation on this platform: their kept one placed
+        here, else one opened -- as the widget's owner, for the contact."""
         agent_name = await agent_name_for_id(uow, widget.agent_id)
         name = await self._display_name(uow, session)
         context_token = set_current_context(
@@ -361,6 +363,8 @@ class WebChat:
                 return found
 
             async def opening() -> UUID:
+                """The visitor's kept conversation, placed on this platform,
+                or a new one opened there."""
                 if kept is not None:
                     await agent_channels.place_in_channel(
                         uow,

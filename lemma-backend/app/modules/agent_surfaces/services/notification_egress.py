@@ -308,6 +308,8 @@ class NotificationEgress:
         channel_id: UUID,
         platform: str,
     ) -> UUID | None:
+        """Open the recipient's conversation on this platform of the channel
+        to carry a notification, and record where it was delivered."""
         surface = channel.surface
         conversation = await agent_conversations.open_surface_conversation(
             self.uow,

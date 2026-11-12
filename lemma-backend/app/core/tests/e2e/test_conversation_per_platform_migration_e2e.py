@@ -46,6 +46,8 @@ def _migrate(
 
 
 def _seed(plain_url: str) -> dict[str, UUID]:
+    """A member with a direct channel to an agent, and their conversation
+    there from before the platform column (``old``)."""
     ids = {name: uuid4() for name in ("org", "user", "pod", "channel", "agent", "old")}
     with psycopg.connect(plain_url) as connection:
         run = connection.execute
@@ -88,6 +90,8 @@ def _seed(plain_url: str) -> dict[str, UUID]:
 
 
 def _open_by_email(plain_url: str, ids: dict[str, UUID]) -> UUID:
+    """Open the member's email conversation in the same channel, active
+    after ``old`` so a downgrade keeps it."""
     conversation = uuid4()
     with psycopg.connect(plain_url) as connection:
         connection.execute(

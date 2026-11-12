@@ -170,6 +170,8 @@ async def _answer_as(
     agent_id: UUID,
     agent_name: str,
 ) -> UUID | None:
+    """Have this agent answer a member's channel line in their conversation on
+    the line's platform, as the member; the conversation answered, or None."""
     pod_id, user_id = channel.pod_id, line.sender.user_id
     assert user_id is not None
     context = await create_authorization_data_service(uow).build_user_context(

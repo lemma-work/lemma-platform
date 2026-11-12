@@ -321,6 +321,8 @@ class ConversationModel(UUIDAuditBase):
         }
 
     def to_entity(self) -> ConversationEntity:
+        """The conversation as the domain reads it, with whatever messages and
+        runs were loaded alongside; the latest run says whether it failed."""
         loaded_messages = self.__dict__.get("messages", [])
         loaded_runs = self.__dict__.get("agent_runs", [])
         latest_run = loaded_runs[-1] if loaded_runs else None
