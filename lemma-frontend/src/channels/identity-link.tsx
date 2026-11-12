@@ -11,7 +11,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Pod } from "@/data";
 import { ChannelIcon } from "@/shell/channels";
 import { Modal } from "@/shell/modal";
-import { channelApi, type TelegramAccount } from "./api";
+import { channelApi } from "./api";
+import { LINK_POLL_MS, accountSaid, linkEnded, linkStep, type TelegramAccount } from "./identity-link-model";
 import { problemOf } from "./problem";
 
 type Link = { code: string; url: string };
@@ -63,7 +64,7 @@ export function LinkTelegramSteps({ pod, surfaceId, contactId, seenAs, everywher
         queryKey: ["identity-link", pod.id, link?.code],
         queryFn: () => api.identityLinkStatus(link!.code),
         enabled: Boolean(link) && !linked,
-        refetchInterval: (query) => (query.state.data?.state ?? "WAITING") === "WAITING" ? 2_000 : false,
+        refetchInterval: (query) => (query.state.data?.state ?? "WAITING") === "WAITING" ? LINK_POLL_MS : false,
     });
     const confirm = useMutation({
         mutationFn: () => api.confirmIdentityLink(link!.code),
@@ -74,7 +75,7 @@ export function LinkTelegramSteps({ pod, surfaceId, contactId, seenAs, everywher
         onSuccess: onClose,
     });
 
-    const state = status.data?.state ?? "WAITING";
+    const step = linkStep(status.data, Boolean(linked));
     const account = status.data?.state === "OPENED" ? status.data.account : null;
     const problem = make.error ?? confirm.error ?? decline.error;
     const where = everywhere ? "every space you’re in" : pod.name;
@@ -82,11 +83,11 @@ export function LinkTelegramSteps({ pod, surfaceId, contactId, seenAs, everywher
         <div className="gsheet">
             {linked ? (
                 <p className="gsheet__lead">
-                    Linked. {everywhere ? "Every space you’re in knows" : pod.name + " knows"} {said(linked)} as you from the next message.
+                    Linked. {everywhere ? "Every space you’re in knows" : pod.name + " knows"} {accountSaid(linked)} as you from the next message.
                 </p>
             ) : account ? (
                 <>
-                    <p className="gsheet__lead">Is {said(account)} your Telegram account?</p>
+                    <p className="gsheet__lead">Is {accountSaid(account)} your Telegram account?</p>
                     <p className="gsheet__fine">Only say yes if it is. Linked, it gets your access in {where}.</p>
                     <div className="gsheet__foot gsheet__foot--split">
                         <button type="button" className="ghost-pill" disabled={decline.isPending} onClick={() => decline.mutate()}>Not me</button>
@@ -95,11 +96,11 @@ export function LinkTelegramSteps({ pod, surfaceId, contactId, seenAs, everywher
                         </button>
                     </div>
                 </>
-            ) : state === "OTHER_ACCOUNT" ? (
+            ) : step === "other-account" ? (
                 <p className="gsheet__lead">
                     That link was opened from a different Telegram account than {seenAs ?? "the one in the group"}, so nothing was linked.
                 </p>
-            ) : state === "GONE" ? (
+            ) : step === "gone" ? (
                 <p className="gsheet__lead">That link has expired. Close this and try again.</p>
             ) : (
                 <>
@@ -119,18 +120,11 @@ export function LinkTelegramSteps({ pod, surfaceId, contactId, seenAs, everywher
                 </>
             )}
             {problem && <p className="gsheet__problem" role="alert">{problemOf(problem, "Couldn’t link it.")}</p>}
-            {(linked || (state !== "WAITING" && !account)) && (
+            {linkEnded(step) && (
                 <div className="gsheet__foot">
                     <button type="button" className="ghost-pill" onClick={onClose}>Done</button>
                 </div>
             )}
         </div>
     );
-}
-
-function said(account: TelegramAccount): string {
-    const name = account.name?.trim();
-    const handle = account.username ? "@" + account.username : null;
-    if (name && handle) return name + " (" + handle + ")";
-    return name || handle || "this account";
 }

@@ -20,6 +20,7 @@ import Session from "supertokens-web-js/recipe/session/index.js";
 import { ensureCookieSessionSupport } from "./supertokens.js";
 import { EmbeddedCredentials, isEmbeddedInHost } from "./embedded.js";
 import { isUnreachableStatus, probeReachable, refreshFailureKind } from "./reachability.js";
+import type { TokenSource } from "./config.js";
 
 export interface UserInfo {
   id: string;
@@ -449,6 +450,8 @@ export class AuthManager {
   private readonly apiUrl: string;
   private readonly authUrl: string;
   private injectedToken: string | null;
+  /** Where a token-mode caller's current token comes from, when it changes. */
+  private readonly tokenSource: TokenSource | null;
   /** An app framed inside an AI tool, whose token comes from the Lemma view around it. */
   private readonly embedded: EmbeddedCredentials | null;
   private state: AuthState = { status: "loading", user: null };
@@ -463,11 +466,14 @@ export class AuthManager {
    *   is no session cookie and no `localStorage`. It wins over a token set
    *   through `setTestingToken`, because it was passed for this client rather
    *   than left lying in shared state.
+   * @param tokenSource The current token and a renewed one, for a caller that
+   *   refreshes its own session (`LemmaConfig.tokenSource`). Only with `token`.
    */
-  constructor(apiUrl: string, authUrl: string, token?: string | null) {
+  constructor(apiUrl: string, authUrl: string, token?: string | null, tokenSource?: TokenSource | null) {
     this.apiUrl = apiUrl;
     this.authUrl = authUrl;
     this.injectedToken = token?.trim() || detectInjectedToken();
+    this.tokenSource = this.injectedToken ? tokenSource ?? null : null;
     this.embedded = !this.injectedToken && isEmbeddedInHost() ? new EmbeddedCredentials() : null;
 
     if (!this.injectedToken && !this.embedded) {
@@ -665,6 +671,9 @@ export class AuthManager {
    * Throws if no token is available.
    */
   async getAccessToken(): Promise<string> {
+    if (this.tokenSource) {
+      return this.tokenSource.current();
+    }
     if (this.injectedToken) {
       return this.injectedToken;
     }
@@ -686,6 +695,9 @@ export class AuthManager {
    * Force a refresh-token flow and return the new access token.
    */
   async refreshAccessToken(): Promise<string> {
+    if (this.tokenSource) {
+      return this.tokenSource.renew();
+    }
     if (this.injectedToken) {
       return this.injectedToken;
     }

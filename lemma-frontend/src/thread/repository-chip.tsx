@@ -3,9 +3,10 @@
 import "@/styles/desktop.css";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { codeOf, saidAbout, source, type ChatRepository } from "@/data";
+import { saidAbout, source } from "@/data";
 import { isFramePath } from "@/outcomes/paths";
 import { BranchIcon, ChevronDownIcon } from "@/ui/icons";
+import { byOwner, FIX_FALLBACK, fixLabel, MORE_INSTALLED, NO_REPOSITORY, repositoryFix, repositoryTitle } from "./repositories";
 
 /** The GitHub repositories a new chat in this pod can work in, read once
  *  for every box that offers them. Refused when the pod's `github` connector
@@ -23,18 +24,6 @@ export function useChatRepositories(podId: string | null) {
     });
 }
 
-/** The refusals the reader can fix on the Connectors page, said as what to
- *  do there. Any other -- the pod has no `github` connector, GitHub is not
- *  answering -- draws nothing: a chat without a repository is the ordinary
- *  one, and there is no step to offer. */
-const FIXES: Record<string, string> = {
-    GITHUB_INSTALLATION_REQUIRED: "Install the GitHub app",
-    GITHUB_INSTALLATION_UNREACHABLE: "Reconnect GitHub",
-    CONNECTION_REQUIRED: "Connect GitHub",
-    CONNECTOR_NEEDS_ACCOUNT: "Connect GitHub",
-    CONNECTOR_REAUTH_REQUIRED: "Reconnect GitHub",
-};
-
 /** The repository a new chat works in, beside the composer.
  *
  *  Picked before the chat exists and sent with the conversation it creates:
@@ -42,8 +31,8 @@ const FIXES: Record<string, string> = {
  *  cut from the repository. A native list underneath, for the keyboard.
  *
  *  When GitHub is connected but not yet usable, the chip says the step that
- *  is missing and opens Connectors in a tab of its own, so what is typed here
- *  stays; the listing is read again on coming back. */
+ *  is missing (`repositories.ts`) and opens Connectors in a tab of its own,
+ *  so what is typed here stays; the listing is read again on coming back. */
 export function RepositoryChip({ podId, picked, onPick, className, chevron }: {
     podId: string;
     /** "owner/name", or null for a chat in no repository. */
@@ -59,7 +48,7 @@ export function RepositoryChip({ podId, picked, onPick, className, chevron }: {
     const row = (chip: ReactNode) => (className ? chip : <div className="repo-chip">{chip}</div>);
 
     if (listed.error) {
-        const fix = FIXES[codeOf(listed.error)];
+        const fix = repositoryFix(listed.error);
         /* Connectors is a page of the app's frame; the older shell has no
            address for it to open. */
         if (!fix || !isFramePath(window.location.pathname)) return null;
@@ -69,29 +58,25 @@ export function RepositoryChip({ podId, picked, onPick, className, chevron }: {
                 href="/connectors"
                 target="_blank"
                 rel="noopener"
-                title={saidAbout(listed.error, "GitHub is connected but cannot reach a repository yet.") + " Opens Connectors in a new tab."}
+                title={saidAbout(listed.error, FIX_FALLBACK) + " Opens Connectors in a new tab."}
             >
                 <BranchIcon size={14} aria-hidden="true" />
-                <span>{fix} to work in a repo</span>
+                <span>{fixLabel(fix)}</span>
             </a>,
         );
     }
 
     const items = listed.data?.items ?? [];
     if (items.length === 0) return null;
-    const owners = [...items.reduce((byOwner, repo) => {
-        const owner = repo.fullName.split("/")[0];
-        byOwner.set(owner, [...(byOwner.get(owner) ?? []), repo]);
-        return byOwner;
-    }, new Map<string, ChatRepository[]>())];
+    const owners = byOwner(items);
     return row(
-        <label className={pick} title={picked ? `Works in ${picked}, on a branch of its own` : "Work in a GitHub repository"}>
+        <label className={pick} title={repositoryTitle(picked)}>
             <span className="sr-only">Repository</span>
             <BranchIcon size={14} aria-hidden="true" />
             <select value={picked ?? ""} onChange={(event) => onPick(event.target.value || null)}>
-                <option value="">No repository</option>
-                {/* Under each GitHub account they live on -- someone's own and
-                    their GitHub organization's -- when there is more than one. */}
+                <option value="">{NO_REPOSITORY}</option>
+                {/* Under each GitHub account they live on when there is more
+                    than one. */}
                 {owners.length > 1
                     ? owners.map(([owner, repos]) => (
                         <optgroup key={owner} label={owner}>
@@ -99,9 +84,7 @@ export function RepositoryChip({ podId, picked, onPick, className, chevron }: {
                         </optgroup>
                     ))
                     : items.map((repo) => <option key={repo.fullName} value={repo.fullName}>{repo.fullName}</option>)}
-                {/* The installation covers more than GitHub listed in one
-                    read; those are not offered here. */}
-                {listed.data?.complete === false && <option disabled>More are installed than shown</option>}
+                {listed.data?.complete === false && <option disabled>{MORE_INSTALLED}</option>}
             </select>
             {chevron ?? <ChevronDownIcon size={12} aria-hidden="true" />}
         </label>,

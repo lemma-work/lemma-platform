@@ -27,6 +27,10 @@ import { readInbox, type Inbox, type PersonRef } from "./waiting";
 import { readSourceSettings, type SourceChange, type SourceSettings } from "./sources";
 import type { Mention } from "./mentions";
 import { attachmentFolder } from "./compose-model";
+import { readIdentityLinkStatus, readTelegramAccount, type IdentityLinkStatus, type TelegramAccount } from "./identity-link-model";
+import { readTableGrant, type TableGrant } from "./table-grants-model";
+
+export type { IdentityLinkStatus, TableGrant, TelegramAccount };
 
 /** A group one bot is in, with whether the reader is in it: an admin is
  *  listed the bot's private groups they are not in, to join on request. */
@@ -126,21 +130,6 @@ export interface ChannelApi {
     confirmIdentityLink(code: string): Promise<TelegramAccount>;
     declineIdentityLink(code: string): Promise<void>;
 }
-
-export interface TableGrant {
-    table: string;
-    readColumns: string[];
-    addColumns: string[];
-}
-
-export interface TelegramAccount {
-    name: string | null;
-    username: string | null;
-}
-
-export type IdentityLinkStatus =
-    | { state: "WAITING" | "OTHER_ACCOUNT" | "GONE" }
-    | { state: "OPENED"; account: TelegramAccount };
 
 export interface PostBody {
     text: string;
@@ -306,26 +295,20 @@ function liveApi(podId: string): ChannelApi {
             return { code: link.code, url: link.url, expiresAt: link.expires_at };
         },
         async identityLinkStatus(code) {
-            const found = await client().channels.sources.identityLinkStatus(podId, code);
-            if (found.state === "OPENED" && found.account) {
-                return { state: "OPENED", account: { name: found.account.name ?? null, username: found.account.username ?? null } };
-            }
-            return { state: found.state === "OPENED" ? "GONE" : found.state };
+            return readIdentityLinkStatus(await client().channels.sources.identityLinkStatus(podId, code));
         },
         async confirmIdentityLink(code) {
-            const account = await client().channels.sources.confirmIdentityLink(podId, code);
-            return { name: account.name ?? null, username: account.username ?? null };
+            return readTelegramAccount(await client().channels.sources.confirmIdentityLink(podId, code));
         },
         async declineIdentityLink(code) {
             await client().channels.sources.declineIdentityLink(podId, code);
         },
         async tableGrants(channelId) {
             const listed = await client().channels.sources.tableGrants(podId, channelId);
-            return listed.items.map((grant) => ({ table: grant.table, readColumns: grant.read_columns, addColumns: grant.add_columns }));
+            return listed.items.map(readTableGrant);
         },
         async setTableGrant(channelId, table, grant) {
-            const saved = await client().channels.sources.setTableGrant(podId, channelId, table, grant);
-            return { table: saved.table, readColumns: saved.read_columns, addColumns: saved.add_columns };
+            return readTableGrant(await client().channels.sources.setTableGrant(podId, channelId, table, grant));
         },
         async removeTableGrant(channelId, table) {
             await client().channels.sources.removeTableGrant(podId, channelId, table);
