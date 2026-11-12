@@ -44,6 +44,14 @@ def _worker_redis(monkeypatch, *present: str) -> None:
     )
 
 
+def _set_embedded_worker(monkeypatch, value: bool) -> None:
+    # Through the dict Starlette's ``State`` keeps its values in, not
+    # ``setattr``: pytest 9.2 reads the value to restore from the instance
+    # ``__dict__``, which for ``State`` never holds it, so patching the key
+    # twice in one test made teardown delete it twice.
+    monkeypatch.setitem(appmod.app.state._state, "embedded_worker", value)
+
+
 @pytest.fixture(autouse=True)
 def healthy_by_default(monkeypatch):
     """Readiness asks five things; each test is about one of them.
@@ -185,7 +193,7 @@ def test_ready_is_not_ready_when_the_embedded_worker_has_stopped(
     heartbeat = tmp_path / "worker_heartbeat"
     heartbeat.write_text(str(time.time() - 3600), encoding="utf-8")
     monkeypatch.setattr(healthmod.settings, "worker_heartbeat_path", str(heartbeat))
-    monkeypatch.setattr(appmod.app.state, "embedded_worker", True, raising=False)
+    _set_embedded_worker(monkeypatch, True)
 
     r = client.get("/health/ready")
 
@@ -213,7 +221,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
 
-    monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
+    _set_embedded_worker(monkeypatch, False)
     monkeypatch.setattr(
         healthmod.settings, "worker_heartbeat_path", str(tmp_path / "never-written")
     )
@@ -226,7 +234,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
     assert "worker" not in r.json()["components"]
 
     # Embedded, but the file is not there yet: still starting, not stalled.
-    monkeypatch.setattr(appmod.app.state, "embedded_worker", True, raising=False)
+    _set_embedded_worker(monkeypatch, True)
     r = client.get("/health/ready")
     assert r.status_code == 200
     assert "worker" not in r.json()["components"]
@@ -390,7 +398,7 @@ def test_ready_is_not_ready_when_a_separate_worker_process_has_stopped(
 
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
-    monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
+    _set_embedded_worker(monkeypatch, False)
     # A worker was here; nothing is answering now.
     _worker_redis(monkeypatch, WORKER_SEEN_KEY)
 
@@ -411,7 +419,7 @@ def test_ready_is_ready_when_a_separate_worker_process_is_ticking(client, monkey
 
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
-    monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
+    _set_embedded_worker(monkeypatch, False)
     _worker_redis(monkeypatch, WORKER_ALIVE_KEY, WORKER_SEEN_KEY)
 
     r = client.get("/health/ready")

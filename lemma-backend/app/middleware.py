@@ -255,11 +255,15 @@ class RequestObserverMiddleware:
                         fields["error_code"] = state.get(
                             "lemma_error_code", "INTERNAL_ERROR"
                         )
-                        exc_info = (
-                            (type(failure), failure, failure.__traceback__)
-                            if isinstance(failure, BaseException)
-                            else None
-                        )
+                        exc_info = None
+                        if isinstance(failure, BaseException):
+                            tb = failure.__traceback__
+                            if failure is not caught:
+                                # A handled one: Starlette has cleared its
+                                # traceback by now, so read the copy the
+                                # handler kept.
+                                tb = state.get("lemma_exception_traceback") or tb
+                            exc_info = (type(failure), failure, tb)
                         logger.error(
                             "http.request.failed",
                             method=fields["method"],
