@@ -304,6 +304,7 @@ class SurfaceDelivery:
                 agent_id=target.agent_id,
                 user_id=target.conversation_user_id,
                 contact_id=target.audience.contact_id,
+                platform=place.platform,
             )
             if found is not None:
                 return found

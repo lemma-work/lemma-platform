@@ -1,16 +1,16 @@
 """Each message is answered where it was asked, whatever is said elsewhere meanwhile.
 
-A member has one conversation with the pod's agent across their email, their
-WhatsApp and Lemma. They email the agent and, while it works on that, send it
-something else on WhatsApp. The run answering the email used to take the
-WhatsApp message in -- both were "the person, mid-run" -- and its one answer
-went where the person had written last: the email was answered on WhatsApp,
-and the WhatsApp message was never answered at all.
+A member emails the agent and, while it works on that, sends it something
+else on WhatsApp. When one conversation served their email, their WhatsApp
+and Lemma, the run answering the email took the WhatsApp message in -- both
+were "the person, mid-run" -- and its one answer went where the person had
+written last: the email was answered on WhatsApp, and the WhatsApp message was
+never answered at all.
 
-Now a run answers the place it was asked (``agent.domain.run_places``): the
-WhatsApp message waits for the email's run to end, and its own turn answers
-it on WhatsApp. That is the trade: the second place's answer comes after the
-first's.
+Now each platform is a conversation of its own (``agent_conversations.
+platform``): the WhatsApp message starts its own run at once, neither run
+reads the other's words, and each answers where it was asked
+(``agent.domain.run_places``).
 
 Against Postgres, through the Resend and WhatsApp parsers and the fake Resend
 and Meta servers, with the real harness and a scripted model.
@@ -29,7 +29,6 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.run_places import ASKED_IN_PLACE_KEY, place_source
-from app.modules.agent.events.run_followup_work import start_queued_followup_for
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     AgentRunStepModel,
@@ -258,15 +257,18 @@ async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
             headers={},
         ),
     )
-    conversation_id = emailed.conversation_id
-    assert whatsapped.conversation_id == conversation_id, "one conversation"
+    # Two platforms, two conversations: the WhatsApp message waits behind
+    # nothing, and neither run reads what was said on the other.
+    assert whatsapped.conversation_id != emailed.conversation_id
     assert whatsapped.source_id != emailed.source_id
-    [email_run] = await _runs(conversation_id)
+    [email_run] = await _runs(emailed.conversation_id)
     assert _asked_at(email_run.run_metadata) == emailed.source_id
+    [whatsapp_run] = await _runs(whatsapped.conversation_id)
+    assert _asked_at(whatsapp_run.run_metadata) == whatsapped.source_id
 
     await run_scripted_agent_run(
         db_session,
-        conversation_id=conversation_id,
+        conversation_id=emailed.conversation_id,
         user_id=emailed.user_id,
         pod_id=emailed.pod_id,
         agent_name=emailed.agent_name,
@@ -277,39 +279,22 @@ async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
     emails = await wait_for_messages(message_store, "RESEND", min_count=1)
     assert _says(emails, _EMAIL_ANSWER)
     assert not _says(message_store.get_all("WHATSAPP"), _EMAIL_ANSWER)
-    # The WhatsApp message was not taken into the email's run: still owed,
-    # and nothing the email's run sent the model carried its words.
-    waiting = await _user_message(conversation_id, _WHATSAPPED)
-    assert _asked_at(waiting.message_metadata) == whatsapped.source_id
-    assert waiting.steered_into_run_id is None
     assert _WHATSAPPED not in await _logged_by(email_run.id)
-    # Each heard line is owed its answer as a line written in Lemma is: the
-    # email's is answered by the run's line, the WhatsApp one still waits.
     state, answered_by = await _owed(_EMAILED)
     assert state == "ANSWERED"
     assert answered_by is not None and answered_by.body == _EMAIL_ANSWER
     assert answered_by.agent_run_id == email_run.id
-    assert (await _owed(_WHATSAPPED)) == ("ANSWERING", None)
 
-    whatsapp_run_id = await start_queued_followup_for(
-        conversation_id,
-        email_run.id,
-        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-    )
-    assert whatsapp_run_id is not None
-    [_, whatsapp_run] = await _runs(conversation_id)
-    assert whatsapp_run.id == whatsapp_run_id
-    assert _asked_at(whatsapp_run.run_metadata) == whatsapped.source_id
     await run_scripted_agent_run(
         db_session,
-        conversation_id=conversation_id,
+        conversation_id=whatsapped.conversation_id,
         user_id=whatsapped.user_id,
         pod_id=whatsapped.pod_id,
         agent_name=whatsapped.agent_name,
         script=[script_text(_WHATSAPP_ANSWER)],
     )
 
-    # Its own turn answered it on WhatsApp -- after the email, and only there.
+    # Its own run answered it on WhatsApp, and only there.
     texts = await wait_for_messages(
         message_store,
         "WHATSAPP",
@@ -317,12 +302,12 @@ async def test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said(
     )
     assert _says(texts, _WHATSAPP_ANSWER)
     assert not _says(message_store.get_all("RESEND"), _WHATSAPP_ANSWER)
-    claimed = await _user_message(conversation_id, _WHATSAPPED)
-    assert claimed.steered_into_run_id == whatsapp_run_id
-    assert _WHATSAPPED in await _logged_by(whatsapp_run_id)
+    logged = await _logged_by(whatsapp_run.id)
+    assert _WHATSAPPED in logged
+    assert _EMAILED not in logged
     state, answered_by = await _owed(_WHATSAPPED)
     assert state == "ANSWERED"
-    assert answered_by is not None and answered_by.agent_run_id == whatsapp_run_id
+    assert answered_by is not None and answered_by.agent_run_id == whatsapp_run.id
 
 
 async def test_an_answer_whose_place_went_mid_run_stays_on_the_timeline(

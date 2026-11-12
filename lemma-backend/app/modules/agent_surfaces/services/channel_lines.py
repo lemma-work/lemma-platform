@@ -264,7 +264,10 @@ async def note_heard_on_web(
         home=ContactsHome(contact_id=contact_id),
     )
     await agent_channels.place_in_channel(
-        uow, conversation_id=conversation_id, channel_id=source.channel_id
+        uow,
+        conversation_id=conversation_id,
+        channel_id=source.channel_id,
+        platform=source.platform,
     )
     await post(
         uow,

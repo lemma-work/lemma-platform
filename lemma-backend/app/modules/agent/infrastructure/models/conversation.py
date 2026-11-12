@@ -69,6 +69,10 @@ from app.modules.agent.infrastructure.models.typed_state import (
 )
 
 
+#: How ``uq_agent_conversations_channel_person`` reads no platform: Lemma.
+IN_LEMMA = ""
+
+
 class ConversationModel(UUIDAuditBase):
     """Conversation shared by the pod assistant and pod agents."""
 
@@ -106,10 +110,11 @@ class ConversationModel(UUIDAuditBase):
             "conversation_metadata",
             postgresql_using="gin",
         ),
-        # A person has one live conversation per agent in a channel.
+        # One live conversation per person, agent and platform (None: Lemma).
         Index(
             "uq_agent_conversations_channel_person",
             "channel_id",
+            text(f"COALESCE(platform, '{IN_LEMMA}')"),
             text("COALESCE(agent_id, pod_id)"),
             text("COALESCE(contact_id, user_id)"),
             unique=True,
@@ -171,6 +176,8 @@ class ConversationModel(UUIDAuditBase):
     #: The channel this conversation's agent works in, when it lives on one.
     #: A conversation started in Lemma, and an agent's own task, have none.
     channel_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
+    #: The platform it is kept on in that channel; None: in Lemma itself.
+    platform: Mapped[str | None] = mapped_column(String(32), nullable=True)
     organization_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         index=True,
@@ -292,6 +299,7 @@ class ConversationModel(UUIDAuditBase):
             "pod_id": conversation.pod_id,
             "contact_id": conversation.contact_id,
             "channel_id": conversation.channel_id,
+            "platform": conversation.platform,
             "organization_id": conversation.organization_id,
             "agent_id": conversation.agent_id,
             "title": conversation.title,
@@ -325,6 +333,7 @@ class ConversationModel(UUIDAuditBase):
             pod_id=self.pod_id,
             contact_id=self.contact_id,
             channel_id=self.channel_id,
+            platform=self.platform,
             organization_id=self.organization_id,
             agent_id=self.agent_id,
             title=self.title,
