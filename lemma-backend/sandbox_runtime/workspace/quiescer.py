@@ -28,8 +28,8 @@ class WorkspaceQuiescer:
     # `/home/user` were once different runtimes' homes, and naming only one of
     # them carried the E2B fleet's Chrome profile through every suspend; #744
     # gave the Docker image's `appuser` `--home-dir /home/user`, so the two have
-    # converged and only the survivor is listed. `/workspace/.browser-profile`
-    # and `/workspace/agent-browser.json` went the same way when the durable
+    # converged and only the survivor is listed. The old project root's
+    # `.browser-profile` and `agent-browser.json` went the same way when the durable
     # root moved into the home. Deleting a path that cannot exist is not free:
     # it reads as coverage this had stopped providing.
     _ephemeral_directories = (

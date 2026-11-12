@@ -428,8 +428,8 @@ export interface ImageLook {
      *  A relative `workspace_file_path` resolves against the *conversation's*
      *  directory — `WorkspaceFileManager._workspace_path` joins it onto its own
      *  `cwd`, which `test_workspace_path_resolution.py` pins — while this app's
-     *  route joins the same string onto `/workspace`
-     *  (`files_controller._workspace_path`). One string, two different files.
+     *  route joins the same string onto the machine's workspace root
+     *  (`machine_files_controller._machine_path`). One string, two different files.
      *  The card carries the fact; resolving it needs a query, so the view does
      *  it. */
     relative: boolean;

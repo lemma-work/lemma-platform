@@ -65,3 +65,32 @@ async def list_ready_pod_apps(
             )
         )
     return ready
+
+
+@dataclass(frozen=True)
+class AppIdentity:
+    id: UUID
+    pod_id: UUID
+    name: str
+
+
+async def app_identity(*, uow, app_id: UUID) -> AppIdentity | None:
+    """One app by id, whatever its status: what a consent is granted to."""
+    app = await AppRepository(uow).get(app_id)
+    if app is None or app.id is None:
+        return None
+    return AppIdentity(id=app.id, pod_id=app.pod_id, name=app.name)
+
+
+async def app_names_by_id(*, uow, app_ids: list[UUID]) -> dict[UUID, str]:
+    """Names for a list of apps, for a page listing what was consented to."""
+    from sqlalchemy import select
+
+    from app.modules.apps.infrastructure.models import AppModel
+
+    if not app_ids:
+        return {}
+    rows = await uow.session.execute(
+        select(AppModel.id, AppModel.name).where(AppModel.id.in_(app_ids))
+    )
+    return dict(rows.tuples().all())

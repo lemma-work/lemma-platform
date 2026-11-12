@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from functools import partial
 from pathlib import Path
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import RUNS_ROOT, WORKSPACE_ROOT
 
 from uuid import uuid4
 
@@ -38,6 +38,7 @@ class _FakeRedis:
 class _FakeSession:
     def __init__(self, *, exit_code: int = 0, stderr: str = "") -> None:
         self.session_id = "session-1"
+        self.cwd: str | None = None
         self.commands: list[str] = []
         self._exit_code = exit_code
         self._stderr = stderr
@@ -481,3 +482,54 @@ def test_an_unreachable_origin_still_leaves_a_worktree_and_says_fetch_failed(
 
     assert code == github_project._FETCH_FAILED_EXIT
     assert git.run("-C", str(worktree), "branch", "--show-current") == "lemma/two"
+
+
+@pytest.mark.asyncio
+async def test_a_run_on_a_shared_machine_checks_out_into_its_own_directory() -> None:
+    """The session already starts in the run's directory; that is where the
+    project goes, detached, and the person's worktree sweep is not run there."""
+    session = _FakeSession()
+    session.cwd = f"{RUNS_ROOT}/reviewer/run-1"
+    swept: list[object] = []
+
+    async def sweep(ctx, workspace_session) -> None:
+        swept.append(workspace_session)
+
+    notice = await github_project.ensure_project_checkout(
+        _worktree_context(), session, redis=_FakeRedis(), sweep=sweep
+    )
+
+    assert notice is None
+    command = session.commands[0]
+    clone = f"{WORKSPACE_ROOT}/repos/acme/web"
+    run_dir = f"{RUNS_ROOT}/reviewer/run-1"
+    assert f'git -C {clone} worktree add --quiet --detach {run_dir} "$start"' in command
+    assert "lemma/ab12cd34" not in command
+    assert swept == []
+
+
+def test_a_run_directory_is_a_detached_worktree_of_the_shared_clone(
+    git: LocalGit,
+) -> None:
+    first_code, first = git.run_step("one")
+    second_code, second = git.run_step("two")
+
+    assert (first_code, second_code) == (0, 0)
+    assert git.run("-C", str(first), "branch", "--show-current") == ""
+    (first / "draft.txt").write_text("unsaved")
+    assert git.run("-C", str(second), "status", "--porcelain") == ""
+    # A run directory the machine cleared does not stop the next one.
+    shutil.rmtree(first)
+    code, _ = git.run_step("three")
+    assert code == 0
+
+
+def test_a_pull_request_is_checked_out_by_its_own_head(git: LocalGit) -> None:
+    head = git.open_pull_request(12)
+
+    code, worktree = git.step("one", ref="pull/12/head")
+    run_code, run_dir = git.run_step("one", ref="pull/12/head")
+
+    assert (code, run_code) == (0, 0)
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == head
+    assert git.run("-C", str(run_dir), "rev-parse", "HEAD") == head

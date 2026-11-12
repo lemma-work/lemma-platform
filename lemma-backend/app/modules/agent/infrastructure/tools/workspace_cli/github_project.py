@@ -24,6 +24,16 @@ Three rules shape what this does and does not do:
   return a notice the caller shows the agent once, rather than leaving it to
   infer something from an empty directory.
 
+A run on a shared pod machine already starts in a directory of its own
+(``agent_machines.run_workdir``), which is made a worktree of the same clone,
+detached rather than on a branch: run directories are cleared by the machine
+once nothing has written to them for an hour, so a branch per run would only
+pile up. The person's own worktree sweep does not run there.
+
+A pull request (``pull/123/head``) is not among what a clone fetches, so it is
+fetched by name, into ``origin/pull/123/head``, and checked out from there --
+a review sees the pull request itself rather than a branch that may be gone.
+
 Once a checkout has run, the person's finished worktrees are cleared
 (``worktree_sweep``): this is where worktrees are made, and the one moment the
 sandbox is known to be awake for it.
@@ -41,6 +51,7 @@ what is in the directory they share.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -57,6 +68,7 @@ from app.modules.agent.infrastructure.tools.workspace_cli.github_credential_brid
 from app.modules.agent.infrastructure.tools.workspace_cli.worktree_sweep import (
     sweep_finished_worktrees,
 )
+from sandbox_runtime.paths import RUNS_ROOT
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -77,6 +89,8 @@ _CLONE_TIMEOUT_SECONDS = 300
 # worktree could not be made.
 _FETCH_FAILED_EXIT = 75
 _WORKTREE_FAILED_EXIT = 76
+# A pull request's head, which only a fetch by name brings into a clone.
+_PULL_REQUEST_REF = re.compile(r"^pull/[0-9]+/head$")
 
 
 def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
@@ -86,17 +100,38 @@ def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
     head of any command: an existing clone is never cloned over. A fetch that
     fails sets `stale` for the end of the step, so a worktree is still made.
     """
-    branch = f"--branch {shlex.quote(ref)} " if ref else ""
+    pull_request = bool(ref and _PULL_REQUEST_REF.match(ref))
+    branch = f"--branch {shlex.quote(ref)} " if ref and not pull_request else ""
     clone = shlex.quote(path)
-    return (
+    command = (
         f"if [ -e {shlex.quote(path + '/.git')} ]; then "
         f"git -C {clone} fetch --quiet origin || stale=1; "
         f"else git clone {branch}{shlex.quote(url)} {clone} || exit; fi"
     )
+    if pull_request:
+        refspec = shlex.quote(f"+refs/{ref}:refs/remotes/origin/{ref}")
+        command += f"; git -C {clone} fetch --quiet origin {refspec} || stale=1"
+    return command
+
+
+def _start_point(git: str, ref: str | None) -> str:
+    """Set `start` to `origin/<ref>`, or the ref itself for a tag or a commit."""
+    target = ref or "HEAD"
+    return (
+        f"start={shlex.quote('origin/' + target)}; "
+        f'{git} rev-parse --verify --quiet "$start^{{commit}}" >/dev/null '
+        f"|| start={shlex.quote(target)}"
+    )
 
 
 def _checkout_command(
-    *, url: str, clone_dir: str, ref: str | None, worktree: str | None, slug: str | None
+    *,
+    url: str,
+    clone_dir: str,
+    ref: str | None,
+    worktree: str | None,
+    slug: str | None,
+    run_dir: str | None = None,
 ) -> str:
     """The whole step, as one shell command.
 
@@ -106,19 +141,24 @@ def _checkout_command(
     prune` first, so a worktree whose directory went missing can be made again;
     its branch, if it survived, is reused rather than re-made, so its commits
     are where they were.
+
+    With a run directory instead: that directory, detached at the same start.
     """
     steps = [_clone_or_fetch(url=url, path=clone_dir, ref=ref)]
-    if worktree is not None and slug is not None:
-        git = f"git -C {shlex.quote(clone_dir)}"
+    git = f"git -C {shlex.quote(clone_dir)}"
+    if run_dir is not None:
+        steps.append(
+            f"if [ ! -e {shlex.quote(run_dir + '/.git')} ]; then "
+            f"{git} worktree prune; {_start_point(git, ref)}; "
+            f'{git} worktree add --quiet --detach {shlex.quote(run_dir)} "$start" '
+            f"|| exit {_WORKTREE_FAILED_EXIT}; fi"
+        )
+    elif worktree is not None and slug is not None:
         branch = worktree_branch(slug)
-        target = ref or "HEAD"
         path = shlex.quote(worktree)
         steps.append(
             f"if [ ! -e {shlex.quote(worktree + '/.git')} ]; then "
-            f"{git} worktree prune; "
-            f"start={shlex.quote('origin/' + target)}; "
-            f'{git} rev-parse --verify --quiet "$start^{{commit}}" >/dev/null '
-            f"|| start={shlex.quote(target)}; "
+            f"{git} worktree prune; {_start_point(git, ref)}; "
             f"if {git} show-ref --verify --quiet {shlex.quote('refs/heads/' + branch)}; "
             f"then {git} worktree add --quiet {path} {shlex.quote(branch)}; "
             f'else {git} worktree add --quiet -b {shlex.quote(branch)} {path} "$start"; '
@@ -133,6 +173,15 @@ def _worktree_of(ctx: ToolContext, repo: ProjectRepo) -> tuple[str, str] | None:
     cwd = ctx.get_workspace_cwd()
     slug = repo.worktree_slug(cwd)
     return (repo.worktree_dir(slug), slug) if slug is not None else None
+
+
+def _run_dir_of(workspace_session) -> str | None:
+    """The run's own directory on a shared pod machine, which the session
+    already starts in (`get_workspace_session`), or None everywhere else."""
+    cwd = getattr(workspace_session, "cwd", None)
+    if isinstance(cwd, str) and cwd.startswith(f"{RUNS_ROOT}/"):
+        return cwd.rstrip("/")
+    return None
 
 
 async def ensure_project_checkout(
@@ -170,8 +219,9 @@ async def ensure_project_checkout(
     if await redis.exists(marker_key):
         return None
 
-    worktree = _worktree_of(ctx, repo)
-    here = worktree[0] if worktree else repo.clone_dir
+    run_dir = _run_dir_of(workspace_session)
+    worktree = None if run_dir else _worktree_of(ctx, repo)
+    here = run_dir or (worktree[0] if worktree else repo.clone_dir)
     url = f"https://github.com/{repo.owner}/{repo.repo}.git"
     result = await workspace_session.exec_command(
         cmd=_checkout_command(
@@ -180,12 +230,16 @@ async def ensure_project_checkout(
             ref=repo.ref,
             worktree=worktree[0] if worktree else None,
             slug=worktree[1] if worktree else None,
+            run_dir=run_dir,
         ),
         timeout=_CLONE_TIMEOUT_SECONDS,
     )
     notice = await _settle(
         result, redis=redis, marker_key=marker_key, repo=repo, here=here
     )
+    if run_dir is not None:
+        # A shared machine clears its own run directories (`machine_lifecycle`).
+        return notice
     # The sandbox is awake, which is the only time the person's finished
     # worktrees are cleared (`worktree_sweep`); it never raises.
     await (sweep or sweep_finished_worktrees)(ctx, workspace_session)

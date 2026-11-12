@@ -3,8 +3,23 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.tools import ReplayClass, ToolGroup, ToolPolicy, tool
-from app.modules.agent.infrastructure.tools.workspace_cli import workspace_cli
+from app.modules.agent.domain.tools import (
+    ReplayClass,
+    ToolAccess,
+    ToolGroup,
+    ToolPolicy,
+    tool,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    machine_tools,
+    workspace_cli,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.machine_tools import (
+    ExposePortRequest,
+    ListMachinesRequest,
+    ResetMachineRequest,
+    SyncFilesRequest,
+)
 from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecCommandResult,
@@ -23,11 +38,12 @@ async def exec_command(
     request: ExecCommandRequest,
 ) -> ExecCommandResult:
     """
-    Run a shell command in the private conversation workspace.
+    Run a shell command on your machine, in this conversation's directory.
 
     Use it for repo inspection, builds, tests, file edits, and `lemma` CLI calls
-    (pod credentials are pre-injected). `localhost` is this container, not the
-    Lemma backend.
+    (pod credentials are pre-injected). `localhost` is the machine, not the
+    Lemma backend. Name `machine` to run on another one you may use (see
+    `list_machines`); on a pod machine each run gets its own directory.
 
     Default (`tty=false`) returns after a short wait; a command still running
     returns a `process_id` instead of blocking. `tty=true` starts a real terminal
@@ -66,13 +82,14 @@ async def manage_process(
     Drive a process started by `exec_command`.
 
     `input` sends characters to a running process, or polls its output when
-    `chars` is omitted. `kill` stops it. `list` shows tracked processes in this
-    workspace. `resize` changes an interactive terminal's `cols`/`rows`. All but
-    `list` need `process_id`.
+    `chars` is omitted. `kill` stops it. `list` shows tracked processes on the
+    machine (`machine` picks another). `resize` changes an interactive
+    terminal's `cols`/`rows`. All but `list` need `process_id`.
     """
     if request.action == "list":
         return await workspace_cli.list_processes_internal(
-            ctx, ListProcessesRequest(comment=request.comment)
+            ctx,
+            ListProcessesRequest(comment=request.comment, machine=request.machine),
         )
     if not request.process_id:
         return ExecCommandResult(
@@ -138,8 +155,9 @@ async def view_image(
     - Set exactly one of `workspace_file_path` or `pod_file_path`. Setting both,
       or neither, is refused — the store is the one you name, never inferred
       from the shape of the path.
-    - `workspace_file_path` is relative to the conversation's sandbox, e.g.
-      `images/output.png`. Use it for artifacts this run just produced.
+    - `workspace_file_path` is relative to the conversation's directory on your
+      machine, e.g. `images/output.png`. Use it for artifacts this run just
+      produced.
     - `pod_file_path` is a datastore path, e.g. `/me/photo.jpg`. Use it for a
       file that lives in the pod.
     - Images only. For a PDF, use `pod_view_document_pages` instead.
@@ -147,7 +165,63 @@ async def view_image(
     return await workspace_cli.view_image_internal(ctx, request)
 
 
+async def list_machines(
+    ctx: ToolContext,
+    request: ListMachinesRequest,
+) -> machine_tools.ListMachinesResult:
+    """
+    The machines you may run commands on: your usual one, the pod's shared
+    machines you are allowed, with each one's size, whether it has Docker,
+    and its status. Pass a `ref` as `machine` to `exec_command` and the other
+    machine tools.
+    """
+    return await machine_tools.list_machines_internal(ctx, request)
+
+
+async def expose_port(
+    ctx: ToolContext,
+    request: ExposePortRequest,
+) -> machine_tools.ExposePortResult:
+    """
+    Turn a port on the machine into a preview URL people can open, e.g. a dev
+    server you started (`npm run dev` on 5173). The URL is its own origin, so
+    hot reload and root-absolute assets work. `private` previews ask the person
+    to be signed in to Lemma; `link` previews work for anyone for at most 24
+    hours. Reply with the URL; the person can revoke it.
+    """
+    return await machine_tools.expose_port_internal(ctx, request)
+
+
+async def sync_files(
+    ctx: ToolContext,
+    request: SyncFilesRequest,
+) -> machine_tools.SyncFilesResult:
+    """
+    Copy files between the machine and the pod's files without downloading
+    them yourself: `to_pod` puts a file or a folder's files into a pod folder
+    (what you made, for people to see); `from_pod` brings one pod file onto
+    the machine.
+    """
+    return await machine_tools.sync_files_internal(ctx, request)
+
+
+async def reset_machine(
+    ctx: ToolContext,
+    request: ResetMachineRequest,
+) -> machine_tools.ResetMachineResult:
+    """
+    Free a machine's disk or stop stray work: `processes`, `runs` (finished
+    runs' folders), `caches`, `docker`. Says how much space came back. Logins
+    and services are never touched; only a person can reset a machine's home.
+    """
+    return await machine_tools.reset_machine_internal(ctx, request)
+
+
 _SHELL = ToolPolicy(native_command=True, kind="sandbox")
+_MACHINE = ToolPolicy(deferrable=True, kind="sandbox")
+_MACHINE_READ = ToolPolicy(
+    access=ToolAccess.READ, deferrable=True, kind="sandbox", replay=ReplayClass.SAFE
+)
 
 SPECS = (
     tool(
@@ -157,6 +231,15 @@ SPECS = (
     ),
     tool(manage_process, ToolGroup.WORKSPACE_CLI, _SHELL),
     tool(execute_python, ToolGroup.WORKSPACE_CLI, _SHELL),
+    # The machine tools ride with WORKSPACE_CLI -- an agent that runs commands
+    # can name its machines, open a preview, copy files to the pod and clean
+    # up -- but as a group of their own, so the pod's assistant keeps them
+    # behind tool search: they are four schemas most chats never need in its
+    # prefix.
+    tool(list_machines, ToolGroup.MACHINES, _MACHINE_READ),
+    tool(expose_port, ToolGroup.MACHINES, _MACHINE),
+    tool(sync_files, ToolGroup.MACHINES, _MACHINE),
+    tool(reset_machine, ToolGroup.MACHINES, _MACHINE),
 )
 
 # Offered whenever the run's model can interpret an image, whatever toolsets

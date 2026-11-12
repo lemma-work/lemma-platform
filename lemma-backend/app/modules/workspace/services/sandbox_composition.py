@@ -58,9 +58,11 @@ def build_local_client() -> LocalSandboxClient:
 
 
 class LocalSandbox(ISandbox):
-    """``ISandbox`` over the local sandbox service.
+    """``ISandbox`` over the local sandbox service, keyed by machine id.
 
-    Resolves the row before ensuring, because a user whose default workspace
+    The interface still calls the key ``user_id``: a default machine's id is
+    its user's, and every other machine is addressed by its own row id.
+    Resolves the row before ensuring, because a user whose default machine
     predates the backfill -- or was created after it -- still has to get one.
     """
 
@@ -69,11 +71,21 @@ class LocalSandbox(ISandbox):
     def __init__(self, service: SandboxService | None = None) -> None:
         self._service = service or get_sandbox_service()
 
-    async def _sandbox_id(self, user_id: UUID) -> UUID:
+    async def _sandbox_id(self, key: UUID) -> UUID:
+        """The machine ``key`` names: a machine id, or a user id for their default.
+
+        The two coincide for a default machine -- its row id is its user's id --
+        which is why every caller that has only ever passed a user id keeps
+        working, and why a pod machine's id can travel down the same path. A
+        user whose default machine has no row yet gets one.
+        """
+        existing = await self._service.get(key)
+        if existing is not None and existing.kind is SandboxKind.WORKSPACE:
+            return existing.id
         sandbox = await self._service.resolve(
             kind=SandboxKind.WORKSPACE,
             owner_kind=SandboxOwnerKind.USER,
-            owner_id=user_id,
+            owner_id=key,
         )
         return sandbox.id
 

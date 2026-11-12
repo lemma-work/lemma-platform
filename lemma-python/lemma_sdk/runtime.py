@@ -66,6 +66,7 @@ class FunctionContext(BaseModel):
     config: Any = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
     _pod: Any = PrivateAttr(default=None)
+    _machines: Any = PrivateAttr(default=None)
 
     @property
     def pod(self) -> Any:
@@ -91,6 +92,39 @@ class FunctionContext(BaseModel):
             )
         )
         return self._pod
+
+    @property
+    def machines(self) -> Any:
+        """The machines this run may use, as the run's own identity.
+
+        ``pod:<name>`` refers to this function's pod. Closed with the
+        invocation, like :attr:`pod`.
+        """
+        if self._machines is not None:
+            return self._machines
+        binding = current_function_invocation()
+        if binding is None:
+            raise RuntimeError(
+                "ctx.machines is available only during function execution"
+            )
+        if binding.pod_id != self.pod_id:
+            raise RuntimeError("function invocation pod does not match its context")
+        from .client import Lemma
+
+        client = binding.register(
+            Lemma(
+                pod_id=str(binding.pod_id),
+                org_id=(
+                    str(binding.organization_id)
+                    if binding.organization_id is not None
+                    else None
+                ),
+                base_url=binding.base_url,
+                token=binding.token,
+            )
+        )
+        self._machines = client.machines
+        return self._machines
 
 
 __all__ = [

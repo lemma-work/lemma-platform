@@ -46,7 +46,7 @@ lemma pods describe        # tables, agents, functions, workflows, schedules, ap
                            # (two folder levels; --depth N or --full for more)
 ```
 
-A workspace injects `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`,
+A Lemma machine's shell injects `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`,
 `LEMMA_POD_ID` and `LEMMA_CONVERSATION_ID`; use them. On a laptop,
 `.lemma.<server>.env` files at the project root supply the same values; real
 env wins.
@@ -380,12 +380,32 @@ The connector decides whose account runs it, so there is no account to pass.
 the person as is and run again when they are done. A write matched from text
 rather than named is refused without `--yes`.
 
-## Workspace notes
+## Machines
+
+Every person has a default machine (`me`); a pod can have shared machines
+(`pod:<name>`, or `pod:<pod>/<name>` from outside it), some with Docker. An
+agent runs on the machine its definition names, else on the default machine of
+whoever the run acts for.
+
+```bash
+lemma machine list                              # yours and your pods', with size and status
+lemma machine exec me 'ls ~/lemma'              # options go before the ref
+lemma machine shell me                          # an interactive terminal
+lemma machine ps me                             # processes; `kill <ref> <id>` stops one
+lemma machine cp ./data.csv me:/home/user/lemma/data.csv
+lemma machine preview create me --port 5173     # a URL for a server on the machine
+lemma machine reset me -s caches -s runs        # free disk; home needs --confirm
+lemma machine logins list me                    # sites the browser is signed in to
+```
 
 - Keep one interactive session for long-running processes; one-shot commands
   for everything else.
-- A workspace port has no public URL. To show someone an app, deploy it
-  (`lemma apps deploy`).
+- To let someone open a server on the machine, make a preview (`expose_port`
+  as an agent, `lemma machine preview create` from the CLI): `private` asks
+  them to sign in, `link` works for anyone for at most 24 hours. To ship an
+  app, deploy it (`lemma apps deploy`).
+- The browser profile (`~/.lemma/browser/profile`) holds the person's logins.
+  Never delete or move it.
 - To keep a web page, use the `browser` skill's `save-webpage <url> --formats
   markdown,pdf`, then upload it.
 - On network errors (`Could not resolve host`, TLS timeouts), check

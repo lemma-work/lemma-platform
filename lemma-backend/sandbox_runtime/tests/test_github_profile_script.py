@@ -62,7 +62,7 @@ def test_the_token_never_enters_the_environment(tmp_path: Path) -> None:
 
 
 def test_the_credential_lives_outside_the_durable_volume(tmp_path: Path) -> None:
-    """Session-scoped, like git's credential file. /workspace survives a
+    """Session-scoped, like git's credential file. /home/user survives a
     workspace recreation and must not accumulate credentials."""
     config_dir = _environment(tmp_path)["GH_CONFIG_DIR"]
 

@@ -69,7 +69,7 @@ async def test_a_spec_runs_through_the_runtime_with_its_own_description(
     assert result.success is True
     assert result.stdout == f"{run_ctx.deps.conversation_id}:pwd"
     assert tool.tool_def.description.startswith(
-        "Run a shell command in the private conversation workspace."
+        "Run a shell command on your machine, in this conversation's directory."
     )
     assert tool.tool_def.parameters_json_schema["properties"]["cmd"]["type"] == "string"
 

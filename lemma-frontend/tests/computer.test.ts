@@ -204,6 +204,8 @@ test("a close code is read, not collapsed into 'disconnected'", () => {
     assert.equal(stateFromClose(4409), "no-browser");
     assert.equal(stateFromClose(4422), "unsupported");
     assert.equal(stateFromClose(4426), "stale-image");
+    assert.equal(stateFromClose(4404), "unsupported");
+    assert.equal(stateFromClose(4428), "refused");
     assert.equal(stateFromClose(1006), "lost");
 });
 
@@ -236,7 +238,7 @@ test("the socket names the conversation, and carries a token only when there is 
     const url = new URL(socketUrl("https://api.example.test", { mode: "view", conversationId: "c-1" }));
 
     assert.equal(url.protocol, "wss:");
-    assert.equal(url.pathname, "/workspace/browser/view");
+    assert.equal(url.pathname, "/machines/me/browser/view");
     assert.equal(url.searchParams.get("mode"), "view");
     assert.equal(url.searchParams.get("conversation"), "c-1");
     // A cookie session passes nothing: served beside the API, it rides the

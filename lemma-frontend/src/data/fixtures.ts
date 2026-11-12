@@ -345,7 +345,7 @@ const CONVERSATION: Conversation = {
             sequence: 4.1,
             created_at: new Date().toISOString(),
             tool_name: "exec_command",
-            tool_args: { cmd: "wc -w drafts/monday-launch-v3.md", workdir: "/workspace/launch" },
+            tool_args: { cmd: "wc -w drafts/monday-launch-v3.md", workdir: "/home/user/lemma/launch" },
             tool_call_id: "call_wc",
         },
         {
@@ -377,7 +377,7 @@ const CONVERSATION: Conversation = {
             tool_name: "exec_command",
             tool_args: {
                 cmd: "grep -rn \"a more human way to work\" drafts/",
-                workdir: "/workspace/launch",
+                workdir: "/home/user/lemma/launch",
                 comment: "Checking the old headline is gone everywhere, not just from v3.",
             },
             tool_call_id: "call_grep",
@@ -792,7 +792,7 @@ const CONVERSATION: Conversation = {
             tool_args: {
                 /* Relative, which is the ordinary spelling and the whole
                    difficulty: it resolves against the conversation's own
-                   directory, not against `/workspace`. */
+                   directory, not against `~/lemma`. */
                 workspace_file_path: "images/plans-table.png",
                 instructions: "Read the three column headers and the price under each one.",
             },

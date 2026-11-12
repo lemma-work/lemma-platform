@@ -4,8 +4,8 @@ Inside its own pod an app's page has its viewer's whole access. A few acts are
 the person's own whatever the page is allowed: answering their pending agent
 approvals, approving a join request. An editor's app opened by an owner would
 otherwise approve on the owner's behalf without the owner ever seeing the
-question. And the person's own sandbox -- ``/workspace/*``, ``/web-logins`` --
-is outside any pod, so an app has no business there at all.
+question. And the person's saved web sign-ins -- ``/web-logins`` --
+are outside any pod, so an app has no business there at all.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def _sandbox_routes(test_app) -> list[tuple[str, str]]:
     for route in _flatten(test_app.routes):
         # A socket has no methods; the browser view's is held by its own test.
         path = getattr(route, "path", "")
-        if not path.startswith(("/workspace/", "/web-logins")):
+        if not path.startswith("/web-logins"):
             continue
         for method in getattr(route, "methods", None) or ():
             if method not in {"HEAD", "OPTIONS"}:
@@ -105,7 +105,6 @@ async def test_an_app_reaches_none_of_its_viewers_sandbox_routes(
     """Outside any pod and not in ``APP_ROUTES``: every one is refused by the
     pin, before its handler runs."""
     routes = _sandbox_routes(test_app)
-    assert any(path.startswith("/workspace/") for _m, path in routes)
     assert any(path.startswith("/web-logins") for _m, path in routes)
     headers = pin._from_app(world["origin"], world["owner"])
 

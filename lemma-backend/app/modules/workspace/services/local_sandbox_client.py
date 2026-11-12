@@ -358,7 +358,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             ),
             port=port,
             protocol=protocol or PortProtocol.HTTP,
-            url=f"{base}/public/workspace-ports/{token}/",
+            url=f"{base}/public/machine-ports/{token}/",
             expires_at=expires_at,
         )
 

@@ -1,10 +1,10 @@
 """Real git against a repository on local disk standing in for GitHub.
 
 For the tests of what the sandbox runs on a conversation's repository: the
-checkout that makes a worktree (``github_project``) and the sweep that clears
+checkout that makes a worktree or a run's directory (``github_project``) and the sweep that clears
 it (``worktree_sweep``). Both build a shell command; these run it, with the
 clone and the worktrees laid out under a temporary root the way the sandbox
-lays them out under ``/workspace``.
+lays them out under ``~/lemma``.
 """
 
 from __future__ import annotations
@@ -55,6 +55,17 @@ class LocalGit:
         self.run("-C", str(scratch), "push", "-q", "origin", "main")
         return self.run("-C", str(scratch), "rev-parse", "HEAD")
 
+    def open_pull_request(self, number: int) -> str:
+        """Push a commit only a pull request's head points at, as GitHub keeps
+        one: under ``refs/pull``, which a plain clone does not fetch."""
+        scratch = self.root / f"pull-{number}"
+        self.run("clone", "-q", str(self.origin), str(scratch))
+        self.run("-C", str(scratch), "commit", "-q", "--allow-empty", "-m", "pr")
+        self.run(
+            "-C", str(scratch), "push", "-q", "origin", f"HEAD:refs/pull/{number}/head"
+        )
+        return self.run("-C", str(scratch), "rev-parse", "HEAD")
+
     def worktree(self, slug: str) -> Path:
         return self.root / "worktrees" / "acme" / "web" / slug
 
@@ -71,6 +82,20 @@ class LocalGit:
             slug=slug,
         )
         return self._sh(command).returncode, worktree
+
+    def run_step(self, name: str, *, ref: str | None = None) -> tuple[int, Path]:
+        """What a shared pod machine runs before a run's first command."""
+        run_dir = self.root / "runs" / "agent" / name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        command = github_project._checkout_command(
+            url=str(self.origin),
+            clone_dir=str(self.clone),
+            ref=ref,
+            worktree=None,
+            slug=None,
+            run_dir=str(run_dir),
+        )
+        return self._sh(command).returncode, run_dir
 
     def sweep(self, *slugs: str) -> list[str]:
         """What the sandbox runs to clear finished worktrees; what it said."""

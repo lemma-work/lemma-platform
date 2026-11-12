@@ -134,8 +134,9 @@ SIGN_IN_PATHS: dict[str, frozenset[str]] = {
 #: headers on an upgrade). Exempt on the websocket scope only. The pod live
 #: socket, `/pods/{pod_id}/live`, and its predecessor
 #: `/pods/{pod_id}/datastore/changes` are matched by `_is_pod_live_ws_path`
-#: because their prefix is a pod id.
-SELF_AUTHENTICATED_WEBSOCKETS: tuple[str, ...] = ("/workspace/browser/view",)
+#: because their prefix is a pod id, and a machine's sockets by
+#: `_is_machine_ws_path` because theirs is a machine ref.
+SELF_AUTHENTICATED_WEBSOCKETS: tuple[str, ...] = ()
 
 #: Old paths of routes that moved under `/public/`, and the day each goes. The
 #: same handler serves both until then; the gate fails once a date passes, so
@@ -147,8 +148,6 @@ LEGACY_ALIASES: dict[str, date] = {
     "/widgets/serve": date(2026, 12, 15),
     # Short file links live at most seven days.
     "/s": date(2026, 11, 30),
-    # Port grants are minted per preview and expire within the hour.
-    "/workspace-ports": date(2026, 11, 30),
 }
 
 
@@ -225,9 +224,34 @@ def exemption_of(path: str, method: str) -> str | None:
     return None
 
 
+_MACHINE_WS_TAILS = (("browser", "view"), ("processes", "*", "stream"))
+
+
+def _is_machine_ws_path(path: str) -> bool:
+    """``/machines/{ref}/browser/view`` and ``/machines/{ref}/processes/{id}/stream``.
+
+    Matched here because their second segment is a ref. Both handlers check
+    the page's origin and read the session themselves, before resolving the
+    machine the way every other machine route does.
+    """
+    parts = path.strip("/").split("/")
+    if len(parts) < 3 or parts[0] != "machines":
+        return False
+    tail = parts[2:]
+    return any(
+        len(tail) == len(shape)
+        and all(want in ("*", got) for want, got in zip(shape, tail, strict=True))
+        for shape in _MACHINE_WS_TAILS
+    )
+
+
 def is_self_authenticated_websocket(path: str) -> bool:
     """Whether a websocket handshake on this path authenticates itself."""
-    return _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS) or _is_pod_live_ws_path(path)
+    return (
+        _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS)
+        or _is_pod_live_ws_path(path)
+        or _is_machine_ws_path(path)
+    )
 
 
 __all__ = [

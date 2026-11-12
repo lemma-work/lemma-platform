@@ -184,7 +184,7 @@ async def test_an_unpaired_host_is_refused(world):
 @pytest.mark.sandbox
 @scenario("Asking for browser access answers, rather than failing open or falling over")
 @proves("PS-FUNC-002")
-@covers("workspace.browser.access")
+@covers("machine.browser.access")
 async def test_browser_access_is_granted_or_refused_but_never_crashes(person):
     """Two ways this goes wrong, and `< 500` alone caught neither.
 
@@ -200,7 +200,7 @@ async def test_browser_access_is_granted_or_refused_but_never_crashes(person):
     go, and a refusal has to read as a refusal.
     """
     response = await person.api.call(
-        "POST", "/workspace/apps/browser/access", json={"ttl_seconds": 60}
+        "POST", "/machines/me/browser:access", json={"ttl_seconds": 60}
     )
 
     assert response.status_code < 500, (

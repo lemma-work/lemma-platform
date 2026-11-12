@@ -33,6 +33,8 @@ interface RequestOptions {
   params?: RequestParams;
   body?: unknown;
   isFormData?: boolean;
+  /** Sent as it is rather than as JSON: a file's bytes, for one. Wins over `body`. */
+  rawBody?: BodyInit;
   headers?: HeadersInit;
   signal?: AbortSignal;
 }
@@ -357,6 +359,9 @@ export class HttpClient {
   }
 
   private getRequestBody(options: RequestOptions): BodyInit | undefined {
+    if (options.rawBody !== undefined) {
+      return options.rawBody;
+    }
     if (options.body === undefined) {
       return undefined;
     }

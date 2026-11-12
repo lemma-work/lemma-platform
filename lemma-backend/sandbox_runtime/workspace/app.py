@@ -51,6 +51,7 @@ from .filesystem_manager import (
     FilesystemManager,
     FileTooLargeError,
 )
+from . import port_relay
 from .browser_guard import shed_browser_if_starved
 from .process_manager import ManagedProcess, OutputChunk, ProcessManager
 from .python_session_manager import PythonSessionManager
@@ -497,6 +498,10 @@ def create_app(
             # two answers depending on how deep the absence went.
             removed = False
         return Response(status_code=200 if removed else 204)
+
+    # A port on this machine's loopback, for a preview the fabric cannot reach
+    # any other way. See `port_relay`.
+    app.include_router(port_relay.create_router(), dependencies=[Depends(authenticate)])
 
     return app
 

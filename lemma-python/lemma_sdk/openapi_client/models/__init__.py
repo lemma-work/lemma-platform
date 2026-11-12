@@ -117,6 +117,8 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'BrowserAccessRequest': 'browser_access_request',
+    'BrowserAccessResponse': 'browser_access_response',
     'BrowserStatusResponse': 'browser_status_response',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
@@ -171,6 +173,8 @@ _NAME_TO_MODULE = {
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
     'ConnectorStatusResponse': 'connector_status_response',
+    'ConsentListResponse': 'consent_list_response',
+    'ConsentResponse': 'consent_response',
     'ContactAnswer': 'contact_answer',
     'ContactExportResponse': 'contact_export_response',
     'ContactIdentityResponse': 'contact_identity_response',
@@ -207,6 +211,11 @@ _NAME_TO_MODULE = {
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders': 'create_open_ai_compatible_runtime_profile_request_headers',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
+    'CreatePodMachineRequest': 'create_pod_machine_request',
+    'CreatePodMachineRequestTemplate': 'create_pod_machine_request_template',
+    'CreatePodMachineRequestVisibility': 'create_pod_machine_request_visibility',
+    'CreatePreviewRequest': 'create_preview_request',
+    'CreatePreviewRequestVisibility': 'create_preview_request_visibility',
     'CreateRecordRequest': 'create_record_request',
     'CreateRecordRequestData': 'create_record_request_data',
     'CreateScheduleRequest': 'create_schedule_request',
@@ -336,6 +345,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
+    'GrantConsentRequest': 'grant_consent_request',
     'GranteeRef': 'grantee_ref',
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
@@ -388,6 +398,21 @@ _NAME_TO_MODULE = {
     'LoopNodePositionType0': 'loop_node_position_type_0',
     'LoopNodeResponse': 'loop_node_response',
     'LoopNodeResponsePositionType0': 'loop_node_response_position_type_0',
+    'MachineCapabilitiesModel': 'machine_capabilities_model',
+    'MachineFileEntry': 'machine_file_entry',
+    'MachineFileEntryKind': 'machine_file_entry_kind',
+    'MachineFileListResponse': 'machine_file_list_response',
+    'MachineGrantsModel': 'machine_grants_model',
+    'MachineListResponse': 'machine_list_response',
+    'MachinePolicyResponse': 'machine_policy_response',
+    'MachineResponse': 'machine_response',
+    'MachineResponseAccess': 'machine_response_access',
+    'MachineResponseKind': 'machine_response_kind',
+    'MachineResponseStatus': 'machine_response_status',
+    'MachineResponseTemplate': 'machine_response_template',
+    'MachineResponseVisibility': 'machine_response_visibility',
+    'MachineStartupResponse': 'machine_startup_response',
+    'MachineStartupResponseState': 'machine_startup_response_state',
     'MakeDecisionRequest': 'make_decision_request',
     'MakeDecisionRequestPriority': 'make_decision_request_priority',
     'MakeDecisionRequestSchema': 'make_decision_request_schema',
@@ -407,11 +432,14 @@ _NAME_TO_MODULE = {
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'MoveRequest': 'move_request',
     'MyMembershipResponse': 'my_membership_response',
     'MyMembershipUpdate': 'my_membership_update',
     'MyMembershipUpdateNotifyViaType0Item': 'my_membership_update_notify_via_type_0_item',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
+    'NavigateRequest': 'navigate_request',
+    'NavigateResponse': 'navigate_response',
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
@@ -466,6 +494,8 @@ _NAME_TO_MODULE = {
     'OutcomeStandingResponse': 'outcome_standing_response',
     'OutcomeTemplateCard': 'outcome_template_card',
     'OutcomeWeekResponse': 'outcome_week_response',
+    'OutputChunkModel': 'output_chunk_model',
+    'OutputChunkModelChannel': 'output_chunk_model_channel',
     'OutreachDelivery': 'outreach_delivery',
     'OutreachLine': 'outreach_line',
     'OutreachRequest': 'outreach_request',
@@ -528,6 +558,14 @@ _NAME_TO_MODULE = {
     'PodTriggerSettings': 'pod_trigger_settings',
     'PodTriggerSettingsBulkWritesDefaultType0': 'pod_trigger_settings_bulk_writes_default_type_0',
     'PodUpdateRequest': 'pod_update_request',
+    'PreviewListResponse': 'preview_list_response',
+    'PreviewResponse': 'preview_response',
+    'PreviewResponseVisibility': 'preview_response_visibility',
+    'ProcessInputRequest': 'process_input_request',
+    'ProcessListResponse': 'process_list_response',
+    'ProcessOutputResponse': 'process_output_response',
+    'ProcessResponse': 'process_response',
+    'ProcessResponseState': 'process_response_state',
     'PublicAudience': 'public_audience',
     'PublicColumnItem': 'public_column_item',
     'PublicColumnResponse': 'public_column_response',
@@ -556,6 +594,11 @@ _NAME_TO_MODULE = {
     'RecordUpdateResponseRecordUpdate': 'record_update_response_record_update',
     'ReportFeedbackRequest': 'report_feedback_request',
     'ReportFeedbackResponse': 'report_feedback_response',
+    'ResetRequest': 'reset_request',
+    'ResetRequestScopesItem': 'reset_request_scopes_item',
+    'ResetResponse': 'reset_response',
+    'ResetScopeResult': 'reset_scope_result',
+    'ResetScopeResultScope': 'reset_scope_result_scope',
     'ResolveUserApprovalRequest': 'resolve_user_approval_request',
     'ResolveUserApprovalRequestResponseType0': 'resolve_user_approval_request_response_type_0',
     'ResourceAccessGrantRequest': 'resource_access_grant_request',
@@ -612,6 +655,8 @@ _NAME_TO_MODULE = {
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
+    'SizeOffer': 'size_offer',
+    'SizeOfferTemplate': 'size_offer_template',
     'SlackAppCreateRequest': 'slack_app_create_request',
     'SlackAppCreateResponse': 'slack_app_create_response',
     'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
@@ -632,6 +677,8 @@ _NAME_TO_MODULE = {
     'SourceUpdateRequest': 'source_update_request',
     'StartLemmaRequest': 'start_lemma_request',
     'StartLemmaResponse': 'start_lemma_response',
+    'StartProcessRequest': 'start_process_request',
+    'StartProcessRequestEnv': 'start_process_request_env',
     'StartedPodResponse': 'started_pod_response',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
@@ -674,6 +721,9 @@ _NAME_TO_MODULE = {
     'SurfaceUnavailableReason': 'surface_unavailable_reason',
     'SurfaceUpdateRequest': 'surface_update_request',
     'SurfaceWhatsAppConfigInput': 'surface_whats_app_config_input',
+    'SyncRequest': 'sync_request',
+    'SyncRequestDirection': 'sync_request_direction',
+    'SyncResponse': 'sync_response',
     'TableColumn': 'table_column',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -693,6 +743,7 @@ _NAME_TO_MODULE = {
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
     'TemplateOutcome': 'template_outcome',
     'TemplatePlan': 'template_plan',
+    'TerminalSizeModel': 'terminal_size_model',
     'ThreadResponse': 'thread_response',
     'TriggerSkipListResponse': 'trigger_skip_list_response',
     'TriggerSkipReason': 'trigger_skip_reason',
@@ -714,6 +765,8 @@ _NAME_TO_MODULE = {
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateOpenAICompatibleRuntimeProfileRequest': 'update_open_ai_compatible_runtime_profile_request',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0': 'update_open_ai_compatible_runtime_profile_request_model_settings_type_0',
+    'UpdatePodMachineRequest': 'update_pod_machine_request',
+    'UpdatePodMachineRequestVisibilityType0': 'update_pod_machine_request_visibility_type_0',
     'UpdateRecordRequest': 'update_record_request',
     'UpdateRecordRequestData': 'update_record_request_data',
     'UpdateScheduleRequest': 'update_schedule_request',
@@ -787,13 +840,6 @@ _NAME_TO_MODULE = {
     'WorkflowRunWaitingOn': 'workflow_run_waiting_on',
     'WorkflowSummaryResponse': 'workflow_summary_response',
     'WorkflowUpdateRequest': 'workflow_update_request',
-    'WorkspaceAppAccessRequest': 'workspace_app_access_request',
-    'WorkspaceAppAccessResponse': 'workspace_app_access_response',
-    'WorkspaceFileEntry': 'workspace_file_entry',
-    'WorkspaceFileEntryKind': 'workspace_file_entry_kind',
-    'WorkspaceFileListResponse': 'workspace_file_list_response',
-    'WorkspaceStatusResponse': 'workspace_status_response',
-    'WorkspaceStatusResponseState': 'workspace_status_response_state',
     'WriteIntent': 'write_intent',
 }
 
@@ -906,6 +952,8 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .browser_access_request import BrowserAccessRequest
+    from .browser_access_response import BrowserAccessResponse
     from .browser_status_response import BrowserStatusResponse
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
@@ -960,6 +1008,8 @@ if TYPE_CHECKING:
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
     from .connector_status_response import ConnectorStatusResponse
+    from .consent_list_response import ConsentListResponse
+    from .consent_response import ConsentResponse
     from .contact_answer import ContactAnswer
     from .contact_export_response import ContactExportResponse
     from .contact_identity_response import ContactIdentityResponse
@@ -996,6 +1046,11 @@ if TYPE_CHECKING:
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
     from .create_open_ai_compatible_runtime_profile_request_headers import CreateOpenAICompatibleRuntimeProfileRequestHeaders
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
+    from .create_pod_machine_request import CreatePodMachineRequest
+    from .create_pod_machine_request_template import CreatePodMachineRequestTemplate
+    from .create_pod_machine_request_visibility import CreatePodMachineRequestVisibility
+    from .create_preview_request import CreatePreviewRequest
+    from .create_preview_request_visibility import CreatePreviewRequestVisibility
     from .create_record_request import CreateRecordRequest
     from .create_record_request_data import CreateRecordRequestData
     from .create_schedule_request import CreateScheduleRequest
@@ -1125,6 +1180,7 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
+    from .grant_consent_request import GrantConsentRequest
     from .grantee_ref import GranteeRef
     from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
@@ -1177,6 +1233,21 @@ if TYPE_CHECKING:
     from .loop_node_position_type_0 import LoopNodePositionType0
     from .loop_node_response import LoopNodeResponse
     from .loop_node_response_position_type_0 import LoopNodeResponsePositionType0
+    from .machine_capabilities_model import MachineCapabilitiesModel
+    from .machine_file_entry import MachineFileEntry
+    from .machine_file_entry_kind import MachineFileEntryKind
+    from .machine_file_list_response import MachineFileListResponse
+    from .machine_grants_model import MachineGrantsModel
+    from .machine_list_response import MachineListResponse
+    from .machine_policy_response import MachinePolicyResponse
+    from .machine_response import MachineResponse
+    from .machine_response_access import MachineResponseAccess
+    from .machine_response_kind import MachineResponseKind
+    from .machine_response_status import MachineResponseStatus
+    from .machine_response_template import MachineResponseTemplate
+    from .machine_response_visibility import MachineResponseVisibility
+    from .machine_startup_response import MachineStartupResponse
+    from .machine_startup_response_state import MachineStartupResponseState
     from .make_decision_request import MakeDecisionRequest
     from .make_decision_request_priority import MakeDecisionRequestPriority
     from .make_decision_request_schema import MakeDecisionRequestSchema
@@ -1196,11 +1267,14 @@ if TYPE_CHECKING:
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .move_request import MoveRequest
     from .my_membership_response import MyMembershipResponse
     from .my_membership_update import MyMembershipUpdate
     from .my_membership_update_notify_via_type_0_item import MyMembershipUpdateNotifyViaType0Item
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
+    from .navigate_request import NavigateRequest
+    from .navigate_response import NavigateResponse
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
@@ -1255,6 +1329,8 @@ if TYPE_CHECKING:
     from .outcome_standing_response import OutcomeStandingResponse
     from .outcome_template_card import OutcomeTemplateCard
     from .outcome_week_response import OutcomeWeekResponse
+    from .output_chunk_model import OutputChunkModel
+    from .output_chunk_model_channel import OutputChunkModelChannel
     from .outreach_delivery import OutreachDelivery
     from .outreach_line import OutreachLine
     from .outreach_request import OutreachRequest
@@ -1317,6 +1393,14 @@ if TYPE_CHECKING:
     from .pod_trigger_settings import PodTriggerSettings
     from .pod_trigger_settings_bulk_writes_default_type_0 import PodTriggerSettingsBulkWritesDefaultType0
     from .pod_update_request import PodUpdateRequest
+    from .preview_list_response import PreviewListResponse
+    from .preview_response import PreviewResponse
+    from .preview_response_visibility import PreviewResponseVisibility
+    from .process_input_request import ProcessInputRequest
+    from .process_list_response import ProcessListResponse
+    from .process_output_response import ProcessOutputResponse
+    from .process_response import ProcessResponse
+    from .process_response_state import ProcessResponseState
     from .public_audience import PublicAudience
     from .public_column_item import PublicColumnItem
     from .public_column_response import PublicColumnResponse
@@ -1345,6 +1429,11 @@ if TYPE_CHECKING:
     from .record_update_response_record_update import RecordUpdateResponseRecordUpdate
     from .report_feedback_request import ReportFeedbackRequest
     from .report_feedback_response import ReportFeedbackResponse
+    from .reset_request import ResetRequest
+    from .reset_request_scopes_item import ResetRequestScopesItem
+    from .reset_response import ResetResponse
+    from .reset_scope_result import ResetScopeResult
+    from .reset_scope_result_scope import ResetScopeResultScope
     from .resolve_user_approval_request import ResolveUserApprovalRequest
     from .resolve_user_approval_request_response_type_0 import ResolveUserApprovalRequestResponseType0
     from .resource_access_grant_request import ResourceAccessGrantRequest
@@ -1401,6 +1490,8 @@ if TYPE_CHECKING:
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
+    from .size_offer import SizeOffer
+    from .size_offer_template import SizeOfferTemplate
     from .slack_app_create_request import SlackAppCreateRequest
     from .slack_app_create_response import SlackAppCreateResponse
     from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
@@ -1421,6 +1512,8 @@ if TYPE_CHECKING:
     from .source_update_request import SourceUpdateRequest
     from .start_lemma_request import StartLemmaRequest
     from .start_lemma_response import StartLemmaResponse
+    from .start_process_request import StartProcessRequest
+    from .start_process_request_env import StartProcessRequestEnv
     from .started_pod_response import StartedPodResponse
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
@@ -1463,6 +1556,9 @@ if TYPE_CHECKING:
     from .surface_unavailable_reason import SurfaceUnavailableReason
     from .surface_update_request import SurfaceUpdateRequest
     from .surface_whats_app_config_input import SurfaceWhatsAppConfigInput
+    from .sync_request import SyncRequest
+    from .sync_request_direction import SyncRequestDirection
+    from .sync_response import SyncResponse
     from .table_column import TableColumn
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -1482,6 +1578,7 @@ if TYPE_CHECKING:
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
     from .template_outcome import TemplateOutcome
     from .template_plan import TemplatePlan
+    from .terminal_size_model import TerminalSizeModel
     from .thread_response import ThreadResponse
     from .trigger_skip_list_response import TriggerSkipListResponse
     from .trigger_skip_reason import TriggerSkipReason
@@ -1503,6 +1600,8 @@ if TYPE_CHECKING:
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_open_ai_compatible_runtime_profile_request import UpdateOpenAICompatibleRuntimeProfileRequest
     from .update_open_ai_compatible_runtime_profile_request_model_settings_type_0 import UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0
+    from .update_pod_machine_request import UpdatePodMachineRequest
+    from .update_pod_machine_request_visibility_type_0 import UpdatePodMachineRequestVisibilityType0
     from .update_record_request import UpdateRecordRequest
     from .update_record_request_data import UpdateRecordRequestData
     from .update_schedule_request import UpdateScheduleRequest
@@ -1576,13 +1675,6 @@ if TYPE_CHECKING:
     from .workflow_run_waiting_on import WorkflowRunWaitingOn
     from .workflow_summary_response import WorkflowSummaryResponse
     from .workflow_update_request import WorkflowUpdateRequest
-    from .workspace_app_access_request import WorkspaceAppAccessRequest
-    from .workspace_app_access_response import WorkspaceAppAccessResponse
-    from .workspace_file_entry import WorkspaceFileEntry
-    from .workspace_file_entry_kind import WorkspaceFileEntryKind
-    from .workspace_file_list_response import WorkspaceFileListResponse
-    from .workspace_status_response import WorkspaceStatusResponse
-    from .workspace_status_response_state import WorkspaceStatusResponseState
     from .write_intent import WriteIntent
 
 
@@ -1708,6 +1800,8 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'BrowserAccessRequest',
+    'BrowserAccessResponse',
     'BrowserStatusResponse',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
@@ -1762,6 +1856,8 @@ __all__ = [
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',
     'ConnectorStatusResponse',
+    'ConsentListResponse',
+    'ConsentResponse',
     'ContactAnswer',
     'ContactExportResponse',
     'ContactIdentityResponse',
@@ -1798,6 +1894,11 @@ __all__ = [
     'CreateOpenAICompatibleRuntimeProfileRequest',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
+    'CreatePodMachineRequest',
+    'CreatePodMachineRequestTemplate',
+    'CreatePodMachineRequestVisibility',
+    'CreatePreviewRequest',
+    'CreatePreviewRequestVisibility',
     'CreateRecordRequest',
     'CreateRecordRequestData',
     'CreateScheduleRequest',
@@ -1927,6 +2028,7 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
+    'GrantConsentRequest',
     'GranteeRef',
     'GranteeRefGranteeType',
     'GroupPublicResponse',
@@ -1979,6 +2081,21 @@ __all__ = [
     'LoopNodePositionType0',
     'LoopNodeResponse',
     'LoopNodeResponsePositionType0',
+    'MachineCapabilitiesModel',
+    'MachineFileEntry',
+    'MachineFileEntryKind',
+    'MachineFileListResponse',
+    'MachineGrantsModel',
+    'MachineListResponse',
+    'MachinePolicyResponse',
+    'MachineResponse',
+    'MachineResponseAccess',
+    'MachineResponseKind',
+    'MachineResponseStatus',
+    'MachineResponseTemplate',
+    'MachineResponseVisibility',
+    'MachineStartupResponse',
+    'MachineStartupResponseState',
     'MakeDecisionRequest',
     'MakeDecisionRequestPriority',
     'MakeDecisionRequestSchema',
@@ -1998,11 +2115,14 @@ __all__ = [
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'MoveRequest',
     'MyMembershipResponse',
     'MyMembershipUpdate',
     'MyMembershipUpdateNotifyViaType0Item',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
+    'NavigateRequest',
+    'NavigateResponse',
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
@@ -2057,6 +2177,8 @@ __all__ = [
     'OutcomeStandingResponse',
     'OutcomeTemplateCard',
     'OutcomeWeekResponse',
+    'OutputChunkModel',
+    'OutputChunkModelChannel',
     'OutreachDelivery',
     'OutreachLine',
     'OutreachRequest',
@@ -2119,6 +2241,14 @@ __all__ = [
     'PodTriggerSettings',
     'PodTriggerSettingsBulkWritesDefaultType0',
     'PodUpdateRequest',
+    'PreviewListResponse',
+    'PreviewResponse',
+    'PreviewResponseVisibility',
+    'ProcessInputRequest',
+    'ProcessListResponse',
+    'ProcessOutputResponse',
+    'ProcessResponse',
+    'ProcessResponseState',
     'PublicAudience',
     'PublicColumnItem',
     'PublicColumnResponse',
@@ -2147,6 +2277,11 @@ __all__ = [
     'RecordUpdateResponseRecordUpdate',
     'ReportFeedbackRequest',
     'ReportFeedbackResponse',
+    'ResetRequest',
+    'ResetRequestScopesItem',
+    'ResetResponse',
+    'ResetScopeResult',
+    'ResetScopeResultScope',
     'ResolveUserApprovalRequest',
     'ResolveUserApprovalRequestResponseType0',
     'ResourceAccessGrantRequest',
@@ -2203,6 +2338,8 @@ __all__ = [
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
+    'SizeOffer',
+    'SizeOfferTemplate',
     'SlackAppCreateRequest',
     'SlackAppCreateResponse',
     'SlackAppWorkspaceListResponse',
@@ -2223,6 +2360,8 @@ __all__ = [
     'SourceUpdateRequest',
     'StartLemmaRequest',
     'StartLemmaResponse',
+    'StartProcessRequest',
+    'StartProcessRequestEnv',
     'StartedPodResponse',
     'StepRecordResponse',
     'StepStatus',
@@ -2265,6 +2404,9 @@ __all__ = [
     'SurfaceUnavailableReason',
     'SurfaceUpdateRequest',
     'SurfaceWhatsAppConfigInput',
+    'SyncRequest',
+    'SyncRequestDirection',
+    'SyncResponse',
     'TableColumn',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
@@ -2284,6 +2426,7 @@ __all__ = [
     'TelegramManagedBotSetupResponse',
     'TemplateOutcome',
     'TemplatePlan',
+    'TerminalSizeModel',
     'ThreadResponse',
     'TriggerSkipListResponse',
     'TriggerSkipReason',
@@ -2305,6 +2448,8 @@ __all__ = [
     'UpdateMemberRoleRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0',
+    'UpdatePodMachineRequest',
+    'UpdatePodMachineRequestVisibilityType0',
     'UpdateRecordRequest',
     'UpdateRecordRequestData',
     'UpdateScheduleRequest',
@@ -2378,12 +2523,5 @@ __all__ = [
     'WorkflowRunWaitingOn',
     'WorkflowSummaryResponse',
     'WorkflowUpdateRequest',
-    'WorkspaceAppAccessRequest',
-    'WorkspaceAppAccessResponse',
-    'WorkspaceFileEntry',
-    'WorkspaceFileEntryKind',
-    'WorkspaceFileListResponse',
-    'WorkspaceStatusResponse',
-    'WorkspaceStatusResponseState',
     'WriteIntent',
 ]

@@ -31,6 +31,10 @@ EXPECTED = [
     ("usage_contacts_monthly_default_usd", "USAGE_CONTACTS_MONTHLY_DEFAULT_USD", 50),
     # How many contacts its bots may answer, until an owner sets a number.
     ("usage_contacts_max_default", "USAGE_CONTACTS_MAX_DEFAULT", 500),
+    # Compute allowances and the price of a compute unit (machines).
+    ("usage_user_monthly_compute_units", "USAGE_USER_MONTHLY_COMPUTE_UNITS", None),
+    ("usage_org_monthly_compute_units", "USAGE_ORG_MONTHLY_COMPUTE_UNITS", None),
+    ("usage_compute_unit_usd", "USAGE_COMPUTE_UNIT_USD", None),
     # What a limit does when the cost of the work cannot be established.
     ("usage_unpriced_limit_policy", "USAGE_UNPRICED_LIMIT_POLICY", "allow"),
 ]

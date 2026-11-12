@@ -15,7 +15,7 @@ Doing the work:
 - `lemma-data-analysis`: quantitative analysis, charts, and writing a measure.
 - `lemma-artifact-author`: documents, spreadsheets, decks, PDFs, HTML.
 - `lemma-form`: forms and sign-ups for people outside; responses are table rows.
-- `browser`: the workspace browser the person sees, driven with `agent-browser`;
+- `browser`: the browser on your machine that the person sees, driven with `agent-browser`;
   `agent-browser open <url>` starts it.
 - `liteparse-documents`: documents outside the pod or missing conversion.
 

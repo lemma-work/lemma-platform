@@ -339,7 +339,7 @@
             },
             "input": {
               "cmd": "echo hello-lemma",
-              "workdir": "/workspace/fixture"
+              "workdir": "/home/user/lemma/fixture"
             },
             "parent_call_id": null
           }
@@ -360,7 +360,7 @@
       "tool_name": "exec_command",
       "tool_args": {
         "cmd": "echo hello-lemma",
-        "workdir": "/workspace/fixture"
+        "workdir": "/home/user/lemma/fixture"
       },
       "tool_result": {
         "exit_code": 0,

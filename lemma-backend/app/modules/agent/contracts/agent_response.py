@@ -57,6 +57,7 @@ class AgentResponse(BaseModel):
     input_schema: JsonObject | None = None
     output_schema: JsonObject | None = None
     metadata: JsonObject | None = None
+    machine: str | None = None
     created_at: datetime
     updated_at: datetime
 

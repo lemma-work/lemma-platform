@@ -24,6 +24,7 @@ _GROUP_LABELS: dict[ToolGroup, str] = {
     ToolGroup.WAIT: "Pausing and resuming later",
     ToolGroup.BROWSER: "Driving a real browser",
     ToolGroup.SPEECH: "Speaking and transcribing",
+    ToolGroup.MACHINES: "Other machines, previews, copies to pod files, cleanup",
 }
 
 

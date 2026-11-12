@@ -197,7 +197,7 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
                 system_prompt: "Be concise".into(),
                 prompt: vec![serde_json::json!({"type": "text", "text": "hello"})],
                 resume_session_id: None,
-                workspace_cwd: Some("/workspace/c/2026-09-07/Δ project".into()),
+                workspace_cwd: Some("/home/user/lemma/c/2026-09-07/Δ project".into()),
                 context: BTreeMap::new(),
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),

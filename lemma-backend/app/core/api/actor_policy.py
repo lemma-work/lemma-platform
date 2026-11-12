@@ -30,6 +30,41 @@ from app.core.domain.errors import DomainError
 #: The pod prefix every pod-scoped route shares.
 POD_SCOPED_PREFIX = "/pods/{pod_id}"
 
+_MACHINE = "/machines/{ref}"
+
+#: A machine's work: its processes, its files, its previews, and how it is.
+#: Open to workloads and to apps' pages because every one of these resolves
+#: the machine through the workspace module's machine resolver, which applies
+#: the caller's own rule -- a run reaches its person's machine only when they
+#: started it in Lemma, a pod machine only by visibility or grant, an app its
+#: viewer's machine only after that viewer said yes to that app. The browser,
+#: its logins, the consents, creating and deleting machines, and resetting a
+#: machine's home are none of these: those stay a person's.
+MACHINE_WORK_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/machines"),
+        ("GET", _MACHINE),
+        ("GET", f"{_MACHINE}/startup"),
+        ("POST", f"{_MACHINE}/processes"),
+        ("GET", f"{_MACHINE}/processes"),
+        ("GET", f"{_MACHINE}/processes/{{process_id}}"),
+        ("GET", f"{_MACHINE}/processes/{{process_id}}/output"),
+        ("POST", f"{_MACHINE}/processes/{{process_id}}:input"),
+        ("POST", f"{_MACHINE}/processes/{{process_id}}:resize"),
+        ("DELETE", f"{_MACHINE}/processes/{{process_id}}"),
+        ("GET", f"{_MACHINE}/files"),
+        ("GET", f"{_MACHINE}/files:stat"),
+        ("GET", f"{_MACHINE}/files:content"),
+        ("PUT", f"{_MACHINE}/files/content"),
+        ("DELETE", f"{_MACHINE}/files"),
+        ("POST", f"{_MACHINE}/files:move"),
+        ("POST", f"{_MACHINE}/files:sync"),
+        ("POST", f"{_MACHINE}/previews"),
+        ("GET", f"{_MACHINE}/previews"),
+        ("DELETE", f"{_MACHINE}/previews/{{preview_id}}"),
+    }
+)
+
 #: Routes outside a pod that a workload may call, as ``(method, path template)``.
 #: Each resolves the workload's own context (or reads nothing beyond the person's
 #: own profile), so opening it does not hand the workload the person.
@@ -116,6 +151,11 @@ WORKLOAD_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # Tools the sandbox calls back for.
         ("POST", "/tools/web-search"),
         ("POST", "/tools/report-feedback"),
+        # An agent cleaning the machine it works on. The route takes only the
+        # agent scopes from a workload -- processes, runs, caches, docker --
+        # never the home, and never anybody's logins.
+        ("POST", "/machines/{ref}:reset"),
+        *MACHINE_WORK_ROUTES,
     }
 )
 
@@ -194,6 +234,9 @@ APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
             "GET",
             f"{_ORG_CONNECTORS}/{{auth_config_name}}/triggers/{{trigger_name}}",
         ),
+        # Running code for its viewer: their own machine only after they said
+        # yes to this app, a pod machine only in the app's own pod.
+        *MACHINE_WORK_ROUTES,
     }
 )
 
@@ -305,6 +348,7 @@ def refuse_named_workloads(action_label: str):
 
 
 __all__ = [
+    "MACHINE_WORK_ROUTES",
     "APP_PERSON_ONLY",
     "APP_ROUTE_NOT_ALLOWED",
     "APP_ROUTES",

@@ -149,11 +149,17 @@ class ConfiguredUsageLimitPort:
             org_monthly_limit_usd=org_monthly,
             user_weekly_limit_usd=usage_settings.usage_user_weekly_limit_usd,
             user_monthly_limit_usd=usage_settings.usage_user_monthly_limit_usd,
+            user_monthly_compute_units=usage_settings.usage_user_monthly_compute_units,
+            org_monthly_compute_units=usage_settings.usage_org_monthly_compute_units,
+            compute_unit_usd=usage_settings.usage_compute_unit_usd,
         )
         has_any = (
             values.org_monthly_limit_usd is not None
             or values.user_weekly_limit_usd is not None
             or values.user_monthly_limit_usd is not None
+            or values.user_monthly_compute_units is not None
+            or values.org_monthly_compute_units is not None
+            or values.compute_unit_usd is not None
         )
         return values if has_any else None
 
@@ -164,6 +170,9 @@ def configured_usage_limit_port(uow: object) -> UsageLimitPort | None:
         usage_settings.usage_org_monthly_limit_usd is not None
         or usage_settings.usage_user_weekly_limit_usd is not None
         or usage_settings.usage_user_monthly_limit_usd is not None
+        or usage_settings.usage_user_monthly_compute_units is not None
+        or usage_settings.usage_org_monthly_compute_units is not None
+        or usage_settings.usage_compute_unit_usd is not None
         or bool(settings.usage_org_limit_overrides_json.strip())
     )
     if not has_any:

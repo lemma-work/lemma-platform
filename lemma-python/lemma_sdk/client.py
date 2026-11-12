@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .resources import (
         AgentHosts,
         WebLogins,
+        Machines,
         BoundConnectors,
         BoundOrg,
         BoundOrgRuntime,
@@ -126,6 +127,17 @@ class Lemma:
         from .resources import WebLogins
 
         return WebLogins(self._transport)
+
+    @cached_property
+    def machines(self) -> "Machines":
+        """Machines you can run commands on: your own and your pods'.
+
+        Addressed by ref (``me``, ``pod:<pod>/<name>``, ``mine:<name>`` or an
+        id), not by organization; ``pod:<name>`` means this client's pod.
+        """
+        from .resources import Machines
+
+        return Machines(self._transport, pod_id=self.default_pod_id)
 
     @cached_property
     def org_runtime(self) -> "BoundOrgRuntime":

@@ -10,8 +10,8 @@ outright.
 Two separate things made that happen, and both are prompt-shaped:
 
 1. Nothing told the agent that `/me/c/<date>/<slug>` exists, or that a relative
-   pod path resolves there. `# Working Directory` names `/workspace` and only
-   `/workspace`.
+   pod path resolves there. `# Working Directory` names `~/lemma` and only
+   `~/lemma`.
 2. Search over pod files is an index built *after* the file is stored, so a file
    uploaded moments ago is readable by path while search still returns nothing.
    An agent that looks by searching gets an empty result and concludes the file
@@ -133,9 +133,9 @@ class TestAnEmptySearchIsNotAnAbsentFile:
 class TestTheDirectoryFallsBackToWhereTheAgentActuallyIs:
     """A run context without a cwd must still name a real directory.
 
-    The prompt's fallback was ``/workspace/conversations/{id}``, a path shape
+    The prompt's fallback was ``~/lemma/conversations/{id}``, a path shape
     this platform stopped making long ago: the cwd is persisted in conversation
-    metadata and otherwise defaults to ``/workspace/c/{date}/{slug}``. So the one
+    metadata and otherwise defaults to ``~/lemma/c/{date}/{slug}``. So the one
     section whose whole job is to say where the agent is named somewhere that
     does not exist -- silently, whenever the context did not carry a cwd.
 

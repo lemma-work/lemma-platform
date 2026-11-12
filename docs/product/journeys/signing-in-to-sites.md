@@ -15,7 +15,9 @@ would anywhere.
 The promise is the same one: a person's way in is theirs, and nothing uses it
 except on their behalf. The mechanism is now the plainest one available — the
 session stays in the browser that was signed in, in that person's own computer,
-and never leaves it. Lemma keeps no copy to encrypt, show or lose.
+and does not leave it except as one encrypted backup, kept so that a new disk
+does not sign the person out. Nobody — person, agent or app — can read that
+copy, and nothing shows it.
 
 Two things follow from that, and they are load-bearing rather than incidental.
 
@@ -98,8 +100,9 @@ and that decision was where it went wrong.
 - The agent's browser shall keep its own session for a site the person signed
   in to, and that session shall survive the browser closing, the computer
   being suspended, and the conversation ending.
-- The system shall never carry a session's contents out of the person's own
-  computer: what leaves it is which sites have one and when they lapse.
+- The system shall never show or hand a session's contents to anyone: what
+  leaves the person's computer readably is which sites have one and when they
+  lapse.
 - The system shall not let one person's browser session be used by another
   person.
 - While the browser is still signed in to a site, the system shall not ask
@@ -133,6 +136,24 @@ and that decision was where it went wrong.
 
 **Contracts:** `web_login.delete`
 
+### PS-BROWSER-023 — Nothing short of the person's own say-so loses a login
+**Status:** gap
+
+> **Gap:** not proved black-box. Showing that a login survives a new disk needs
+> a real machine with a real browser profile, which this suite has no way to
+> stand up — the same reason the sign-in flow is proved in the workspace e2e
+> suite, noted at the top of `test_saved_logins.py`.
+
+- No agent, app, cleanup or automatic disk reclamation shall delete, move or
+  overwrite the browser's logins.
+- When a machine gets a new disk, or its home is reset, the browser shall come
+  back signed in to the sites it was signed in to, unless the person asked for
+  the reset to forget them.
+- Only the person, confirming it, shall be able to reset a machine in a way
+  that signs its browser out.
+
+**Contracts:** `machine.reset`, `machine.browser.logins.list`
+
 ---
 
 ## Capability: Watch the agent's browser
@@ -152,8 +173,8 @@ and that decision was where it went wrong.
 > proved black-box over the shipped API, it is recorded as a gap here rather
 > than claimed.
 
-- The system shall let a person see what the browser in their own workspace is
-  doing, and shall not start a paused workspace merely to answer whether it can.
+- The system shall let a person see what the browser on their own machine is
+  doing, and shall not start a paused machine merely to answer whether it can.
 - The system shall let that person drive it, and shall refuse input from a view
   that is only watching.
 - The system shall not let anyone else watch or drive another person's browser.
@@ -163,7 +184,7 @@ and that decision was where it went wrong.
   keyboard shortcut.
 - Where floating windows are supported, a person shall be able to pop out the
   browser and bring it back. Leaving the Computer view shall close its viewer.
-- While the workspace starts, the Computer view shall show startup status and
+- While the machine starts, the Computer view shall show startup status and
   measured download progress when available, rather than reporting it asleep.
 
-**Contracts:** `workspace.browser.status`
+**Contracts:** `machine.browser.status`
