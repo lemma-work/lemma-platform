@@ -5,9 +5,12 @@ shared timeline -- who said what, when, and where -- fed by any number of
 outside **sources**: a WhatsApp or Telegram chat, a Telegram or WhatsApp group,
 a Slack or Teams channel or group DM, an email thread, a web chat -- or by
 none, a channel made in Lemma. A **conversation** is one agent
-working for one person -- a member or a contact -- and in a channel there is
-one per agent and person, however many threads, numbers or days they write
-across.
+working for one person -- a member or a contact -- on one platform of a
+channel: one per agent, person and platform (or none, for a conversation kept
+in Lemma itself), however many threads, numbers or days they write across
+there. A member's
+WhatsApp chat and their email are two sources of their `DIRECT` channel, and
+two conversations.
 
 Three kinds, decided by who the channel is about:
 

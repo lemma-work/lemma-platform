@@ -40,8 +40,11 @@ class FoldConversations:
         """The merged contact's conversations are the survivor's now.
 
         Where the survivor already has one with the same agent in the same
-        channel, it keeps the seat. Returns how many changed hands.
+        channel, it keeps the seat. Returns how many changed hands. The merged
+        contact's conversations are held first, so none is placed between
+        finding the clashes and repointing them.
         """
+        await self.seats.hold_contacts(pod_id=pod_id, contact_id=merged_id)
         pairs = await self.seats.unseated_by_merge(
             pod_id=pod_id, merged_id=merged_id, survivor_id=survivor_id
         )
