@@ -15,17 +15,18 @@ import httpx2
 import pytest
 from pydantic_ai.messages import ModelMessage, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.config import agent_settings
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
+from app.modules.agent.domain.tools import NoArguments, ToolGroup, tool
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
-from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.run_options import (
+    harness_usage_limits,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -33,11 +34,8 @@ _LONG_RUN_STEPS = 250
 
 
 def _runner_limits():
-    """The limits a production run is driven under, read off the runner itself."""
-    return AgentRunnerService(
-        uow_factory=None,  # type: ignore[arg-type]  # never opened here
-        harness_registry=HarnessRegistry({}),
-    ).fixed_usage_limits
+    """The limits a production run is driven under, as the harness sets them."""
+    return harness_usage_limits()
 
 
 def _spend(model_requests: int) -> RunSpend:
@@ -58,7 +56,7 @@ def _tool_returns(messages: list[ModelMessage]) -> int:
     )
 
 
-async def _run(model: FunctionModel, *, spend: RunSpend, toolsets=None):
+async def _run(model: FunctionModel, *, spend: RunSpend, tools=None):
     pod_id = uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=uuid4())
     events: list[AgentEvent] = []
@@ -71,7 +69,7 @@ async def _run(model: FunctionModel, *, spend: RunSpend, toolsets=None):
         ),
         conversation=conversation,
         messages=[],
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=conversation.user_id,
             pod_id=pod_id,
             conversation_id=conversation.id,
@@ -79,8 +77,7 @@ async def _run(model: FunctionModel, *, spend: RunSpend, toolsets=None):
         options=HarnessOptions(
             model_name="test-model",
             history_summarization_enabled=False,
-            toolsets=toolsets or [],
-            usage_limits=_runner_limits(),
+            tools=tools or [],
             spend=spend,
         ),
         agent_run_id=uuid4(),
@@ -99,7 +96,8 @@ def test_the_runner_leaves_request_counting_to_the_run_budget() -> None:
 async def test_a_long_run_inside_its_budget_is_not_ended_by_a_hidden_cap() -> None:
     requests: list[int] = []
 
-    async def step() -> str:
+    async def step(ctx: ToolContext, request: NoArguments) -> str:
+        del ctx, request
         return "ok"
 
     async def stream_fn(messages, info: AgentInfo) -> AsyncIterator[object]:
@@ -114,7 +112,7 @@ async def test_a_long_run_inside_its_budget_is_not_ended_by_a_hidden_cap() -> No
     events = await _run(
         FunctionModel(stream_function=stream_fn),
         spend=spend,
-        toolsets=[FunctionToolset(tools=[step])],
+        tools=[tool(step, ToolGroup.CALLABLES)],
     )
 
     assert [e for e in events if e.type is AgentEventType.ERROR] == []

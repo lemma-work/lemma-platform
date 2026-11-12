@@ -19,7 +19,7 @@ export default function AppError({ error, retry }: { error: Error & { digest?: s
             <div className="screen__inner">
                 <p>Something went wrong on this page.</p>
                 <button className="btn" onClick={() => retry()}>Try again</button>
-                <Link href="/t">Open your teammates</Link>
+                <Link href="/home">Open your teammates</Link>
             </div>
         </main>
     );

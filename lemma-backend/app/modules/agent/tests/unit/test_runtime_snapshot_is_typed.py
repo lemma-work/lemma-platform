@@ -14,17 +14,17 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.agent_host import AgentHostRunState
+from app.modules.agent.agent_host.domain.host import AgentHostRunState
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
     RuntimeProfileScope,
 )
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
-from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+from app.modules.agent.agent_host.harness.run_config import (
     agent_host_run_config,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     RunLease,
     lease_terminal_detail,
 )

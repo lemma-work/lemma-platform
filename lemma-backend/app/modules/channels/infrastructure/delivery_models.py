@@ -1,10 +1,11 @@
 """Tables for sending a channel's lines outside Lemma.
 
 ``channel_message_deliveries`` is every send of a line to a place, or push to
-a member, unique per line and target; ``channel_delivery_attempts`` each try
-of one, so a send that met a 429 and then went shows both. A member's pushes
-are coalesced first: ``channel_push_pending`` holds, per member and channel,
-the lines waiting to be pushed, and one delivery goes per window.
+a member, unique per line and target; ``channel_delivery_attempts``, each try
+of one, is no longer written -- nothing read it -- and goes with the migration
+that drops it. A member's pushes are coalesced first:
+``channel_push_pending`` holds, per member and channel, the lines waiting to
+be pushed, and one delivery goes per window.
 
 A delivery hangs from its line by ``(message_id, channel_id)``, so a line that
 moves channel (a contact's channel folded into another) takes its deliveries
@@ -188,10 +189,7 @@ class ChannelMessageDeliveryModel(UUIDAuditBase):
 
 class ChannelDeliveryAttemptModel(Base):
     """One try of a delivery: when it began and ended, and what it ended as.
-
-    Written as the sender claims it (``n`` is the delivery's ``attempts``) and
-    finished with the outcome, so a lapsed claim is a try with no end.
-    """
+    No longer written."""
 
     __tablename__ = "channel_delivery_attempts"
     __table_args__ = (
@@ -257,6 +255,8 @@ class ChannelPushPendingModel(Base):
     )
     pod_id: Mapped[UUID] = mapped_column(nullable=False)
     from_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: The newest line folded in. Nothing reads it; it is still written,
+    #: because the window check holds it until the contract migration.
     to_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lead_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lines: Mapped[int] = mapped_column(
@@ -271,6 +271,7 @@ class ChannelPushPendingModel(Base):
     pushed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: When the row was made; no longer moved by a change, which nothing read.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

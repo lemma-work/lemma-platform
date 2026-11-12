@@ -7,12 +7,12 @@ PostgreSQL and mirrored to Redis. Every accepted compare-and-swap write bumps
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice, ConnectorPlan
 
@@ -130,14 +130,57 @@ class VariableSpec(BaseModel):
     default: str | None = None
 
 
+class OutcomePlanAction(str, Enum):
+    """What an import does with what its bundle's pod owned."""
+
+    #: The pod owns nothing yet: the import sets the bundle's.
+    SET = "SET"
+    #: The pod already owns something else, and keeps it: an import adds to a
+    #: pod, it does not change what the pod is for.
+    KEEP = "KEEP"
+    #: The pod already owns this one (sentence, kind, target, unit and due).
+    SAME = "SAME"
+
+
+class PlannedOutcome(BaseModel):
+    """What the bundle's pod owned (``pod.json -> outcome``), and what the
+    import will do with it -- shown so the person approving sees it first.
+
+    Its measure is not repeated: it is a query only the apply reads, as the
+    person importing, and one they cannot read is left off then.
+    """
+
+    sentence: str
+    kind: Literal["week", "date"]
+    target: float | None = None
+    unit: str | None = None
+    due: date | None = None
+    has_measure: bool = False
+    action: OutcomePlanAction
+
+
 class ImportPlan(BaseModel):
     format_version: int
     bundle_name: str | None = None
+    # `pod.json`'s description, so the person importing can see what the bundle
+    # is for before approving it.
+    description: str | None = None
     steps: list[PlanStep] = Field(default_factory=list)
     variables: list[VariableSpec] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     #: The bundle's pod connectors and the choices each offers the importer.
     connectors: list[ConnectorPlan] = Field(default_factory=list)
+    #: What the bundle's pod owned and what the import does with it; ``None``
+    #: when it owned nothing, its block is invalid (said in ``warnings``), or
+    #: the import is a template's, whose start sets it.
+    outcome: PlannedOutcome | None = None
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _text_or_nothing(cls, value: object) -> object:
+        """A ``pod.json`` description that is not text is no description: the
+        bundle is someone else's file, and one stray field must not fail a plan."""
+        return value if isinstance(value, str) else None
 
     def next_pending_step(self) -> PlanStep | None:
         for step in self.steps:
@@ -164,19 +207,28 @@ class BundleSourceKind(str, Enum):
 
     ``URL`` covers any lemma-origin signed download URL (an export or an
     uploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public
-    repo fetched via the connector path.
+    repo fetched via the connector path; ``TEMPLATE`` is a bundle that ships
+    with the backend under ``pod_bundle/templates/``, named rather than located.
     """
 
     URL = "URL"
     GITHUB = "GITHUB"
+    TEMPLATE = "TEMPLATE"
+
+
+#: A template's name is its directory under ``templates/``. No dots and no
+#: separators, so a name cannot address anything outside that directory.
+TEMPLATE_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
 
 
 class BundleSource(BaseModel):
     kind: BundleSourceKind
     # For kind=URL: the signed lemma download URL the bundle was imported from
     # (kept for the recipe/provenance). For kind=GITHUB: repo_url is set instead.
+    # For kind=TEMPLATE: `template:<name>`, which is what the recipe records.
     url: str | None = None
     repo_url: str | None = None
+    template: str | None = None
     ref: str | None = None
     bundle_filename: str | None = None
     bundle_sha256: str | None = None

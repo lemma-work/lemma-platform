@@ -1,37 +1,36 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { ContactsPage } from "@/space/contacts-page";
+import { ChatsPage } from "@/space/chats-page";
+import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { Library } from "@/library/library";
 import { AppCover } from "@/stage/app-cover";
-import { platformName } from "@/thread/conversation-origin";
 import { readableName } from "@/library/reading";
-import { useWorkflowList } from "@/workflow/use-run";
 import { useMaySeeContacts } from "@/space/contact-queries";
 import { TeammateFace } from "@/space/teammate-face";
 import { allChannels, useChannelList } from "@/channels/queries";
 import { sinceShort } from "@/channels/model";
+import { platformName } from "@/thread/conversation-origin";
 import { useMe } from "@/session/use-me";
+import { useWorkflowList } from "@/workflow/use-run";
 import {
-    NEW_CHAT, NOTHING_OWNED, OUTCOME_TABS, PLAN_PATH, PLAN_SECTIONS, SECTION_TITLES,
-    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, viewOfItem, workRows,
-    type Go, type OutcomeTab, type Plan, type PlanLine, type PlanSection, type QueueItem,
+    NOTHING_OWNED, PLAN_PATH, PLAN_SECTIONS, SECTION_TITLES,
+    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, withOwned, workRows,
+    type Ask, type Go, type OutcomeTab, type Owned, type Plan, type PlanLine, type PlanSection, type QueueItem, type View,
 } from "./model";
-import { classic, mcpUrl, planRequest, PlanMovedOn, readPlan, savePlan, useMeasure } from "./data";
-import { Avatar, Empty, Icon, to, type IconName } from "./parts";
+import { mcpUrl, planRequest, PlanMovedOn, readPlan, saveOwned, savePlan, standingKey, useMeasure, useOwned, useWeeks } from "./data";
+import { Empty, Icon, to, type IconName } from "./parts";
 import type { FrameActions } from "./actions";
-import { AskBox } from "./ask";
-import { WhatItRuns } from "./runs";
-import { kindOf, markOf } from "./sidebar";
-
-const TAB_LABELS: Record<OutcomeTab, string> = { home: "Home", plan: "Plan", apps: "Apps", made: "Files", contacts: "Contacts", xray: "X-ray", settings: "Settings" };
-
-/** Close the menu a click inside it came from. */
-function closeMenu(event: { currentTarget: Element }) {
-    event.currentTarget.closest("details")?.removeAttribute("open");
-}
+import { NeedRow } from "./answer";
+import { AppTiles, AskBox, useApps, type PodApp } from "./ask";
+import { StartWith } from "./chats";
+import { AutomationsTab } from "./automations";
+import { LemmaActions, SectionSwitch, closeMenu, sectionLabel, useLemmaSections } from "./lemma-bar";
+import { kindOf, markOf, readsAhead } from "./sidebar";
+import { Stage } from "./stage";
 
 async function copy(text: string): Promise<boolean> {
     try {
@@ -42,159 +41,220 @@ async function copy(text: string): Promise<boolean> {
     }
 }
 
-/** One Lemma: who it is -- its face and name -- and what it owns, with its
- *  number, on top. Its home is where you talk to it, what it needs from
- *  you, what it has been doing and what it runs; then the plan, its apps,
- *  what it has made, the people outside who wrote in, and X-ray. */
-export function OutcomePage({ pod, tab, plan, activity, queue, me, go, onAsk, actions }: {
+/** "1 table", "3 tables". */
+function counted(n: number, one: string): string {
+    return `${n} ${one}${n === 1 ? "" : "s"}`;
+}
+
+/** One Lemma. At its own address, a summary: who it is and what it owns,
+ *  a box to ask it, what it needs from you, what it has been doing and its
+ *  apps, with its sections listed beside them. Each section -- the plan,
+ *  apps, files, contacts, automations -- is a page of its own under the bar
+ *  every page of a Lemma shares, and names itself once. (Settings is drawn
+ *  by the shell, full height, under the same bar.) */
+export function OutcomePage({ pod, pods, tab, section = null, plan, activity, queue, me, go, onAsk, actions }: {
     pod: Pod;
+    /** Every Lemma in the organization, for the queues that read across them. */
+    pods: readonly Pod[];
     tab: OutcomeTab;
+    /** One view of the tab, where the tab has views (Automations). */
+    section?: string | null;
     plan: Plan | null | undefined;
     activity: readonly ConversationRef[];
     queue: readonly QueueItem[];
     me: string;
     go: Go;
     /** Start a chat with this Lemma with these words, and open it. */
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
     actions: FrameActions;
 }) {
-    const measure = useMeasure(pod.id, plan);
-    const value = measure.data ?? null;
-    const standing = standingOf(plan, value);
-    const owns = plan?.outcome || "";
-    const newChat = to(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }), go);
     const contacts = useMaySeeContacts(pod.id);
-    const tabs = OUTCOME_TABS.filter((one) => one !== "contacts" || contacts);
+    /* Its own page is where a chat with it starts, so only its other
+       pages offer the way there. */
+    const bar = <LemmaActions pod={pod} go={go} actions={actions} newChat={tab !== "home"} />;
+    if (tab === "home") {
+        return (
+            <Stage pod={pod} go={go} actions={bar}>
+                <LemmaSummary pod={pod} plan={plan} activity={activity} queue={queue} go={go} onAsk={onAsk} actions={actions} />
+            </Stage>
+        );
+    }
     return (
-        <div className="ox-page ox-page--lemma">
-            <p className="ox-crumb">
-                <a {...to({ name: "outcomes" }, go)}>Lemmas</a>
-                <span aria-hidden="true">/</span>
-                <span>{pod.name}</span>
-            </p>
-            <section className="ox-ohead">
-                <div className="ox-ohead__l">
-                    <div className="ox-ohead__who">
-                        <TeammateFace pod={pod} size={40} />
-                        <h1 className="ox-ohead__name">{pod.name}</h1>
-                    </div>
-                    {owns
-                        ? <p className="ox-ohead__owns">{pod.name} owns: {owns}</p>
-                        : (
-                            <>
-                                {pod.description && <p className="ox-ohead__owns">{pod.description}</p>}
-                                {tab !== "home" && <p className="ox-ohead__nudge">{tab === "plan" ? NOTHING_OWNED : <a {...to(outcomeView(pod.id, "plan"), go)}>{NOTHING_OWNED}</a>}</p>}
-                            </>
-                        )}
-                    <p className="ox-ohead__people">
-                        <span className="ox-faces">{pod.members.slice(0, 6).map((member) => <span key={member.id} title={member.name}><Avatar name={member.name} size={22} /></span>)}</span>
-                        <span>{pod.members.length} {pod.members.length === 1 ? "person" : "people"}</span>
-                    </p>
-                </div>
-                <div className="ox-ohead__r">
-                    {plan && value !== null
-                        ? <div className="ox-stand"><span className="ox-big ox-num">{formatMeasure(value, plan.unit)}</span>{plan.target && <span className="ox-vs">target {plan.target}</span>}{standing && <span className={"ox-pill" + (standing === "behind" ? " ox-pill--behind" : "")}>{standing === "behind" ? "Behind" : "On track"}</span>}</div>
-                        : measure.isError ? <span className="ox-vs">The measure didn’t run</span> : null}
-                    <div className="ox-ohead__acts">
-                        <details className="ox-more">
-                            <summary aria-label={`More for ${pod.name}`} title="More"><Icon name="more" size={16} /></summary>
-                            <div className="ox-more__menu" role="menu">
-                                <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.addPeople(pod.id); }}>Who has access</button>
-                                <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where people reach it</button>
-                                <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.share(pod.id); }}>Share or export</button>
-                                <a role="menuitem" {...to(outcomeView(pod.id, "settings"), go)} onClick={(event) => { closeMenu(event); to(outcomeView(pod.id, "settings"), go).onClick(event); }}>Settings</a>
-                                <a role="menuitem" href={classic.pod(pod.id)}>Open in the workspace</a>
-                            </div>
-                        </details>
-                        {tab !== "home" && <a className="ox-btn ox-btn--primary" {...newChat}>New chat</a>}
-                    </div>
-                </div>
-            </section>
-            <nav className="ox-otabs" aria-label={pod.name}>
-                {tabs.map((one) => (
-                    <a key={one} className="ox-otab" aria-current={one === tab ? "page" : undefined} {...to(outcomeView(pod.id, one), go)}>{TAB_LABELS[one]}</a>
-                ))}
-            </nav>
-            {tab === "home" && <HomeTab pod={pod} plan={plan} activity={activity} queue={queue} go={go} onAsk={onAsk} />}
-            {tab === "plan" && <PlanTab pod={pod} me={me} go={go} onAsk={onAsk} />}
-            {tab === "apps" && <AppsTab pod={pod} go={go} />}
-            {tab === "made" && (
-                <div className="ox-embed">
-                    <Library podId={pod.id} onFile={(path) => go({ name: "file", podId: pod.id, path })} onTable={(name) => go({ name: "table", podId: pod.id, table: name })} />
-                </div>
-            )}
-            {tab === "contacts" && (contacts
-                ? <div className="ox-embed"><ContactsPage pod={pod} onConnect={() => actions.connect(pod.id)} /></div>
-                : <Empty title="Contacts are for whoever looks after them."><p>Ask an admin of {pod.name} if you should be one.</p></Empty>)}
-            {tab === "xray" && <XrayTab pod={pod} go={go} actions={actions} />}
+        <Stage pod={pod} here={<SectionSwitch pod={pod} here={tab} go={go} />} go={go} actions={bar}>
+            <div className="ox-page ox-section" data-section={tab}>
+                <header className="ox-section__head">
+                    <h1 className="ox-section__t">{sectionLabel(tab)}</h1>
+                    {tab === "made" && <MakeMenu pod={pod} go={go} actions={actions} />}
+                </header>
+                {tab === "plan" && <PlanTab pod={pod} me={me} go={go} onAsk={onAsk} />}
+                {tab === "chats" && (
+                    <ChatsPage
+                        pod={pod}
+                        openId={null}
+                        initialFilter={section === "channels" ? "channels" : "all"}
+                        onOpen={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
+                        onOpenChannel={(id) => go(chatView({ kind: "shared", podId: pod.id, id }))}
+                        onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
+                        onNew={() => go(outcomeView(pod.id))}
+                        onConnect={() => actions.connect(pod.id)}
+                        onReach={() => actions.connect(pod.id)}
+                        onPages={() => go(outcomeView(pod.id, "made"))}
+                        onAsk={(text) => actions.prompt(pod.id, text)}
+                    />
+                )}
+                {tab === "apps" && <AppsTab pod={pod} go={go} actions={actions} />}
+                {tab === "made" && <Library podId={pod.id} onFile={(path) => go({ name: "file", podId: pod.id, path })} onTable={(name) => go({ name: "table", podId: pod.id, table: name })} />}
+                {tab === "contacts" && (contacts
+                    ? <ContactsPage pod={pod} onConnect={() => actions.connect(pod.id)} />
+                    : <Empty title="Contacts are for whoever looks after them."><p>Ask an admin of {pod.name} if you should be one.</p></Empty>)}
+                {tab === "automations" && <AutomationsTab pod={pod} pods={pods} section={section} queue={queue} go={go} actions={actions} />}
+            </div>
+        </Stage>
+    );
+}
 
+/** New, over a Lemma's files, as the workspace offers it: a blank page or
+ *  one from a template, made and opened with the caret in it; a table or an
+ *  app, which the Lemma makes, so they start as words in a chat's box. */
+function MakeMenu({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
+    const cache = useQueryClient();
+    const [making, setMaking] = useState<string | null>(null);
+    const [failed, setFailed] = useState(false);
+    const make = async (event: { currentTarget: Element }, id: string, base: string, text: string) => {
+        closeMenu(event);
+        setMaking(id);
+        setFailed(false);
+        try {
+            /* Named like a person would, Untitled then Untitled 2, against
+               what the pages folder already holds; with no listing, names are
+               found by trying. Create-only, so it never writes over a page. */
+            const taken = await source.listLibrary(pod.id, "files", "/pages")
+                .then((listed) => new Set(listed.items.map((item) => item.name.toLowerCase())))
+                .catch(() => new Set<string>());
+            const path = await makePage((at, body) => source.createFile(pod.id, at, body), base, text, taken);
+            void cache.invalidateQueries({ queryKey: ["library", pod.id] });
+            go({ name: "file", podId: pod.id, path });
+        } catch {
+            setFailed(true);
+        } finally {
+            setMaking(null);
+        }
+    };
+    const mate = pod.teammate?.name || pod.name;
+    return (
+        <div className="ox-make">
+            {failed && <span className="ox-make__note" role="alert">That page couldn’t be made. Try again.</span>}
+            <details className="ox-more">
+                <summary className="ox-btn ox-btn--small" aria-label="New">{making ? "Making…" : "New"}<Icon name="chevron" size={14} /></summary>
+                <div className="ox-more__menu" role="menu">
+                    <button type="button" role="menuitem" disabled={Boolean(making)} onClick={(event) => void make(event, "page", "Untitled", "# Untitled\n\n")}>Page</button>
+                    {PAGE_TEMPLATES.map((template) => (
+                        <button key={template.id} type="button" role="menuitem" disabled={Boolean(making)} onClick={(event) => void make(event, template.id, template.file, template.body(mate, new Date()))}>
+                            {template.title}<span className="ox-make__blurb">{template.blurb}</span>
+                        </button>
+                    ))}
+                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.prompt(pod.id, "Set up a table to track "); }}>Table</button>
+                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.prompt(pod.id, "Build an app that "); }}>App</button>
+                </div>
+            </details>
         </div>
     );
 }
 
-/* ── home ─────────────────────────────────────────────────────────────── */
+/* ── the summary ──────────────────────────────────────────────────────── */
 
-/** How many recent things a Lemma's home lists. */
-const RECENT_SHOWN = 8;
+/** How many recent things the summary lists. */
+const RECENT_SHOWN = 6;
+/** How many names a row of the map lists before it trails off. */
+const NAMES_SHOWN = 6;
+/** Apps on a Lemma's page before "All": one row of the column. */
+const APPS_SHOWN = 5;
 
-/** A Lemma's home: what it owns, if nothing yet; a box to talk to it; what
- *  it needs from you; what it has been doing -- its chats, the automations
- *  that ran, the tables that changed -- and what it runs, with a way to ask
- *  for more. */
-function HomeTab({ pod, plan, activity, queue, go, onAsk }: {
+/** The first few names, and "…" when there are more. */
+function names(all: readonly string[]): string {
+    return all.slice(0, NAMES_SHOWN).join(", ") + (all.length > NAMES_SHOWN ? ", …" : "");
+}
+
+/** A Lemma's own page, and the new chat with it, one column read top to
+ *  bottom: who it is and what it owns; what it needs from the reader; its
+ *  apps, as cards, since they are what people use it through; what it has
+ *  been doing; what it is made of -- and at the foot, pinned like a chat's
+ *  composer, the box to ask it something and the ways to start a chat with
+ *  people instead. One edge, and nothing beside the column pulling the eye
+ *  away. */
+function LemmaSummary({ pod, plan, activity, queue, go, onAsk, actions }: {
     pod: Pod;
     plan: Plan | null | undefined;
     activity: readonly ConversationRef[];
     queue: readonly QueueItem[];
     go: Go;
-    onAsk: (podId: string, text: string) => void;
+    onAsk: Ask;
+    actions: FrameActions;
 }) {
     const reader = useMe();
     const [now] = useState(() => Date.now());
-    const [seed, setSeed] = useState<{ text: string; id: number } | null>(null);
-    const seedWith = (text: string) => setSeed((was) => ({ text, id: (was?.id ?? 0) + 1 }));
+    const measure = useMeasure(pod.id, plan);
+    const value = measure.data ?? null;
+    const standing = standingOf(plan, value);
+    const owns = plan?.outcome || "";
     const channelList = useChannelList(pod.id, { archived: false });
     const tables = useQuery({ queryKey: ["outcome-tables", pod.id], queryFn: () => source.listLibrary(pod.id, "tables", "/"), staleTime: 5 * 60_000, retry: false });
-    const rows = useMemo(() => {
+    const tableItems = useMemo(() => (tables.data?.items ?? []).filter((item) => item.kind === "table"), [tables.data]);
+    const solo = useMemo(() => [pod], [pod]);
+    const { apps } = useApps(solo);
+    const { chats, rows } = useMemo(() => {
         const { needs, rest } = chatItems({ pods: [pod], conversations: new Map([[pod.id, activity]]), channels: new Map([[pod.id, allChannels(channelList.data)]]), me: reader });
+        const listed = [...needs, ...rest].filter(inSidebar);
         const work = workRows({
             podId: pod.id,
             conversations: activity,
-            tables: (tables.data?.items ?? []).filter((item) => item.kind === "table").map((item) => ({ name: item.name, title: readableName(item.name), updated: item.updated })),
+            tables: tableItems.map((item) => ({ name: item.name, title: readableName(item.name), updated: item.updated })),
             now,
         });
-        return sectionRows([...needs, ...rest].filter(inSidebar), work).filter((row) => !row.needsYou);
-    }, [pod, activity, channelList.data, tables.data, reader, now]);
+        return { chats: listed, rows: sectionRows(listed, work).filter((row) => !row.needsYou) };
+    }, [pod, activity, channelList.data, tableItems, reader, now]);
+
     return (
-        <div className="ox-lhome">
-            {plan !== undefined && !plan?.outcome && (
-                <section className="ox-ownit" aria-label={`What ${pod.name} owns`}>
-                    <div>
-                        <p className="ox-ownit__t">What does {pod.name} own?</p>
-                        <p className="ox-vs">A bar it holds every week, or a finish line by a date, and the number that says how it is doing.</p>
-                    </div>
-                    <div className="ox-ownit__acts">
-                        <button type="button" className="ox-btn ox-btn--primary" onClick={() => onAsk(pod.id, planRequest(pod.description ?? ""))}>Write it with {pod.name}</button>
-                        <a className="ox-btn" {...to(outcomeView(pod.id, "plan"), go)}>Set it yourself</a>
-                    </div>
-                </section>
-            )}
-            <AskBox pods={[pod]} podId={pod.id} fixed onAsk={onAsk} seed={seed} placeholder={`Ask ${pod.name} anything, or say what to do`} />
+        <div className="ox-page ox-lsum">
+            <header className="ox-lsum__head">
+                <TeammateFace pod={pod} size={48} />
+                <div className="ox-lsum__id">
+                    <h1>{pod.name}</h1>
+                    {pod.description && <p>{pod.description}</p>}
+                    {owns ? (
+                        <p className="ox-lsum__owns">
+                            <span className="ox-vs">Owns</span>
+                            <span>{owns}</span>
+                            {plan && value !== null && <span className="ox-num">{formatMeasure(value, plan.unit)}{plan.target ? ` of ${plan.target}` : ""}</span>}
+                            {plan?.owned && <Weeks podId={pod.id} owned={plan.owned} />}
+                            {standing && <span className={"ox-pill" + (standing === "behind" ? " ox-pill--behind" : "")}>{standing === "behind" ? "Behind" : "On track"}</span>}
+                            {measure.isError && <span className="ox-vs">The measure didn’t run</span>}
+                        </p>
+                    ) : plan !== undefined && (
+                        <p className="ox-lsum__owns">
+                            <span className="ox-vs">{NOTHING_OWNED}</span>
+                            <button type="button" className="ox-textbtn" onClick={() => onAsk(pod.id, planRequest(pod.description ?? ""))}>Write it with {pod.name}</button>
+                            <span className="ox-vs" aria-hidden="true">·</span>
+                            <a className="ox-textbtn" {...to(outcomeView(pod.id, "plan"), go)}>Set it yourself</a>
+                        </p>
+                    )}
+                </div>
+            </header>
             {queue.length > 0 && (
                 <section aria-label="Needs you">
                     <div className="ox-sec"><h2>Needs you</h2></div>
                     <div className="ox-queue">
-                        {queue.map((item) => (
-                            <a key={item.key} className="ox-item" {...to(viewOfItem(item), go)}>
-                                <span className="ox-item__t">
-                                    <span className="ox-item__w">{item.title}</span>
-                                    {item.detail && <span className="ox-item__o">{item.detail}</span>}
-                                </span>
-                                <span className="ox-item__age">{ageOf(item.sinceMs, now)}</span>
-                                <span className="ox-btn ox-btn--small">{item.kind === "decide" ? "Decide" : item.kind === "answer" ? "Answer" : "Open"}</span>
-                            </a>
-                        ))}
+                        {queue.map((item) => <NeedRow key={item.key} item={item} pods={[pod]} now={now} go={go} showLemma={false} />)}
                     </div>
+                </section>
+            )}
+            {apps.length > 0 && (
+                <section aria-label="Apps">
+                    <div className="ox-sec">
+                        <h2>Apps</h2>
+                        {apps.length > APPS_SHOWN && <a className="ox-link" {...to(outcomeView(pod.id, "apps"), go)}>All {apps.length}</a>}
+                    </div>
+                    <AppTiles apps={apps.slice(0, APPS_SHOWN)} go={go} showWhose={false} />
                 </section>
             )}
             <section aria-label="Recently">
@@ -202,7 +262,7 @@ function HomeTab({ pod, plan, activity, queue, go, onAsk }: {
                 {rows.length === 0 ? <p className="ox-vs">Nothing yet. Ask {pod.name} something, and it shows here.</p> : (
                     <div className="ox-recent">
                         {rows.slice(0, RECENT_SHOWN).map((row) => (
-                            <a key={row.key} className="ox-recent__row" {...to(row.view, go)}>
+                            <a key={row.key} className="ox-recent__row" {...to(row.view, go)} {...readsAhead(row.view)}>
                                 <span className="ox-glyph">{markOf(row)}</span>
                                 <span className="ox-recent__t">{row.title}</span>
                                 <span className="ox-recent__k">{kindOf(row)}</span>
@@ -214,8 +274,111 @@ function HomeTab({ pod, plan, activity, queue, go, onAsk }: {
                     </div>
                 )}
             </section>
-            <WhatItRuns pod={pod} go={go} onNew={seedWith} />
+            <Inside pod={pod} plan={plan} queue={queue} apps={apps} chats={chats.map((chat) => chat.title)} tables={tables.isSuccess ? tableItems.map((item) => readableName(item.name)) : null} go={go} actions={actions} />
+            {/* A chat with it starts here: this page is the new chat, so its
+                box sits where a chat keeps one -- at the foot, in reach while
+                everything above it scrolls. */}
+            <div className="ox-lsum__ask">
+                <StartWith pod={pod} go={go} onConnect={() => actions.connect(pod.id)} />
+                <AskBox pods={[pod]} podId={pod.id} onAsk={onAsk} autoFocus placeholder={`Ask ${pod.name} anything, or say what to do`} />
+            </div>
         </div>
+    );
+}
+
+interface MapRow {
+    key: string;
+    icon: IconName;
+    label: string;
+    /** How many, where that is known and worth saying. */
+    count: number | null;
+    /** The first few by name, or what is there in a few words. */
+    said: string;
+    /** Something here waits on the reader. */
+    you?: boolean;
+    open: { kind: "view"; view: View } | { kind: "act"; run: () => void };
+}
+
+/** What it is made of, a row per kind -- how many, and the first few by
+ *  name -- each opening where they all are: the answer to "what is in
+ *  here?" read as a list, the way the Lemma would say it, not a set of
+ *  panels each asking to be looked at. */
+function Inside({ pod, plan, queue, apps, chats, tables, go, actions }: {
+    pod: Pod;
+    plan: Plan | null | undefined;
+    queue: readonly QueueItem[];
+    /** Its apps, drawn as cards above; the map names them only when there
+     *  are none, to say so. */
+    apps: readonly PodApp[];
+    /** Its chats lately, by name. */
+    chats: readonly string[];
+    /** Its tables by name; null until they are read. */
+    tables: readonly string[] | null;
+    go: Go;
+    actions: FrameActions;
+}) {
+    const sections = useLemmaSections(pod.id);
+    const workflows = useWorkflowList(pod.id);
+    const schedules = useQuery({ queryKey: ["outcome-schedules", pod.id], queryFn: () => source.listSchedules(pod.id), staleTime: 5 * 60_000 });
+    const files = useQuery({ queryKey: ["outcome-files", pod.id], queryFn: () => source.listLibrary(pod.id, "files", "/"), staleTime: 5 * 60_000, retry: false });
+    const surfaces = useQuery({ queryKey: ["outcome-surfaces", pod.id], queryFn: () => source.listSurfaces(pod.id), staleTime: 5 * 60_000, retry: false });
+    /* Under the keys its Connections page reads them by. */
+    const connectors = useQuery({ queryKey: ["pod-connectors", pod.id], queryFn: () => source.listPodConnectors(pod.id), staleTime: 30_000, retry: false });
+    const catalog = useQuery({ queryKey: ["connectors"], queryFn: () => source.listConnectors(), staleTime: 10 * 60_000 });
+
+    const automations = [
+        ...(workflows.data ?? []).map((flow) => readableName(flow.name)),
+        ...(schedules.data ?? []).filter((job) => !job.internal).map((job) => job.title),
+    ];
+    const automationsKnown = workflows.isSuccess && schedules.isSuccess;
+    /* Its folders first, the way it would name where things live, and none
+       of the dot-named ones the system keeps for itself. */
+    const top = (files.data?.items ?? [])
+        .filter((item) => !item.name.startsWith("."))
+        .sort((a, b) => Number(b.kind === "folder") - Number(a.kind === "folder"))
+        .map((item) => (item.kind === "folder" ? "/" + item.name : item.name));
+    const lines = plan ? PLAN_SECTIONS.reduce((sum, one) => sum + plan.sections[one].length, 0) : 0;
+    const waiting = queue.filter((item) => item.contactId).length;
+    const on = (surfaces.data ?? []).filter((surface) => surface.active);
+    const places = [...on.reduce((all, surface) => all.set(platformName(surface.platform), (all.get(platformName(surface.platform)) ?? 0) + 1), new Map<string, number>())]
+        .map(([name, n]) => (n > 1 ? `${name} ×${n}` : name));
+    const contacts = sections.some((one) => one.tab === "contacts");
+    const titles = new Map((catalog.data ?? []).map((one) => [one.id, one.title]));
+    const through = (connectors.data ?? []).map((one) => titles.get(one.connectorId) ?? one.installationName ?? one.slug);
+
+    const rows: MapRow[] = [
+        ...(apps.length === 0 ? [{ key: "apps", icon: "app", label: "Apps", count: null, said: "None yet", open: { kind: "view", view: outcomeView(pod.id, "apps") } } satisfies MapRow] : []),
+        { key: "automations", icon: "flow", label: "Automations", count: automations.length || null, said: automations.length ? names(automations) : automationsKnown ? "None yet" : "", open: { kind: "view", view: outcomeView(pod.id, "automations") } },
+        { key: "tables", icon: "table", label: "Tables", count: tables?.length || null, said: tables === null ? "" : tables.length ? names(tables) : "None yet", open: { kind: "view", view: outcomeView(pod.id, "made") } },
+        { key: "files", icon: "file", label: "Files", count: null, said: top.length ? names(top) : files.isSuccess ? "None yet" : "", open: { kind: "view", view: outcomeView(pod.id, "made") } },
+        { key: "chats", icon: "chat", label: "Chats", count: null, said: chats.length ? names(chats) : "None yet", open: { kind: "view", view: outcomeView(pod.id, "chats") } },
+        ...(contacts ? [{ key: "contacts", icon: "people", label: "Contacts", count: waiting || null, said: waiting ? `${waiting} waiting on a person` : "People outside who wrote in", you: waiting > 0, open: { kind: "view", view: outcomeView(pod.id, "contacts") } } satisfies MapRow] : []),
+        { key: "plan", icon: "skill", label: "Plan", count: lines || null, said: plan === undefined ? "" : lines ? `${counted(lines, "line")} in plan.md` : "Not written yet", open: { kind: "view", view: outcomeView(pod.id, "plan") } },
+        { key: "people", icon: "agent", label: "People", count: pod.members.length || null, said: names(pod.members.map((member) => member.name)), open: { kind: "act", run: () => actions.addPeople(pod.id) } },
+        { key: "connections", icon: "plug", label: "Connections", count: through.length || null, said: connectors.isSuccess ? (through.length ? names(through) : "None yet") : "", open: { kind: "view", view: outcomeView(pod.id, "settings", "connections") } },
+        { key: "reach", icon: "link", label: "Where it answers", count: on.length || null, said: surfaces.isSuccess ? (places.length ? names(places) : "Only here, so far") : "", open: { kind: "act", run: () => actions.connect(pod.id) } },
+        { key: "settings", icon: "gear", label: "Settings", count: null, said: "", open: { kind: "view", view: outcomeView(pod.id, "settings") } },
+    ];
+
+    return (
+        <section aria-label={`What ${pod.name} is made of`}>
+            <div className="ox-sec"><h2>Inside</h2></div>
+            <div className="ox-map">
+                {rows.map((row) => {
+                    const body = (
+                        <>
+                            <Icon name={row.icon} size={16} />
+                            <span className="ox-map__t">{row.label}</span>
+                            <span className="ox-map__n ox-num">{row.count ?? ""}</span>
+                            <span className={"ox-map__d" + (row.you ? " ox-map__d--you" : "")}>{row.said}</span>
+                        </>
+                    );
+                    return row.open.kind === "view"
+                        ? <a key={row.key} className="ox-map__row" {...to(row.open.view, go)}>{body}</a>
+                        : <button key={row.key} type="button" className="ox-map__row" onClick={row.open.run}>{body}</button>;
+                })}
+            </div>
+        </section>
     );
 }
 
@@ -224,14 +387,56 @@ function HomeTab({ pod, plan, activity, queue, go, onAsk }: {
 /** The plan: what it owns and how, line by line, with who wrote each. With
  *  none yet, a draft read off what it already runs -- to save as it is, or
  *  to have the Lemma write properly in a chat. */
-function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: (podId: string, text: string) => void }) {
+/** The Lemma's last weeks against what it owns, once there are two to
+ *  compare: a Lemma started today has one week, and one bar says nothing. */
+function Weeks({ podId, owned }: { podId: string; owned: Owned }) {
+    const weeks = useWeeks(podId, true);
+    const list = weeks.data ?? [];
+    const read = list.flatMap((week) => (typeof week.value === "number" ? [week.value] : []));
+    if (read.length < 2) return null;
+    const top = Math.max(owned.target ?? 0, ...read, 1);
+    const said = list.map((week) => (typeof week.value === "number" ? formatMeasure(week.value, owned.unit) : "not read")).join(", ");
+    return (
+        <span className="ox-weeks" role="img" aria-label={`The last ${list.length} weeks: ${said}`}>
+            {list.map((week, index) => {
+                const value = typeof week.value === "number" ? week.value : null;
+                const tone = value === null ? " ox-weeks__b--none" : index === list.length - 1 ? " ox-weeks__b--now" : "";
+                return <span key={week.starts_on} className={"ox-weeks__b" + tone} style={{ height: `${value === null ? 8 : Math.max(8, Math.round((value / top) * 100))}%` }} />;
+            })}
+        </span>
+    );
+}
+
+function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: Ask }) {
     const queryClient = useQueryClient();
+    const solo = useMemo(() => [pod], [pod]);
+    const owned = useOwned(solo).get(pod.id) ?? null;
     /* The frame's own read of the plan, shared by key, asked here for its
        failure: a plan that could not be read is not a pod with no plan. */
     const read = useQuery({ queryKey: ["outcome-plan", pod.id], queryFn: () => readPlan(pod.id), staleTime: 5 * 60_000 });
     const plan = read.data;
     const [busy, setBusy] = useState(false);
     const [note, setNote] = useState<string | null>(null);
+
+    /* What it owns is the Lemma's, kept on the server, so a change to it goes
+       there and the number is read again; the plan's lines stay in the file.
+       The sample source has no server to keep it, so its plan file does. */
+    const own = source.label === "live"
+        ? async (next: Owned) => {
+            setBusy(true);
+            setNote(null);
+            try {
+                await saveOwned(pod.id, next);
+                await queryClient.invalidateQueries({ queryKey: standingKey(pod.id) });
+                setNote("Saved");
+            } catch (error) {
+                setNote(error instanceof Error ? `Couldn’t save: ${error.message}` : "Couldn’t save what it owns");
+                throw error;
+            } finally {
+                setBusy(false);
+            }
+        }
+        : null;
 
     const save = async (next: Plan, exists: boolean) => {
         setBusy(true);
@@ -259,7 +464,7 @@ function PlanTab({ pod, me, go, onAsk }: { pod: Pod; me: string; go: Go; onAsk: 
                     ? <p className="ox-loading">Reading the plan…</p>
                     : plan === null
                         ? <PlanDraft key={pod.id} pod={pod} busy={busy} onSave={(draft) => save(draft, false)} onAsk={() => onAsk(pod.id, planRequest(pod.description ?? ""))} me={me} />
-                        : <PlanEditor key={pod.id} plan={plan} busy={busy} me={me} onChange={(next) => save(next, true)} file={to({ name: "file", podId: pod.id, path: PLAN_PATH }, go)} />}
+                        : <PlanEditor key={pod.id} plan={plan} owned={owned} busy={busy} me={me} onChange={(next) => save(next, true)} onOwn={own} file={to({ name: "file", podId: pod.id, path: PLAN_PATH }, go)} />}
             {note && <p className="ox-note" role="status">{note}</p>}
         </div>
     );
@@ -315,16 +520,29 @@ function DraftSection({ title, lines }: { title: string; lines: readonly PlanLin
     );
 }
 
-function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: boolean; me: string; onChange: (plan: Plan) => void; file: ReturnType<typeof to> }) {
+function PlanEditor({ plan: lines, owned, busy, me, onChange, onOwn, file }: {
+    plan: Plan;
+    owned: Owned | null;
+    busy: boolean;
+    me: string;
+    onChange: (plan: Plan) => void;
+    /** Where what it owns is saved, when the Lemma keeps it rather than its file. */
+    onOwn: ((next: Owned) => Promise<void>) | null;
+    file: ReturnType<typeof to>;
+}) {
+    const plan = lines;
+    const shown = withOwned(lines, owned) ?? lines;
     const [editing, setEditing] = useState<{ section: PlanSection; index: number; text: string } | null>(null);
     const [adding, setAdding] = useState<Record<PlanSection, string>>({ must: "", how: "", who: "", never: "" });
     const [measureOpen, setMeasureOpen] = useState(false);
     const metaOf = (from: Plan) => ({ outcome: from.outcome, kind: from.kind ?? "week", target: from.target ?? "", unit: from.unit ?? "", due: from.due ?? "", measure: from.measure ?? "" });
-    const [meta, setMeta] = useState<{ outcome: string; kind: string; target: string; unit: string; due: string; measure: string }>(() => metaOf(plan));
+    const [meta, setMeta] = useState<{ outcome: string; kind: string; target: string; unit: string; due: string; measure: string }>(() => metaOf(shown));
     /* Filled from the plan as it is now each time the form opens, so a save
        never writes back values a later read replaced. */
+    const [metaProblem, setMetaProblem] = useState<string | null>(null);
     const toggleMeasure = () => {
-        if (!measureOpen) setMeta(metaOf(plan));
+        if (!measureOpen) setMeta(metaOf(shown));
+        setMetaProblem(null);
         setMeasureOpen(!measureOpen);
     };
 
@@ -355,6 +573,34 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
         onChange(withSection(section, lines));
     };
     const saveMeta = () => {
+        if (onOwn) {
+            const said = meta.target.trim();
+            const target = said ? Number.parseFloat(said) : null;
+            const unit = meta.unit.trim() || null;
+            /* Said back rather than dropped: a target the server would keep as
+               nothing, or a % against a unit picked as a count, is a mistake
+               the person can fix here, not one to save over the last target. */
+            if (target !== null && !Number.isFinite(target)) {
+                setMetaProblem("The target needs a number, like 90 or 90%.");
+                return;
+            }
+            if (/%\s*$/.test(said) && unit !== "%") {
+                setMetaProblem("The target says % but the unit is a count. Pick “A share (%)”, or drop the %.");
+                return;
+            }
+            setMetaProblem(null);
+            void onOwn({
+                sentence: meta.outcome.trim(),
+                kind: meta.kind === "date" ? "date" : "week",
+                target,
+                unit,
+                due: meta.kind === "date" ? meta.due.trim() || null : null,
+                measure: meta.measure.trim() || null,
+                value: null,
+                problem: null,
+            }).then(() => setMeasureOpen(false), () => undefined);
+            return;
+        }
         onChange({
             ...plan,
             outcome: meta.outcome.trim(),
@@ -403,7 +649,7 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
             ))}
             <div className="ox-measure">
                 <button type="button" className="ox-link" onClick={toggleMeasure} aria-expanded={measureOpen}>
-                    {plan.measure ? "The measure and target" : "Add a measure, so what it owns gets a number"}
+                    {shown.measure ? "The measure and target" : "Add a measure, so what it owns gets a number"}
                 </button>
                 <a className="ox-link" {...file}>Open plan.md</a>
             </div>
@@ -417,6 +663,7 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
                         {meta.kind === "date" && <label>Due<input type="date" value={meta.due} onChange={(event) => setMeta({ ...meta, due: event.target.value })} /></label>}
                     </div>
                     <label>Measure, one read-only SQL query that answers a single number<textarea rows={4} value={meta.measure} onChange={(event) => setMeta({ ...meta, measure: event.target.value })} placeholder="SELECT round(100.0 * avg(CASE WHEN replied_within_hours <= 24 THEN 1 ELSE 0 END)) FROM conversations WHERE created_at > now() - interval '7 days'" /></label>
+                    {metaProblem && <p className="ox-note" role="alert">{metaProblem}</p>}
                     <div className="ox-plan__acts"><button type="button" className="ox-btn ox-btn--primary" onClick={saveMeta} disabled={busy}>Save</button><button type="button" className="ox-btn" onClick={() => setMeasureOpen(false)}>Cancel</button></div>
                 </div>
             )}
@@ -426,7 +673,7 @@ function PlanEditor({ plan, busy, me, onChange, file }: { plan: Plan; busy: bool
 
 /* ── apps ─────────────────────────────────────────────────────────────── */
 
-function AppsTab({ pod, go }: { pod: Pod; go: Go }) {
+function AppsTab({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
     const tabs = useQuery({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 });
     const apps = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" ? [tab] : []));
     const [copied, setCopied] = useState<string | null>(null);
@@ -447,7 +694,7 @@ function AppsTab({ pod, go }: { pod: Pod; go: Go }) {
             ) : apps.length === 0 ? (
                 <Empty title="No apps yet.">
                     <p>Apps are how people work with {pod.name}, and how people outside it use what it makes.</p>
-                    <a className="ox-btn ox-btn--lemma" {...to(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }), go)}>Ask {pod.name} to build one</a>
+                    <button type="button" className="ox-btn ox-btn--lemma" onClick={() => actions.prompt(pod.id, "Build an app that ")}>Ask {pod.name} to build one</button>
                 </Empty>
             ) : (
                 <div className="ox-apps">
@@ -473,100 +720,3 @@ function AppsTab({ pod, go }: { pod: Pod; go: Go }) {
         </div>
     );
 }
-
-/* ── x-ray ────────────────────────────────────────────────────────────── */
-
-function lastRan(at: string): string {
-    const ms = at ? Date.parse(at) : Number.NaN;
-    return Number.isNaN(ms) ? "" : ` · last ran ${ageOf(ms, Date.now())} ago`;
-}
-
-/** One thing a Lemma runs on. Opens in the frame when the frame shows that
- *  kind of thing, in the workspace when it does not. */
-function Piece({ icon, name, line, link, tone }: { icon: IconName; name: string; line?: string; link: { href: string; onClick?: ReturnType<typeof to>["onClick"] }; tone?: "lemma" | "off" }) {
-    return (
-        <a className={"ox-piece" + (tone === "off" ? " ox-piece--off" : "")} {...link}>
-            <span className={"ox-piece__i" + (tone === "lemma" ? " ox-piece__i--lemma" : "")}><Icon name={icon} /></span>
-            <span className="ox-piece__t">{name}</span>
-            {line && <span className="ox-piece__d">{line}</span>}
-        </a>
-    );
-}
-
-function XrayTab({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
-    const agents = useQuery({ queryKey: ["outcome-agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
-    const schedules = useQuery({ queryKey: ["outcome-schedules", pod.id], queryFn: () => source.listSchedules(pod.id), staleTime: 5 * 60_000 });
-    const tables = useQuery({ queryKey: ["outcome-tables", pod.id], queryFn: () => source.listLibrary(pod.id, "tables", "/"), staleTime: 5 * 60_000 });
-    const tabs = useQuery({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 });
-    const skills = useQuery({ queryKey: ["outcome-skills", pod.id], queryFn: () => source.listLibrary(pod.id, "files", "/skills"), staleTime: 5 * 60_000, retry: false });
-    const surfaces = useQuery({ queryKey: ["outcome-surfaces", pod.id], queryFn: () => source.listSurfaces(pod.id), staleTime: 5 * 60_000, retry: false });
-    const workflows = useWorkflowList(pod.id);
-
-    const apps = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" ? [tab] : []));
-    const jobs = (schedules.data ?? []).filter((job) => !job.internal);
-    const groups: { title: string; pending: boolean; failed: boolean; empty: string; pieces: ReactNode[] }[] = [
-        {
-            title: "Runs on its own",
-            pending: schedules.isPending,
-            failed: schedules.isError,
-            empty: "Nothing scheduled.",
-            pieces: jobs.map((job) => <Piece key={job.id} icon="clock" name={job.title} line={`${job.trigger}${job.active ? "" : " · paused"}${lastRan(job.lastFiredAt)}`} link={to(outcomeView(pod.id, "settings", "schedules"), go)} tone={job.active ? "lemma" : "off"} />),
-        },
-        {
-            title: "Workflows",
-            pending: workflows.isPending,
-            failed: workflows.isError,
-            empty: "No workflows yet.",
-            pieces: (workflows.data ?? []).map((flow) => <Piece key={flow.id} icon="flow" name={readableName(flow.name)} line={[flow.description, `${flow.steps} ${flow.steps === 1 ? "step" : "steps"}`, flow.active ? "" : "off"].filter(Boolean).join(" · ")} link={to({ name: "workflow", podId: pod.id, workflow: flow.name }, go)} tone={flow.active ? "lemma" : "off"} />),
-        },
-        {
-            title: "Agents",
-            pending: agents.isPending,
-            failed: agents.isError,
-            empty: "Only its own agent.",
-            pieces: (agents.data ?? []).map((agent) => <Piece key={agent.id} icon="agent" name={agent.front ? `${agent.label} (answers here)` : agent.label} line={agent.blurb} link={to({ name: "agent", podId: pod.id, agent: agent.name }, go)} tone="lemma" />),
-        },
-        {
-            title: "Tables",
-            pending: tables.isPending,
-            failed: tables.isError,
-            empty: "No tables yet.",
-            pieces: (tables.data?.items ?? []).map((table) => <Piece key={table.id} icon="table" name={table.name} line={table.detail} link={to({ name: "table", podId: pod.id, table: table.name }, go)} />),
-        },
-        {
-            title: "Apps",
-            pending: tabs.isPending,
-            failed: tabs.isError,
-            empty: "No apps yet.",
-            pieces: apps.map((app) => <Piece key={app.id} icon="app" name={app.label} line={app.visibility ? app.visibility.toLowerCase() : undefined} link={to({ name: "app", podId: pod.id, app: app.id.replace(/^app:/, "") }, go)} />),
-        },
-        {
-            title: "Skills it follows",
-            pending: skills.isPending,
-            failed: skills.isError,
-            empty: "No skills written here yet.",
-            pieces: (skills.data?.items ?? []).map((item) => <Piece key={item.id} icon="skill" name={item.name.replace(/\.md$/i, "")} line={item.description} link={to({ name: "file", podId: pod.id, path: item.kind === "file" ? item.path : item.path.replace(/\/+$/, "") + "/SKILL.md" }, go)} />),
-        },
-        {
-            title: "Where people reach it",
-            pending: surfaces.isPending,
-            failed: surfaces.isError,
-            empty: "Only here.",
-            pieces: (surfaces.data ?? []).map((surface) => <Piece key={surface.id} icon="plug" name={platformName(surface.platform)} line={[surface.handle, surface.active ? "" : "off"].filter(Boolean).join(" · ")} link={{ href: "#", onClick: (event) => { event.preventDefault(); actions.connect(pod.id); } }} tone={surface.active ? undefined : "off"} />),
-        },
-    ];
-    return (
-        <div>
-            <p className="ox-xray__lead">Everything {pod.name} runs on. Each piece opens here.</p>
-            <div className="ox-xray">
-                {groups.map((group) => (
-                    <section key={group.title} className="ox-xray__g">
-                        <h2>{group.title}{!group.pending && !group.failed && group.pieces.length > 0 && <span className="ox-vs"> · {group.pieces.length}</span>}</h2>
-                        {group.pending ? <p className="ox-loading">Loading…</p> : group.failed ? <p className="ox-vs">Couldn’t read this.</p> : group.pieces.length === 0 ? <p className="ox-vs">{group.empty}</p> : <div className="ox-pieces">{group.pieces}</div>}
-                    </section>
-                ))}
-            </div>
-        </div>
-    );
-}
-

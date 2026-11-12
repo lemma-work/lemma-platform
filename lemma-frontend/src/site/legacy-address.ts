@@ -28,7 +28,7 @@ export function legacyAddress(
     const [root, id, area, item] = path;
     const e = encodeURIComponent;
     const setting = (name: string, org?: string) =>
-        "/t?settings=" + name + (org ? "&org=" + e(org) : "");
+        "/home?settings=" + name + (org ? "&org=" + e(org) : "");
     if (root === "profile")
         return setting(
             id === "billing" ? "plan" : id === "usage" ? "usage" : "account",
@@ -53,10 +53,10 @@ export function legacyAddress(
        It is the teammate's Connections part, opened on that connector. */
     if (root === "pods" && id && area === "connections" && !item) {
         const slug = query.get("connector");
-        return "/t/" + e(id) + "/about/connections" + (slug ? "?connector=" + e(slug) : "");
+        return "/l/" + e(id) + "/settings/connections" + (slug ? "?connector=" + e(slug) : "");
     }
     if (root === "pod" && id) {
-        const base = "/t/" + e(id);
+        const base = "/l/" + e(id);
         switch (area) {
             case undefined:
                 return base;

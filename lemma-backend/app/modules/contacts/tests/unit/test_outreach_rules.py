@@ -39,15 +39,14 @@ pytestmark = pytest.mark.unit
 NOW = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
 
 
-def _handle(kind: IdentityKind, value: str, *, wrote=None) -> ContactHandle:
+def _handle(kind: IdentityKind, value: str, *, vouched=NOW) -> ContactHandle:
     return ContactHandle(
         id=uuid4(),
         contact_id=uuid4(),
         kind=kind,
         value=value,
         strength=IdentityStrength.CHANNEL,
-        verified_at=NOW,
-        last_inbound_at=wrote,
+        verified_at=vouched,
     )
 
 
@@ -98,8 +97,8 @@ def test_a_contact_with_no_handle_there_is_refused():
 
 
 def test_one_opted_out_address_silences_only_that_address():
-    work = _handle(IdentityKind.EMAIL, "dana@old.example", wrote=NOW)
-    personal = _handle(IdentityKind.EMAIL, "dana@home.example", wrote=NOW)
+    work = _handle(IdentityKind.EMAIL, "dana@old.example", vouched=NOW)
+    personal = _handle(IdentityKind.EMAIL, "dana@home.example", vouched=NOW)
 
     def to(value):
         return decide(
@@ -128,7 +127,7 @@ def test_every_handle_of_the_kind_opted_out_is_suppressed_not_missing():
 
 
 def test_a_shut_window_refuses_with_the_platforms_words():
-    handle = _handle(IdentityKind.PHONE, "+447700900001", wrote=NOW)
+    handle = _handle(IdentityKind.PHONE, "+447700900001", vouched=NOW)
 
     def at(window):
         return decide(
@@ -147,9 +146,11 @@ def test_a_shut_window_refuses_with_the_platforms_words():
     assert at(None).allowed
 
 
-def test_the_latest_heard_from_handle_decides_when_the_place_names_none():
-    stale = _handle(IdentityKind.PHONE, "+447700900001", wrote=NOW - timedelta(days=3))
-    fresh = _handle(IdentityKind.PHONE, "+447700900002", wrote=NOW)
+def test_the_latest_vouched_for_handle_decides_when_the_place_names_none():
+    stale = _handle(
+        IdentityKind.PHONE, "+447700900001", vouched=NOW - timedelta(days=3)
+    )
+    fresh = _handle(IdentityKind.PHONE, "+447700900002", vouched=NOW)
 
     verdict = decide(
         to=Address(kind=IdentityKind.PHONE),
@@ -163,8 +164,8 @@ def test_the_latest_heard_from_handle_decides_when_the_place_names_none():
 
 
 def test_a_place_names_its_number_however_it_is_spelled():
-    old = _handle(IdentityKind.PHONE, "+447700900001", wrote=NOW - timedelta(days=1))
-    new = _handle(IdentityKind.PHONE, "+447700900002", wrote=NOW)
+    old = _handle(IdentityKind.PHONE, "+447700900001", vouched=NOW - timedelta(days=1))
+    new = _handle(IdentityKind.PHONE, "+447700900002", vouched=NOW)
 
     verdict = decide(
         to=Address(kind=IdentityKind.PHONE, value="+44 7700 900001"),

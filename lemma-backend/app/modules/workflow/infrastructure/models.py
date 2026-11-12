@@ -28,6 +28,9 @@ class WorkflowModel(UUIDAuditBase):
     """Workflow definitions table."""
 
     __tablename__ = "workflow_flows"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "pod_id"
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_workflow_flow_pod_name"),
         Index("ix_workflow_flow_pod_name", "pod_id", "name"),
@@ -123,6 +126,10 @@ class WorkflowRunModel(UUIDAuditBase):
             "schedule_event_id",
             name="uq_workflow_run_flow_user_schedule_event",
         ),
+        # A pod's runs inside a window, for how much each workflow ran lately
+        # (``contracts.run_activity``). Without it the read walks every run the
+        # pod ever had through ``pod_id`` alone, and nothing prunes old runs.
+        Index("ix_workflow_flow_runs_pod_created", "pod_id", "created_at"),
     )
 
     # Base provides id, created_at, updated_at

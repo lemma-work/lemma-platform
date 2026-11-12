@@ -49,6 +49,10 @@ from app.modules.identity.infrastructure.organization_cap import (
 )
 
 
+#: Memberships read per statement by ``list_user_memberships``.
+_MEMBERSHIP_PAGE = 100
+
+
 class OrganizationRepository(OrganizationRepositoryPort):
     """Organization repository implementation local to identity module."""
 
@@ -314,6 +318,29 @@ class OrganizationRepository(OrganizationRepositoryPort):
         )
         return int(result.scalar_one())
 
+    async def list_user_memberships(
+        self, user_id: UUID
+    ) -> list[OrganizationMemberEntity]:
+        # Every page, not the first: a deletion that stopped at a page would
+        # leave the person in the organizations past it.
+        memberships: list[OrganizationMemberEntity] = []
+        after: UUID | None = None
+        while True:
+            statement = (
+                select(OrganizationMember)
+                .options(joinedload(OrganizationMember.user))
+                .where(OrganizationMember.user_id == user_id)
+                .order_by(OrganizationMember.organization_id)
+                .limit(_MEMBERSHIP_PAGE)
+            )
+            if after is not None:
+                statement = statement.where(OrganizationMember.organization_id > after)
+            page = list((await self.session.execute(statement)).scalars().all())
+            memberships.extend(member.to_entity() for member in page)
+            if len(page) < _MEMBERSHIP_PAGE:
+                return memberships
+            after = page[-1].organization_id
+
     async def count_members_with_role_for_update(
         self, organization_id: UUID, role: OrganizationRole
     ) -> int:
@@ -403,7 +430,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
         await refuse_if_organization_full(self.uow, entity.organization_id)
         invitation = OrganizationInvitation(
             **entity.model_dump(
-                exclude={"organization_name", "pod_name", "pod_description"}
+                exclude={"organization_name", "pod_name", "pod_description", "note"}
             )
         )
         self.session.add(invitation)

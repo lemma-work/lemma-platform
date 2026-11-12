@@ -23,6 +23,7 @@ EXPECTED_SKILLS = {
     "lemma-evals",
     "lemma-form",
     "lemma-research",
+    "lemma-setup",
     "lemma-skill-creator",
     "lemma-user",
     "lemma-widget",

@@ -7,6 +7,7 @@ from app.core.api.schemas import BaseSchema
 from app.modules.identity.domain.email import normalize_identity_email
 
 from app.modules.identity.domain.organization_entities import (
+    INVITATION_NOTE_CHARS,
     OrganizationInvitationStatus,
     OrganizationJoinPolicy,
     OrganizationRole,
@@ -72,11 +73,25 @@ class OrganizationInvitationRequest(BaseSchema):
     pod_id: UUID | None = None
     pod_role: str | None = None
     redirect_uri: str | None = None
+    note: str | None = Field(
+        default=None,
+        max_length=INVITATION_NOTE_CHARS,
+        description=(
+            "A few words from the inviter, quoted in the invitation email: why "
+            "they are being asked in. The invitation record does not keep it; "
+            "it travels with the email until the email is sent."
+        ),
+    )
 
     @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, value: object) -> str:
         return normalize_identity_email(str(value))
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def blank_note_is_none(cls, value: object) -> object:
+        return value.strip() or None if isinstance(value, str) else value
 
 
 class OrganizationInvitationResponse(BaseSchema):

@@ -435,8 +435,9 @@ async def test_an_emailed_approve_resolves_the_approval_despite_the_quoted_threa
     decision = (
         await db_session.execute(
             text(
-                "SELECT decision FROM agent_approval_decisions "
-                "WHERE conversation_id = :cid ORDER BY created_at DESC LIMIT 1"
+                "SELECT resolution->>'decision' FROM agent_pauses "
+                "WHERE conversation_id = :cid AND resolution ? 'decision' "
+                "ORDER BY resolved_at DESC LIMIT 1"
             ),
             {"cid": conversation_id},
         )

@@ -96,6 +96,7 @@ async def test_a_failed_run_still_ends_the_stream_with_done(monkeypatch):
     from contextlib import asynccontextmanager
 
     from app.modules.agent.contracts import visitor_stream
+    from app.modules.agent.infrastructure.live import ConversationLiveEvents
 
     published = [json.dumps({"type": "error", "agent_run_id": RUN, "data": "x"})]
 
@@ -108,13 +109,12 @@ async def test_a_failed_run_still_ends_the_stream_with_done(monkeypatch):
 
             yield frames()
 
-    async def service():
-        return _Service()
-
     async def not_private(run_id: str) -> bool:
         return False
 
-    monkeypatch.setattr(visitor_stream, "get_channel_service", service)
+    monkeypatch.setattr(
+        visitor_stream, "live_events", lambda: ConversationLiveEvents(_Service())
+    )
     monkeypatch.setattr(
         visitor_stream, "_private_run_lookup", lambda _factory: not_private
     )
@@ -140,22 +140,22 @@ async def test_every_frame_of_a_private_run_is_dropped():
     async def private(run_id: str) -> bool:
         return run_id == RUN
 
-    assert await _translate(json.dumps(_token("secret")), private) is None
-    assert (
-        await _translate(json.dumps({"type": "status", "agent_run_id": RUN}), private)
-        is None
-    )
+    assert await _translate(_token("secret"), private) is None
+    assert await _translate({"type": "status", "agent_run_id": RUN}, private) is None
 
 
 async def test_a_public_run_and_a_garbled_frame():
     async def public(run_id: str) -> bool:
         return False
 
-    assert await _translate(json.dumps(_token("ok")), public) == {
+    assert await _translate(_token("ok"), public) == {
         "type": "delta",
         "text": "ok",
     }
-    assert await _translate("not json", public) is None
+    # A garbled frame never reaches a transport: the one subscription drops it.
+    from app.modules.agent.infrastructure.live import _decoded
+
+    assert _decoded("not json") is None
 
 
 def _fill_return(result: object) -> dict:

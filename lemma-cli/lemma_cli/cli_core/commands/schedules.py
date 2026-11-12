@@ -11,6 +11,7 @@ from lemma_sdk.openapi_client.models.schedule_run_status import ScheduleRunStatu
 from lemma_sdk.openapi_client.models.update_schedule_request import (
     UpdateScheduleRequest,
 )
+from rich.markup import escape
 
 from ...cli_app.enums import DATASTORE_OPERATIONS as _DATASTORE_OPERATIONS
 from ..confirm import confirm_destructive
@@ -489,6 +490,30 @@ def resume_schedule(
     )
     if result is not None:
         emit(state, _shown(result))
+
+
+@app.command("run")
+def run_schedule(
+    ctx: typer.Context,
+    schedule: str = typer.Argument(..., help="Schedule name or id."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Run a time schedule once now, outside its timing."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).schedules.run_now(schedule),
+    )
+    if result is None:
+        return
+    emit(state, result)
+    if state.output != "json":
+        pod_flag = f" --pod {pod}" if pod else ""
+        # Escaped: a `[...]` in a name must print, not style the line.
+        err_console.print(
+            "[dim]started; see how it went with[/dim] "
+            + escape(f"lemma schedules runs list {schedule}{pod_flag}")
+        )
 
 
 @app.command("delete")

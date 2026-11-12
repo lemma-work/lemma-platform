@@ -25,8 +25,8 @@ import pytest
 from fastapi import status
 
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
     ListProcessesRequest,
@@ -34,7 +34,7 @@ from app.modules.agent.tools.workspace_cli.models import (
     TerminateProcessRequest,
     WriteStdinRequest,
 )
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     exec_command_internal,
     execute_python_internal,
     list_processes_internal,
@@ -72,7 +72,7 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     pod = response.json()
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),

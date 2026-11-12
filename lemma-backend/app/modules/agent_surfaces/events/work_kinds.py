@@ -16,7 +16,7 @@ from uuid import UUID
 SURFACE_INGEST: Final = "surface.ingest"
 #: Sends one ``surface_deliveries`` row to its platform.
 SURFACE_REPLY: Final = "surface.reply"
-#: Posts a finished run's answer as a line with a delivery (an ``AgentRunFinished`` subscriber).
+#: Drains run answers queued before ``agent.channel_reply`` said every run's; subscribed by nothing.
 SURFACE_REPLY_FOR_RUN: Final = "surface.reply_for_run"
 #: Sends one channel delivery: a line to a place, or a push to a member.
 SURFACE_CHANNEL_DELIVERY: Final = "surface.channel_delivery"
@@ -26,6 +26,8 @@ SURFACE_RECEIVER: Final = "surface.receiver"
 SURFACE_PLATFORM_UPDATE: Final = "surface.platform_update"
 #: Clears identities bound to a phone number a user no longer has.
 SURFACE_MOBILE_CHANGED: Final = "surfaces.mobile_changed"
+#: Revokes every identity a person proved, once their account is deleted.
+SURFACE_ACCOUNT_DELETED: Final = "surfaces.account_deleted"
 #: One thing Lemma's own Slack app (a workspace's manager) was told, off the request.
 SURFACE_SLACK_MANAGER: Final = "surface.slack_manager"
 #: A Slack grant a manager flow started, finished (a ``ConnectorAccountConnected``
@@ -46,10 +48,6 @@ ONBOARDING_CLEANUP_PERIODIC: Final = "surfaces.onboarding_cleanup"
 
 def ingest_key(inbound_message_id: UUID) -> str:
     return f"ingest:{inbound_message_id}"
-
-
-def run_reply_key(run_id: UUID) -> str:
-    return f"run-reply:{run_id}"
 
 
 def channel_delivery_key(delivery_id: UUID) -> str:
@@ -98,7 +96,6 @@ __all__ = [
     "channel_delivery_key",
     "channel_delivery_target_key",
     "receiver_key",
-    "run_reply_key",
     "slack_manager_key",
     "slack_manager_message_key",
     "slack_teammate_hello_key",

@@ -6,8 +6,8 @@ loop is cut, so this is an ordinary contract
 and can say what it takes and returns. Every signature on the shim was `object`
 or `list[object]` -- not because the types were unknown, but because naming them
 in the composition root would have put a third module's paths into `agent`'s
-build. `agent/contracts` publishes `Conversation` and `DisplayResourceRequest`,
-so they are named here.
+build. `agent/contracts` publishes `DisplayResourceRequest`, so it is named
+here.
 
 The direction is one-way: `agent` decides what to send and this delivers it.
 What a platform *is* -- the capability lookups and the prompt text derived from
@@ -26,17 +26,71 @@ if TYPE_CHECKING:
         SurfaceAgentRunProgressObserver,
     )
 from uuid import UUID
-from pydantic_ai.toolsets import AbstractToolset
-from app.modules.agent.contracts import ConversationContext
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import Conversation, DisplayResourceRequest
+from app.modules.agent.contracts.tools import DisplayResourceRequest
+from app.modules.agent.contracts.tools import ToolSpec
+from app.modules.agent.contracts.channel_replies import RunReplyMaterial
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,
 )
+from app.modules.channels.contracts import ChannelMessage
+from app.modules.channels.contracts.places import ReplyAddress
 
 logger = get_logger(__name__)
+
+
+async def post_answer_at_place(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    address: ReplyAddress,
+    material: RunReplyMaterial,
+    answering: ChannelMessage | None = None,
+) -> ChannelMessage | None:
+    """A finished run's answer as the agent's line at a platform place, with
+    its delivery there: the agent module decides the place and the line it
+    answers (``services/run_answers``), channels where in the place it goes
+    (``channels.contracts.placement``), and this says it the way the place
+    reads it -- a failure as the platform's notice, a web chat's as shown at
+    once. No network: the delivery is sent by ``channel_deliveries``."""
+    from app.modules.agent_surfaces.services.run_reply_lines import post_run_reply
+
+    return await post_run_reply(
+        uow,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        address=address,
+        material=material,
+        answering=answering,
+    )
+
+
+async def post_unplaced_answer(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation_id: UUID,
+    material: RunReplyMaterial,
+    gone_source_id: UUID | None,
+) -> ChannelMessage | None:
+    """A finished run's answer whose place went while it worked: the agent's
+    line on its conversation's channel, sent to no place -- never to another
+    place the person wrote from, and never nowhere. Logged as degraded."""
+    from app.modules.agent_surfaces.services.run_reply_lines import (
+        post_unplaced_reply,
+    )
+
+    return await post_unplaced_reply(
+        uow,
+        run_id=run_id,
+        conversation_id=conversation_id,
+        material=material,
+        gone_source_id=gone_source_id,
+    )
 
 
 async def hold_display_for_one_reply(
@@ -65,17 +119,20 @@ def parse_surface_event_metadata(
     return TypeAdapter(SurfaceEventMetadata).validate_python(payload)
 
 
-async def build_surface_toolsets(
+async def build_surface_tools(
     uow_factory: UnitOfWorkFactory,
-    conversation: Conversation,
-) -> list[AbstractToolset[ConversationContext]]:
-    """The tools this conversation's platform adds to the run."""
+    *,
+    platform: str,
+    surface_id: UUID | None,
+    conversation_kind: str | None,
+) -> list[ToolSpec]:
+    """The tools the platform a run talks over adds to it, as specs."""
     from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
         SurfacePlatformToolFactory,
     )
 
-    return await SurfacePlatformToolFactory(uow_factory).build_toolsets(
-        conversation=conversation
+    return await SurfacePlatformToolFactory(uow_factory).build_tools(
+        platform=platform, surface_id=surface_id, conversation_kind=conversation_kind
     )
 
 
@@ -245,12 +302,14 @@ def space_url(*, pod_id: UUID) -> str:
 __all__ = [
     "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
-    "build_surface_toolsets",
+    "build_surface_tools",
     "conversation_url",
     "deliver_display_resource",
     "deliver_voice_note",
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
+    "post_answer_at_place",
+    "post_unplaced_answer",
     "report_approved_action_failed",
     "retire_cards_answered_in_lemma",
     "space_url",

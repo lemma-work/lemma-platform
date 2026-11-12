@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     channel_context_block,
 )
 

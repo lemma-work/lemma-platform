@@ -1,6 +1,7 @@
 import type {
     ConnectorChoice,
     ConnectorPlan,
+    ImportPlanOutcome,
     ImportStatus,
     PlanStep,
     StepAction,
@@ -21,7 +22,7 @@ const KINDS: Record<string, { one: string; many: string; order: number }> = {
     TABLE: { one: "Table", many: "Tables", order: 4 },
     TABLE_DATA: { one: "Sample rows", many: "Sample rows", order: 5 },
     FUNCTION: { one: "Function", many: "Functions", order: 6 },
-    SURFACE: { one: "Channel", many: "Channels", order: 7 },
+    SURFACE: { one: "Messaging app", many: "Messaging apps", order: 7 },
     FILE: { one: "File", many: "Files", order: 8 },
     CONNECTOR: { one: "Connection", many: "Connections", order: 9 },
 };
@@ -127,9 +128,9 @@ export function installedApp(steps: PlanStep[]): string | null {
  *  the teammate instead puts the thing that was just installed behind a second
  *  click, which reads as an install that produced nothing. */
 export function landingPath(podId: string, steps: PlanStep[]): string {
-    const base = "/t/" + encodeURIComponent(podId);
+    const base = "/l/" + encodeURIComponent(podId);
     const app = installedApp(steps);
-    return app ? base + "/app/" + encodeURIComponent(app) : base;
+    return app ? base + "/apps/" + encodeURIComponent(app) : base;
 }
 
 /** A repository slug as a teammate's name: `smart-inbox` → "Smart Inbox". */
@@ -177,6 +178,25 @@ export function contentsLine(groups: StepGroup[]): string {
     );
     if (parts.length < 2) return parts.join("");
     return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+}
+
+/** One line on what the install does with what the bundle's Lemma owned, or
+ *  null when there is nothing to say: it owned nothing, or this Lemma already
+ *  owns the same thing. */
+export function ownsLine(outcome: ImportPlanOutcome | null | undefined): string | null {
+    if (!outcome) return null;
+    switch (outcome.action) {
+        case "SET":
+            return "It will own: “" + outcome.sentence + "”";
+        case "KEEP":
+            return (
+                "Keeps what this Lemma already owns; the bundle's “" +
+                outcome.sentence +
+                "” is not set"
+            );
+        default:
+            return null;
+    }
 }
 
 /** What the installer has picked for one bundled connector.

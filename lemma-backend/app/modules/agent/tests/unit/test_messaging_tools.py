@@ -18,26 +18,25 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic_ai.tools import RunContext
-from pydantic_ai.usage import RunUsage
 
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.messaging.models import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.messaging.models import (
     ChannelListRequest,
     ChannelPostRequest,
     ChannelReadRequest,
-    ChannelSearchRequest,
     ListPodMembersRequest,
 )
-from app.modules.agent.tools.messaging.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.messaging.tools import (
+    SPECS,
+    asked_question,
     channel_list,
     channel_post,
     channel_read,
-    channel_search,
     line_sender_name,
     list_pod_members,
 )
 from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.services.tool_runtime import WITHHELD_MESSAGE, ToolRuntime
 from app.modules.channels.contracts import ChannelMessage, Sender, SenderKind
 from app.modules.pod.contracts.directory import PodDirectoryMember, PodDirectoryPage
 
@@ -54,39 +53,24 @@ BOB_USER = uuid4()
 NOW = datetime(2026, 10, 18, tzinfo=timezone.utc)
 
 
-def _ctx(
-    pod_id=None, user_id=None, *, run_id=None, tool_call_id=None
-) -> RunContext[BaseAgentContext]:
-    return RunContext(
-        deps=BaseAgentContext(
-            user_id=user_id or ME,
-            pod_id=pod_id or uuid4(),
-            conversation_id=uuid4(),
-            agent_run_id=run_id,
-        ),
-        model=None,  # type: ignore[arg-type]
-        usage=RunUsage(),
-        prompt=None,
+def _ctx(pod_id=None, user_id=None, *, run_id=None, tool_call_id=None) -> ToolContext:
+    return ToolContext(
+        user_id=user_id or ME,
+        pod_id=pod_id or uuid4(),
+        conversation_id=uuid4(),
+        agent_run_id=run_id,
         tool_call_id=tool_call_id,
     )
 
 
-def _podless_ctx() -> RunContext[BaseAgentContext]:
+def _podless_ctx() -> ToolContext:
     """``pod_id`` is a required UUID, so this state cannot be built normally.
 
     ``model_construct`` skips validation to reach the defensive branch anyway --
     the same guard every tool here carries, kept for consistency rather than
     because the model can get here.
     """
-    deps = BaseAgentContext.model_construct(
-        user_id=ME, pod_id=None, conversation_id=uuid4()
-    )
-    return RunContext(
-        deps=deps,
-        model=None,  # type: ignore[arg-type]
-        usage=RunUsage(),
-        prompt=None,
-    )
+    return ToolContext.model_construct(user_id=ME, pod_id=None, conversation_id=uuid4())
 
 
 # ------------------------------------------------------------ list_pod_members
@@ -270,7 +254,9 @@ def _no_database(monkeypatch):
     def _uow():  # pragma: no cover - must not be reached
         raise AssertionError("the tool reached the database")
 
-    monkeypatch.setattr("app.modules.agent.tools.messaging.pydantic_adapter._uow", _uow)
+    monkeypatch.setattr(
+        "app.modules.agent.infrastructure.tools.messaging.tools._uow", _uow
+    )
 
 
 async def test_a_name_that_resolves_to_nobody_points_at_the_lookup(monkeypatch):
@@ -317,6 +303,56 @@ async def test_a_question_in_a_channel_is_refused_not_dropped(monkeypatch):
     assert "`to`" in (result.error or "")
 
 
+async def test_choices_without_a_question_are_refused(monkeypatch):
+    """Choices are answers: offered on a line nobody waits on, they would be
+    buttons that wake nobody."""
+    _no_database(monkeypatch)
+
+    result = await channel_post(
+        _ctx(),
+        ChannelPostRequest(text="Ship it?", to=str(PRIYA), choices=["Yes", "No"]),
+    )
+
+    assert result.success is False
+    assert "`wants_answer`" in (result.error or "")
+
+
+def test_a_question_keeps_its_choices_as_ask_user_does():
+    """The chat and the overview read offered answers from one shape, the one
+    ``ask_user`` keeps, so a line's question draws as buttons in both."""
+    assert asked_question("Ship it?", None) == {"tool": "message", "prompt": "Ship it?"}
+    assert asked_question("Ship it?", ["Yes", " ", "Not yet"]) == {
+        "tool": "message",
+        "prompt": "Ship it?",
+        "questions": [
+            {
+                "question": "Ship it?",
+                "options": [{"label": "Yes"}, {"label": "Not yet"}],
+            }
+        ],
+    }
+
+
+def test_a_question_offers_two_to_four_choices():
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Only one"])
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=list("abcde"))
+
+
+def test_choices_are_counted_after_blanks_and_repeats_are_dropped():
+    """A blank would be an empty button and a repeat the same button twice, so
+    neither counts toward the two the question must offer."""
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Yes", " "])
+    with pytest.raises(ValueError):
+        ChannelPostRequest(text="?", to="x", wants_answer=True, choices=["Yes", "Yes"])
+    asked = ChannelPostRequest(
+        text="?", to="x", wants_answer=True, choices=[" Send it", "Not mine", "Send it"]
+    )
+    assert asked.choices == ["Send it", "Not mine"]
+
+
 async def test_outside_a_pod_nothing_is_posted(monkeypatch):
     _no_database(monkeypatch)
 
@@ -328,24 +364,26 @@ async def test_outside_a_pod_nothing_is_posted(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("tool", "request_"),
+    ("tool", "arguments"),
     [
-        (channel_post, ChannelPostRequest(text="hi", to=str(PRIYA))),
-        (channel_read, ChannelReadRequest(asked_by_me=True)),
-        (channel_search, ChannelSearchRequest(query="invoice")),
-        (channel_list, ChannelListRequest()),
+        ("channel_post", {"text": "hi", "to": str(PRIYA)}),
+        ("channel_read", {"asked_by_me": True}),
+        ("channel_search", {"query": "invoice"}),
+        ("channel_list", {}),
+        ("list_pod_members", {}),
     ],
-    ids=["post", "read", "search", "list"],
+    ids=["post", "read", "search", "list", "members"],
 )
-async def test_a_strangers_run_touches_no_channel(monkeypatch, tool, request_):
+async def test_a_strangers_run_touches_no_channel(monkeypatch, tool, arguments):
+    """Not in a stranger's toolset, so held at the runtime however it is
+    asked for -- before any lookup."""
     _no_database(monkeypatch)
     ctx = _ctx()
-    ctx.deps.audience = Audience.contact(uuid4())
+    ctx.audience = Audience.contact(uuid4())
 
-    result = await tool(ctx, request_)
+    result = await ToolRuntime(SPECS).call(tool, arguments, ctx)
 
-    assert result.success is False
-    assert "ask_a_person" in (result.error or "")
+    assert result == {"success": False, "error": WITHHELD_MESSAGE}
 
 
 async def test_a_read_names_a_channel_or_asks_for_the_questions(monkeypatch):

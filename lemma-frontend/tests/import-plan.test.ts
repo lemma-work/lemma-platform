@@ -14,6 +14,7 @@ import {
     installedApp,
     landingPath,
     needsAnswer,
+    ownsLine,
     suggestedValue,
     teammateName,
 } from "../src/site/import/plan.ts";
@@ -82,18 +83,18 @@ test("the installer is never asked about a variable that fills itself in", () =>
 
 test("an install lands on the app it brought, not behind it", () => {
     // The teammate's own page is where a teammate without an app belongs.
-    assert.equal(landingPath("p-1", [step("AGENT", "triager"), step("TABLE", "t")]), "/t/p-1");
+    assert.equal(landingPath("p-1", [step("AGENT", "triager"), step("TABLE", "t")]), "/l/p-1");
     assert.equal(installedApp([step("AGENT", "triager")]), null);
 
     // An APP step is named by the app's own directory, which is the segment a
     // workspace URL names it by.
     const steps = [step("AGENT", "triager"), step("APP", "queue"), step("APP", "board")];
     assert.equal(installedApp(steps), "queue");
-    assert.equal(landingPath("p-1", steps), "/t/p-1/app/queue");
+    assert.equal(landingPath("p-1", steps), "/l/p-1/apps/queue");
 });
 
 test("an id or an app name that needs escaping is escaped", () => {
-    assert.equal(landingPath("p 1", [step("APP", "my app")]), "/t/p%201/app/my%20app");
+    assert.equal(landingPath("p 1", [step("APP", "my app")]), "/l/p%201/apps/my%20app");
 });
 
 test("names read as words", () => {
@@ -234,4 +235,23 @@ test("a connector the pod already has is kept; a clashing slug blocks", () => {
     assert.equal(blockedBy(kept, defaultPick(kept)), null);
     assert.equal(blockedBy(clash, defaultPick(clash)), "taken");
     assert.deepEqual(connectorChoices([kept], {}), {});
+});
+
+test("the review says what the install will own, and stays quiet when nothing changes", () => {
+    const outcome = {
+        sentence: "Every lead hears back within two days.",
+        kind: "week" as const,
+        has_measure: true,
+    };
+    assert.equal(
+        ownsLine({ ...outcome, action: "SET" }),
+        "It will own: “Every lead hears back within two days.”",
+    );
+    assert.equal(
+        ownsLine({ ...outcome, action: "KEEP" }),
+        "Keeps what this Lemma already owns; the bundle's “Every lead hears back within two days.” is not set",
+    );
+    assert.equal(ownsLine({ ...outcome, action: "SAME" }), null);
+    assert.equal(ownsLine(null), null);
+    assert.equal(ownsLine(undefined), null);
 });

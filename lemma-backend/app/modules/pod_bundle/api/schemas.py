@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.pod_bundle.domain.connector_plan import (
     ConnectorChoice,
     ConnectorPlan,
 )
 from app.modules.pod_bundle.domain.state import (
+    TEMPLATE_NAME_PATTERN,
     BundleSourceKind,
     ExportState,
     ExportStatus,
     ImportPlan,
     ImportState,
     ImportStatus,
+    OutcomePlanAction,
+    PlannedOutcome,
     Progress,
     PublishState,
     PublishMode,
@@ -141,6 +145,42 @@ class VariableSpecResponse(BaseModel):
     default: str | None = None
 
 
+class ImportPlanOutcome(BaseModel):
+    """What the bundle's pod owned, and what the import does with it."""
+
+    sentence: str = Field(description="What it owns, as one sentence.")
+    kind: Literal["week", "date"] = Field(
+        description="week: a bar held every week. date: a finish line by `due`."
+    )
+    target: float | None = Field(
+        default=None, description="The number its measure is held to, if set."
+    )
+    unit: str | None = Field(
+        default=None, description="'%' for a share; otherwise what it counts."
+    )
+    due: date | None = Field(default=None, description="The finish line's date.")
+    has_measure: bool = Field(
+        default=False,
+        description=(
+            "Whether the bundle carries a measure. It is read as the person "
+            "importing when the import applies; one they cannot read is left "
+            "off, with a warning, and the rest is still set."
+        ),
+    )
+    action: OutcomePlanAction = Field(
+        description=(
+            "SET: the pod owns nothing yet, and the import sets this. KEEP: the "
+            "pod already owns something else and keeps it; this is not set. "
+            "SAME: the pod already owns this (same sentence, kind, target, unit "
+            "and due)."
+        )
+    )
+
+    @classmethod
+    def from_domain(cls, outcome: PlannedOutcome) -> "ImportPlanOutcome":
+        return cls.model_validate(outcome.model_dump())
+
+
 class ImportPlanResponse(BaseModel):
     format_version: int
     bundle_name: str | None = None
@@ -156,6 +196,16 @@ class ImportPlanResponse(BaseModel):
             "created, and (SHARED) your own accounts you could share. "
             "NEEDS_INSTALLATION and CONFLICT block the apply until resolved; "
             "NEEDS_ACCOUNT imports, waiting for an account."
+        ),
+    )
+    outcome: ImportPlanOutcome | None = Field(
+        default=None,
+        description=(
+            "What the bundle's pod owned (`pod.json -> outcome`) and whether "
+            "the import sets it on this pod, which it does only when the pod "
+            "owns nothing yet. Null when the bundle's pod owned nothing, when "
+            "its block is invalid (said in `warnings`), or for a template "
+            "import, whose start sets it."
         ),
     )
 
@@ -190,11 +240,16 @@ class ImportPlanResponse(BaseModel):
             warnings=plan.warnings,
             has_destructive_steps=plan.has_destructive_steps,
             connectors=plan.connectors,
+            outcome=(
+                ImportPlanOutcome.from_domain(plan.outcome)
+                if plan.outcome is not None
+                else None
+            ),
         )
 
 
 class ImportStartRequest(BaseModel):
-    """Body for starting a URL-based import."""
+    """Body for starting an import."""
 
     # Unknown fields are refused; the deprecated `account_id` is accepted, and
     # its response says it was ignored, so a stale client is told rather than
@@ -202,7 +257,11 @@ class ImportStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: BundleSourceKind = Field(
-        ..., description="URL (a lemma signed download URL) or GITHUB (a public repo)."
+        ...,
+        description=(
+            "URL (a lemma signed download URL), GITHUB (a public repo), or "
+            "TEMPLATE (a template that ships with Lemma, by name)."
+        ),
     )
     url: str | None = Field(
         default=None,
@@ -224,6 +283,34 @@ class ImportStartRequest(BaseModel):
             "pod's `github` connector, as you."
         ),
     )
+    template: str | None = Field(
+        default=None,
+        pattern=TEMPLATE_NAME_PATTERN,
+        description=(
+            "For TEMPLATE: the template's name, e.g. 'support'. Required with "
+            "TEMPLATE and refused with any other kind."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _source_fields_match_kind(self) -> "ImportStartRequest":
+        """A template is named, never located, so the fields that locate a
+        bundle are refused beside it rather than ignored."""
+        if self.kind is not BundleSourceKind.TEMPLATE:
+            if self.template is not None:
+                raise ValueError("template is only accepted with kind=TEMPLATE.")
+            return self
+        if not self.template:
+            raise ValueError("template is required with kind=TEMPLATE.")
+        if any(
+            value is not None
+            for value in (self.url, self.owner, self.repo, self.ref, self.account_id)
+        ):
+            raise ValueError(
+                "kind=TEMPLATE takes only template; url, owner, repo, ref and "
+                "account_id locate other kinds of bundle."
+            )
+        return self
 
 
 class UploadResponse(BaseModel):

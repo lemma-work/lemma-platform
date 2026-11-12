@@ -26,6 +26,10 @@ def _register_work() -> None:
     # Every process: a pod deletion (API) writes this through `PodDeleted`.
     import app.modules.mcp_access.events.pod_lifecycle  # noqa: F401
 
+    # Every process: an account deletion (API) writes this through
+    # `AccountDeleted`.
+    import app.modules.mcp_access.events.account_lifecycle  # noqa: F401
+
     # Every process: subscribing (API) writes `changes.sync_subscribers`, and
     # the worker's change-log delivery finds this module's subscriber by prefix.
     import app.modules.mcp_access.events.event_deliveries  # noqa: F401

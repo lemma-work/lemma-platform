@@ -11,17 +11,17 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.tools.context import BaseAgentContext, ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
 
 
 def test_the_tool_context_has_no_field_for_provider_credentials() -> None:
-    assert "runtime_credentials" not in BaseAgentContext.model_fields
+    assert "runtime_credentials" not in ToolContext.model_fields
 
 
 def test_a_credential_handed_to_the_tool_context_is_not_kept() -> None:
-    ctx = ConversationContext.model_validate(
+    ctx = ToolContext.model_validate(
         {
             "user_id": uuid4(),
             "pod_id": uuid4(),

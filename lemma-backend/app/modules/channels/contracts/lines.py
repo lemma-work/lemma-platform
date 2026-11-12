@@ -7,34 +7,40 @@ agent working for a member sees exactly the channels that member could open.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.domain.access import Viewer, may_see
+from app.modules.channels.domain.projection import is_outside
 from app.modules.channels.domain.entities import (
     Channel,
     ChannelKind,
     ChannelMessage,
     Source,
 )
-from app.modules.channels.infrastructure.line_answers import LineAnswers
+from app.modules.channels.infrastructure.rows import message_entity
 from app.modules.channels.infrastructure.line_search import LineSearch, SearchFilter
-from app.modules.channels.infrastructure.lines import LineRepository
+from app.modules.channels.infrastructure.lines import (
+    LineRepository,
+    heard_rows,
+)
 from app.modules.channels.infrastructure.members import MemberRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.source_repository import SourceRepository
-from app.modules.pod.contracts.members import pod_member_holds
+from app.modules.pod.contracts.members import pod_member_holds, pod_members_among
 
 #: The most channels a member's agent is shown at once.
 MAX_CHANNELS = 100
 
 __all__ = [
     "channels_for",
-    "last_heard_line",
     "line_by_id",
+    "lines_heard_at",
     "member_background",
     "page_lines",
+    "said_outside",
     "search_lines",
     "thread_root_at",
     "viewer_of",
@@ -73,12 +79,16 @@ async def line_by_id(
     return await LineRepository(uow.session).get(message_id)
 
 
-async def last_heard_line(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
-) -> ChannelMessage | None:
-    """The latest line a person said in this conversation -- in Lemma or on a
-    platform -- which is where its answer belongs."""
-    return await LineAnswers(uow.session).last_heard(conversation_id)
+async def lines_heard_at(
+    uow: SqlAlchemyUnitOfWork, keys: Sequence[tuple[UUID, str]]
+) -> dict[tuple[UUID, str], ChannelMessage]:
+    """The lines platform messages are -- (place, platform message id) each,
+    at the place it was heard -- in one read however many. A message that is
+    no line here is left out."""
+    rows = await heard_rows(uow.session, keys)
+    return {
+        key: message_entity(row) for key in keys if (row := rows.get(key)) is not None
+    }
 
 
 async def thread_root_at(
@@ -147,6 +157,17 @@ async def page_lines(
     return await LineRepository(uow.session).page(
         channel_id, limit=limit, before_seq=before_seq, after_seq=after_seq
     )
+
+
+async def said_outside(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, lines: Sequence[ChannelMessage]
+) -> frozenset[UUID]:
+    """Which of these lines somebody outside the pod said (``is_outside``),
+    asking once who of their speakers the pod holds now -- the same answer
+    the background a run is given reads them by."""
+    speakers = {line.sender.user_id for line in lines if line.sender.user_id}
+    held = await pod_members_among(uow, pod_id, speakers)
+    return frozenset(line.id for line in lines if is_outside(line.sender, held=held))
 
 
 async def search_lines(

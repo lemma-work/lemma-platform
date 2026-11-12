@@ -22,27 +22,24 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     create_uow_from_session_maker,
 )
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostRunState,
 )
-from app.modules.agent.domain.queued_messages import (
-    STEER_DISPATCHED_AT,
-    STEER_UNDELIVERED,
-    STEERED_INTO_RUN,
-)
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     MessageDraft,
     MessageRole,
+    QueueState,
 )
-from app.modules.agent.infrastructure.agent_host import recovery
-from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
+from app.modules.agent.agent_host.control import recovery
+from app.modules.agent.agent_host.harness.steering import (
     forward_queued_messages,
     record_steer_result,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostRunLeaseModel,
@@ -85,22 +82,24 @@ async def _dispatched_run(
 
 async def _sent_while_working(conversation_id: UUID, run_id: UUID, text: str) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        message = await ConversationRepository(uow).append_message(
+        message = await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=run_id,
             draft=MessageDraft.of_text(
-                text, role=MessageRole.USER, metadata={"during_active_run": True}
+                text,
+                role=MessageRole.USER,
+                state=MessageState(queue_state=QueueState.QUEUED),
             ),
         )
         await uow.commit()
     return message.id
 
 
-async def _metadata(message_id: UUID) -> dict[str, object]:
+async def _state(message_id: UUID) -> MessageState:
     async with async_session_maker() as session:
         message = await session.get(MessageModel, message_id)
         assert message is not None
-        return dict(message.message_metadata or {})
+        return message.state()
 
 
 async def _commands(
@@ -140,7 +139,7 @@ async def test_a_message_sent_mid_turn_is_handed_to_the_host_once(
     assert (sent, again) == (1, 0), "a message already on its way was sent twice"
     (steer,) = await _commands(run_id, AgentHostCommandKind.STEER_RUN)
     assert steer.payload["message_id"] == str(message_id)
-    assert STEER_DISPATCHED_AT in await _metadata(message_id)
+    assert (await _state(message_id)).steer_dispatched_at is not None
 
 
 async def test_what_the_host_says_about_a_steer_decides_who_answers_it(
@@ -169,12 +168,13 @@ async def test_what_the_host_says_about_a_steer_decides_who_answers_it(
         payload={"delivered": False, "detail": "the turn had ended"},
     )
 
-    landed_metadata = await _metadata(landed)
-    missed_metadata = await _metadata(missed)
-    assert landed_metadata[STEERED_INTO_RUN] == str(run_id)
-    assert STEER_UNDELIVERED not in landed_metadata
-    assert STEERED_INTO_RUN not in missed_metadata
-    assert missed_metadata[STEER_UNDELIVERED] == "the turn had ended"
+    landed_state = await _state(landed)
+    missed_state = await _state(missed)
+    assert landed_state.queue_state is QueueState.STEERED
+    assert landed_state.steered_into_run_id == run_id
+    assert missed_state.queue_state is QueueState.STEER_UNDELIVERED
+    assert missed_state.steered_into_run_id is None
+    assert missed_state.is_withdrawable
 
 
 async def test_a_run_the_host_has_not_accepted_keeps_its_messages_queued(
@@ -193,7 +193,7 @@ async def test_a_run_the_host_has_not_accepted_keeps_its_messages_queued(
 
     assert sent == 0
     assert await _commands(run_id, AgentHostCommandKind.STEER_RUN) == []
-    assert STEER_DISPATCHED_AT not in await _metadata(message_id)
+    assert (await _state(message_id)).steer_dispatched_at is None
 
 
 # ------------------------------------------------------------------- sweeps

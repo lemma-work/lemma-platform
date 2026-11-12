@@ -1,7 +1,7 @@
 """E2E for a run's answer as a channel line with a delivery: one outbound path.
 
 A finished run's answer is posted as the agent's line at the place it was
-asked (``surface.reply_for_run``), with a ``channel_message_deliveries`` row
+asked (``agent.channel_reply``), with a ``channel_message_deliveries`` row
 for that place; ``surface.channel_delivery`` sends it and records the
 platform's id for the message on the row. Against a real database, the real
 surface service and the fake platform servers:
@@ -35,7 +35,6 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.domain.steered_answers import ANSWERED_BEFORE_STEER
 from app.modules.agent.events.channel_answer_work import register_channel_answer_work
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.config import surface_settings
@@ -43,9 +42,7 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.reply_for_run_work import (
-    register_reply_for_run_work,
-)
+from app.modules.agent.events.channel_answer_work import register_run_answer_work
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _seed_external_user,
@@ -95,19 +92,24 @@ ANSWER = "Three invoices are due."
 
 
 async def _finished(run_id: UUID, conversation_id: UUID, pod_id: UUID) -> None:
-    """The finalize's fact, as the agent module emits it."""
+    """The finalize's fact, as the agent module emits it: for a person's
+    conversation, which names whose it is."""
     async with async_session_maker() as session:
         uow = SqlAlchemyUnitOfWork(session)
+        user_id = await session.scalar(
+            text("SELECT user_id FROM agent_conversations WHERE id = :c"),
+            {"c": conversation_id},
+        )
         await facts.emit(
             uow,
             AgentRunFinished(
                 run_id=run_id,
                 conversation_id=conversation_id,
                 pod_id=pod_id,
+                user_id=user_id,
                 status="COMPLETED",
                 conversation_status="COMPLETED",
                 origin="surface",
-                has_reply_target=True,
             ),
         )
         await uow.commit()
@@ -173,20 +175,13 @@ async def _a_finished_run(
             await session.execute(
                 text(
                     "INSERT INTO agent_messages (id, conversation_id, agent_run_id, "
-                    "sequence, role, kind, text, message_metadata, created_at) "
+                    "sequence, role, kind, text, answer, created_at) "
                     "SELECT gen_random_uuid(), :c, :r, "
                     "coalesce(max(sequence), 0) + 1, 'assistant', 'TEXT', :t, "
-                    "CAST(:m AS jsonb), now() "
+                    "'BEFORE_STEER', now() "
                     "FROM agent_messages WHERE conversation_id = :c"
                 ),
-                {
-                    "c": conversation_id,
-                    "r": run_id,
-                    "t": earlier,
-                    "m": json.dumps(
-                        {"is_final_answer": False, ANSWERED_BEFORE_STEER: True}
-                    ),
-                },
+                {"c": conversation_id, "r": run_id, "t": earlier},
             )
         await session.commit()
     await _finished(run_id, conversation_id, UUID(test_pod["id"]))
@@ -217,7 +212,7 @@ def _telegram_answers(message_store) -> list[dict]:
 def _lines_only_registry() -> WorkRegistry:
     """The answer's line is written; nothing sends it."""
     registry = WorkRegistry()
-    register_reply_for_run_work(registry)
+    register_run_answer_work(registry)
     return registry
 
 

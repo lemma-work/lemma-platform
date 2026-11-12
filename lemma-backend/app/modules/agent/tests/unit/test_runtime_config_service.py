@@ -2,10 +2,12 @@ import pytest
 from uuid import UUID, uuid4
 from types import SimpleNamespace
 
+from app.modules.agent.application.agents.manage_runtime_profiles import (
+    RuntimeProfileCreation,
+)
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.config import agent_settings
-from app.modules.agent.defaults import default_agent_runtime_profile_id
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
@@ -27,23 +29,19 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     HarnessKind,
 )
-from app.modules.agent.agent_runtime_defaults import (
-    AgentRuntimeDefaultError,
-    AgentRuntimeDefaultService,
-)
 from app.modules.agent.services import runtime_system_profiles as system_profiles
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
 )
-from app.modules.agent.services.runtime_resolution import (
+from app.modules.agent.services.runtime_profile_service import (
     selected_model as _selected_model,
 )
-from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
-from app.modules.agent.services.runtime_profile_editor import (
+from app.modules.agent.infrastructure.providers.discovery import DiscoveredModel
+from app.modules.agent.application.agents.edit_runtime_profile import (
     AgentRuntimeProfileEditor,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
+from app.modules.agent.infrastructure.harness.lemma.harness import (
     _runtime_profile_model,
 )
 
@@ -694,7 +692,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     harness does not advertise — so an unpinned profile must dispatch with no
     model at all.
     """
-    from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+    from app.modules.agent.agent_host.harness.harness import (
         agent_host_run_config,
     )
 
@@ -766,7 +764,9 @@ async def test_create_agent_host_profile_binds_harness_and_advertises_its_models
     )
     service = AgentRuntimeProfileService(repo, host_repository=host_repo)
 
-    profile = await service.create_agent_host_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_agent_host_profile(
         organization_id=org_id,
         user_id=user_id,
         harness_id=harness_id,
@@ -811,7 +811,9 @@ async def test_an_unstated_harness_scope_never_shares_the_machine():
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    profile = await service.create_agent_host_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_agent_host_profile(
         organization_id=org_id,
         user_id=user_id,
         harness_id=harness_id,
@@ -819,7 +821,9 @@ async def test_an_unstated_harness_scope_never_shares_the_machine():
     )
     assert profile.scope is RuntimeProfileScope.PERSONAL
 
-    shared = await service.create_agent_host_profile(
+    shared = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_agent_host_profile(
         organization_id=org_id,
         user_id=user_id,
         harness_id=harness_id,
@@ -850,7 +854,9 @@ async def test_create_agent_host_profile_marks_models_vision_when_harness_report
         _ProfileRepository([]), host_repository=host_repo
     )
 
-    profile = await service.create_agent_host_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_agent_host_profile(
         organization_id=org_id,
         user_id=user_id,
         harness_id=harness_id,
@@ -871,7 +877,9 @@ async def test_create_agent_host_profile_rejects_unknown_harness():
     )
 
     with pytest.raises(RuntimeProfileValidationError, match="not available"):
-        await service.create_agent_host_profile(
+        await RuntimeProfileCreation(
+            service.repository, service.host_repository
+        ).create_agent_host_profile(
             organization_id=uuid4(),
             user_id=user_id,
             harness_id=uuid4(),
@@ -893,7 +901,9 @@ async def test_create_agent_host_profile_rejects_offline_host():
     )
 
     with pytest.raises(RuntimeProfileValidationError, match="offline"):
-        await service.create_agent_host_profile(
+        await RuntimeProfileCreation(
+            service.repository, service.host_repository
+        ).create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
             harness_id=harness_id,
@@ -912,7 +922,9 @@ async def test_create_agent_host_profile_rejects_unhealthy_harness():
     )
 
     with pytest.raises(RuntimeProfileValidationError, match="not ready"):
-        await service.create_agent_host_profile(
+        await RuntimeProfileCreation(
+            service.repository, service.host_repository
+        ).create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
             harness_id=harness_id,
@@ -943,7 +955,9 @@ async def test_create_agent_host_profile_rejects_model_the_harness_does_not_offe
     with pytest.raises(
         RuntimeProfileValidationError, match="not offered by this harness"
     ):
-        await service.create_agent_host_profile(
+        await RuntimeProfileCreation(
+            service.repository, service.host_repository
+        ).create_agent_host_profile(
             organization_id=org_id,
             user_id=user_id,
             harness_id=harness_id,
@@ -963,7 +977,9 @@ async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else
     with pytest.raises(
         RuntimeProfileValidationError, match="not owned by the current user"
     ):
-        await service.create_agent_host_profile(
+        await RuntimeProfileCreation(
+            service.repository, service.host_repository
+        ).create_agent_host_profile(
             organization_id=org_id,
             user_id=uuid4(),
             harness_id=harness_id,
@@ -984,14 +1000,16 @@ async def test_create_openai_compatible_profile_discovers_provider_models(monkey
         ]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
         fake_discover,
     )
     org_id = uuid4()
     repo = _ProfileRepository([])
     service = AgentRuntimeProfileService(repo)
 
-    profile = await service.create_openai_compatible_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_openai_compatible_profile(
         organization_id=org_id,
         name="OpenRouter",
         base_url="https://openrouter.ai/api/v1",
@@ -1045,12 +1063,14 @@ async def test_create_openai_compatible_profile_uses_supplied_models_when_discov
         return []
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
         fake_discover,
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
 
-    profile = await service.create_openai_compatible_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_openai_compatible_profile(
         organization_id=uuid4(),
         name="Custom provider",
         base_url="https://api.vendor.test/v1",
@@ -1070,13 +1090,15 @@ async def test_create_provider_profile_requires_discovery_or_model_names(monkeyp
         return []
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
         fake_discover,
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
 
     with pytest.raises(RuntimeProfileValidationError, match="type a model name below"):
-        await service.create_openai_compatible_profile(
+        await RuntimeProfileCreation(
+            service.repository, service.host_repository
+        ).create_openai_compatible_profile(
             organization_id=uuid4(),
             name="Unknown provider",
             base_url="https://provider.test/v1",
@@ -1097,7 +1119,9 @@ async def test_create_openai_compatible_profile_rejects_ssrf_base_url(base_url):
     address must be rejected before any server-side request is issued."""
     service = AgentRuntimeProfileService(_ProfileRepository([]))
     with pytest.raises(RuntimeProfileValidationError, match="public http"):
-        await service.create_openai_compatible_profile(
+        await RuntimeProfileCreation(
+            service.repository, service.host_repository
+        ).create_openai_compatible_profile(
             organization_id=uuid4(),
             name="evil",
             base_url=base_url,
@@ -1116,12 +1140,14 @@ async def test_create_anthropic_compatible_profile_discovers_provider_models(
         return [DiscoveredModel("claude-sonnet-4-5-20250929")]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._discover_anthropic_compatible_models",
+        "app.modules.agent.infrastructure.providers.discovery._discover_anthropic_compatible_models",
         fake_discover,
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
 
-    profile = await service.create_anthropic_compatible_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_anthropic_compatible_profile(
         organization_id=uuid4(),
         name="Anthropic",
         api_key="anthropic-secret",
@@ -1198,35 +1224,6 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
     assert isinstance(model.wrapped, AnthropicModel)
 
 
-def test_default_runtime_uses_system_profile(monkeypatch, tmp_path):
-    from app.core.config import settings
-    from app.modules.agent.config import agent_settings
-
-    monkeypatch.setattr(
-        agent_settings,
-        "local_agent_runtime_config_path",
-        str(tmp_path / "missing-runtime.json"),
-    )
-
-    monkeypatch.setattr(settings, "environment", "local")
-    assert default_agent_runtime_profile_id() == DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-
-    monkeypatch.setattr(settings, "environment", "development")
-    assert default_agent_runtime_profile_id() == DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-
-
-def test_local_default_runtime_can_be_file_backed(tmp_path):
-    service = AgentRuntimeDefaultService(
-        environment="local",
-        config_path=tmp_path / "agent-runtime.json",
-    )
-
-    updated = service.set_default(AgentRuntimeConfig(profile_id="user-profile"))
-
-    assert updated.profile_id == "user-profile"
-    assert service.get_default() == updated
-
-
 def test_agent_runtime_config_rejects_empty_profile_id():
     with pytest.raises(ValueError):
         AgentRuntimeConfig(profile_id=" ")
@@ -1235,16 +1232,6 @@ def test_agent_runtime_config_rejects_empty_profile_id():
 def test_agent_runtime_config_rejects_empty_model_name():
     with pytest.raises(ValueError):
         AgentRuntimeConfig(profile_id="system:lemma", model_name=" ")
-
-
-def test_default_runtime_cannot_be_changed_outside_local(tmp_path):
-    service = AgentRuntimeDefaultService(
-        environment="development",
-        config_path=tmp_path / "agent-runtime.json",
-    )
-
-    with pytest.raises(AgentRuntimeDefaultError):
-        service.set_default(AgentRuntimeConfig(profile_id="system:lemma"))
 
 
 def test_selected_model_returns_requested_when_in_catalog():
@@ -1305,7 +1292,7 @@ def _no_discovery(monkeypatch):
         "_discover_anthropic_compatible_models",
     ):
         monkeypatch.setattr(
-            f"app.modules.agent.services.runtime_provider_discovery.{target}",
+            f"app.modules.agent.infrastructure.providers.discovery.{target}",
             _explode,
         )
 
@@ -1347,7 +1334,7 @@ async def test_provider_api_key_absent_keeps_null_clears_and_a_string_rotates(
         return [DiscoveredModel(name="model-a"), DiscoveredModel(name="model-b")]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
         _discovered,
     )
 
@@ -1386,7 +1373,7 @@ async def test_changing_the_base_url_is_ssrf_checked_even_without_rediscovery(
         raise ValueError("blocked")
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._validate_public_base_url",
+        "app.modules.agent.infrastructure.providers.discovery._validate_public_base_url",
         _validate,
     )
 
@@ -1414,7 +1401,7 @@ async def test_a_provider_outage_does_not_blank_a_working_catalog(monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
         _nothing,
     )
 
@@ -1442,7 +1429,7 @@ async def test_a_pinned_model_the_provider_dropped_falls_back_instead_of_failing
         return [DiscoveredModel(name="model-c")]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
         _discovered,
     )
 
@@ -1470,7 +1457,9 @@ async def _harness_profile(
     service = AgentRuntimeProfileService(
         repository=repository, host_repository=host_repository
     )
-    profile = await service.create_agent_host_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_agent_host_profile(
         organization_id=organization_id,
         user_id=user_id,
         harness_id=harness_id,
@@ -1757,7 +1746,7 @@ async def test_a_model_provider_reports_no_availability():
 
 
 async def test_availability_degrades_where_the_service_has_no_host_repository():
-    """agent_runner_service and conversation_service both build this service
+    """agent_runner_service and the turn use cases both build this service
     without one. They never render availability, so it must not raise."""
     organization_id = uuid4()
     profile, _repository = _availability_case(organization_id=organization_id)

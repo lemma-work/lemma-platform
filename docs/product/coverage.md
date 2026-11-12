@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 24 |
+| `planned` | 36 |
 | `withdrawn` | 0 |
-| **total** | **228** |
+| **total** | **240** |
 
 Scenario tests declaring a promise: 454.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 259 | 373 |
+| OpenAPI operations | 259 | 384 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -124,11 +124,16 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions`, `test_an_organization_editor_cannot_make_themselves_a_pod_administrator`, `test_an_invitation_cannot_smuggle_a_pod_administrator` |
 | `PS-POD-030` A person sees exactly the pods they may open | `covered` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
+| `PS-POD-032` A person sees what waits on them, and what moved, across every pod at once | `planned` | — |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
 | `PS-POD-041` A pod always has at least one admin | `covered` | `test_the_last_pod_admin_cannot_step_down`, `test_the_last_pod_admin_cannot_remove_themselves`, `test_an_organization_owner_cannot_be_the_admin_who_steps_down` |
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_repeated_deletion_still_reports_success`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-POD-060` An empty place says what belongs there and offers a way to start | `manual` | — |
+| `PS-POD-070` A person starts a pod that owns something, in one step | `planned` | — |
+| `PS-POD-071` Everyone in a pod sees the same number, week by week | `planned` | — |
+| `PS-POD-072` Only someone who can read every row a measure counts may set it | `planned` | — |
+| `PS-POD-073` A pod's agent knows what the pod owns and can set its measure | `planned` | — |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
 
@@ -176,6 +181,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_an_editor_cannot_reach_over_an_owner`, `test_an_editor_removes_members_and_editors`, `test_a_member_manages_nobody`, `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
+| `PS-ONB-080` A person deletes their own account, from the app or the website | `planned` | — |
+| `PS-ONB-081` Deleting an account unlinks the person from work they shared | `planned` | — |
+| `PS-ONB-082` An account is not deleted out from under what depends on it | `planned` | — |
 | `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
 | `PS-ONB-070` A new person is shown what Lemma is and where everything is | `manual` | — |
 | `PS-ONB-071` A person can ask how the place they are in works | `manual` | — |
@@ -225,6 +233,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-001` A person schedules work for a time or a repeat | `covered` | `test_a_repeating_schedule_is_created`, `test_unusable_timing_is_refused`, `test_an_outsider_cannot_touch_schedules` |
 | `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_stopped_schedule_can_be_restarted`, `test_a_schedule_can_be_paused_and_resumed`, `test_a_paused_schedule_does_not_fire` |
 | `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire`, `test_the_schedule_outlives_its_deleted_target` |
+| `PS-SCHED-004` A person can run a timed schedule now, without waiting for it | `planned` | — |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
 | `PS-SCHED-013` Work starts on an event from a server a person connected | `planned` | — |
@@ -290,6 +299,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-015` Somebody outside the pod is answered in a group opened to them | `planned` | — |
 | `PS-SURF-016` The bot remembers what was said in a group | `planned` | — |
+| `PS-SURF-054` A member's run asks before acting on what somebody outside the pod wrote | `planned` | — |
 | `PS-SURF-017` A person can say something to the agent without the group reading it | `planned` | — |
 | `PS-SURF-018` An email thread with other people on it is answered like one | `planned` | — |
 | `PS-SURF-019` A member opens a WhatsApp group with the bot in it | `planned` | — |
@@ -297,6 +307,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
 | `PS-SURF-023` A person reachable from several pods is reached by the right one | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
+| `PS-SURF-024` A person writing from two places is answered in each | `planned` | — |
+| `PS-SURF-025` Which agent answers does not depend on where the line was typed | `planned` | — |
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_what_names_a_person_arrives_in_their_inbox`, `test_a_line_for_one_person_is_in_their_own_channel`, `test_an_outsider_sees_no_inbox`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_what_is_new`, `test_read_state_is_personal` |
 | `PS-SURF-032` A person can answer from their inbox | `covered` | `test_a_question_is_answered_from_the_inbox`, `test_an_answered_question_refuses_a_second_answer` |

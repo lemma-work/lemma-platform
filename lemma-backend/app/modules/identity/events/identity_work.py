@@ -32,10 +32,12 @@ from app.core.infrastructure.work import (
     org_namespace,
     registry as default_registry,
 )
+from app.modules.identity.contracts.account_facts import AccountDeleted
 from app.modules.identity.contracts.profile_facts import UserMobileChanged
 from app.modules.identity.domain.events import (
     OrganizationInvitationAcceptedEvent,
     OrganizationInvitationCreatedEvent,
+    UserDeletedEvent,
     UserMobileChangedEvent,
     UserPhoneReplacedEvent,
     UserSignedUpEvent,
@@ -45,6 +47,7 @@ from app.modules.identity.domain.ports import IdentityEmailPort
 
 IDENTITY_EMAIL = "identity.email"
 IDENTITY_WHATSAPP_VERIFICATION = "identity.whatsapp_verification"
+IDENTITY_ACCOUNT_DELETED = "identity.account_deleted"
 
 #: The events that owe somebody an email.
 _EMAIL_EVENTS: tuple[type[DomainEvent], ...] = (
@@ -103,6 +106,7 @@ async def send_identity_email(
             accept_url=invited.accept_url,
             pod_name=invited.pod_name,
             pod_description=invited.pod_description,
+            note=invited.note,
         )
         return
     if event_type == UserSignedUpEvent.get_event_type():
@@ -143,6 +147,17 @@ async def run_whatsapp_verification(
     )
 
 
+async def run_account_deleted(ctx: JobContext, payload: AccountDeleted) -> None:
+    from app.modules.identity.infrastructure.supertokens_auth.account_removal import (
+        end_deleted_account_sign_in,
+    )
+
+    del ctx
+    # The request only dropped the cached standing; this is where the
+    # sessions end and the address is freed, retried until it lands.
+    await end_deleted_account_sign_in(payload.user_id)
+
+
 def register_identity_work(registry: WorkRegistry) -> None:
     registry.handler(
         kind=IDENTITY_EMAIL,
@@ -156,9 +171,21 @@ def register_identity_work(registry: WorkRegistry) -> None:
         mode=WorkMode.JOB,
         payload=WhatsAppVerificationPayload,
     )(run_whatsapp_verification)
+    registry.handler(
+        kind=IDENTITY_ACCOUNT_DELETED,
+        cls=WorkClass.DELIVERY,
+        mode=WorkMode.JOB,
+        payload=AccountDeleted,
+    )(run_account_deleted)
 
 
 register_identity_work(default_registry)
+facts.subscribe(
+    AccountDeleted,
+    kind=IDENTITY_ACCOUNT_DELETED,
+    cls=WorkClass.DELIVERY,
+    dedup=lambda fact: f"identity-account-deleted:{fact.user_id}",
+)
 
 
 def _namespace(event: DomainEvent) -> str:
@@ -175,12 +202,18 @@ async def stage_identity_work(
 
     A changed mobile number is also announced as the ``UserMobileChanged``
     fact in the same transaction, so what was bound to the old number (a
-    surface identity) is unbound by work that commits with the change.
+    surface identity) is unbound by work that commits with the change. A
+    deleted account is announced as ``AccountDeleted``, whose subscribers --
+    this module's removal of the sign-in among them -- commit with it, so a
+    deletion cannot be left with a login that still works.
     """
     work = WorkWriter.of(uow)
     for event in events:
         if isinstance(event, UserMobileChangedEvent):
             await emit_mobile_changed(uow, event.user_id, writer=work)
+            continue
+        if isinstance(event, UserDeletedEvent):
+            await facts.emit(uow, AccountDeleted(user_id=event.user_id), writer=work)
             continue
         if not isinstance(event, _EMAIL_EVENTS):
             continue

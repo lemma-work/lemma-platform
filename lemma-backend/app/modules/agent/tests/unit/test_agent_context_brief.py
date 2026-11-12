@@ -8,21 +8,23 @@ opening any UoW.
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentToolset, ConversationOrigin
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
-from app.modules.agent.services import agent_context_brief as brief_mod
-from app.modules.agent.services import agent_memory_brief as memory_mod
+from app.modules.agent.services.context_brief import agent_brief as brief_mod
+from app.modules.agent.services.context_brief import memory as memory_mod
 from app.modules.agent.infrastructure.context_brief_repository import UserProfile
 from app.modules.pod.contracts.members import PodProfile
 from app.modules.schedule.contracts.pod_summaries import PodScheduleSummary
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
-from app.modules.agent.services.brief_lines import user_lines as _user_lines
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
+from app.modules.agent.services.context_brief.lines import user_lines as _user_lines
 
 
 class _FakeBriefCache:
@@ -153,7 +155,20 @@ class _FakeFileService:
 
 
 @pytest.fixture
-def stubbed(monkeypatch):
+def inventory_tokens(monkeypatch) -> dict[UUID, str]:
+    """Each pod's inventory token, as Redis holds it: a test writing to a pod
+    sets a new one, as a committed write would."""
+    tokens: dict[UUID, str] = {}
+
+    async def _token(pod_id: UUID) -> str:
+        return tokens.get(pod_id, "0")
+
+    monkeypatch.setattr(brief_mod, "pod_inventory_generation", _token)
+    return tokens
+
+
+@pytest.fixture
+def stubbed(monkeypatch, inventory_tokens):
     # The repository is a constructor argument, so tests build the subject with
     # a double rather than replacing a name inside it -- see `_builder` below.
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
@@ -250,6 +265,7 @@ def _conversation(is_pod_assistant: bool):
         user_id=None,
         type=None,
         metadata={},
+        origin=ConversationOrigin.CHAT,
     )
 
 
@@ -299,6 +315,32 @@ async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
 
     assert first == second
     assert factory.opened == opened_after_first  # cache hit: no new UoWs
+
+
+async def test_a_write_to_the_pod_reaches_the_next_brief(
+    stubbed, monkeypatch, inventory_tokens
+):
+    """A table created a moment ago is in the next run's brief, not the one a
+    minute later: the write replaced the pod's token, so the entry built
+    before it is never read."""
+    monkeypatch.setattr(
+        brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
+    )
+    factory = RecordingUoWFactory()
+    builder = _builder(factory)
+    agent = _named_agent()
+    uid, pid = uuid4(), uuid4()
+
+    await builder.build(
+        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+    )
+    opened_after_first = factory.opened
+    inventory_tokens[pid] = "after-the-write"
+    await builder.build(
+        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+    )
+
+    assert factory.opened > opened_after_first
 
 
 async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
@@ -484,12 +526,16 @@ class TestEveryCapSaysWhatItLeftOut:
     """
 
     def test_nothing_is_said_when_nothing_was_dropped(self) -> None:
-        from app.modules.agent.services.brief_lines import more_note as _more_note
+        from app.modules.agent.services.context_brief.lines import (
+            more_note as _more_note,
+        )
 
         assert _more_note(shown=3, total=3, noun="tables") == []
 
     def test_the_count_left_out_is_named(self) -> None:
-        from app.modules.agent.services.brief_lines import more_note as _more_note
+        from app.modules.agent.services.context_brief.lines import (
+            more_note as _more_note,
+        )
 
         (line,) = _more_note(shown=50, total=137, noun="tables")
 
@@ -498,7 +544,9 @@ class TestEveryCapSaysWhatItLeftOut:
     def test_an_unknown_total_is_not_treated_as_nothing_more(self) -> None:
         """A repository that does not count returns None. That is 'unknown',
         and it must not crash prompt assembly either."""
-        from app.modules.agent.services.brief_lines import more_note as _more_note
+        from app.modules.agent.services.context_brief.lines import (
+            more_note as _more_note,
+        )
 
         assert _more_note(shown=5, total=None, noun="agents") == []
 
@@ -507,7 +555,7 @@ class TestEveryCapSaysWhatItLeftOut:
         then told is required, or reports to the user as not existing."""
         from types import SimpleNamespace
 
-        from app.modules.agent.services.brief_lines import (
+        from app.modules.agent.services.context_brief.lines import (
             MAX_COLUMNS as _MAX_COLUMNS,
             table_line as _table_line,
         )
@@ -532,7 +580,9 @@ class TestEveryCapSaysWhatItLeftOut:
     def test_a_narrow_table_gets_no_note(self) -> None:
         from types import SimpleNamespace
 
-        from app.modules.agent.services.brief_lines import table_line as _table_line
+        from app.modules.agent.services.context_brief.lines import (
+            table_line as _table_line,
+        )
         from app.modules.datastore.domain.datastore_entities import (
             ColumnSchema,
             DatastoreDataType,
@@ -547,7 +597,7 @@ class TestEveryCapSaysWhatItLeftOut:
         assert "more columns" not in _table_line(table)
 
     def test_extra_top_level_files_are_declared(self) -> None:
-        from app.modules.agent.services.brief_lines import (
+        from app.modules.agent.services.context_brief.lines import (
             MAX_RESOURCES as _MAX_RESOURCES,
             top_level_file_entries as _top_level_file_entries,
         )
@@ -641,10 +691,10 @@ class TestTheAgentIsToldWhoItIs:
 
         assert "## You" in brief.stable
         assert "**Acme**" in brief.stable
-        assert "Lem" not in brief.stable
-        assert "default agent for this pod" in brief.stable
+        assert "**Lem**" not in brief.stable
+        assert "this Lemma's own agent" in brief.stable
         assert "Here since 2026-03-04" in brief.stable
-        assert "What this pod is for: Where support lives." in brief.stable
+        assert "What this Lemma is for: Where support lives." in brief.stable
 
     async def test_a_named_agent_is_named_as_one(self, stubbed):
         agent = _named_agent()
@@ -656,8 +706,8 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=uuid4(),
         )
 
-        assert "a named agent in this pod" in brief.stable
-        assert "default agent for this pod" not in brief.stable
+        assert "a named agent working for this Lemma" in brief.stable
+        assert "this Lemma's own agent" not in brief.stable
 
     async def test_schedules_separate_yours_from_everyone_elses(
         self, stubbed, monkeypatch

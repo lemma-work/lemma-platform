@@ -12,10 +12,15 @@ from uuid import UUID, uuid4
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
-from app.modules.agent.tools.workspace_cli import github_loan
-from app.modules.agent.tools.workspace_cli.github_loan import BorrowedLoan
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_credential,
+    github_credential_bridge as bridge,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli import github_loan
+from app.modules.agent.infrastructure.tools.workspace_cli.github_loan import (
+    BorrowedLoan,
+)
 from app.modules.connectors.contracts import sandbox_borrowers
 
 _SESSION = "session-1"
@@ -70,12 +75,12 @@ class _Session:
         return {"success": True}
 
 
-def _context() -> BaseAgentContext:
-    return BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+def _context() -> ToolContext:
+    return ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
 
 
 def _lent(pod_account_id: UUID, borrower: UUID | None = None):
-    async def _resolve(ctx: BaseAgentContext):
+    async def _resolve(ctx: ToolContext):
         return bridge._GithubCredential(
             access_token="gho_lent",
             login="alice",
@@ -194,7 +199,7 @@ async def test_a_marker_from_before_it_named_the_borrower_is_not_trusted():
     redis = _Redis()
     session = _Session()
     redis.values[_MARKER_KEY] = f"borrowed:{uuid4()}"
-    resolved: list[BaseAgentContext] = []
+    resolved: list[ToolContext] = []
 
     async def _nothing(ctx):
         resolved.append(ctx)
@@ -283,4 +288,4 @@ def test_the_bridge_and_the_loan_name_the_same_marker_files_and_connector():
         sandbox_borrowers.SANDBOX_STALE_SESSION_MINUTES
     )
     assert bridge._GH_HOSTS_NAME == github_loan.GH_HOSTS_NAME
-    assert bridge._POD_CONNECTOR_SLUG == github_loan.POD_CONNECTOR_SLUG
+    assert github_credential._POD_CONNECTOR_SLUG == github_loan.POD_CONNECTOR_SLUG

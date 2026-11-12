@@ -2345,10 +2345,10 @@ function sampleContacts(podId: string): Contact[] {
     if (!CONTACTS.has(podId)) {
         const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
         CONTACTS.set(podId, [
-            { id: podId + "-contact-dana", name: "Dana Ruiz", createdAt: day(1), anonymous: false, handles: [{ kind: "EMAIL", value: "dana@client.example", strength: "CHANNEL" }] },
-            { id: podId + "-contact-tiago", name: "Tiago", createdAt: day(3), anonymous: false, handles: [{ kind: "PHONE", value: "16505551234", strength: "CHANNEL" }] },
-            { id: podId + "-contact-ana", name: null, createdAt: day(6), anonymous: false, handles: [{ kind: "HOST", value: "w:cust-42", strength: "HOST" }, { kind: "EMAIL", value: "ana@shop.example", strength: "CODE" }] },
-            { id: podId + "-contact-visitor", name: null, createdAt: day(0), anonymous: true, handles: [{ kind: "WEB", value: podId + "-session", strength: "SESSION" }] },
+            { id: podId + "-contact-dana", name: "Dana Ruiz", createdAt: day(1), anonymous: false, channelId: "sample-contact", handles: [{ kind: "EMAIL", value: "dana@client.example", strength: "CHANNEL" }] },
+            { id: podId + "-contact-tiago", name: "Tiago", createdAt: day(3), anonymous: false, channelId: null, handles: [{ kind: "PHONE", value: "16505551234", strength: "CHANNEL" }] },
+            { id: podId + "-contact-ana", name: null, createdAt: day(6), anonymous: false, channelId: null, handles: [{ kind: "HOST", value: "w:cust-42", strength: "HOST" }, { kind: "EMAIL", value: "ana@shop.example", strength: "CODE" }] },
+            { id: podId + "-contact-visitor", name: null, createdAt: day(0), anonymous: true, channelId: "sample-visitor", handles: [{ kind: "WEB", value: podId + "-session", strength: "SESSION" }] },
         ]);
     }
     return CONTACTS.get(podId) ?? [];
@@ -2957,6 +2957,12 @@ export const fixtureSource: PodSource = {
         await wait(300);
         RUNTIMES = RUNTIMES.map((raw) =>
             (raw as { id?: string }).id === runtimeId ? { ...(raw as object), status: "ACTIVE" } : raw);
+    },
+    async listChatRepositories() {
+        /* The sample has no GitHub installation, and its chats are not
+           created with a repository, so it offers none. */
+        await wait(60);
+        return { items: [], complete: true };
     },
     async getConversationRuntime(podId: string, conversationId: string) {
         await wait(60);
@@ -3584,6 +3590,28 @@ export const fixtureSource: PodSource = {
         };
         runs.unshift(redrive);
         return readRun(redrive);
+    },
+    async runScheduleNow(_podId: string, scheduleId: string) {
+        await wait(420);
+        const runs = (SCHEDULE_RUNS[scheduleId] ??= []);
+        const started = {
+            id: "manual-" + Date.now(),
+            schedule_id: scheduleId,
+            status: "PROCESSING",
+            attempts: 0,
+            source_event_id: "manual:" + Date.now(),
+            created_at: new Date().toISOString(),
+            started_at: null,
+            completed_at: null,
+        };
+        runs.unshift(started);
+        /* The sample has no worker: the run finishes on its own a moment
+           later, so the history's next read shows it done, not running. */
+        setTimeout(() => {
+            const at = new Date().toISOString();
+            Object.assign(started, { status: "COMPLETED", attempts: 1, started_at: at, completed_at: at });
+        }, 1500);
+        return readRun(started);
     },
     async createSchedule(_podId: string, draft: ScheduleDraft) {
         await wait(520);

@@ -6,19 +6,22 @@
 
 import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
-import { listedAsChat } from "@/channels/chat-list";
-import { channelTitle, directPlaces, platformsOf, previewOf, type Channel } from "@/channels/model";
-import type { OriginKind } from "@/thread/conversation-origin";
+import type { ChatItem, ChatKind } from "@/channels/chat-list";
+import type { Channel } from "@/channels/model";
 import { readableName } from "@/library/reading";
 import type { AskedRow } from "@/thread/waiting-on-you";
 import type { WaitingRow } from "@/workflow/waiting-inbox";
 
 export * from "./address";
-import { chatView, outcomeView, writeView, type ChatOpen, type OpenChat, type View } from "./address";
+/* Which paths are the frame's own, rather than workspace addresses that
+   `readAddress` and `viewOfAddress` read, is in `./paths`. */
+export { isFramePath } from "./paths";
+import { chatView, outcomeView, writeView, type ChatOpen, type View } from "./address";
 
 /** Where something waiting on you opens, inside the frame: its conversation,
  *  or the workflow run whose form it is. */
-export function viewOfItem(item: Pick<QueueItem, "podId" | "conversationId" | "runId" | "contactId">): View {
+export function viewOfItem(item: Pick<QueueItem, "podId" | "conversationId" | "runId" | "contactId"> & { line?: QueueItem["line"] }): View {
+    if (item.line) return chatView({ kind: "shared", podId: item.podId, id: item.line.channelId });
     if (item.contactId) return chatView({ kind: "contact", podId: item.podId, id: item.contactId });
     if (item.conversationId) return chatView({ kind: "chat", podId: item.podId, id: item.conversationId });
     if (item.runId) return { name: "run", podId: item.podId, runId: item.runId };
@@ -30,18 +33,24 @@ export function viewOfItem(item: Pick<QueueItem, "podId" | "conversationId" | "r
  *  the rest, which the workspace opens. The thread and the shared-chat page
  *  write their links for the workspace, and this is how following one stays
  *  here. */
-export function viewOfAddress(address: { podId: string | null; tabId: string | null; conversationId: string | null; section?: string | null; agentName?: string | null }): View | null {
+export function viewOfAddress(address: { podId: string | null; tabId: string | null; conversationId: string | null; section?: string | null; agentName?: string | null; team?: boolean }): View | null {
     const { podId, tabId } = address;
+    /* The workspace's every-teammate page is the list of Lemmas here. */
+    if (address.team) return { name: "outcomes" };
     if (!podId) return null;
     switch (tabId) {
         case null:
         case "space:home":
-        case "space:chats":
-        case "space:channels":
-        case "history":
             return outcomeView(podId);
+        case "space:chats":
+        case "history":
+            return outcomeView(podId, "chats");
+        case "space:channels":
+            return outcomeView(podId, "chats", "channels");
         case "space:about":
-            return outcomeView(podId, "settings", address.section ?? null);
+            /* Schedules are a part of About in the workspace and a view of
+               Automations here. */
+            return address.section === "schedules" ? outcomeView(podId, "automations", "schedules") : outcomeView(podId, "settings", address.section ?? null);
         case "profile":
             return address.agentName ? { name: "agent", podId, agent: address.agentName } : outcomeView(podId, "settings");
         case "conversation":
@@ -51,13 +60,16 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "space:apps":
         case "apps":
             return outcomeView(podId, "apps");
+        case "space:all":
         case "space:files":
         case "space:pages":
         case "space:tables":
         case "library":
             return outcomeView(podId, "made");
         case "space:workflows":
-            return outcomeView(podId, "xray");
+            return outcomeView(podId, "automations");
+        case "computer":
+            return { name: "computer", podId, conversationId: null };
     }
     const colon = tabId.indexOf(":");
     const kind = colon < 0 ? tabId : tabId.slice(0, colon);
@@ -90,6 +102,12 @@ export interface Handoff {
     /** What the new conversation is made with: the agent it is with, when
      *  it is not the Lemma's own. */
     createWith?: Record<string, unknown>;
+    /** Files that go with the first message, as the box they were attached
+     *  in would have sent them. */
+    files?: File[];
+    /** A folder on this computer chosen in that box, by the id it was
+     *  parked under (desktop app only), for the new chat to work in. */
+    folder?: string;
 }
 
 /** Words put in a chat's box -- what an app or a widget asked for, or ⌘K
@@ -98,6 +116,8 @@ export interface Fill {
     text: string;
     id: number;
     podId: string;
+    /** Files attached with the words, held in the box with them. */
+    files?: File[];
 }
 
 export interface GoOptions {
@@ -109,6 +129,19 @@ export interface GoOptions {
 }
 
 export type Go = (view: View, options?: GoOptions) => void;
+
+/** What goes with words asked of a Lemma: files from the box they were
+ *  typed in, and what the new chat is made with -- the model picked there,
+ *  or the agent it is with. */
+export interface AskWith {
+    files?: File[];
+    createWith?: Record<string, unknown>;
+    /** The id a folder chosen in the box was parked under. */
+    folder?: string;
+}
+
+/** Start a chat with a Lemma with these words, sent, and open it. */
+export type Ask = (podId: string, text: string, extra?: AskWith) => void;
 
 /* ── activity ─────────────────────────────────────────────────────────── */
 
@@ -227,6 +260,53 @@ export interface Plan {
     /** The file's text as it was read, when it was: a save edits that text
      *  rather than replacing it, and refuses when the file has moved on. */
     file?: string;
+    /** What the Lemma itself keeps it owns, with the number its measure
+     *  answers now -- shown in place of the file's front matter, which only
+     *  Lemmas from before it was kept on the Lemma still carry. */
+    owned?: Owned;
+}
+
+/** What a Lemma owns as the server keeps it (`GET .../outcome/standing`),
+ *  and what its measure answers now: one number, the same for everyone. */
+export interface Owned {
+    sentence: string;
+    kind: "week" | "date";
+    target: number | null;
+    unit: string | null;
+    /** `YYYY-MM-DD`, for a finish line. */
+    due: string | null;
+    measure: string | null;
+    value: number | null;
+    /** Why the measure could not be read, when it could not. */
+    problem: string | null;
+}
+
+/** A target as a person reads it: "90%", "2 posts", "99.95%". Exactly the
+ *  number kept, never rounded: it is what readings are compared against, and
+ *  what the plan editor writes back. */
+export function targetText(target: number | null, unit: string | null): string | null {
+    if (target === null || !Number.isFinite(target)) return null;
+    const said = String(target);
+    if (unit === "%") return said + "%";
+    return unit ? `${said} ${unit}` : said;
+}
+
+/** The plan as the frame shows it: the file's lines, with what the Lemma
+ *  owns taken from the Lemma when it keeps one. The file itself is never
+ *  given these fields, so saving its lines does not write them back into it. */
+export function withOwned(plan: Plan | null | undefined, owned: Owned | null | undefined): Plan | null | undefined {
+    if (!owned) return plan;
+    const base = plan ?? emptyPlan();
+    return {
+        ...base,
+        outcome: owned.sentence,
+        kind: owned.kind,
+        target: targetText(owned.target, owned.unit),
+        due: owned.due,
+        unit: owned.unit,
+        measure: owned.measure,
+        owned,
+    };
 }
 
 export function emptyPlan(outcome = ""): Plan {
@@ -376,6 +456,8 @@ function mergedHead(plan: Plan, before: Plan, head: string, front: string | null
         if (meta[key]) kept[key] = meta[key];
         else delete kept[key];
     }
+    /* Nothing left once what it owns moved onto the Lemma: no empty block. */
+    if (!Object.keys(kept).length) return "";
     return "---\n" + dump(kept, { lineWidth: -1 }) + "---";
 }
 
@@ -435,7 +517,9 @@ function mergePlan(plan: Plan, onto: string): string {
         while (out.length && !out[out.length - 1].trim()) out.pop();
         out.push("", `## ${SECTION_TITLES[section]}`, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`), "");
     }
-    return mergedHead(plan, before, head, front) + out.join("\n");
+    const top = mergedHead(plan, before, head, front);
+    /* A block that was taken away leaves the blank line after it behind. */
+    return top || !head ? top + out.join("\n") : out.join("\n").replace(/^\n+/, "");
 }
 
 export interface DraftInput {
@@ -514,6 +598,34 @@ export interface QueueItem {
     runId: string | null;
     /** A contact's chat, waiting on a person. */
     contactId: string | null;
+    /** The workflow wait itself, when the row is one: it carries its form. */
+    wait: WaitingRow["wait"] | null;
+    /** A question a Lemma asked in your chat with it, answered by a choice
+     *  it offered or in words. */
+    /** `prompt` is the whole question when the title is only its first line. */
+    line: { channelId: string; messageId: string; choices: string[]; prompt: string | null } | null;
+}
+
+/** Where a row is answered: in place, from its own card ("ask") or its
+ *  form ("form"), or only where it came from (null). A question or an
+ *  approval is answered with the card the chat would dock, and a form wait
+ *  with the form the run would show. A contact wants a written reply, and
+ *  a workflow decision has no form to submit, so both open where they are. */
+export function answersHere(item: Pick<QueueItem, "contactId" | "wait" | "conversationId" | "runId"> & { line?: QueueItem["line"] }): "ask" | "form" | "line" | null {
+    if (item.line) return "line";
+    if (item.contactId) return null;
+    if (item.wait) return item.wait.type === "HUMAN" ? "form" : null;
+    if (item.runId) return null;
+    return item.conversationId ? "ask" : null;
+}
+
+/** The row's button: what doing it is called. */
+export function verbOf(item: Pick<QueueItem, "kind" | "contactId" | "wait" | "conversationId" | "runId"> & { line?: QueueItem["line"] }): string {
+    const here = answersHere(item);
+    if (here === "line") return "Answer";
+    if (here === "form") return "Fill in";
+    if (here === "ask") return item.kind === "decide" ? "Decide" : "Answer";
+    return item.contactId ? "Reply" : "Open";
 }
 
 /** Someone outside a Lemma who wrote in and is waiting on a person: its
@@ -544,6 +656,8 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.conversationId,
             runId: null,
             contactId: null,
+            wait: null,
+            line: null,
         });
     }
     for (const row of waits) {
@@ -559,6 +673,8 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.wait.externalRef,
             runId: row.run.id,
             contactId: null,
+            wait: row.wait,
+            line: null,
         });
     }
     for (const row of contacts) {
@@ -573,9 +689,131 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: null,
             runId: null,
             contactId: row.channelId,
+            wait: null,
+            line: null,
         });
     }
     return items.sort((a, b) => a.sinceMs - b.sinceMs);
+}
+
+/** One thing waiting on you as the organization's overview lists it
+ *  (`GET /organizations/{id}/needs-you`), in this frame's names. */
+export interface NeedsItem {
+    key: string;
+    kind: "QUESTION" | "APPROVAL" | "PERMISSION" | "FORM" | "DECISION" | "CONTACT" | "MESSAGE";
+    podId: string;
+    podName: string;
+    title: string | null;
+    detail: string | null;
+    /** ISO time it started waiting. */
+    since: string;
+    conversationId: string | null;
+    workflowRunId: string | null;
+    channelId: string | null;
+    messageId: string | null;
+    choices: readonly string[];
+}
+
+/** Everything waiting on you, from the organization's one list, oldest
+ *  first. A workflow form is matched to its wait, which carries the form to
+ *  fill in here; one whose wait has not been read yet opens its run. */
+export function queueFromNeeds(needs: readonly NeedsItem[], waits: readonly WaitingRow[]): QueueItem[] {
+    const byRun = new Map(waits.map((row) => [row.run.id, row]));
+    const items: QueueItem[] = [];
+    for (const need of needs) {
+        const since = Date.parse(need.since);
+        const sinceMs = Number.isNaN(since) ? Date.now() : since;
+        const base = { podId: need.podId, podName: need.podName, sinceMs, conversationId: null, runId: null, contactId: null, wait: null, line: null };
+        switch (need.kind) {
+            case "QUESTION":
+            case "APPROVAL":
+            case "PERMISSION":
+                if (!need.conversationId) break;
+                items.push({ ...base, key: "ask:" + need.conversationId, kind: need.kind === "QUESTION" ? "answer" : "decide", title: need.title ?? "A question for you", detail: need.detail, conversationId: need.conversationId });
+                break;
+            case "FORM": {
+                const row = need.workflowRunId ? byRun.get(need.workflowRunId) : undefined;
+                if (row) items.push({ ...base, key: "wait:" + row.wait.id, kind: "do", title: row.wait.question ?? need.title ?? `Fill in the ${row.workflowName} form`, detail: row.workflowName, conversationId: row.wait.externalRef, runId: row.run.id, wait: row.wait });
+                else if (need.workflowRunId) items.push({ ...base, key: need.key, kind: "do", title: need.title ?? "A form to fill in", detail: need.detail, runId: need.workflowRunId });
+                break;
+            }
+            case "DECISION":
+                if (need.workflowRunId) items.push({ ...base, key: need.key, kind: "decide", title: need.title ?? "A decision for you", detail: need.detail, runId: need.workflowRunId });
+                break;
+            case "CONTACT":
+                if (need.channelId) items.push({ ...base, key: "contact:" + need.channelId, kind: "answer", title: `Reply to ${need.title ?? "someone waiting"}`, detail: need.detail ?? "Waiting on a person", contactId: need.channelId });
+                break;
+            case "MESSAGE":
+                if (need.channelId && need.messageId) items.push({ ...base, key: need.key, kind: "answer", title: need.title ?? "A question for you", detail: null, line: { channelId: need.channelId, messageId: need.messageId, choices: [...need.choices], prompt: need.detail } });
+                break;
+        }
+    }
+    return items.sort((a, b) => a.sinceMs - b.sinceMs);
+}
+
+/* ── the shelf: what a new Lemma can start from ─────────────────────── */
+
+/** A template as the shelf shows it (`GET /pods/bundle/templates`). */
+export interface ShelfCard {
+    id: string;
+    name: string;
+    /** What it owns. A finish line's carries `{due}` until a date is picked. */
+    sentence: string;
+    kind: "week" | "date";
+    /** The kind of work it does: support, sales, engineering… */
+    work: string | null;
+    face: string | null;
+    /** Where its work usually happens, as a label. */
+    place: string | null;
+    brings: readonly string[];
+    never: readonly string[];
+}
+
+/** The templates of one kind of work, as one card on the first shelf. */
+export interface ShelfWork {
+    id: string;
+    label: string;
+    cards: ShelfCard[];
+    /** Where its templates' work usually happens, once each. */
+    places: string[];
+    face: string | null;
+}
+
+/** "support" → "Support"; templates that say no kind of work sit together
+ *  under "More". */
+export function workLabel(id: string): string {
+    return id === "more" ? "More" : id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** The shelf's first view: the templates grouped by the work they do, in
+ *  the order the server ships them -- a group sits where its first template
+ *  does. Nothing here names a kind of work the templates do not. */
+export function shelfOf(cards: readonly ShelfCard[]): ShelfWork[] {
+    const groups = new Map<string, ShelfWork>();
+    for (const card of cards) {
+        const id = card.work?.trim().toLowerCase() || "more";
+        const group = groups.get(id) ?? { id, label: workLabel(id), cards: [], places: [], face: card.face };
+        group.cards.push(card);
+        if (card.place && !group.places.includes(card.place)) group.places.push(card.place);
+        groups.set(id, group);
+    }
+    return [...groups.values()];
+}
+
+/** What a finish line says before and after its date is picked. */
+export function sentenceFor(card: Pick<ShelfCard, "sentence">, due: string | null): string {
+    if (!card.sentence.includes("{due}")) return card.sentence;
+    if (!due) return card.sentence.replace("{due}", "a date you pick");
+    const at = new Date(due + "T12:00:00Z");
+    return Number.isNaN(at.getTime()) ? card.sentence.replace("{due}", due) : card.sentence.replace("{due}", at.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" }));
+}
+
+/** A short name for a Lemma started from its owner's own words: the first
+ *  word that says what it is about. */
+export function ownName(text: string): string {
+    const words = text.replace(/[^A-Za-z0-9 ]+/g, " ").trim().split(/\s+/).filter(Boolean);
+    const pick = words.find((word) => word.length > 4 && !/^(every|within|before|after|their|there)$/i.test(word)) ?? words[0] ?? "Lemma";
+    return pick.charAt(0).toUpperCase() + pick.slice(1).toLowerCase();
 }
 
 /** "40 min", "26 h", "3 d". */
@@ -589,134 +827,28 @@ export function ageOf(sinceMs: number, now: number): string {
 
 /* ── chats ────────────────────────────────────────────────────────────── */
 
-/** A chat with Lemma, someone's private line with it (WhatsApp, Telegram,
- *  what it sends them), or a chat shared with people. */
-export type ChatKind = "chat" | "line" | "shared";
-
-export interface ChatItem {
-    key: string;
-    open: OpenChat;
-    podId: string;
-    podName: string;
-    kind: ChatKind;
-    title: string;
-    /** The last thing said, for a shared chat; where it came from, for a
-     *  chat that started on a platform. Shown after the name, quieter. */
-    said: string | null;
-    /** Last active, epoch ms, or null when the server gave no time. */
-    at: number | null;
-    needsYou: boolean;
-    /** New lines in a shared chat since the reader last read it. */
-    unread: number;
-    /** Lemma is working in it right now. */
-    running: boolean;
-    /** The platforms feeding it, for its mark. */
-    platforms: string[];
-    channel: Channel | null;
-    conversation: ConversationRef | null;
-}
-
-/** Where a conversation came from, when it counts as a chat. A run that a
- *  schedule, a workflow, a notice or another outcome started is Lemma's own
- *  work, read as activity on its outcome; one about a doc lives on the doc.
- *  Any of them still waiting on you is listed, because that is where it is
- *  answered. */
-const CHAT_ORIGINS: ReadonlySet<OriginKind> = new Set<OriginKind>(["chat", "channel"]);
-
-export function isChat(conversation: Pick<ConversationRef, "origin" | "waitingOnYou" | "boundTo">): boolean {
-    if (conversation.waitingOnYou) return true;
-    if (conversation.boundTo) return false;
-    return CHAT_ORIGINS.has(conversation.origin?.kind ?? "chat");
-}
-
-/** Someone's private line with a Lemma, named for what it is: theirs, on
- *  the platforms it comes through -- or the notices the Lemma sends them.
- *  Called just "Email" beside chats with names, it read as an inbox. */
-export function lineTitle(platforms: string): string {
-    return platforms === "Notices" ? "Notices" : `Your line on ${platforms}`;
-}
+/* What a chat is, its name, its order and its two groups are the one chat
+   list model every surface draws (`@/channels/chat-list`); the frame adds
+   only how a row sits in its sidebar, below. */
+export { chatItems, isChat, type ChatItem, type ChatKind } from "@/channels/chat-list";
 
 function timeOf(iso: string | null | undefined): number | null {
     const at = iso ? Date.parse(iso) : Number.NaN;
     return Number.isNaN(at) ? null : at;
 }
 
-function newestFirst(a: ChatItem, b: ChatItem): number {
-    if (a.at !== null && b.at !== null) return b.at - a.at || a.title.localeCompare(b.title);
-    if (a.at !== b.at) return a.at === null ? 1 : -1;
-    return a.title.localeCompare(b.title);
-}
-
-/** Every chat in the outcomes given, as one list in two groups: what is
- *  waiting on the reader, then everything else, newest first in each.
- *  `search` keeps the ones whose name or outcome contains it. */
-export function chatItems(input: {
-    pods: readonly { id: string; name: string }[];
-    conversations: ReadonlyMap<string, readonly ConversationRef[]>;
-    channels: ReadonlyMap<string, readonly Channel[]>;
-    me: string | null;
-    search?: string;
-}): { needs: ChatItem[]; rest: ChatItem[] } {
-    const items: ChatItem[] = [];
-    for (const pod of input.pods) {
-        for (const channel of input.channels.get(pod.id) ?? []) {
-            if (!listedAsChat(channel)) continue;
-            items.push({
-                key: `g:${pod.id}:${channel.id}`,
-                open: { kind: "shared", podId: pod.id, id: channel.id },
-                podId: pod.id,
-                podName: pod.name,
-                kind: channel.kind === "DIRECT" ? "line" : "shared",
-                title: channel.kind === "DIRECT" ? lineTitle(directPlaces(channel)) : channelTitle(channel, pod.name),
-                said: channel.lastLine || channel.topic ? previewOf(channel, input.me) : null,
-                at: timeOf(channel.lastMessageAt ?? channel.createdAt),
-                needsYou: channel.unread.waiting > 0,
-                unread: channel.unread.lines,
-                running: false,
-                platforms: platformsOf(channel),
-                channel,
-                conversation: null,
-            });
-        }
-        for (const conversation of input.conversations.get(pod.id) ?? []) {
-            if (!isChat(conversation)) continue;
-            const origin = conversation.origin;
-            items.push({
-                key: `c:${pod.id}:${conversation.id}`,
-                open: { kind: "chat", podId: pod.id, id: conversation.id },
-                podId: pod.id,
-                podName: pod.name,
-                kind: "chat",
-                title: conversation.title,
-                said: origin && origin.kind !== "chat" ? origin.label : null,
-                at: timeOf(conversation.activityAt),
-                needsYou: conversation.waitingOnYou === true,
-                unread: 0,
-                running: isRunning(conversation),
-                platforms: origin?.platform ? [origin.platform.toUpperCase()] : [],
-                channel: null,
-                conversation,
-            });
-        }
-    }
-    const needle = input.search?.trim().toLowerCase() ?? "";
-    const kept = needle
-        ? items.filter((item) => item.title.toLowerCase().includes(needle) || item.podName.toLowerCase().includes(needle) || (item.said ?? "").toLowerCase().includes(needle))
-        : items;
-    kept.sort(newestFirst);
-    return { needs: kept.filter((item) => item.needsYou), rest: kept.filter((item) => !item.needsYou) };
-}
-
 /* ── a Lemma's recent things, in the sidebar ─────────────────────────── */
 
 /** A line in a Lemma's sidebar section: a chat, or something of its own
  *  work -- an automation that ran, a table that changed -- each opening
- *  where it is read. */
-export type RowKind = ChatKind | "automation" | "table";
+ *  where it is read; or an app the reader pinned. */
+export type RowKind = ChatKind | "automation" | "table" | "app";
 
 export interface SideRow {
     key: string;
     kind: RowKind;
+    /** The Lemma it is in, for a list that mixes them. */
+    podId: string;
     title: string;
     /** More about it, for its tooltip: the last thing said, where it came from. */
     said: string | null;
@@ -735,6 +867,7 @@ export function rowOfChat(item: ChatItem): SideRow {
     return {
         key: item.key,
         kind: item.kind,
+        podId: item.podId,
         title: item.title,
         said: item.said,
         at: item.at,
@@ -785,8 +918,11 @@ export function workRows(input: {
         const run = origin.runId ?? conversation.id;
         const at = timeOf(conversation.activityAt);
         const row: SideRow = {
-            key: "auto:" + automation.key,
+            /* Its Lemma in its key: a list that mixes Lemmas can hold two
+               automations of one name. */
+            key: "auto:" + input.podId + ":" + automation.key,
             kind: "automation",
+            podId: input.podId,
             title: automation.name,
             said: origin.kind === "schedule" ? "Runs on a schedule" : "A workflow",
             at,
@@ -812,8 +948,9 @@ export function workRows(input: {
         const at = timeOf(table.updated);
         if (at === null || input.now - at > QUIET_AFTER_MS) return [];
         return [{
-            key: "table:" + table.name,
+            key: "table:" + input.podId + ":" + table.name,
             kind: "table",
+            podId: input.podId,
             title: table.title,
             said: "A table",
             at,
@@ -856,8 +993,33 @@ export function inSidebar(item: { kind: string; unread: number; needsYou: boolea
     return item.kind !== "line" || item.unread > 0 || item.needsYou;
 }
 
-/** How long an outcome can go without a chat moving before its section
- *  folds itself away. */
+/** What the sidebar lists under each Lemma, as the reader asked: its chats;
+ *  with its automations' latest runs; or with the tables changed lately as
+ *  well. */
+export type SideShowing = "chats" | "automations" | "everything";
+
+/** How the sidebar lists them: under each Lemma, or all together, newest
+ *  first. */
+export type SideGrouping = "lemma" | "together";
+
+export interface SideSettings {
+    showing: SideShowing;
+    grouping: SideGrouping;
+}
+
+export const SIDE_DEFAULTS: SideSettings = { showing: "chats", grouping: "lemma" };
+
+/** What a browser kept of the reader's choice, read safely: anything it
+ *  does not recognise is the default. */
+export function readSideSettings(raw: unknown): SideSettings {
+    const kept = raw && typeof raw === "object" ? raw as Partial<SideSettings> : {};
+    return {
+        showing: kept.showing === "automations" || kept.showing === "everything" ? kept.showing : "chats",
+        grouping: kept.grouping === "together" ? "together" : "lemma",
+    };
+}
+
+/** How long a table can go unchanged before it stops counting as recent. */
 export const QUIET_AFTER_MS = 7 * 86_400_000;
 
 export interface SidebarSection<T, R> {
@@ -870,13 +1032,14 @@ export interface SidebarSection<T, R> {
     open: boolean;
 }
 
-/** The sidebar's outcomes: the one that moved most recently first, the ones
- *  that never moved last, by name. Each is open unless it has been quiet for
- *  a week -- and always when it is where the reader is, or has something
- *  waiting on them. What the reader folded or opened themselves wins. */
+/** The sidebar's Lemmas: the one that moved most recently first, the ones
+ *  that never moved last, by name. Each is folded to its name -- a list of
+ *  Lemmas, the way a list of projects reads -- and a dot on a folded one says
+ *  something in it waits on the reader. One opens while the reader is in it,
+ *  and stays open once they open it themselves; what they folded or opened
+ *  wins. */
 export function sidebarSections<T extends { id: string; name: string }, R extends { at: number | null; needsYou: boolean }>(
     sections: readonly { pod: T; items: readonly R[] }[],
-    now: number,
     chosen: ReadonlyMap<string, boolean>,
     here: string | null,
 ): SidebarSection<T, R>[] {
@@ -885,8 +1048,7 @@ export function sidebarSections<T extends { id: string; name: string }, R extend
             const times = items.map((item) => item.at).filter((at): at is number => at !== null);
             const latest = times.length > 0 ? Math.max(...times) : null;
             const waiting = items.filter((item) => item.needsYou).length;
-            const lively = waiting > 0 || pod.id === here || (latest !== null && now - latest < QUIET_AFTER_MS);
-            return { pod, items: [...items], latest, waiting, open: chosen.get(pod.id) ?? lively };
+            return { pod, items: [...items], latest, waiting, open: chosen.get(pod.id) ?? pod.id === here };
         })
         .sort((a, b) => {
             if (a.latest !== null && b.latest !== null && a.latest !== b.latest) return b.latest - a.latest;
@@ -913,4 +1075,113 @@ export function sameOpen(a: ChatOpen, b: ChatOpen): boolean {
     if (a.kind !== b.kind) return false;
     if (a.kind === "none" || b.kind === "none") return true;
     return a.podId === b.podId && (a as { id: string | null }).id === (b as { id: string | null }).id;
+}
+
+/** An agent row's page, or none for a row that arrived without a name: its
+ *  address would end at `agent/` and land on the Lemma's settings, while the
+ *  row itself says there is nothing to open. */
+export function agentView(podId: string, agent: { name: string; broken: boolean }): View | null {
+    return agent.broken ? null : { name: "agent", podId, agent: agent.name };
+}
+
+/** A key for an agent row. Two nameless rows share an empty id, so the
+ *  position keys them apart. */
+export function agentKey(agent: { id: string }, at: number): string {
+    return agent.id || `unnamed-${at}`;
+}
+
+/** An app kept mounted this visit, with the organization it was opened in
+ *  and its Lemma as last read. */
+export type KeptApp<P extends { id: string }> = { podId: string; app: string; orgId: string | null; pod: P | null };
+
+/** The kept apps against a Lemma list just read for `orgId`. Each takes its
+ *  Lemma as now listed. One whose own organization's list no longer has its
+ *  Lemma goes. One from another organization stays as it was, so switching
+ *  organization never unmounts it. The same array when nothing changed. */
+export function refreshKept<P extends { id: string }>(kept: readonly KeptApp<P>[], pods: readonly P[], orgId: string | null): readonly KeptApp<P>[] {
+    let changed = false;
+    const next = kept.flatMap((one) => {
+        const now = pods.find((candidate) => candidate.id === one.podId);
+        if (now) {
+            if (now !== one.pod) changed = true;
+            return [{ ...one, pod: now }];
+        }
+        if (one.orgId !== orgId) return [one];
+        changed = true;
+        return [];
+    });
+    return changed ? next : kept;
+}
+
+/** Where a pasted link to something shared opens here: a GitHub repository
+ *  opens its import, and a link this deployment made -- a share, a remix, an
+ *  import, from one of `ownOrigins` -- opens at its own path. Null for
+ *  anything else, including another site's link that happens to have a path
+ *  like one of these. */
+export function sharedLinkPath(text: string, ownOrigins: readonly string[]): string | null {
+    const said = text.trim();
+    if (!said) return null;
+    let url: URL;
+    try {
+        url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(said) ? said : "https://" + said);
+    } catch {
+        return null;
+    }
+    const parts = url.pathname.split("/").filter(Boolean).map(decodedSegment);
+    if (parts.some((part) => part === null)) return null;
+    const segments = parts as string[];
+    if (url.hostname === "github.com" || url.hostname === "www.github.com") {
+        const [owner, repo] = segments;
+        return owner && repo ? `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo.replace(/\.git$/, ""))}` : null;
+    }
+    const [head] = segments;
+    if (!ownOrigins.includes(url.origin) || !head || !SHARED_HEADS.has(head)) return null;
+    /* Rebuilt from its parts, each encoded, rather than passed on as typed: a
+       link is somebody else's text, and what this navigates to is only ever
+       one of this app's own paths. */
+    const path = "/" + segments.map(encodeURIComponent).join("/");
+    const query = [...url.searchParams].map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join("&");
+    return query ? `${path}?${query}` : path;
+}
+
+/** The first words of the paths a shared link of this app's opens at. */
+const SHARED_HEADS: ReadonlySet<string> = new Set(["s", "d", "remix", "import"]);
+
+/** One path segment as written, or null for one that is not valid percent-encoding. */
+function decodedSegment(segment: string): string | null {
+    try {
+        return decodeURIComponent(segment);
+    } catch {
+        return null;
+    }
+}
+
+/** What one step of a template's import adds, said as a person would count
+ *  it: a skill is its SKILL.md, and a folder made on the way is nothing. */
+function broughtKind(step: { kind: string; name: string }): [string, string] | null {
+    const kind = step.kind.toUpperCase();
+    if (kind === "TABLE") return ["table", "tables"];
+    if (kind === "SCHEDULE" || kind === "WORKFLOW") return ["automation", "automations"];
+    if (kind === "AGENT") return ["agent", "agents"];
+    if (kind === "APP") return ["app", "apps"];
+    if (kind === "FILE") {
+        const last = step.name.split("/").pop() ?? "";
+        if (last === "SKILL.md") return ["skill", "skills"];
+        return last.includes(".") ? ["file", "files"] : null;
+    }
+    return null;
+}
+
+/** "1 table, 2 automations and 2 skills": what a template's import brings,
+ *  counted by kind, in the order it brings them. */
+export function broughtSaid(steps: readonly { kind: string; name: string }[]): string {
+    const counts = new Map<string, { one: string; many: string; count: number }>();
+    for (const step of steps) {
+        const said = broughtKind(step);
+        if (!said) continue;
+        const now = counts.get(said[1]) ?? { one: said[0], many: said[1], count: 0 };
+        counts.set(said[1], { ...now, count: now.count + 1 });
+    }
+    const parts = [...counts.values()].map(({ one, many, count }) => `${count} ${count === 1 ? one : many}`);
+    return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }

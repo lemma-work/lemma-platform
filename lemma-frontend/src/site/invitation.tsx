@@ -17,7 +17,7 @@ export function InvitationDecision({
     const [error, setError] = useState("");
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState(false);
-    const [destination, setDestination] = useState("/t");
+    const [destination, setDestination] = useState("/home");
     async function decide() {
         setBusy(true);
         setError("");
@@ -31,7 +31,7 @@ export function InvitationDecision({
                         result.redirect_uri ||
                             invitation.data?.redirect_uri ||
                             null,
-                    ) || "/t",
+                    ) || "/home",
                 );
             } else await lemma().organizations.invitations.revoke(id);
             setDone(true);

@@ -72,10 +72,11 @@ export function Surfaces({ pod, expanded = false }: { pod: Pod; expanded?: boole
     const [sheet, setSheet] = useState(false);
     const all = surfacesForAgent(surfaces.data ?? []);
     const mine = all.filter((surface) => surface.mine && surface.active !== false && Boolean(surface.handle));
+    const name = pod.teammate?.name || pod.name;
 
     if (surfaces.isPending) {
         return (
-            <span className="reaches" aria-label="Loading channels" aria-busy="true">
+            <span className="reaches" aria-label={`Loading where ${name} answers`} aria-busy="true">
                 <span className="channel-skeleton" />
                 <span className="channel-skeleton" />
             </span>
@@ -84,28 +85,28 @@ export function Surfaces({ pod, expanded = false }: { pod: Pod; expanded?: boole
     if (surfaces.isError && !surfaces.data) {
         return (
             <button className="reach reach--retry" onClick={() => void surfaces.refetch()}>
-                <RefreshIcon size={16} /> Retry channels
+                <RefreshIcon size={16} /> Retry
             </button>
         );
     }
 
     return (
         <>
-            <div className={`reaches${expanded ? " reaches--expanded" : ""}`} aria-label="Contact channels">
+            <div className={`reaches${expanded ? " reaches--expanded" : ""}`} aria-label={`Where ${name} answers`}>
                 {mine.map((surface) => (
                     <CopyAddress key={surface.id} surface={surface} compact={!expanded} />
                 ))}
                 <button
                     className={`reach reach--add${expanded || mine.length === 0 ? " reach--labeled" : ""}`}
-                    title={`Manage channels for ${pod.name}`}
-                    aria-label={`Manage channels for ${pod.name}`}
+                    title={`Manage where ${name} answers`}
+                    aria-label={`Manage where ${name} answers`}
                     onClick={() => setSheet(true)}
                 >
                     <span className="reach__mark"><PlusIcon size={15} /></span>
-                    {(expanded || mine.length === 0) && <span>{all.length ? "Manage channels" : "Add a channel"}</span>}
+                    {(expanded || mine.length === 0) && <span>{all.length ? "Manage where " + name + " answers" : "Choose where " + name + " answers"}</span>}
                 </button>
                 {surfaces.isError && (
-                    <span title="Channel status may be out of date"><WarningIcon size={16} /></span>
+                    <span title="This may be out of date"><WarningIcon size={16} /></span>
                 )}
             </div>
             {sheet && <ReachSheet pod={pod} onClose={() => setSheet(false)} />}

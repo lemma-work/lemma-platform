@@ -25,6 +25,10 @@ export interface Contact {
     handles: ContactHandle[];
     /** Known only by the browser they wrote from: nobody has vouched for them yet. */
     anonymous: boolean;
+    /** Their own chat with the space, opened straight from them; null until
+     *  they first write. Undefined from a backend too old to say, which
+     *  `contactChannelId` looks up instead of reading as "none yet". */
+    channelId: string | null | undefined;
 }
 
 export type WidgetAnswer = "off" | "known" | "anyone";
@@ -82,7 +86,18 @@ export function readContact(wire: ContactResponse): Contact {
                 strength: identity.strength,
             })),
         anonymous: wire.is_anonymous ?? false,
+        channelId: wire.channel_id,
     };
+}
+
+/** Where a contact's chat is: what the contact says, or -- when the backend
+ *  doesn't say -- what `find` looks up. Null when they have none yet. */
+export async function contactChannelId(
+    contact: Contact,
+    find: (contactId: string) => Promise<string | null>,
+): Promise<string | null> {
+    if (contact.channelId !== undefined) return contact.channelId;
+    return find(contact.id);
 }
 
 export function readContacts(wire: ContactListResponse): { items: Contact[]; next: string | null } {
@@ -230,13 +245,13 @@ export function waitsOnTheSite(handle: Pick<ContactHandle, "kind">): boolean {
 /** What a member is told after writing to a contact first. */
 export function outreachSaid(sent: Pick<OutreachSent, "status" | "reason" | "platform">): string {
     if (sent.platform === "WEB" && sent.status === "SENT") return "In their chat on your website, for when they next open it.";
-    if (sent.platform === "WEB" && sent.status === "PENDING") return "In their channel, on its way to their chat on your website.";
+    if (sent.platform === "WEB" && sent.status === "PENDING") return "Saved here, on its way to their chat on your website.";
     const where = sent.platform === "WHATSAPP" ? "WhatsApp" : sent.platform === "TELEGRAM" ? "Telegram" : "email";
     switch (sent.status) {
-        case "SENT": return "Sent by " + where + ". It is in their channel.";
-        case "PENDING": return "In their channel, on its way by " + where + ".";
-        case "SKIPPED": return "In their channel, but not sent" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ".";
-        default: return "In their channel, but it did not go" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ". Retry it from there.";
+        case "SENT": return "Sent by " + where + ". It is in their chat here.";
+        case "PENDING": return "In their chat here, on its way by " + where + ".";
+        case "SKIPPED": return "In their chat here, but not sent" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ".";
+        default: return "In their chat here, but it did not go" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ". Retry it from there.";
     }
 }
 

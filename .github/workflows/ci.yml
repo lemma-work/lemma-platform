@@ -968,14 +968,20 @@ jobs:
   # most of managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build
   # lints code that never ships while never linting the code that does" - and
   # folding it in here satisfies that rather than contradicting it, since this
-  # job already runs on macos-14. The Agent Host followed: it is Desktop-only
+  # job already runs on macos-15. The Agent Host followed: it is Desktop-only
   # now, so ubuntu was testing a platform it no longer ships on.
+  #
+  # A numbered image, never macos-latest, here and in the release workflows:
+  # the image picks the Xcode and SDK a release is built with, so moving it is
+  # a pull request of its own. Once GitHub retires an image, jobs on it are
+  # cancelled within a second with no log rather than failed, so a run of
+  # cancelled macOS jobs means this label needs moving.
   desktop:
     name: Desktop workspace (fmt, clippy, tests, macOS build + codesign)
     timeout-minutes: 90
     needs: changes
     if: needs.changes.outputs.desktop == 'true' && github.event_name != 'merge_group'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
 
@@ -1349,7 +1355,7 @@ jobs:
     timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.desktop_launch == 'true' && github.event_name != 'merge_group'
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -1491,7 +1497,7 @@ jobs:
       github.event_name == 'push' &&
       (needs.changes.outputs.desktop_contract == 'true' ||
        needs.changes.outputs.desktop == 'true')
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7

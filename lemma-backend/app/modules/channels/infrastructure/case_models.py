@@ -1,12 +1,17 @@
-"""Tables for a contact's support cases: one episode of the pod answering them,
-and what happened in it.
+"""Tables for a contact's case: the pod answering them, as it stands now.
 
-A contact's channel has one *current* case (``channels.current_case_id``) and
-at most one open one, which is always the current one. A line written after
-the current case closed opens the next; a member reopening a closed case by
-hand keeps it. Every change to a case appends a ``channel_case_events`` row, so
-time to first response, reopens and resolution time are read, not guessed.
-Only a contact's channel has cases: the foreign key carries the channel's kind.
+A contact's channel has one case (``channels.current_case_id``), made with
+the channel and kept: closing it sets its status, and it opens again on the
+same row (``cases``). Only a contact's channel has a case: the foreign key
+carries the channel's kind.
+
+Nothing reads a case's history, so none is kept: ``channel_case_events``,
+``first_response_at``, ``first_response_by_user_id`` and ``closed_by_user_id``
+are no longer written, and the earlier cases of a channel made before its case
+was kept -- rows its ``current_case_id`` does not name -- are no longer read.
+All of them go with the migration that drops them, which can then hold a
+channel to one case (unique ``channel_id``, in place of ``uq_channel_cases_open``
+and ``ix_channel_cases_channel``).
 """
 
 from __future__ import annotations
@@ -47,7 +52,8 @@ CASE_EVENT_KINDS = (
 
 
 class ChannelCaseModel(UUIDAuditBase):
-    """One episode of the pod answering a contact."""
+    """The pod answering a contact: who by hand, where it stands, whether it
+    asks for a person."""
 
     __tablename__ = "channel_cases"
     __table_args__ = (
@@ -115,7 +121,9 @@ class ChannelCaseModel(UUIDAuditBase):
         server_default=text("'CONTACT'"),
     )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    #: The channel's newest line when it opened: the case is the lines after.
+    #: The channel's newest line when it was made. Nothing reads it; it is
+    #: still written, because the column is NOT NULL until the contract
+    #: migration that drops it.
     opened_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="open", server_default=text("'open'")
@@ -157,7 +165,7 @@ class ChannelCaseModel(UUIDAuditBase):
 
 
 class ChannelCaseEventModel(Base):
-    """One change to a case, in the order it happened."""
+    """One change to a case, in the order it happened. No longer written."""
 
     __tablename__ = "channel_case_events"
     __table_args__ = (

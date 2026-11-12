@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.file_access import is_datastore_path
+from app.modules.agent.infrastructure.tools.file_access import is_datastore_path
 from sandbox_runtime.paths import (
     HOME_ROOT,
     RUNTIME_FILESYSTEM_ROOTS,

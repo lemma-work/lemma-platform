@@ -1,0 +1,10 @@
+{
+  "name": "monday_evidence",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 9 * * 1",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Read the controls table. Set ready back to false on any control whose evidence_on is more than 90 days ago. List controls with no owner, controls past their date, and controls with no evidence_on or evidence older than 90 days, and ask each owner once for what is missing: check what you asked before with channel_read(asked_by_me=True)."
+}

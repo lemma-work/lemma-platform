@@ -27,14 +27,17 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.infrastructure.repositories import AgentRepository
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
-from app.modules.agent.services import agent_context_brief as brief_mod
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
+from app.modules.agent.services.context_brief import agent_brief as brief_mod
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
     invite_org_member,
     signup_user,
 )
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 pytestmark = pytest.mark.e2e
 
@@ -82,6 +85,7 @@ async def _default_agent_brief(*, pod_id: str, user_id: str) -> str:
             "metadata": {},
             "user_id": UUID(user_id),
             "type": None,
+            "origin": ConversationOrigin.CHAT,
         },
     )()
     brief = await AgentContextBriefBuilder(uow_factory).build(
@@ -110,7 +114,7 @@ async def test_the_default_agent_is_told_the_pods_name_and_purpose(
 
     assert "## You" in brief
     assert f"**{name}**" in brief
-    assert "What this pod is for: Where the support work lives." in brief
+    assert "What this Lemma is for: Where the support work lives." in brief
     # Tenure comes off the pod's own created_at, so a brand new pod still has a
     # date rather than a hole.
     assert "Here since " in brief

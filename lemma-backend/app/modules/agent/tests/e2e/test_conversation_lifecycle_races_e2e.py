@@ -9,6 +9,8 @@ repository answers whatever the test tells it to and the races live in SQL.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.state_kinds import PauseKind
+
 from uuid import UUID
 
 import pytest
@@ -24,20 +26,23 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.events.run_followup_work import start_queued_followup_for
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.services.approval_reconciliation import (
     stage_approval_execution,
 )
 from app.modules.test_support.e2e.agent_work import run_approval_work
-from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
+from app.modules.agent.agent_host.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
+    record_decision,
     RECORD_DELETE_REFUSALS,
     Seeded,
     conversation,
-    conversation_service,
+    admit_message,
+    resolve_pause,
+    stop_conversation,
     finish,
     messages,
     owner_uow,
@@ -50,6 +55,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     uow_factory,
 )
 from app.modules.test_support.e2e.function_helpers import create_table
+from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = [pytest.mark.e2e]
 
@@ -151,17 +157,12 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     await finish(paused, conversation_status=ConversationStatus.WAITING)
     # Approved: the decision is committed and the tool handed to a worker,
     # which has not written its result yet.
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
-            conversation_id=seeded.conversation_id,
-            approval_id=approval_id,
-            agent_run_id=paused,
-            tool_name="pod_write_record",
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            response={},
-            resolved_by_user_id=seeded.user_id,
-        )
-        await uow.commit()
+    await record_decision(
+        seeded.conversation_id,
+        approval_id,
+        decision=AgentRunApprovalDecision.APPROVE_ONCE,
+        by=seeded.user_id,
+    )
 
     sent = await scenario.owner_client.post(
         f"/pods/{scenario.pod_id}/conversations/{seeded.conversation_id}/messages/append",
@@ -184,11 +185,11 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     all_runs = await runs(seeded.conversation_id)
     assert [run.id for run in all_runs][:1] == [paused]
     (resume,) = all_runs[1:]
-    assert resume.run_metadata["resumed_tool_call_id"] == approval_id
+    assert resume.resumed_tool_call_id == approval_id
     typed = next(
         m for m in found if m.role is MessageRole.USER and "second" in (m.text or "")
     )
-    assert typed.metadata["steered_into_run"] == str(resume.id)
+    assert typed.state.steered_into_run_id == resume.id
 
     # And the resumed run is shown the approved result, not "did not answer".
     history, _prompt = history_and_prompt(found)
@@ -217,7 +218,7 @@ async def test_an_answer_that_lands_before_the_pause_is_written_still_resumes(
     )
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,
@@ -233,7 +234,7 @@ async def test_an_answer_that_lands_before_the_pause_is_written_still_resumes(
     assert resumed is not None
     resume = await _run(seeded, resumed)
     assert resume.status == AgentRunStatus.RUNNING.value
-    assert resume.run_metadata["resumed_tool_call_id"] == question
+    assert resume.resumed_tool_call_id == question
     assert (await conversation(seeded.conversation_id)).status == (
         ConversationStatus.RUNNING
     )
@@ -251,16 +252,15 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     before = await queued_message(seeded, working, "Also check the logs.")
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).stop_conversation(
+        await stop_conversation(uow).stop(
             conversation_id=seeded.conversation_id,
             user_id=seeded.user_id,
             pod_id=seeded.pod_id,
         )
     async with owner_uow(seeded) as uow:
-        joined = await conversation_service(uow).turns.start(
+        joined = await admit_message(uow).admit(
             await conversation(seeded.conversation_id),
             user_id=seeded.user_id,
-            pod_id=seeded.pod_id,
             content="Stop that, summarise the README instead.",
             agent_name=None,
             message_metadata=None,
@@ -268,7 +268,7 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     assert joined.agent_run_id == working and joined.started_new_run is False
     # The run being stopped does not take it in: nothing there would answer.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        steered = await ConversationRepository(uow).claim_queued_user_messages(
+        steered = await QueuedMessages(uow).claim_queued_user_messages(
             working, as_run=True
         )
         await uow.rollback()
@@ -281,8 +281,8 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     assert followup is not None
     found = {message.id: message for message in await messages(seeded.conversation_id)}
     after = next(m for m in found.values() if "README" in (m.text or ""))
-    assert after.metadata["steered_into_run"] == str(followup)
-    assert "steered_into_run" not in (found[before.id].metadata or {})
+    assert after.state.steered_into_run_id == followup
+    assert found[before.id].state.steered_into_run_id is None
 
 
 async def test_a_remote_harness_question_is_answered_inside_its_own_run(
@@ -299,6 +299,7 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
         conversation_id=seeded.conversation_id,
         agent_run_id=working,
         tool_name="ask_user",
+        pauses=PauseKind.QUESTION,
         arguments={"questions": ["Which branch?"]},
     )
     waiting = await record_pausing_tool_call(
@@ -306,17 +307,18 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
         conversation_id=seeded.conversation_id,
         agent_run_id=working,
         tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"seconds": 60},
     )
     marks = {
-        m.tool_call_id: (m.metadata or {}).get("parked_in_run")
+        m.tool_call_id: m.state.parked_in_run_id is not None or None
         for m in await messages(seeded.conversation_id)
         if m.kind is MessageKind.TOOL_CALL
     }
     assert marks == {question: True, waiting: None}
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,
@@ -342,20 +344,16 @@ async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
         seeded, paused, tool_name="ask_user", tool_args={"questions": ["Go?"]}
     )
     await finish(paused, conversation_status=ConversationStatus.WAITING)
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
-            conversation_id=seeded.conversation_id,
-            approval_id=question,
-            agent_run_id=paused,
-            tool_name="ask_user",
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            response={"answers": {"Go?": "yes"}},
-            resolved_by_user_id=seeded.user_id,
-        )
-        await uow.commit()
+    await record_decision(
+        seeded.conversation_id,
+        question,
+        decision=AgentRunApprovalDecision.APPROVE_ONCE,
+        by=seeded.user_id,
+        response={"answers": {"Go?": "yes"}},
+    )
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).stop_conversation(
+        await stop_conversation(uow).stop(
             conversation_id=seeded.conversation_id,
             user_id=seeded.user_id,
             pod_id=seeded.pod_id,
@@ -388,9 +386,7 @@ async def test_resuming_a_pause_is_held_to_the_usage_limit(scenario) -> None:
     await finish(paused, conversation_status=ConversationStatus.WAITING)
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(
-            uow, usage_service=_ExhaustedUsage()
-        ).resolve_user_approval_internal(
+        await resolve_pause(uow, usage_service=_ExhaustedUsage()).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,
@@ -423,10 +419,10 @@ async def test_messages_queued_behind_a_question_say_so_and_ride_its_answer(
 
     assert await _completed(seeded, asking) is None
     held = next(m for m in await messages(seeded.conversation_id) if m.id == waiting.id)
-    assert held.metadata["waiting_on_answer"] == str(asking)
+    assert held.state.queue_state is QueueState.WAITING_ON_ANSWER
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,
@@ -438,7 +434,7 @@ async def test_messages_queued_behind_a_question_say_so_and_ride_its_answer(
     answered = next(
         m for m in await messages(seeded.conversation_id) if m.id == waiting.id
     )
-    assert answered.metadata["steered_into_run"] == str(resume.id)
+    assert answered.state.steered_into_run_id == resume.id
 
 
 async def test_a_client_cannot_mark_its_own_message_delivered(scenario) -> None:
@@ -467,10 +463,10 @@ async def test_a_client_cannot_mark_its_own_message_delivered(scenario) -> None:
         for m in await messages(seeded.conversation_id)
         if m.text == "Look at this too."
     )
-    assert stored.metadata["during_active_run"] is True
-    assert stored.metadata["keep_me"] == "yes"
-    for key in ("steered_into_run", "steer_dispatched_at", "waiting_on_answer"):
-        assert key not in stored.metadata, key
+    assert stored.state.queue_state is QueueState.QUEUED
+    assert stored.state.steered_into_run_id is None
+    assert stored.state.steer_dispatched_at is None
+    assert stored.metadata == {"keep_me": "yes"}
 
 
 @pytest.mark.parametrize("content", ["", "x" * 60_001])

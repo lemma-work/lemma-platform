@@ -25,9 +25,13 @@ lose one. Each step of a turn (a tool call, its return, the answer) commits
 fenced by the turn's claim, so a worker that lost the turn's lease cannot add a
 second answer, and a resumed turn whose answer had committed ends on it without
 asking the model again. Lemma's database being unreachable mid-turn interrupts
-the turn, which resumes; it is never recorded as the model failing. Transient token/status frames use the core realtime-channel port with
-a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
-and releases it on completion, failure, or cancellation.
+the turn, which resumes; it is never recorded as the model failing. Transient
+token/status frames go out through one publisher, `infrastructure/live.py`
+(the `LiveEvents` port, on the core realtime-channel port's Redis Pub/Sub
+adapter); the SSE stream, the web app's live socket and a visitor's page each
+subscribe to that one publish and encode its frames (`domain/live_events.py`)
+for their own wire. Each SSE connection leases one subscription connection and
+releases it on completion, failure, or cancellation.
 
 Migration `0056_agent_surface_bundle_work` arms every active wait. A turn that
 was running on the old transport, and a conversation paused on an approval that
@@ -44,18 +48,98 @@ to continue; nothing is replayed
 | `agent_host_pairings` | Single-use pairing codes a user authorizes; consuming one deletes the row, so presence is the whole validity check and a replayed code looks like one that never existed |
 | `agent_hosts`, `agent_host_harnesses` | Paired Agent Host installations and their harness snapshots |
 | `agent_host_commands`, `agent_host_run_leases` | Durable command handout and the single dispatch fence per run |
+| `agent_host_sessions` | One row per conversation: the provider session an Agent Host conversation talks to (session, harness, host, the run that bound it), the host's working directory, the instructions digest delivered, the instructions and prompt still pending, and how far into the conversation the session has been sent (`agent_host/control/session_memory`). Was the conversation's `agent_host_provider_session_id` metadata key until migration 0066 |
+| `agent_host_run_records` | One row per run: what it decided once and every later context build reads back -- where its commands execute, whether its agent's own shell replaces Lemma's command tools, and the final answer its tool recorded (`agent_host/control/run_records`). Were the run's `execution`, `host_native_commands` and `final_answer` metadata keys until migration 0066 |
 | `agent_conversations` | Pod thread, the agent it belongs to (the pod's assistant is a row like any other), parent/subagent and workspace metadata |
-| `agent_messages` | User/assistant/tool messages and structured parts |
-| `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
-| `agent_conversation_waits` | What a paused turn is waiting on — wait type, external reference, wake deadline, and the fire lease a timer tick takes; a partial unique index allows one `ACTIVE` row per conversation, mirroring `workflow_run_waits` |
-| `agent_approval_decisions`, `agent_feedback` | Durable interaction/audit records |
+| `agent_messages` | User/assistant/tool messages and structured parts: the projection the UI, surfaces, search and the Agent Host read. `run_step_seq` names the run-log step a message came from; nothing reads this table to build model input |
+| `agent_runs` | One execution attempt: its kind (`RunKind`, set once by the entry point that started it), status, usage, errors, stop state, harness metadata |
+| `agent_run_steps` | The verbatim run log (`domain/run_log`): one row per step the conversation's model history gained, in `seq` order, with its kind (step, compaction, notice, resume, held, folded) and the pydantic-ai messages it added, stored as TEXT so replay hands back the bytes that were sent. Model input is replayed from the latest compaction row onward |
+| `agent_pauses` | One row per pausing tool call — the `Pause` aggregate (`domain/pauses`): its kind (question, approval, sign-in, budget, Agent Host permission, wait), status, deadline, resolution, the typed host request or budget, a wait's type, token, wake time and spec, and the one-shot execution claim of an approved tool; a partial unique index allows one PENDING wait per conversation |
+| `agent_conversation_waits`, `agent_approval_decisions` | No longer written: kept one release after `agent_pauses` absorbed them (migration 0066) |
+| `agent_feedback` | Feedback a run leaves through its tools |
+
+### Repositories
+
+Conversations, runs, messages and pauses are read and written through
+`infrastructure/db`, one concrete repository per aggregate, each built from the
+unit of work it shares a transaction with:
+
+| Repository | Owns |
+| --- | --- |
+| `conversations.Conversations` | The conversation row, its status and row lock, the history list, titling's opening texts, the sub-agent tree, and (for now) the metadata key/value writes |
+| `runs.Runs` | Starting a run, ending it exactly once (`finish_agent_run`), and the reads about one run |
+| `messages.Messages` | Appending a message and reading the transcript |
+| `queued_messages.QueuedMessages` | Messages sent while a run was working: counting, claiming, steering, withdrawing |
+| `history_reads.HistoryReads` | The runs and run-less messages a prompt is built from |
+| `pauses.Pauses` | Every pause: opened with its call, one `pending()` read of what a conversation or run is waiting on, endings written fenced on the status they were read with, the execution claim, and the pending-interactions inbox |
+| `calls.Calls` | A call's conversations (by the `call` mark each carries, at any depth), its canvas since the conversation became a call, its earlier connections' transcripts and the relays sent while nobody listened; `contracts/calls` holds the call in a chat and marks it live or not |
+
+There is no port in front of them: each has one implementation, and their
+tests run against Postgres. Every turn transaction takes the conversation's row
+lock before its run's, the order `Runs.finish_agent_run` documents.
+
+### Use cases
+
+What a person, a work item or another module does to a conversation is a use
+case under `application/`: one class per verb, with one public async method,
+constructed with exactly the repositories, helpers and other use cases it
+calls, and built from a unit of work by its own `build(uow)`. Controllers get
+the request-scoped ones from `api/dependencies.py`; work handlers, contracts and
+other use cases build the one they need. None is reached through another
+object, and none inherits from another.
+
+| Use case | Does |
+| --- | --- |
+| `conversations/start.StartConversation` | Open a conversation: its agent and the right to run it (`authorize_opening` checks that alone), its kind, where it works -- a GitHub repository the person names is checked through the `ProjectRepositories` port first -- and the server-only facts |
+| `conversations/update.UpdateConversation` | Change title, instructions, runtime, client tags, archived |
+| `conversations/read.ConversationReads` | The query side: list, get, messages, runs, the pending-interactions inbox, and the oldest open pause of each kind |
+| `turns/send_message.SendMessage` | Find or open the conversation, authorize the sender, then admit the message (`typed_in_lemma` only from Lemma's composer) |
+| `turns/admit.AdmitMessage` | Under the conversation lock: join the live run, wait behind a pause, or start a run with its turn |
+| `turns/follow_up.StartQueuedFollowUp` | The turn owed for what was said while a run ran, or the resume of a pause answered before its run finished pausing |
+| `turns/stop.StopConversation` | Stop the run in flight, or close the pause it left, without resuming |
+| `turns/withdraw.WithdrawQueuedMessage` | Take back a message no run has read |
+| `turns/retry.RetryFailedRun` | A fresh run in place of a failed one |
+| `pauses/decide.DecidePause` | A person deciding in Lemma: authorize, resolve, retire the platform's cards |
+| `pauses/resolve.ResolvePause` | Record a decision once, queue an approved tool's execution, or reconcile |
+| `pauses/reconcile.ReconcileDecision` | Write a decided pause's return exactly once, then resume |
+| `pauses/resume.ResumeRun` | Write a pause's return and start the run that replays it, at most once |
+| `pauses/supersede.SupersedeStalePauses` | Deny what the person moved past and cancel a wait typed past, in the caller's transaction |
+| `agents/manage_runtime_profiles.RuntimeProfileCreation` | Create a model-provider or Agent Host runtime profile (discovery first, then the row) |
+| `agents/edit_runtime_profile.AgentRuntimeProfileEditor` | Update, archive and restore a runtime profile |
+| `agents/choose_organization_default.OrganizationDefaultService` | Set or clear the model an organization's teammates run on |
+| `agents/check_provider.check_saved_provider_connection` | The Models page's "Test connection": list the models, send one message |
+| `background/title.ConversationTitleService` | Title a conversation after its first run (first-message title unless a title model is configured) |
+| `background/memory_pass.MemoryPass` | After a turn, keep what the person said that is worth remembering |
+
+Each commits where the step it absorbed always did; `StartConversation`,
+`UpdateConversation` and `SupersedeStalePauses` ride the caller's transaction.
+The steps several share and that do not stand alone -- appending a pause's
+return, starting a resume run (`services/pause_resume`), building
+the return (`services/conversation_resume_return`), stopping one run
+(`services/run_stop`), the access checks (`services/conversation_access`) -- are
+in `services/`; what a message carries and the typed-reply vocabulary are pure
+and in `domain/` (`turn_admission`, `interaction_reply`).
+
+## Layout
+
+| Layer | What is there |
+| --- | --- |
+| `domain/` | Pure: entities and value types, the run's resolved runtime (`resolved_runtime`) and the pure steps of runtime resolution (`runtime_choice`), history assembly (`runtime_history`), a provider PATCH (`runtime_provider_patch`), the live frames (`live_events`), a background call's terms (`background`), prompt assembly (the `prompt/` package), and the ports (`ports.py`: `Harness`, `ModelProvider`, `LiveEvents`, `ProjectRepositories`) |
+| `application/` | The use cases above; each opens and commits its own unit of work |
+| `services/` | Shared steps that never commit on their own. The "one of each": `runtime_resolution.resolve_runtime(request, purpose=...)` is the one chain every model choice goes through (a turn, a title, the memory pass, the vision delegate, compaction); `background_model.BackgroundModel` resolves, builds, meters and runs every non-turn model call through the `ModelProvider` port; `run_session.RunSession` loads what a run works against once (conversation, agent, run, history, runtime, grants) and builds the tools' context for the runner, the resume path, the Agent Host MCP call (`agent_host/relayed_session`, with the runtime and grants cached per lease by grant generation) and the pod MCP server (`pod_tool_context`); the run's briefs are the `context_brief/` package |
+| `infrastructure/` | Repositories (`db/`), model construction and vendor quirks (`providers/`, the only place besides the harness that imports pydantic-ai or a vendor SDK), the in-process harness on pydantic-ai (`harness/lemma/`), the harness registry (`harness/registry.py`), the live publisher (`live.py`) and the MCP wire format (`mcp.py`, `mcp_content.py`) |
+| `agent_host/` | The Agent Host, a sub-package with its own skeleton: `domain/` (wire models, link frames, permissions, readiness, selections), `link/` (the server's half of the link WebSocket: `session` the connection's lifecycle, `requests` what each request frame means, `wire` the plumbing), `control/` (pairing, dispatch, admission, recovery, host execution, and its two tables), `harness/` (`RemoteHarness`), `mcp.py` (the conversation's tools over the link) and `controllers/`. `api.py` is the only file the rest of the backend imports (`tests/unit/test_agent_host_boundary`) |
+
+Nothing under `services/` or `application/` imports pydantic-ai or a model
+vendor SDK; the MCP serving services still import the `mcp` SDK until their own
+adapter is consolidated.
 
 ## API groups
 
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
-| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
+| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
@@ -75,8 +159,10 @@ stateDiagram-v2
     RUNNING --> STOPPED: cooperative stop
 ```
 
-The runner resolves a runtime profile and harness (`pydantic_ai`, Agent Host,
-or test harness), builds only the allowed toolsets, creates short UoWs for
+The runner loads the run's session (`RunSession.load`), resolves its runtime
+through the one chain and its harness (the in-process one in
+`infrastructure/harness/lemma`, Agent Host, or a test harness), builds only the
+allowed toolsets, creates short UoWs for
 message/status transitions, performs model/tool I/O outside them, publishes
 realtime frames, and records usage. Tool calls receive a delegated workload
 context; destructive operations require a standing grant or session approval.
@@ -99,6 +185,55 @@ Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
 
+### A conversation in a GitHub repository
+
+Create takes `repository` (`owner/name`). It is checked as the person opening
+the conversation, through the pod's `github` connector -- the account, and the
+sandbox rule for a shared one, that the clone will use
+(`tools/workspace_cli/github_credential`) -- and then against that account's
+installation: it must be on the repository's owner, and then cover every
+repository there, or the repository is private (an App's user token reads one
+only where the App is installed), or the installation's selection lists it
+(`connectors.contracts.github.installation_repository`). Each refusal keeps its
+own code; GitHub not answering is a 503, never a pass, and a selection too long
+to walk is `GITHUB_REPOSITORY_UNCHECKED`, not "not installed". The listing
+shows at most a picker's worth and says `complete: false` past it.
+The repository is stored as GitHub spells it, and the conversation's directory
+is a worktree of it of its own, `/workspace/worktrees/{owner}/{repo}/{slug}` on
+branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
+sub-agent inherits its parent's worktree; a run a webhook started, which is not
+stamped at creation, gets one keyed by its conversation id.
+
+Before the agent's first shell or Python call, the sandbox clones the
+repository once per person, at `/workspace/repos/{owner}/{repo}`, with the
+person's token -- or fetches it if it is already there -- and then adds this
+conversation's worktree from `origin/<ref>` or `origin/HEAD`
+(`tools/workspace_cli/github_project`). A worktree whose directory was lost is
+made again on its surviving branch. A failed clone, a failed worktree and a
+failed fetch each tell the agent once.
+
+So the clone's objects and `origin/*` are shared, and nothing else is: no
+conversation works in another's tree or on another's branch. Conversations from
+before worktrees recorded the clone itself as their directory and keep working
+there, with the old prompt that tells them it is shared.
+
+A worktree goes when its conversations are finished with it
+(`domain/worktree_sweep`): every conversation working in it -- the root and the
+sub-agents that share it -- is archived and an hour quiet, or two weeks quiet
+whether archived or not, and none has a run going. The hour outlasts the
+checkout marker, so a conversation brought back from the archive makes its
+worktree again rather than trusting a marker. The sweep
+(`tools/workspace_cli/worktree_sweep`) reads the person's conversations across
+pods in one workspace, in a short unit of work of its own, and runs after a
+repository conversation's checkout -- never waking a sleeping sandbox -- at most
+once a day per sandbox. It starts `git worktree remove` in the sandbox and is
+not waited on. Without `--force`, git keeps a tree with changes or untracked
+files, to be tried again the next day; ignored files (`node_modules`, build
+output) go with a clean tree. The branch is never deleted: commits that never
+reached GitHub stay in the clone, and a conversation that runs again gets its
+worktree made again on its branch. A worktree whose conversations were deleted
+with their pod is not swept.
+
 ## Prompt context
 
 Prompts combine a compact pod resource map, the agent's role, reply guidance,
@@ -118,12 +253,25 @@ run), so an edit, a deletion or a forgotten contact reaches every later
 prompt; the visitor's page and an export read a follow-up the same way. Only
 the runs carried whole get their background -- an older run is reduced to its
 requests and answer -- so the read is bounded and moves in elision's blocks.
-A run answering a line in Lemma answers the lines whose words it read
-(`services/channel_answers`, recorded in `channel_line_answers`).
+Every run of a person's conversation is answered one way
+(`services/run_answers`, `agent.channel_reply` on `AgentRunFinished`): at the
+place of the lines whose words it read, each recorded in
+`channel_line_answers` as a turn took it up -- in Lemma under the oldest of
+them, on a platform as the agent's line with a delivery there
+(`agent_surfaces/contracts/egress.post_answer_at_place`). A run that read
+no line answers where its conversation last took one up.
 
 A message the person sends while a run is finishing is steered into it
-(`capabilities/pending_user_messages`), and the run goes on to answer that
-too. The answer it had already written is then not the run's final answer --
+(`harness/lemma/pending_user_messages`), and the run goes on to answer that
+too -- if it is of the run's kind: a note or not alike, and said at the place
+the run was asked or at none (`domain/run_places`). Each thread of a group in
+Lemma is a place of its own (`lemma:<thread>`, kept on the message's and the
+run's metadata), so a line in another thread waits as a platform's message
+said elsewhere does. One said elsewhere waits
+for the follow-up turn that claims it, which is asked where it was said, and
+that turn reads it after the answer of the run it waited for
+(`harness/lemma/history_replay`), not above it. The answer it had already
+written is then not the run's final answer --
 its output is still the last -- but it was an answer: the pydantic-ai node
 loop marks it `answered_before_steer` when the request that sent the run on
 carries the person's words rather than a retry (`domain/steered_answers`).
@@ -154,6 +302,13 @@ Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through
 table inspection rather than repeated in every prompt. Omission counts mark
 truncated inventories and schemas.
+
+The rendered brief is cached in Redis, keyed by the pod's inventory token as
+well as the agent, user and brief shape. A model that appears in the brief
+declares `__pod_inventory__`, and any committed change to one of its rows
+replaces its pod's token (`app/core/infrastructure/db/pod_inventory.py`), so
+a table an agent has just created is in the next run's brief rather than one a
+TTL later.
 
 ## Key dependencies
 

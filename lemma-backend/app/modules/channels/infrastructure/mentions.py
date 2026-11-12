@@ -1,12 +1,17 @@
-"""Who a line names, kept to what its parts say now.
+"""Which members a line names, kept to what its parts say now.
 
-``channel_mentions`` is derived from a line's mention parts -- the people and
-agents ``Naming`` resolved from them -- and nothing else writes it: a post
+``channel_mentions`` is derived from a line's mention parts -- the members
+``Naming`` resolved from them -- and nothing else writes it: a post
 records them (``sync_mentions`` on a new line), an edit makes the rows say
 what the new parts say (a name added is counted and told, a name taken out
 stops counting), and a deleted or emptied line loses them (``drop_mentions``).
 A mention's channel and number are its line's, held there by a cascading
 foreign key, so a fold moving and renumbering the line moves them too.
+
+Only a member's mention is kept: it is counted and told. A contact or an agent
+named is neither, so nothing would read their rows; the rows written for them
+before stay until a later migration drops the columns, and an edit of their
+line takes them out.
 
 Somebody named where they have no read number is given one, at the
 channel's head as it stands before the line naming them, so their unread
@@ -33,9 +38,6 @@ from app.modules.channels.infrastructure.models import (
     ChannelReadStateModel,
 )
 
-#: Who a mention row names: a member, a contact or an agent.
-_Named = tuple[UUID | None, UUID | None, UUID | None]
-
 
 @dataclass(frozen=True, slots=True)
 class MentionChange:
@@ -46,36 +48,33 @@ class MentionChange:
     removed: int = 0
 
 
-def _wanted(people: Sequence[Principal], agents: Sequence[UUID]) -> list[_Named]:
-    named: list[_Named] = [
-        (person.user_id, person.contact_id, None) for person in people
-    ]
-    named += [(None, None, agent_id) for agent_id in agents]
-    return list(dict.fromkeys(named))
-
-
 async def sync_mentions(
     session: AsyncSession,
     *,
     message: ChannelMessage,
     people: Sequence[Principal],
-    agents: Sequence[UUID],
     fresh: bool = False,
 ) -> MentionChange:
-    """Make the line's mentions exactly ``people`` and ``agents``. ``fresh``:
+    """Make the line's mentions exactly the members of ``people``. ``fresh``:
     the line was written just now and names nobody yet."""
     mention = ChannelMentionModel
-    wanted = _wanted(people, agents)
-    had: dict[_Named, UUID] = {}
+    wanted = list(
+        dict.fromkeys(person.user_id for person in people if person.user_id is not None)
+    )
+    had: dict[UUID, UUID] = {}
+    gone: list[UUID] = []
     if not fresh:
         rows = await session.execute(
-            select(mention.id, mention.user_id, mention.contact_id, mention.agent_id)
+            select(mention.id, mention.user_id)
             .where(mention.message_id == message.id)
             .limit(len(wanted) + 64)
         )
-        had = {(row[1], row[2], row[3]): row[0] for row in rows}
-    gone = [row_id for named, row_id in had.items() if named not in wanted]
-    new = [named for named in wanted if named not in had]
+        for row_id, user_id in rows.tuples():
+            if user_id is not None and user_id in wanted:
+                had[user_id] = row_id
+            else:
+                gone.append(row_id)
+    new = [user_id for user_id in wanted if user_id not in had]
     if gone:
         await session.execute(delete(mention).where(mention.id.in_(gone)))
     if new:
@@ -89,18 +88,14 @@ async def sync_mentions(
                         "pod_id": message.pod_id,
                         "seq": message.seq,
                         "user_id": user_id,
-                        "contact_id": contact_id,
-                        "agent_id": agent_id,
                     }
-                    for user_id, contact_id, agent_id in new
+                    for user_id in new
                 ]
             )
             .on_conflict_do_nothing()
         )
-    added_users = [user_id for user_id, _, _ in new if user_id is not None]
-    if added_users:
-        await _give_a_place(session, message, added_users)
-    return MentionChange(added_users=added_users, removed=len(gone))
+        await _give_a_place(session, message, new)
+    return MentionChange(added_users=new, removed=len(gone))
 
 
 async def _give_a_place(

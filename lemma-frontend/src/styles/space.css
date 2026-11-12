@@ -262,8 +262,21 @@
 .doc-tab-pane {
     background: var(--paper);
 }
+/* The side margin is the screen's, not the page's: 56px either side is a
+   comfortable strip beside a 68ch measure on a laptop, and on a phone it is a
+   third of the screen gone, the text in a narrow column, and a long page that
+   takes far more scrolling than it needs. So it scales with the viewport, down
+   to a thumb's rest — and stops there, so no line touches the edge. */
 .docspace__page {
-    padding: 56px 56px 160px;
+    padding: 56px clamp(18px, 4vw, 56px) 160px;
+}
+/* From here up the block handle sits outside the first character, so the left
+   margin has to hold it as well; a phone hides the handle, and there the strip
+   is all that is needed. */
+@media (min-width: 768px) {
+    .docspace__page {
+        padding-inline: clamp(48px, 4vw, 56px);
+    }
 }
 .docspace__page > .filecard--full {
     max-width: 760px;
@@ -1797,6 +1810,44 @@ samp,
 .cbar__spacer {
     flex: 1;
 }
+/* How the machine is, after where it is when the page put its crumbs in the
+   bar, a hairline between them. */
+.cbar__how {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: hidden;
+}
+.cbar > :not(.cbar__how) + .cbar__how {
+    margin-left: 4px;
+    padding-left: 14px;
+    border-left: 1px solid var(--line);
+}
+/* Where it is keeps its line; what gives way first is the note on how the
+   machine is, then the Lemma's name -- never the place this is. */
+.cbar .ox-stagebar__l {
+    flex: 0 0 auto;
+    max-width: 45%;
+    min-width: 0;
+}
+.cbar .ox-crumb {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cbar .ox-crumb__here {
+    flex: none;
+    white-space: nowrap;
+}
+.cbar__trail {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+}
 .cbar__button {
     height: 32px;
     padding: 0 12px;
@@ -1890,9 +1941,68 @@ samp,
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    padding: 18px;
+    padding: 12px 14px;
     border-left: 1px solid var(--line);
     background: var(--paper);
+}
+/* Beside a screen, a folder is a list to run down, not a page of tiles: a
+   line a file, the path on one line. */
+.cdrawer .computer-path {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    padding-bottom: 8px;
+}
+.cdrawer .computer-path button {
+    max-width: 16ch;
+}
+.computer-view .cdrawer .library-item {
+    gap: 10px;
+    padding: 7px 6px;
+    border-bottom: 0;
+    border-radius: var(--r-sm);
+}
+.cdrawer .library-item-icon {
+    width: 24px;
+    height: 24px;
+    border: 0;
+    color: var(--ink-3);
+}
+.cdrawer .library-item-name small {
+    margin-top: 1px;
+}
+/* Narrow -- a side pane, a small window -- the drawer goes under the screen
+   rather than squeezing it. */
+.computer-view {
+    container-type: inline-size;
+}
+@container (max-width: 900px) {
+    .cbody--drawer {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) minmax(0, 50%);
+    }
+    .cdrawer {
+        border-top: 1px solid var(--line);
+        border-left: 0;
+    }
+    .cbar__note {
+        display: none;
+    }
+}
+/* Narrower still -- a pane beside a chat -- the dot says how the machine
+   is, and the words are its tooltip. */
+@container (max-width: 480px) {
+    .cbar {
+        gap: 4px;
+    }
+    .cbar__state {
+        display: none;
+    }
+    .cbar__button {
+        padding: 0 9px;
+    }
+    .cbar__trail {
+        margin-left: 0;
+    }
 }
 @media (max-width: 900px) {
     .cbody--drawer {
@@ -2859,20 +2969,17 @@ samp,
     margin-top: 24px !important;
 }
 
-/* Who a schedule or workflow runs for, and whether it can run at all. */
-.sched-tag--scope,
-.wf-tag--scope {
+/* Who a schedule runs for, and whether it can run at all. */
+.sched-tag--scope {
     font-style: normal;
     color: var(--ink-3);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: transparent;
 }
-.sched-tag--scope[data-scope="space"],
-.wf-tag--scope[data-scope="space"] {
+.sched-tag--scope[data-scope="space"] {
     color: var(--ink-2);
 }
-.sched-tag--setup,
-.wf-tag--setup {
+.sched-tag--setup {
     font-style: normal;
     color: var(--warn);
     background: color-mix(in srgb, var(--warn) 12%, transparent);

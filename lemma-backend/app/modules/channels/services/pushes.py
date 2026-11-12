@@ -16,8 +16,8 @@ from them (they could not read it). ``MENTIONS`` -- a group seat's default --
 keeps only the first two, and so does a note for members only; ``NONE`` and a
 mute stop them all. Somebody named or asked who is not in the channel is told
 too, when they may see it. The first two *call* them: due at once, never held
-by the window or the hourly budget, never held back while they have the app
-open, and may go by email from any channel (``agent_surfaces``' sending).
+by the window, never held back while they have the app open, and may go by
+email from any channel (``agent_surfaces``' sending).
 """
 
 from __future__ import annotations
@@ -122,9 +122,10 @@ async def push_named(
 async def fold_back(
     uow: SqlAlchemyUnitOfWork, delivery: Delivery, *, hold_for: timedelta
 ) -> None:
-    """A push the hourly budget held: its lines wait in the member's window
-    of the channel, to go with the next push from it -- no sooner than
-    ``hold_for`` unless a line calls them meanwhile."""
+    """A push held while the member had the app open: its lines wait in
+    their window of the channel, to go with the next push from it -- no sooner
+    than ``hold_for`` unless a line calls them meanwhile. A question it asks
+    them still calls them when it goes: it leads, and may go by email."""
     if delivery.recipient_user_id is None:
         return
     channel = await ChannelRepository(uow.session).get(delivery.channel_id)
@@ -136,7 +137,7 @@ async def fold_back(
         folds=[
             Fold(
                 user_id=delivery.recipient_user_id,
-                urgent=False,
+                urgent=delivery.urgent,
                 from_seq=delivery.from_seq or delivery.seq,
                 seq=delivery.seq,
                 lines=delivery.lines,

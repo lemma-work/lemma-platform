@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -153,6 +153,57 @@ class AgentRepository:
             select(AgentModel).where(AgentModel.id.in_(wanted))
         )
         return {model.id: model.to_entity() for model in result.scalars().all()}
+
+    async def header(
+        self, agent_id: UUID
+    ) -> tuple[UUID, str, AgentKind, str | None] | None:
+        """``(id, name, kind, icon_url)``: what a message header names it by."""
+        row = (
+            await self.session.execute(
+                select(
+                    AgentModel.id, AgentModel.name, AgentModel.kind, AgentModel.icon_url
+                ).where(AgentModel.id == agent_id)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        identifier, name, kind, icon_url = row
+        return identifier, name, AgentKind(kind), icon_url
+
+    async def count_in_pod(self, pod_id: UUID) -> int:
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(AgentModel)
+                .where(AgentModel.pod_id == pod_id)
+            )
+            or 0
+        )
+
+    async def id_for_name(self, *, pod_id: UUID, name: str) -> UUID | None:
+        return await self.session.scalar(
+            select(AgentModel.id).where(
+                AgentModel.pod_id == pod_id, AgentModel.name == name
+            )
+        )
+
+    async def name_for_id(
+        self, agent_id: UUID, *, pod_id: UUID | None = None
+    ) -> str | None:
+        """The stored name; ``pod_id`` keeps it to that pod's agents."""
+        statement = select(AgentModel.name).where(AgentModel.id == agent_id)
+        if pod_id is not None:
+            statement = statement.where(AgentModel.pod_id == pod_id)
+        return await self.session.scalar(statement)
+
+    async def names_for_ids(self, agent_ids: Iterable[UUID]) -> dict[UUID, str]:
+        ids = set(agent_ids)
+        if not ids:
+            return {}
+        rows = await self.session.execute(
+            select(AgentModel.id, AgentModel.name).where(AgentModel.id.in_(ids))
+        )
+        return {row[0]: row[1] for row in rows.all()}
 
     async def get(
         self, agent_id: UUID, ctx: Context | None = None

@@ -76,6 +76,7 @@ import type {
     SlackAppWorkspaces,
     LinkShare,
     PodLink,
+    ChatRepositories,
     Conversation,
     ConversationPage,
     ConversationRef,
@@ -1004,6 +1005,14 @@ export const liveSource: PodSource = {
         forgetPod(podId);
     },
 
+    async listChatRepositories(podId: string): Promise<ChatRepositories> {
+        const listed = await lemma(podId).conversations.repositories({ pod_id: podId });
+        return {
+            items: listed.items.map((repo) => ({ fullName: repo.full_name, private: Boolean(repo.private) })),
+            complete: listed.complete !== false,
+        };
+    },
+
     async getConversationRuntime(podId: string, conversationId: string): Promise<Choice | null> {
         /* Read off the conversation rather than remembered: it is the field a
            run copies, and a choice made on another device has to be here. */
@@ -1901,6 +1910,12 @@ export const liveSource: PodSource = {
             "POST",
             `/pods/${podId}/schedules/${scheduleId}/runs/${runId}/retry`,
         ));
+    },
+
+    async runScheduleNow(podId: string, scheduleId: string): Promise<ScheduleRun> {
+        /* 202 with the run it reserved; its target is started by the job a
+           timer's firing uses, so it reads PROCESSING until handed over. */
+        return readRun(await lemma(podId).schedules.runNow(scheduleId));
     },
 
     async createSchedule(podId: string, draft: ScheduleDraft): Promise<StandingJob> {

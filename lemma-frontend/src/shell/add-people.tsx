@@ -70,6 +70,9 @@ export function useCanManageMembers(podId: string): { allowed: boolean; answered
 export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
     const [role, setRole] = useState<string>(ROLES[0].value);
     const [query, setQuery] = useState("");
+    /* A line from the inviter, quoted in the invitation email: why this
+       person is being asked in, which the email cannot say on its own. */
+    const [note, setNote] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [invited, setInvited] = useState<string | null>(null);
@@ -205,9 +208,11 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                 pod_role: role,
                 /* Relative, so it resolves against whichever address they open
                    the invitation on; the accept page only honours a safe one. */
-                redirect_uri: "/t/" + encodeURIComponent(pod.id),
+                redirect_uri: "/l/" + encodeURIComponent(pod.id),
+                note: note.trim() || null,
             })) as PodInvite;
             setQuery("");
+            setNote("");
             setInvited(email);
             setUnsent(unsentInvitation(created));
             await queryClient.invalidateQueries({ queryKey: ["org-invitations", orgId] });
@@ -262,6 +267,17 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                 </form>
             )}
 
+            {canAdd && action === "invite" && (
+                <input
+                    className="addpeople__note"
+                    type="text"
+                    maxLength={500}
+                    aria-label="A note for the invitation email"
+                    placeholder={`Why you’re asking them in, for the email (optional)`}
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                />
+            )}
             {(error || hint) && (
                 <p className="addpeople__hint" role={error ? "alert" : undefined} data-bad={Boolean(error)}>
                     {error ?? hint}
@@ -341,19 +357,6 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                 </>
             )}
         </div>
-    );
-}
-
-/** The way into the dialog from anywhere but the header — the profile's
- *  roster. Nothing at all for somebody the server will not let add, for the
- *  reason the dialog hides its field. */
-export function AddPeopleButton({ podId, onOpen }: { podId: string; onOpen: () => void }) {
-    const { allowed } = useCanManageMembers(podId);
-    if (!allowed) return null;
-    return (
-        <button type="button" className="btn btn--small" onClick={onOpen}>
-            Add people
-        </button>
     );
 }
 

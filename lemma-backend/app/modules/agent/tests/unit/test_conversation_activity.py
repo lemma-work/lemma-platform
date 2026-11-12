@@ -13,16 +13,18 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
     MessageDraft,
     MessageRole,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.repositories.conversation_activity import (
-    is_activity,
+from app.modules.agent.infrastructure.db.conversation_activity import is_activity
+from app.modules.agent.infrastructure.db.conversations import (
+    update_conversation_status,
 )
+from app.modules.agent.infrastructure.db.runs import Runs
 
 _LONG_AGO = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -76,10 +78,8 @@ class _Session:
         return None
 
 
-def _repository(session) -> ConversationRepository:
-    return ConversationRepository(
-        SimpleNamespace(session=session, collect_events=lambda _events: None)
-    )
+def _repository(session) -> Runs:
+    return Runs(SimpleNamespace(session=session, collect_events=lambda _events: None))
 
 
 def _conversation():
@@ -95,7 +95,8 @@ def _conversation():
 async def test_a_status_change_stamps_only_when_asked(touch, moved) -> None:
     conversation = _conversation()
 
-    await _repository(_Session(conversation))._update_conversation_status(
+    await update_conversation_status(
+        _Session(conversation),
         conversation_id=uuid4(),
         status=ConversationStatus.RUNNING,
         touch_activity=touch,
@@ -110,6 +111,7 @@ async def test_finishing_a_run_is_activity() -> None:
     run = SimpleNamespace(
         conversation_id=uuid4(),
         status=AgentRunStatus.RUNNING.value,
+        kind=RunKind.CHAT,
         run_metadata={},
         error=None,
         output_data=None,

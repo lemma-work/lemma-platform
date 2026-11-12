@@ -1,12 +1,16 @@
-"""Where in its place a line is delivered: the line it answers or the thread it
-is in, read from the timeline, then aimed with ``place_threads``.
+"""Where in its place a line is delivered, in the platform's terms.
 
-* An answer in the main timeline answers in place what it replies to, when
-  that was heard there: a quoted reply on Telegram or WhatsApp, rather than a
-  message the group cannot place.
+Where a line goes is decided once, as it is posted: its thread and the line it
+answers (``channels.contracts.placement``). This only translates that into
+what its platform reads, with ``place_threads``:
+
+* A line that answers one heard at its place answers that one in place: its
+  thread on Slack or Teams, its In-Reply-To in email, a quoted reply on
+  Telegram or WhatsApp -- never whatever the place heard last.
 * A reply in a thread goes to that thread: the root's own event when the root
   was heard there, or the message the root was sent as.
-* Anything else at the top of a shared place goes to the place itself.
+* Anything else at the top of a shared place goes to the place itself; in a
+  person's own chat, as the place was last written to.
 """
 
 from __future__ import annotations
@@ -29,14 +33,14 @@ async def aimed_at(
     if ref is None:
         return source
     if line.thread_root_id is None:
-        if source.kind is not SourceKind.CHAT:
-            return source
         replied = None
         if line.reply_to_id is not None:
             async with uow_factory() as uow:
                 replied = await line_by_id(uow, line.reply_to_id)
         if replied is not None and replied.source_id == source.id and replied.reply_ref:
             aimed = dict(replied.reply_ref)
+        elif source.kind is not SourceKind.CHAT:
+            return source
         else:
             aimed = at_place_level(ref, source.platform)
     else:

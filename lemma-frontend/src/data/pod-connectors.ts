@@ -229,12 +229,6 @@ export function connectionsPath(podId: string, slug?: string): string {
     return "/pods/" + encodeURIComponent(podId) + "/connections" + (slug ? "?connector=" + encodeURIComponent(slug) : "");
 }
 
-/** The same place inside the workspace: a teammate's Connections part, for
- *  a link that should stay in the app rather than load it again. */
-export function connectionsPlace(podId: string, slug?: string): string {
-    return "/t/" + encodeURIComponent(podId) + "/about/connections" + (slug ? "?connector=" + encodeURIComponent(slug) : "");
-}
-
 /** A slug for a new connector, free in this pod: `base` made to read the same
  *  in a URL, a YAML key and a tool argument (the server's own pattern), then
  *  `-2`, `-3` while taken — what the server does when it shares a bot it made. */

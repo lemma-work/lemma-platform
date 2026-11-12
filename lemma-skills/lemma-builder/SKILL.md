@@ -5,18 +5,29 @@ description: "Design and build complete Lemma pods: model tables/files/functions
 
 # Lemma Builder
 
-## What Is A Pod
+## What A Lemma Is
 
-A **pod** is one team's operating system: a shared workspace inside an organization
-that holds everything one use case needs — **tables** and **files** (data, with
-documents auto-indexed for built-in RAG), **functions**, **agents**, **workflows**,
+A **Lemma** owns one result for the people it works with: a bar held every week
+("every customer hears back within a day", 90%) or a finish line by a date. In code
+and in the CLI it is a **pod**: a shared workspace inside an organization that holds
+everything that result needs — **tables** and **files** (data, with documents
+auto-indexed for built-in RAG), **functions**, **agents**, **workflows**,
 **schedules**, and **connectors** (automation), and **apps** and **surfaces**
-(interfaces) — under one permission boundary. Two rules run through all of it: every
-workload starts with **zero access** and is granted resources explicitly by name,
-and a workload acts under the **delegated identity** of the user who invoked it — so
-RLS and the personal `/me` area resolve to that user, and the run can do only what
-that user could do *and* the workload was granted. Good pod scope = one team,
-one operating loop, one coherent data model.
+(interfaces) — under one permission boundary. What it owns is kept on the pod
+(`set_what_you_own`: the sentence, the target, and one SQL measure that counts it
+from the pod's tables); how the work gets there is the prose in `/plan.md`.
+
+Two rules run through all of it: every workload starts with **zero access** and is
+granted resources explicitly by name, and a workload acts under the **delegated
+identity** of the user who invoked it — so RLS and the personal `/me` area resolve
+to that user, and the run can do only what that user could do *and* the workload was
+granted. Good scope = one result, the table its work is counted from, and the people
+and automations that move it.
+
+A Lemma started from a template already has its tables, a measure and timed
+schedules, but nothing that feeds them: load **`lemma-setup`** to connect where the
+work happens, bring in past weeks and keep it coming in. Use this skill when you are
+designing or changing what it is built from.
 
 > **Read `references/pod-model.md` first.** It is the canonical model every other
 > doc grounds in — identity & permissions, the data/automation/interface layers,
@@ -27,14 +38,14 @@ one operating loop, one coherent data model.
 
 | Resource | What it is | What it solves |
 | --- | --- | --- |
-| **Tables** | Typed-column data store; per-table row-level security (RLS-on by default = each member's own rows; `enable_rls: false` = shared team data), foreign keys, enums | The pod's database: tickets, leads, approvals — durable structured state |
+| **Tables** | Typed-column data store; per-table row-level security (RLS-on by default = each member's own rows; `enable_rls: false` = shared team data), foreign keys, enums | The pod's database: tickets, leads, approvals — durable structured state. Make the table a Lemma's number counts shared (`enable_rls: false`): the measure is read for everyone alike, so only someone who can read every row it counts may set it (for a per-person table, an admin of that table). Never turn row security off just to measure |
 | **Files** | Document store under shared `/…` folders (e.g. `/knowledge`) and personal `/me`; uploaded documents are auto-indexed and semantically searchable — **built-in RAG** — with converted-markdown reading | The pod's knowledge and artifacts: contracts, manuals, reports, generated deliverables |
 | **Functions** | Typed Python entrypoints run server-side as workload principals | Deterministic logic: validation, multi-table writes, external API calls, transforms |
 | **Agents** | LLM workers with instructions, toolsets, and granted resources | Judgment: classification, drafting, extraction, research, conversation |
 | **Workflows** | Node graphs of FORM / AGENT / FUNCTION / DECISION / LOOP / WAIT_UNTIL steps with durable runs | The process layer — orchestrates functions, agents, **and humans** (form nodes are assigned to pod members) |
 | **Schedules** | Time-based (TIME cron) or event-based — DATASTORE (table row events) and WEBHOOK (connector events) | Starting agents or workflows automatically |
 | **Connectors** | Third-party apps (Gmail, Slack, …) declared in the pod by slug; each call runs as the member's own account or one shared account, never a credential the workload holds | Acting on external systems |
-| **Surfaces** | One pod agent exposed on Slack/Teams/Telegram/WhatsApp/email | Meeting users where they already chat |
+| **Surfaces** | One pod agent exposed on Slack/Teams/Telegram/WhatsApp/email | Where people reach it; in the product these are chats, and "surface" is never a word people see |
 | **People outside** | Contacts (known by their channel), web chat visitors, and tables opened to outside rows — none of them sign in | Customer support, sign-ups, intake, "where is my order" — see `references/people-outside.md` and the `lemma-form` skill |
 | **Apps** | Custom browser apps deployed into the pod — single-file HTML (no build) for one page, or Vite + lemma-sdk for multi-page apps | The product UI: dashboards, queues, detail views, workflow inboxes |
 
@@ -113,14 +124,14 @@ my-pod/
   README.md                                    # operator setup + verification runbook
 ```
 
-Build order follows dependencies: **connectors → tables → files → functions → agents → workflows → schedules → surfaces → app → seed** (grants, schedules and surfaces name a pod connector by slug, so it is declared first). Verify each layer with realistic data before adding the next.
+Build order follows dependencies: **connectors → tables → files → functions → agents → workflows → schedules → surfaces → app → seed → what it owns** (grants, schedules and surfaces name a pod connector by slug, so it is declared first). Verify each layer with realistic data before adding the next. The last step is the one that says whether the rest works: set what it owns with `set_what_you_own` (or `PUT /pods/{pod_id}/outcome`), check that the `value` it returns is the number you expect from the seeded rows (a null `measured_at` means it was not re-read because it did not change: run the query with `lemma query run` or read `lemma pods owns`), and write `/plan.md`'s four sections (What must be true, How we work, Who holds what, Never).
 
 **Build for the hero moment, not just for correctness.** A pod that imports cleanly and passes its tests can still be plumbing nobody wants to open. Before building, name the one screenshottable "oh" — the agent doing real work on its own, behind an interface someone adopts (see `references/pod-design.md`). The **app (or surface) is usually the product** — design it like the thing people live in, not an afterthought tacked on last. And **seed the pod so it demos itself**: a `seed/seed.sh` of sample rows, files, and one completed run, so opening the app shows the hero moment immediately instead of an empty state. (Rows and file bytes *can* travel — `pods export --data-table <t> --folder <path>` names them one at a time on the way out, and `pods import --with-data --with-files` applies them on the way in — but a `seed/seed.sh` is still the better demo path: it is re-runnable and readable. Record it in the README.)
 
 Three rules that bite everyone:
 
 1. **Zero access by default, capped by whoever invoked it, and no destructive power without a grant or approval.** Agents and functions are created with NO access to anything — not tables, not files/folders, not connectors. Every resource they touch must be granted explicitly, either via `permissions.grants` in their bundle JSON (exported automatically, replaced on import) or, against a live pod, `lemma functions|agents permissions add <name> <resource>:<perms>`. Import and `lemma pods doctor` both flag a workload that ends up with **no grants at all** — the usual reason a fresh pod 403s. A grant is a **ceiling on the workload, not a promotion for the person**: a run does the *intersection* of the workload's grants and the invoking member's own access, so a `VIEWER` running a write-granted agent still cannot write. `MISSING_WORKLOAD_RESOURCE_GRANT` means the workload half is missing (grant it); `DELEGATION_EXCEEDS_INVOKER` means the person half is (fix their role — more grants change nothing); `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` means a delete/manage action needs an explicit destructive grant or a user's session approval, which opens the gate without conferring authority. Full 403 decoder + the complete model in `references/authorization-model.md`.
-2. **Not everything bundles.** Pod connectors (`connectors/<slug>/<slug>.json`) round-trip, but the org's installations and each member's connected accounts never do — record in the pod's README who has to connect what. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask, and the two ends spell it differently: **export** names each one (`--data-table <table>`, `--folder <path>`, repeatable — there is deliberately no "everything" flag), while **import** takes `--with-data` / `--with-files`.
+2. **Not everything bundles.** Pod connectors (`connectors/<slug>/<slug>.json`) round-trip, but the org's installations and each member's connected accounts never do — record in the pod's README who has to connect what. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask, and the two ends spell it differently: **export** names each one (`--data-table <table>`, `--folder <path>`, repeatable — there is deliberately no "everything" flag), while **import** takes `--with-data` / `--with-files`. What a Lemma owns travels as `outcome` in `pod.json`. An import sets it once its tables are in, as the person importing, only on a pod that owns nothing yet; a measure they cannot read is dropped with a warning and the rest is kept, so check `lemma pods owns` after importing. `/plan.md` is a file, so it travels only with the files you export.
 3. **Leave a runbook.** Every production-quality bundle should include a README with: purpose, required CLI context, non-bundled setup steps, required uploaded files, which connectors each member must connect (or which account is shared), verification payloads, and the final end-to-end smoke test.
 
 **Last step: report what got in your way.** When the pod is built — or when you gave up — send one `lemma feedback`. Report anything that cost you a detour: a command whose error didn't say what to fix, a flag that didn't behave as documented, missing information you had to discover by trial and error, or a place where *these skills* were wrong, stale, or silent. This is the only channel by which the build experience improves, so file it even if you worked around the problem, and be specific — the exact command, what you expected, what happened.

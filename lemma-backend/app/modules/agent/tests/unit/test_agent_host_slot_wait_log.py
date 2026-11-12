@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.infrastructure.agent_host.recovery import BusyHost
-from app.modules.agent.infrastructure.harnesses.agent_host.slot_wait import SlotWait
+from app.modules.agent.agent_host.control.recovery import BusyHost
+from app.modules.agent.agent_host.harness.slot_wait import SlotWait
 
 
 class _Repository:

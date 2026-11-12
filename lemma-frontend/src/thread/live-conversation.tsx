@@ -19,9 +19,10 @@ import { Composer } from "./composer";
 import { ModelPicker, useSavingModel } from "./model-picker";
 import { useChannelReply } from "./use-channel-reply";
 import { splitQueued, withdrawFailure, withoutSent } from "./queued";
-import { sendToConversation, steerConversation } from "./send-message";
+import { composerSend, sendToConversation, steerConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
+import { RepositoryChip } from "./repository-chip";
 import { needsAiModel, pointsAtModels, runFailure } from "./model-setup";
 import { RECONNECTED_EVENT, isTransportFailure } from "@/shell/connection";
 import { STUCK_AFTER_MS, TRANSPORT_RELOAD_MS, runLooksStuck } from "./stuck-run";
@@ -66,6 +67,7 @@ export function LiveConversation({
     callError,
     callRefresh,
     createWith,
+    folderChosen,
     draftScope,
     emptyHint,
     placeholder,
@@ -79,6 +81,11 @@ export function LiveConversation({
      *  resource metadata it is found by, and it still only comes into being
      *  when somebody says something. */
     createWith?: Record<string, unknown>;
+    /** A folder on this computer chosen for the conversation before this
+     *  pane had a composer -- in another box that handed its first words
+     *  here -- by the id that box parked it under. Adopted in place of this
+     *  pane's own choice when the conversation is created. */
+    folderChosen?: string;
     /** What this pane is about, when it has no conversation yet — the draft a
      *  not-yet-sent message is kept under, so two panes beside two docs do not
      *  share one. Absent in the main pane, which keeps the one "new" draft. */
@@ -318,6 +325,9 @@ export function LiveConversation({
        stored until there is a conversation, so it waits here and goes up with
        the one the first send creates. */
     const [pickedModel, setPickedModel] = useState<Choice | null>(null);
+    /* Likewise the GitHub repository it works in, which can only be chosen
+       before it exists: the conversation's worktree is cut when it is made. */
+    const [pickedRepository, setPickedRepository] = useState<string | null>(null);
     /* The sentence for an upload that failed, kept for the note under the box:
        the send that was carrying it fails too, and "that did not send" is the
        wrong half of what happened. */
@@ -714,11 +724,12 @@ export function LiveConversation({
                             ...(pickedModel
                                 ? { agent_runtime: { profile_id: pickedModel.runtimeId, model_name: pickedModel.model || null } }
                                 : {}),
+                            ...(pickedRepository ? { repository: pickedRepository } : {}),
                         } as Parameters<typeof client.conversations.create>[0]);
                         /* A folder chosen while composing is parked in the
                            desktop shell. Adopted here, before the session
                            learns the id and before the first run reads it. */
-                        await adoptConversationFolder(made.id, folder.pendingId);
+                        await adoptConversationFolder(made.id, folderChosen ?? folder.pendingId);
                         return made;
                     },
                     isActive: () => mounted.current,
@@ -805,7 +816,7 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer, createWith, reply.sendWith],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, folderChosen, running, steer, createWith, pickedRepository, reply.sendWith],
     );
 
     /* A refused message, sent again as a new one, or taken back into the box
@@ -934,6 +945,12 @@ export function LiveConversation({
     const resolveStable = useStableCallback(resolve);
     const withdrawStable = useStableCallback((id: string) => void withdraw(id));
     const sendStable = useStableCallback(send);
+    /* A send that starts a turn is handed over, not waited on: its stream lasts
+       the run, and a composer waiting on it could not steer (`composerSend`). */
+    const startsTurn = useStableCallback(
+        () => !answerWith.current && !(running && (createdHere.current ?? session.conversationId)),
+    );
+    const sendFromComposer = useMemo(() => composerSend(sendStable, startsTurn), [sendStable, startsTurn]);
     const dismissCallError = useStableCallback(() => setDismissedCallError(shownCallError));
     const filled = useStableCallback(() => {
         if (refill) setRefill(null);
@@ -1030,6 +1047,11 @@ export function LiveConversation({
                 answerWith={answerWith}
             />
             <FolderChip folder={folder} />
+            {/* Only while the conversation is still a draft, and not when the
+                box it was asked from already named one. */}
+            {!session.conversationId && typeof createWith?.repository !== "string" && (
+                <RepositoryChip podId={pod.id} picked={pickedRepository} onPick={setPickedRepository} />
+            )}
             <Composer
                 placeholder={waitingOn?.kind === "question"
                     ? "Or answer in your own words…"
@@ -1085,7 +1107,7 @@ export function LiveConversation({
                 attachments={attachments}
                 onAttach={attach}
                 onRemoveAttachment={unattach}
-                onSend={sendStable}
+                onSend={sendFromComposer}
                 onTall={setCrowded}
                 onStop={stop}
                 onVoice={onVoice}

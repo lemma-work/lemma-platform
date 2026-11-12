@@ -8,6 +8,10 @@ export type ContactResponse = {
      * When an agent first answered them; what the contact limit counts.
      */
     answered_at?: (string | null);
+    /**
+     * Their own chat with the pod, to open it without looking it up; absent until they first write.
+     */
+    channel_id?: (string | null);
     created_at: string;
     display_name?: (string | null);
     id: string;

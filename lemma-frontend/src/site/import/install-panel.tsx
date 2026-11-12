@@ -46,6 +46,7 @@ import {
     installedApp,
     landingPath,
     needsAnswer,
+    ownsLine,
     statusLine,
     suggestedValue,
     teammateName,
@@ -621,6 +622,7 @@ function Journey({ repo, owner, title }: Props) {
     const valueOf = (v: VariableSpec) =>
         values[v.name] ?? suggestedValue(v, who);
     const warnings = [...job.warnings, ...(plan?.warnings ?? [])];
+    const owns = ownsLine(plan?.outcome);
     const markFor = podForMark ?? {
         id: job.pod_id,
         teammate: { name: who, iconUrl: null },
@@ -677,7 +679,7 @@ function Journey({ repo, owner, title }: Props) {
                 {app && (
                     <a
                         className={s.quiet}
-                        href={"/t/" + encodeURIComponent(job.pod_id)}
+                        href={"/l/" + encodeURIComponent(job.pod_id)}
                         onClick={markArrival}
                     >
                         Or open {who} instead
@@ -747,6 +749,9 @@ function Journey({ repo, owner, title }: Props) {
                     {groups.length > 0 ? " — " + contentsLine(groups) : ""}.
                 </p>
             )}
+            {/* Said before approving: an install sets what this Lemma owns
+                only when it owns nothing yet. */}
+            {reviewing && owns && <p className={s.muted}>{owns}</p>}
             {!reviewing && (
                 <Progress done={job.progress.done} total={job.progress.total} />
             )}

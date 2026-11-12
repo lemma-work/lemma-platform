@@ -85,8 +85,10 @@ class PushWindows:
         not_before: timedelta = timedelta(0),
     ) -> list[Folded]:
         """Fold lines into each member's window; when each is now due.
-        ``not_before``: none of these goes sooner (a push the hourly budget
-        held, folded back), unless one is urgent."""
+        ``not_before``: none of these goes sooner (a push held while the
+        member had the app open, folded back) -- urgent or not, so a held
+        question keeps calling them when it goes; a line that calls them
+        meanwhile brings it forward."""
         if not folds:
             return []
         at = func.now() + not_before
@@ -100,7 +102,8 @@ class PushWindows:
                 "lead_seq": fold.seq,
                 "lines": fold.lines,
                 "urgent": fold.urgent,
-                "next_attempt_at": func.now() if fold.urgent else at,
+                # Now, unless held back: an urgent fold is due at once.
+                "next_attempt_at": at,
             }
             for fold in sorted(folds, key=lambda each: each.user_id)
         ]
@@ -129,7 +132,7 @@ class PushWindows:
                 "lines": _P.lines + new.lines,
                 "urgent": _P.urgent | new.urgent,
                 "next_attempt_at": case(
-                    (new.urgent, func.now()),
+                    (and_(new.urgent, new.next_attempt_at <= func.now()), func.now()),
                     (
                         _P.next_attempt_at.is_not(None),
                         func.greatest(_P.next_attempt_at, new.next_attempt_at),
@@ -139,7 +142,6 @@ class PushWindows:
                         func.coalesce(_P.pushed_at + PUSH_WINDOW, new.next_attempt_at),
                     ),
                 ),
-                "updated_at": func.now(),
             },
         ).returning(
             _P.recipient_user_id,
@@ -192,7 +194,6 @@ class PushWindows:
                     urgent=False,
                     next_attempt_at=None,
                     pushed_at=func.now(),
-                    updated_at=func.now(),
                 )
             )
         return windows
@@ -201,8 +202,8 @@ class PushWindows:
         self, *, channel_id: UUID, pod_id: UUID, windows: Sequence[Window]
     ) -> list[Delivery]:
         """One delivery per window, on the line it leads with. A line whose
-        push the budget held (``FOLDED``) is planned again; one already
-        pushed to them is not pushed twice."""
+        push was held while the app was open (``FOLDED``) is planned again;
+        one already pushed to them is not pushed twice."""
         if not windows:
             return []
         m = ChannelMessageModel

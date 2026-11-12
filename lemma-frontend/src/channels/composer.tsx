@@ -247,7 +247,7 @@ export function Composer({ podId, channel, people, threadRootId, placeholder, di
         >
             {mention.menu}
             {(chips.length > 0 || files.length > 0) && (
-                <ul className="chcompose__chips" aria-label="With this line">
+                <ul className="chcompose__chips" aria-label="With this message">
                     {chips.map((who) => (
                         <li key={"m" + who.kind + who.id} className="chchip" data-agent={who.kind === "AGENT" || undefined}>
                             <span>@{who.name}</span>

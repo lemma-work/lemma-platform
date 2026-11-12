@@ -17,6 +17,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.domain.generation import ReasoningEffort
 from app.core.settings_env import dotenv_path
+from app.modules.agent.domain.tool_profile import ToolProfile
 
 
 def _default_local_runtime_config_path() -> str:
@@ -125,6 +126,13 @@ class AgentSettings(BaseSettings):
         default=1.0,
         description="Minimum interval between database polls of an agent run's stop flag.",
     )
+    agent_run_control_backstop_seconds: float = Field(
+        default=15.0,
+        description=(
+            "How often a run looks for a stop or a steered message nobody "
+            "signalled to it (a lost live signal): the pushed path's backstop."
+        ),
+    )
     agent_context_brief_cache_ttl_seconds: int = Field(
         default=60,
         description="TTL for cached rendered agent runtime-context briefs; zero disables caching.",
@@ -165,6 +173,15 @@ class AgentSettings(BaseSettings):
             "TTL for the cached memory section of the runtime brief; zero "
             "disables caching. Writes invalidate it, so this is only the "
             "backstop for an invalidation that never arrived."
+        ),
+    )
+    agent_tool_profile: ToolProfile = Field(
+        default=ToolProfile.TODAY,
+        description=(
+            "Toolset experiment scaffolding: the tool surface the pod's own "
+            "assistant gets -- today, direct, core_cli or core_native "
+            "(domain/tool_profile). Recorded on each run that gets another one. "
+            "Deleted once the experiment picks the default."
         ),
     )
     agent_memory_after_turn: bool = Field(
@@ -288,6 +305,17 @@ class AgentSettings(BaseSettings):
             "is working, not stuck. An exchange that does run past it is "
             "retried at most once, with a smaller answer budget, and the reader "
             "is told the model took too long. 0 disables it."
+        ),
+    )
+    agent_model_stream_idle_timeout_seconds: float = Field(
+        default=60.0,
+        description=(
+            "How long a model response, once it has started, may go without a "
+            "content, reasoning or tool-call delta before the attempt is "
+            "abandoned and retried. The per-chunk read timeout cannot see this: "
+            "a provider sending empty keep-alive chunks resets it forever. "
+            "Counted only after the first delta, so a model that thinks "
+            "silently before answering is not cut off. 0 disables it."
         ),
     )
     agent_model_http_max_connections: int = Field(

@@ -37,7 +37,6 @@ from app.modules.agent_surfaces.tests.e2e.group_timeline import (
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent_surfaces.services.group_log import group_source
 from app.modules.agent.domain.asked_questions import message_ref
 from app.modules.channels.contracts import (
     Asker,
@@ -102,7 +101,7 @@ def _no_sandbox(monkeypatch) -> list[str]:
             raise AssertionError("a host session was opened for a stranger's run")
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.workspace_cli.workspace_cli.get_workspace_tool_runtime",
+        "app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli.get_workspace_tool_runtime",
         lambda: _Runtime(),
     )
     return opened
@@ -740,7 +739,7 @@ async def test_a_guest_reads_further_back_in_their_group_and_nothing_more(
         sender=Sender.member(owner, display_name="Arjun"),
     )
     uow = SqlAlchemyUnitOfWork(db_session)
-    source = await group_source(uow, group)
+    source = group
     note = await post(
         uow,
         channel_id=source.channel_id,

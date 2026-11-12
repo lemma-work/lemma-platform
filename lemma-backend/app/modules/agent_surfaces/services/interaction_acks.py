@@ -9,7 +9,7 @@ Approve that it was "Done" when the action had been cancelled and never ran.
 
 from __future__ import annotations
 
-from app.modules.agent.contracts.conversations_for_surfaces import (
+from app.modules.agent.contracts.channels import (
     AgentRunApprovalDecision,
     ApprovalResolution,
 )

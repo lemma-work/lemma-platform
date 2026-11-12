@@ -29,7 +29,7 @@ export function ComputerPreview() {
                 <p>The live browser uses this window control. This preview only opens sample text.</p>
                 {pip.supported ? <button className="btn" onClick={() => pip.pipWindow ? pip.close() : void pip.open()}>{pip.pipWindow ? "Bring it back" : "Pop out"}</button> : <p>This browser does not support floating windows.</p>}
                 {pip.failed && <p role="alert">Couldn’t open the floating window.</p>}
-                <a href="/t">Open your workspace</a>
+                <a href="/home">Open your workspace</a>
             </section>
             {pip.pipWindow && createPortal(<section className="computer-startup"><h1>Computer preview</h1><p>Sample content in the floating window.</p><button className="btn" onClick={pip.close}>Bring it back</button></section>, pip.pipWindow.document.body)}
         </main>

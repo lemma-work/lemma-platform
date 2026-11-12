@@ -1,5 +1,5 @@
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LockIcon, MemoryIcon, TerminalIcon } from "@/ui/icons";
-import { memo, useState, type ReactNode } from "react";
+import { ChevronDownIcon, ChevronRightIcon, LockIcon, MemoryIcon, TerminalIcon } from "@/ui/icons";
+import { memo, useEffect, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
 import { Prose, StreamingProse } from "./markdown";
 import { ClampedProse } from "./clamped-prose";
@@ -11,106 +11,146 @@ import { ResourceCard } from "./resource-card";
 import { PlanCard } from "./plan-card";
 import { ToolCardView } from "./tool-card-view";
 import { InteractionCard, type Resolve } from "./interaction-card";
-import { liveNote, relayedBy, spanOf, type HumanMessage, type Note, type Streaming, type Turn } from "./turns";
+import { answerOf, foldsAway, liveNote, relayedBy, spanOf, type HumanMessage, type Note, type Streaming, type Turn, type TurnItem } from "./turns";
+import { stepLine, stepNow, stepsSaid } from "./step-groups";
 import type { Persona } from "@/data";
 import type { Noted } from "./memory-notes";
 
-/** The turn's work, as one line.
- *
- *  A finished run says what it cost — "Worked for 2m 14s · 7 steps" — because
- *  that is the question a person actually has about a reply that took a while,
- *  and answering it in the closed state is what makes the closed state
- *  acceptable. A live run says what it is doing right now instead; the duration
- *  is not interesting yet, and a ticking clock over a working agent reads as a
- *  countdown. */
-export function Notes({
-    notes,
-    live,
-    span,
-    podId,
-    conversationId,
-}: {
-    notes: Note[];
-    live?: boolean;
-    span?: string;
-    /** Handed to the cards inside the fold. Only the image card uses them, and
-     *  only when somebody asks it to fetch: a `view_image` names a file in one
-     *  of two stores, and neither can be read without knowing the pod, or — for
-     *  a relative workspace path — the conversation it resolves against. */
-    podId: string;
-    conversationId?: string | null;
-}) {
-    const [open, setOpen] = useState(false);
-    /* A live run with no step yet still says it is working, in the same
-       place and the same shape its first step will take — the message has
-       just gone, and this is the teammate taking it. Nothing to open yet. */
-    if (notes.length === 0 && !live) return null;
-    const empty = notes.length === 0;
-    const last = notes[notes.length - 1];
-    const count = notes.length + " step" + (notes.length === 1 ? "" : "s");
-    /* What the closed row says, and it depends on whether the run is still
-       going.
-     *
-     *  Live: the agent's own statement of intent for the step happening now.
-     *  "Fix boot timing and re-render" beats "Browser screenshot", and beats
-     *  the thinking beside it even more — a thought is the agent working
-     *  something out, often mid-dead-end, and watching that scroll past is not
-     *  the same as being told what is happening.
-     *
-     *  Finished: nothing. Not the last comment — a run of forty-six steps
-     *  whose last comment came at step twelve would present that sentence as
-     *  a summary of the whole thing, which is a claim nobody made. And not the
-     *  last step's label, which it used to be: that is usually "Thought", and
-     *  "Worked for 1m 25s · 18 steps | Thought" reads as two controls, the
-     *  second saying nothing. What a finished run owes you is what it cost,
-     *  and the count says that on its own. */
-    const saying = live ? [...notes].reverse().find((note) => note.said && note.detail) : undefined;
-    const peek = live ? (saying ? saying.detail : last?.label) : null;
-
+/** The steps themselves, as opening a run of them shows them: a line each,
+ *  in the order they happened. */
+function StepList({ notes, podId, conversationId }: { notes: readonly Note[]; podId: string; conversationId?: string | null }) {
     return (
-        <div className="steps" data-live={live ? "" : undefined}>
-            <button
-                className="steps__toggle"
-                onClick={empty ? undefined : () => setOpen((was) => !was)}
-                aria-expanded={empty ? undefined : open}
-                data-empty={empty ? "" : undefined}
-            >
-                <span className="steps__state">{live ? <span className="steps__pulse" /> : <CheckIcon size={11} />}</span>
-                <span className="steps__what">{live ? "Working" : span ? "Worked for " + span + " · " + count : count}</span>
-                {!open && peek && <span className="steps__peek">{peek}</span>}
-                {!empty && <span className="steps__chev">{open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}</span>}
+        <ol className="steps__list">
+            {notes.map((note, index) => (
+                <li key={index} data-kind={note.kind} data-nested={note.nested ? "" : undefined}>
+                    <StepRow note={note} podId={podId} conversationId={conversationId} />
+                </li>
+            ))}
+        </ol>
+    );
+}
+
+/** Whether a step has more than its line: a card, or a thought. A call this
+ *  app does not read has its line, and the whole of it on hover. */
+function opensOnto(note: Note): boolean {
+    return Boolean(note.card) || (note.kind === "thought" && note.detail.trim() !== "");
+}
+
+/** A step read rather than summarised: the command and what it printed, the
+ *  pages behind an answer, the thought in full. */
+function StepMore({ note, podId, conversationId }: { note: Note; podId: string; conversationId?: string | null }) {
+    if (note.card) return <div className="steprow__more"><ToolCardView card={note.card} podId={podId} conversationId={conversationId} /></div>;
+    return <p className={"steprow__more steps__detail" + (note.said ? " steps__detail--said" : "")}>{note.detail}</p>;
+}
+
+/** One step, on one line -- what it did and what on -- which opens onto the
+ *  step itself. Open, every card and every thought at once was the whole
+ *  run's output down the reply. */
+function StepRow({ note, podId, conversationId }: { note: Note; podId: string; conversationId?: string | null }) {
+    const [open, setOpen] = useState(false);
+    const { what, on } = stepLine(note);
+    const more = opensOnto(note);
+    const line = (
+        <>
+            <span className="steprow__what">{what}</span>
+            {on && <span className="steprow__on">{on}</span>}
+            {more && <span className="stepgroup__chev">{open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}</span>}
+        </>
+    );
+    if (!more) return <span className="steprow" title={on ? what + " " + on : what}>{line}</span>;
+    return (
+        <>
+            <button type="button" className="steprow steprow--opens" aria-expanded={open} onClick={() => setOpen((was) => !was)}>{line}</button>
+            {open && <StepMore note={note} podId={podId} conversationId={conversationId} />}
+        </>
+    );
+}
+
+/** A run of steps between two things the agent said, as one quiet line
+ *  saying what they did -- "Ran 4 commands", "Read a file, searched the web"
+ *  -- over the steps themselves. In the reply where it happened, so the
+ *  reply reads in order: what it said, what it did next, what it said then.
+ *
+ *  Closed, live or not: the line is the step summary, and the reader opens
+ *  what they want to look into. One step opens straight onto itself rather
+ *  than onto a list of one.
+ *
+ *  `podId` and `conversationId` go to the cards inside: only the image card
+ *  uses them, when somebody asks it to fetch -- a `view_image` names a file in
+ *  one of two stores, and neither can be read without knowing the pod, or,
+ *  for a relative workspace path, the conversation it resolves against. */
+export function StepGroup({ notes, podId, conversationId }: { notes: readonly Note[]; podId: string; conversationId?: string | null }) {
+    const [open, setOpen] = useState(false);
+    const said = stepsSaid(notes);
+    if (!said) return null;
+    const only = notes.length === 1 && opensOnto(notes[0]) ? notes[0] : null;
+    return (
+        <div className="stepgroup">
+            <button type="button" className="stepgroup__toggle" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
+                <span className="stepgroup__what">{said}</span>
+                <span className="stepgroup__chev">{open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}</span>
             </button>
-            {open && (
-                <ol className="steps__list">
-                    {notes.map((note, index) => (
-                        <li
-                            key={index}
-                            data-kind={note.kind}
-                            data-card={note.card ? "" : undefined}
-                            data-nested={note.nested ? "" : undefined}
-                        >
-                            {note.card ? (
-                                /* The step, read rather than summarised. Same
-                                   row it always was — this is what opening the
-                                   fold is for, and the reason the card is in
-                                   here rather than out in the transcript. */
-                                <ToolCardView card={note.card} podId={podId} conversationId={conversationId} />
-                            ) : (
-                                <>
-                                    <span className="steps__label">{note.label}</span>
-                                    {note.detail && (
-                                        <span className={"steps__detail" + (note.said ? " steps__detail--said" : "")}>
-                                            {note.detail}
-                                        </span>
-                                    )}
-                                </>
-                            )}
-                        </li>
-                    ))}
-                </ol>
-            )}
+            {open && (only
+                ? <StepMore note={only} podId={podId} conversationId={conversationId} />
+                : <StepList notes={notes} podId={podId} conversationId={conversationId} />)}
         </div>
     );
+}
+
+/** The line under a reply while its run is going: what it is doing now, in
+ *  the present tense -- "Searching the web", or the agent's own sentence for
+ *  the step in hand -- and how long the run has taken so far, so a long one
+ *  is visibly still moving rather than stuck.
+ *
+ *  It is also the run of steps still going, which open from it as a finished
+ *  run's open from its line. Drawn as a line of its own above, the same work
+ *  read as both done and doing. */
+export function WorkingLine({ steps = [], inFlight, since, podId = "", conversationId }: {
+    /** The run's steps since it last said or showed something, landed. */
+    steps?: readonly Note[];
+    /** The step the stream says is under way and has not landed yet. */
+    inFlight: readonly Note[];
+    since?: number;
+    podId?: string;
+    conversationId?: string | null;
+}) {
+    const [started] = useState(() => since ?? Date.now());
+    const [now, setNow] = useState(() => Date.now());
+    const [open, setOpen] = useState(false);
+    useEffect(() => {
+        const timer = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, []);
+    const doing = stepNow([...steps, ...inFlight]);
+    const what = (
+        <>
+            <span className="working__dot" aria-hidden="true" />
+            <span className="working__what">{doing}</span>
+            <span className="working__time" aria-hidden="true">{spanOf(started, now)}</span>
+        </>
+    );
+    /* Only a change of what it is doing is announced: not the clock, which
+       ticks every second, and not the steps opened under it. */
+    const told = <span className="sr-only" role="status">{doing}</span>;
+    if (steps.length === 0) return <p className="working">{what}{told}</p>;
+    return (
+        <div className="stepgroup">
+            {told}
+            <button type="button" className="working working--opens" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
+                {what}
+                <span className="stepgroup__chev">{open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}</span>
+            </button>
+            {open && <StepList notes={steps} podId={podId} conversationId={conversationId} />}
+        </div>
+    );
+}
+
+/** The line a stale run folds to: how long it worked, or -- with no clock
+ *  to go by -- what it did. */
+function workedFor(turn: Turn): string {
+    const span = spanOf(turn.startedAtMs, turn.endedAtMs);
+    if (span) return "Worked for " + span;
+    return stepsSaid(turn.notes) || "Earlier messages";
 }
 
 export function Reply({ teammate, seed, at, children }: { seed: string; teammate: Persona; at?: string; children: ReactNode }) {
@@ -229,6 +269,7 @@ export const TurnRow = memo(function TurnRow({
     outsiders,
     dockedId,
     runEnded,
+    stale = false,
     resumesOnAnswer,
     onOpenApp,
     onOpenFile,
@@ -247,6 +288,8 @@ export const TurnRow = memo(function TurnRow({
     outsiders?: string;
     dockedId?: string | null;
     runEnded: boolean;
+    /** Its run is over and the person has said something since. */
+    stale?: boolean;
     /** The conversation is waiting on its pauses; see `InteractionCard`. */
     resumesOnAnswer?: boolean;
     onOpenApp?: (name: string) => void;
@@ -257,8 +300,21 @@ export const TurnRow = memo(function TurnRow({
     onEditSend?: (id: string) => void;
 }) {
     const merging = Boolean(streaming);
-    const notes = streaming ? [...turn.notes, ...liveNote(streaming, turn.notes)] : turn.notes;
+    /* The step in flight, which has not landed in the transcript yet. */
+    const inFlight = streaming ? liveNote(streaming, turn.notes) : [];
     const spoke = turn.items.find((item) => item.kind === "text");
+    /* The run of steps the reply has not moved past yet has no line of its
+       own: the working line under it says what it is doing, and a line above
+       saying what it did would read the same work as done and doing. */
+    const last = turn.items[turn.items.length - 1];
+    const going = merging && !streaming?.text && last?.kind === "steps" ? last : null;
+    const goingNotes = going ? turn.notes.slice(going.from, going.from + going.count) : [];
+    /* A stale run reads as its answer, after one line for the work before
+       it (`answerOf`), which opens onto the run as it happened. */
+    const [unfolded, setUnfolded] = useState(false);
+    const answer = stale ? answerOf(turn.items) : -1;
+    const folding = answer > 0;
+    const hidden = (item: TurnItem, index: number) => folding && !unfolded && index < answer && foldsAway(item);
 
     return (
         <div {...{ [TRANSCRIPT_ROW_ATTRIBUTE]: "" }}>
@@ -274,25 +330,26 @@ export const TurnRow = memo(function TurnRow({
                 <Human message={turn.human} bot={teammate.name} outsiders={outsiders} onRetry={onRetrySend} onEdit={onEditSend} />
             )}
 
-            {(notes.length > 0 || turn.items.length > 0 || merging || Boolean(turn.runtimeNotes?.length)) && (
+            {(turn.notes.length > 0 || turn.items.length > 0 || merging || Boolean(turn.runtimeNotes?.length)) && (
                 <Reply
                     seed={seed}
                     teammate={teammate}
                     at={spoke?.kind === "text" ? spoke.at : undefined}
                 >
-                    <Notes
-                        notes={notes}
-                        live={merging && !streaming?.text}
-                        span={spanOf(turn.startedAtMs, turn.endedAtMs)}
-                        podId={podId}
-                        conversationId={conversationId}
-                    />
-
                     {/* One list, in the order it happened. A
                         question the run is blocked on must
                         not float above the widget it was
                         asking about. */}
-                    {turn.items.map((item) => {
+                    {folding && (
+                        <div className="stepgroup">
+                            <button type="button" className="stepgroup__toggle" aria-expanded={unfolded} onClick={() => setUnfolded((was) => !was)}>
+                                <span className="stepgroup__what">{workedFor(turn)}</span>
+                                <span className="stepgroup__chev">{unfolded ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}</span>
+                            </button>
+                        </div>
+                    )}
+                    {turn.items.map((item, index) => {
+                        if (hidden(item, index)) return null;
                         if (item.kind === "text") {
                             /* Its own surface. A teammate
                                that says four things while it
@@ -326,6 +383,10 @@ export const TurnRow = memo(function TurnRow({
                         if (item.kind === "plan") {
                             return <PlanCard key={item.id} steps={item.steps} />;
                         }
+                        if (item.kind === "steps") {
+                            if (item === going) return null;
+                            return <StepGroup key={item.id} notes={turn.notes.slice(item.from, item.from + item.count)} podId={podId} conversationId={conversationId} />;
+                        }
                         if (item.kind === "tool-card") {
                             /* An open sign-in is on the shelf above the composer. */
                             if (item.id === dockedId) return null;
@@ -357,6 +418,10 @@ export const TurnRow = memo(function TurnRow({
                         <div className="said">
                             <StreamingProse text={streaming.text} />
                         </div>
+                    )}
+
+                    {merging && !streaming?.text && (
+                        <WorkingLine steps={goingNotes} inFlight={inFlight} since={turn.startedAtMs} podId={podId} conversationId={conversationId} />
                     )}
 
                     {turn.noted && turn.noted.length > 0 && (

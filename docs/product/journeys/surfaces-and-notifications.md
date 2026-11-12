@@ -346,6 +346,28 @@ is answered *for the pod*.
 
 **Contracts:** `surface.webhook.handle_platform`
 
+### PS-SURF-054 — A member's run asks before acting on what somebody outside the pod wrote
+**Status:** planned
+
+> Proven at module level by `agent/tests/e2e/test_channel_tools_e2e.py`
+> (`test_a_member_since_gone_reads_as_outside_wherever_the_line_is_read`) and
+> `pod/tests/e2e/test_outside_text_gate_e2e.py`. A scenario needs a group chat
+> with somebody outside the pod in it, which the suite does not yet hold.
+
+- When a member's run is handed, or reads, what somebody outside the pod wrote
+  -- a contact, or a member who has since left the pod -- the system shall mark
+  those words as theirs.
+- While a member's run has such words in front of it, the system shall ask the
+  member before the run does anything beyond reading and writing the pod's own
+  records and files.
+- The system shall decide who is outside the pod one way for every reading: a
+  line the run was handed as background and the same line read from the
+  channel shall both ask the member first, or neither shall.
+- If the system cannot tell whether somebody is still in the pod, it shall
+  treat them as outside.
+
+**Contracts:** `agent.conversation.approval.list`, `agent.conversation.approval.resolve`
+
 ### PS-SURF-017 — A person can say something to the agent without the group reading it
 **Status:** planned
 
@@ -523,6 +545,73 @@ by its link.
 - The system shall never let one organization's thread appear in another's.
 
 **Contracts:** `agent.surface.list_mine`, `agent.surface.set_my_default`, `agent.surface.channels`
+
+### PS-SURF-024 — A person writing from two places is answered in each
+**Status:** planned
+
+> One person has one conversation with an agent across every place they reach
+> it — their email, their WhatsApp, Lemma itself — so a second message can
+> arrive from somewhere else while the agent is still answering the first. The
+> agent used to take it into the answer it was writing and send that one answer
+> wherever the person had written last: what was asked by email was answered on
+> WhatsApp, and the WhatsApp message was never answered. Each thread of a group
+> in Lemma is such a place too. Proven today by the module suites
+> (`test_a_message_sent_elsewhere_mid_run_is_answered_where_it_was_said`,
+> `test_an_answer_whose_place_went_mid_run_stays_on_the_timeline`,
+> `test_two_lines_in_a_group_are_answered_each_by_its_own_answer`); the
+> scenario lanes drive one platform per person, so no scenario test can reach
+> it yet.
+
+- When a person writes to the agent from a second place while it is answering
+  them at the first, the system shall answer the second message at the second
+  place once the first answer is done.
+- The system shall deliver each answer only at the place its question was
+  asked.
+- While the agent is answering a message, the system shall show that it is
+  working at the place that message was asked, and nowhere else.
+- If a message arrives from another place while the agent is answering, then
+  the system shall not fold it into the answer it is writing.
+- When a person writes in another thread of a group in Lemma while the agent
+  is answering a thread there, the system shall answer it in its own thread
+  once that answer is done; a reply in the same thread is part of the answer
+  being written.
+- If the place a question was asked at is removed while the agent is answering
+  it, then the system shall keep the answer on the person's timeline in Lemma,
+  and shall not send it to any other place they wrote from.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.surface.send`
+
+### PS-SURF-025 — Which agent answers does not depend on where the line was typed
+**Status:** planned
+
+> A group mirrored from a platform is a channel members also write to in
+> Lemma. The agents that answered a line used to be chosen two ways: in Lemma,
+> the agents it named and those answering every line; on the platform, the
+> bot alone, and only when the line was put to it. The same words got
+> different agents depending on where they were typed. Proven today by the
+> module suites (`test_a_line_is_answered_by_the_same_agents_typed_in_lemma_or_heard_on_the_platform`,
+> `test_an_agent_answering_a_line_heard_on_the_platform_answers_there`, and
+> `test_a_message_nobody_put_to_the_bot_is_let_in_where_it_answers_every_line`);
+> no scenario lane yet speaks in a group from both sides.
+
+- When a member writes a line in a group, the system shall have it answered by
+  the agents it names and by the agents set to answer every line there,
+  whether the member typed it in Lemma or on the platform the group mirrors.
+- On the platform, the system shall take a line put to the bot -- a mention, a
+  reply in its thread, its name -- as naming the bot's agent.
+- When an agent answers a line heard on the platform, the system shall send
+  its answer to that place, whichever agent it is.
+- Where the bot's agent answers every line in a group, when a member writes
+  there without putting it to the bot, the system shall answer them as if
+  they had.
+- If somebody outside the pod writes in a group without putting it to the
+  bot, then the system shall not answer them, nor tell them it will not,
+  whatever the agents there are set to answer.
+- The system shall start each agent at most once for a line, however many of
+  these reasons name it.
+
+**Contracts:** `surface.webhook.handle_platform`, `channel.message.post`,
+`channel.member.add`
 
 ---
 

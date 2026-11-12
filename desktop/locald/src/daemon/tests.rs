@@ -540,6 +540,7 @@ fn an_idle_stop_is_quick_and_times_every_step() {
 /// A stop behind a running operation waits for it, and says that is why.
 #[test]
 fn a_stop_behind_an_operation_waits_for_it_and_says_so() {
+    const HELD: std::time::Duration = std::time::Duration::from_millis(200);
     let (_root, daemon) = daemon();
     let events = listen(&daemon);
     daemon.lifecycle.begin().unwrap();
@@ -549,10 +550,17 @@ fn a_stop_behind_an_operation_waits_for_it_and_says_so() {
         let _ = finished.send(stopping.stop_everything(Some(&json!("quit-2")), true));
     });
 
+    // Spawned is not started. On a slow runner the stop's thread first ran
+    // after `finish` below, found nothing to wait for and took microseconds,
+    // so the operation is held until the stop is blocked behind it.
     assert!(
-        stopped
-            .recv_timeout(std::time::Duration::from_millis(200))
-            .is_err(),
+        daemon
+            .lifecycle
+            .wait_for_waiter(std::time::Duration::from_secs(5)),
+        "the stop must wait for the operation in flight"
+    );
+    assert!(
+        stopped.recv_timeout(HELD).is_err(),
         "the stop must not overtake the operation"
     );
     daemon.lifecycle.finish();
@@ -561,10 +569,10 @@ fn a_stop_behind_an_operation_waits_for_it_and_says_so() {
         .unwrap();
     worker.join().unwrap();
 
-    // Most of the 200ms the operation held on for; the stop's thread started a
-    // moment after the clock above did.
+    // The stop was already waiting when the hold began, so its wait spans all
+    // of it.
     assert_eq!(outcomes[0].step, "operations");
-    assert!(outcomes[0].duration.as_millis() >= 100, "{outcomes:?}");
+    assert!(outcomes[0].duration >= HELD, "{outcomes:?}");
     assert!(events_of(&events).iter().any(|event| event["detail"]
         .as_str()
         .unwrap_or("")

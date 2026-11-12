@@ -15,8 +15,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.capabilities.unique_tool_call_ids import (
-    UniqueToolCallIdsCapability,
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+    UniqueToolCallIds as UniqueToolCallIdsCapability,
 )
 from app.modules.agent.domain.tool_call_ids import first_per_call_id
 
@@ -91,13 +91,15 @@ async def test_two_different_calls_under_one_id_both_run_and_pair_with_their_res
 def test_the_stored_calls_get_the_ids_the_executed_calls_ran_under():
     """The two halves see the same calls but one: a call whose arguments never
     parsed is executed, not stored. It cannot move a stored call's id."""
-    from app.modules.agent.capabilities.unique_tool_call_ids import unique_call_parts
+    from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+        unique_call_parts,
+    )
     from app.modules.agent.domain.value_objects import (
         AgentEvent,
         AgentEventType,
         MessageDraft,
     )
-    from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+    from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         unique_stored_calls,
     )
 

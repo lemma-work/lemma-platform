@@ -46,8 +46,8 @@ class ChannelDetailResponse:
         assignee (None | PersonRef | Unset): A contact's channel: who answers them by hand.
         attention (AttentionResponse | None | Unset): A contact's channel: its current case asks for a person, and why.
             Never set on another kind of channel.
-        case_id (None | Unset | UUID): A contact's channel: its current case, the one `status`, `assignee` and
-            `attention` are read from (`/cases` lists them all).
+        case_id (None | Unset | UUID): A contact's channel: its case, the one `status`, `assignee` and `attention` are
+            read from. A channel keeps one case.
         hand_back_after_hours (int | None | Unset): A contact's channel: how long the assignee holds the contact after
             their last line before the agent answers again.
         joined (bool | Unset): Whether the reader is in it. A pod admin listing a bot's groups (`source_surface`) is

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from app.modules.agent.contracts.progress_tools import (
+from app.modules.agent.contracts.channel_words import (
     TODO_TOOL_NAME,
     TodoStep,
     progress_comment_for_tool_call,
@@ -87,10 +87,9 @@ def test_plain_lines_without_a_checkbox_are_skipped() -> None:
     assert steps == [TodoStep("Real", False)]
 
 
-def test_the_tool_name_is_the_one_the_todo_capability_registers() -> None:
+def test_the_tool_name_is_the_one_the_todo_tools_register() -> None:
     """The constant lives apart from the tool, so tie them together."""
-    import inspect
+    from app.modules.agent.infrastructure.tools.todo import todo_specs
 
-    from app.modules.agent.capabilities import todo
-
-    assert f"def {TODO_TOOL_NAME}(" in inspect.getsource(todo.build_todo_toolset)
+    names = {spec.name for spec in todo_specs(uow_factory=lambda: None)}
+    assert TODO_TOOL_NAME in names

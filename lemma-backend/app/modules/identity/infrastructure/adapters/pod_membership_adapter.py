@@ -17,6 +17,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.domain.ports import PodMembershipPort
+from app.modules.pod.contracts.organization_pods import delete_organization_pods
 from app.modules.pod.contracts.members import (
     add_pod_member,
     leave_organization_pods,
@@ -85,4 +86,13 @@ class SqlAlchemyPodMembershipAdapter(PodMembershipPort):
             self._uow,
             organization_member_id=organization_member_id,
             user_id=user_id,
+        )
+
+    async def delete_organization_pods(
+        self, *, organization_id: UUID, requester_user_id: UUID
+    ) -> list[UUID]:
+        return await delete_organization_pods(
+            self._uow,
+            organization_id=organization_id,
+            requester_user_id=requester_user_id,
         )

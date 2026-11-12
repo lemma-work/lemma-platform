@@ -14,7 +14,7 @@
     "app/core/observability/telemetry.py::_build_llm_fanout_processor::MH006::BatchSpanProcessor": 1,
     "app/core/observability/telemetry.py::_setup_llm_tracing::MH006::BatchSpanProcessor": 1,
     "app/core/observability/telemetry.py::_setup_llm_tracing::MH006::TracerProvider": 1,
-    "app/modules/agent/services/runtime_model_factory.py::<module>::MH003::_closing_clients": 1,
+    "app/modules/agent/infrastructure/providers/model_factory.py::<module>::MH003::_closing_clients": 1,
     "app/modules/apps/api/controllers/public_sdk_controller.py::<module>::MH003::_bundle_cache": 1,
     "app/modules/connectors/services/auth/github_app.py::_mint::MH004::httpx.AsyncClient": 1,
     "app/modules/connectors/services/auth/mcp_oauth.py::discover_authorization_server::MH004::httpx.AsyncClient": 1,

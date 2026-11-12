@@ -36,7 +36,7 @@ jobs:
     # the nightly Desktop builds publish one -- without this they would start an
     # official release build for a tag that has no version in it.
     if: startsWith(github.event.release.tag_name || format('v{0}', inputs.version), 'v')
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       # The release tag, never the ref the run was started from. A dispatch

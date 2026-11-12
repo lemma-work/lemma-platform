@@ -3,8 +3,20 @@ import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
 import { aboutSectionOf, type AboutSection } from "@/space/about-sections";
 
-/** The one segment every workspace URL hangs off. */
+/** The segments a workspace URL hangs off. The workspace this grammar was
+ *  written for lived at `/t`, then `/l`; the app now lives at `/l` and reads
+ *  every address in it, and `/t` sends what it is given there. Links that
+ *  left Lemma before the moves -- in an email, a WhatsApp message, a
+ *  bookmark -- still say `/t` and still open. */
 export const ROOT = "/t";
+export const CLASSIC_ROOT = "/l";
+
+/** Where an address is written: under `/l`, where the app reads it and
+ *  settles on its own address for the same place, with no trip through
+ *  `/t` and back. */
+function rootHere(): string {
+    return CLASSIC_ROOT;
+}
 
 /** The organization's own page — every teammate at once, zoomed out — sits
  *  where a pod id would. Pod ids are UUIDs, so no teammate can be called it. */
@@ -79,7 +91,7 @@ function segmentsOf(pathname: string): string[] | null {
  */
 export function readAddress(pathname: string): Address {
     const segments = segmentsOf(pathname);
-    if (!segments || segments[0] !== ROOT.slice(1)) return NOWHERE;
+    if (!segments || (segments[0] !== ROOT.slice(1) && segments[0] !== CLASSIC_ROOT.slice(1))) return NOWHERE;
 
     const podId = segments[1] ?? null;
     if (!podId) return NOWHERE;
@@ -164,10 +176,20 @@ export function readAddress(pathname: string): Address {
 /** The URL for somewhere. The inverse of `readAddress` for every address that
  *  `readAddress` can produce, which is what the round-trip test asserts. */
 export function writeAddress(address: Address): string {
-    if (address.team) return ROOT + "/" + TEAM_SEGMENT;
-    if (!address.podId) return ROOT;
-    const path = [ROOT, encodeURIComponent(address.podId), ...tailOf(address)];
+    const root = rootHere();
+    if (address.team) return root + "/" + TEAM_SEGMENT;
+    if (!address.podId) return root;
+    const path = [root, encodeURIComponent(address.podId), ...tailOf(address)];
     return path.join("/");
+}
+
+/** A teammate's Connections part, opened on one connector when there is one
+ *  to name: the place `connectionsPath` is inside the app, for a link that
+ *  should stay in it rather than load it again. Written like every other
+ *  address, so from the classic workspace it stays there. */
+export function connectionsPlace(podId: string, slug?: string): string {
+    const place = writeAddress({ ...NOWHERE, podId, tabId: "space:about", section: "connections" });
+    return place + (slug ? "?connector=" + encodeURIComponent(slug) : "");
 }
 
 function tailOf(address: Address): string[] {
@@ -249,9 +271,9 @@ export function tabFromId(tabId: string): Tab | null {
     }
     if (tabId.startsWith("channel:")) {
         const channelId = tabId.slice("channel:".length);
-        /* Named "Channel" until the page has read it and says what it is
+        /* Named "Chat" until the page has read it and says what it is
            called. */
-        return channelId ? { id: tabId, kind: "channel", label: "Channel", channelId } : null;
+        return channelId ? { id: tabId, kind: "channel", label: "Chat", channelId } : null;
     }
     if (tabId.startsWith("run:")) {
         const runId = tabId.slice("run:".length);

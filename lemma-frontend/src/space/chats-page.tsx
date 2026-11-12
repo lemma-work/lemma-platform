@@ -7,24 +7,17 @@ import { source, type ConversationRef, type Pod } from "@/data";
 import { ChannelIcon } from "@/shell/channels";
 import { AgentIcon, ChatIcon, ClockIcon, FileIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
 import { ChannelMark, StartChat } from "@/channels/chat-starter";
-import { chatRows, listedAsChat } from "@/channels/chat-list";
+import { CHAT_FILTERS, chatsOf, keptBy, listsChannels, matchesChat, type ChatFilter } from "@/channels/chat-list";
 import { placeName } from "@/channels/chat-copy";
-import { badge, channelTitle, sayList, type Channel } from "@/channels/model";
+import { badge, sayList, type Channel } from "@/channels/model";
 import { allChannels, useChannelList } from "@/channels/queries";
 import { SearchResults } from "@/channels/search";
 import { listStamp } from "@/data/stamp";
-import { originLabel, type ConversationOrigin, type OriginKind } from "@/thread/conversation-origin";
+import { originLabel, type ConversationOrigin } from "@/thread/conversation-origin";
 import { emptyFor } from "./empty-copy";
 import { SpaceEmpty } from "./empty-state";
 
-type Filter = "all" | "chats" | "channels" | "automations" | "docs";
-const FILTERS: { id: Filter; label: string; kinds: OriginKind[] | null }[] = [
-    { id: "all", label: "All", kinds: null },
-    { id: "chats", label: "Just you", kinds: ["chat", "ask"] },
-    { id: "channels", label: "Shared", kinds: ["channel", "notification"] },
-    { id: "automations", label: "Automations", kinds: ["schedule", "workflow", "task"] },
-    { id: "docs", label: "On docs", kinds: ["resource"] },
-];
+type Filter = ChatFilter;
 
 function OriginIcon({ origin }: { origin: ConversationOrigin }) {
     if ((origin.kind === "channel" || origin.kind === "notification") && origin.platform) {
@@ -79,19 +72,25 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
     /* A chat names its bot by uuid only; the roster turns that into a face. */
     const bots = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
     const botById = useMemo(() => new Map((bots.data ?? []).filter(bot => bot.id && !bot.front).map(bot => [bot.id, bot])), [bots.data]);
-    const wanted = FILTERS.find(each => each.id === filter)?.kinds ?? null;
-    const conversations = filter === "channels" ? [] : wanted ? all.filter(row => wanted.includes((row.origin ?? { kind: "chat" }).kind)) : all;
+    const archived = filter === "archived";
     /* The chats that live on a channel, in the same list: under All by when
-       they were last active, and alone under Shared. Searched by name, as
-       conversations are by title. */
-    const channelList = useChannelList(pod.id, { archived: false });
-    const channels = useMemo(() => {
-        if (filter !== "all" && filter !== "channels") return [];
+       they were last active, alone under Shared, and under Archived the ones
+       put away, to be found and brought back. The server searches the
+       conversations; these are found by name or what was last said, as the
+       one chat list finds them. */
+    const channelList = useChannelList(pod.id, { archived });
+    const shown = useMemo(() => {
         const needle = search.toLowerCase();
-        return allChannels(channelList.data).filter(listedAsChat).filter((channel) => !needle || channelTitle(channel, pod.name).toLowerCase().includes(needle));
-    }, [filter, search, channelList.data, pod.name]);
-    const rows = useMemo(() => chatRows(conversations, channels, pod.name), [conversations, channels, pod.name]);
-    const shown = rows;
+        const items = chatsOf({
+            pod,
+            conversations: all.filter(keptBy(filter)),
+            channels: listsChannels(filter) ? allChannels(channelList.data) : [],
+            me: null,
+            archived,
+        });
+        return needle ? items.filter((item) => item.conversation || matchesChat(item, needle)) : items;
+    }, [all, filter, archived, search, channelList.data, pod]);
+    const channelsOnly = filter === "channels" || archived;
 
     /* Paging on sight of the last row, with a button for when that fails. */
     const more = useRef<HTMLButtonElement>(null);
@@ -117,7 +116,7 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                 <StartChat pod={pod} look="pill" onNewChat={onNew} onOpenChannel={onOpenChannel} onConnect={onConnect} />
             </header>
             <div className="all__tabs chats-page__filters" role="tablist" aria-label="Which conversations">
-                {FILTERS.map(each => (
+                {CHAT_FILTERS.map(each => (
                     <button key={each.id} role="tab" aria-selected={filter === each.id} onClick={() => setFilter(each.id)}>{each.label}</button>
                 ))}
             </div>
@@ -128,8 +127,9 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                 </thead>
                 <tbody>
                     {shown.map((each) => {
-                        if (each.kind === "channel") return <SharedRow key={each.id} pod={pod} channel={each.channel} title={each.title} onOpen={() => onOpenChannel(each.channel.id)} />;
-                        const row: ConversationRef = each.chat;
+                        const channel = each.channel;
+                        if (channel) return <SharedRow key={each.key} pod={pod} channel={channel} title={each.title} onOpen={() => onOpenChannel(channel.id)} />;
+                        const row: ConversationRef = each.conversation!;
                         const origin = row.origin ?? { kind: "chat" as const, label: "Chat" };
                         const cameFrom = originLabel(origin, pod.name);
                         return (
@@ -170,12 +170,12 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
             )}
             {pages.isPending && <p className="all__empty">Loading…</p>}
             {pages.isError && <p className="all__empty">Couldn’t load conversations.</p>}
-            {pages.isSuccess && (filter !== "channels" || !channelList.isPending) && shown.length === 0 && search && <p className="all__empty">Nothing matches that.</p>}
-            {pages.isSuccess && (filter !== "channels" || !channelList.isPending) && shown.length === 0 && !search && (
+            {pages.isSuccess && (!channelsOnly || !channelList.isPending) && shown.length === 0 && search && <p className="all__empty">Nothing matches that.</p>}
+            {pages.isSuccess && (!channelsOnly || !channelList.isPending) && shown.length === 0 && !search && (
                 <SpaceEmpty empty={emptyFor({ place: "chats", filter }, pod.teammate?.name || pod.name)}
                     on={{ chat: onNew, reach: onReach, pages: onPages, ask: onAsk }} />
             )}
-            {hasNextPage && filter !== "channels" && (
+            {hasNextPage && !channelsOnly && (
                 <button ref={more} className="chats-page__more" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
                     {isFetchingNextPage ? "Loading more…" : isFetchNextPageError ? "Couldn’t load more — try again" : "Load more"}
                 </button>
@@ -192,7 +192,7 @@ function SharedRow({ pod, channel, title, onOpen }: { pod: Pod; channel: Channel
     const count = badge(channel.unread.lines);
     const places = channel.sources.map((one) => placeName(one));
     const cameFrom = channel.kind === "DIRECT"
-        ? "Your private line with " + (pod.teammate?.name || pod.name)
+        ? "Your private chat with " + (pod.teammate?.name || pod.name)
         : places.length ? sayList(places) : "Shared chat";
     return (
         <tr tabIndex={0} onClick={onOpen} onKeyDown={event => { if (event.key === "Enter") onOpen(); }}>

@@ -13,6 +13,8 @@
  */
 
 import { readAddress } from "@/shell/address";
+import { isFramePath, podOfFramePath } from "@/outcomes/paths";
+import { podOfView, readTrialView } from "@/outcomes/address";
 import { characterForSeed, CHARACTERS, type CharacterName } from "@/shell/cast";
 import { readableName } from "@/library/reading";
 
@@ -64,8 +66,11 @@ function crowd(seed: string, howMany: number): CharacterName[] {
  *  nobody — pass something stable for a visit, such as the path.
  */
 export function waitingFor(destination: string | null, seed = "lemma"): Waiting {
+    /* A sign-in can be sent to an old address -- `/t/outcome/…`, `/o/…` --
+       before the server has sent it on, so it is read as where it is going. */
     const path = pathOf(destination);
-    const podId = path ? readAddress(path).podId : null;
+    const trial = path ? readTrialView(path) : null;
+    const podId = !path ? null : isFramePath(path) ? podOfFramePath(path) : trial ? podOfView(trial) : readAddress(path.replace(/^\/o(?=\/|$)/, "/t")).podId;
 
     if (podId) return { name: sayableName(podId), faces: [characterForSeed(podId)] };
     return { name: null, faces: crowd(seed, 3) };
