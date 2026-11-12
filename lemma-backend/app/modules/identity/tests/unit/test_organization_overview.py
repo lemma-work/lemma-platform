@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
@@ -307,8 +307,16 @@ def test_a_renamed_zone_is_read_as_its_current_name():
     assert str(known_zone("Europe/Kiev")) == "Europe/Kyiv"
     for old, current in RENAMED_ZONES.items():
         assert str(known_zone(old)) == current
-        assert known_zone(old).utcoffset(datetime(2026, 1, 15)) == ZoneInfo(
-            old
+    # Where the host still knows an old name, it is the same zone as the new
+    # one. A host on current zone data alone (CI's) knows none of them, which
+    # is the case the mapping is for, and the comparison has nothing to read.
+    for old, current in RENAMED_ZONES.items():
+        try:
+            before = ZoneInfo(old)
+        except ZoneInfoNotFoundError:
+            continue
+        assert before.utcoffset(datetime(2026, 1, 15)) == ZoneInfo(
+            current
         ).utcoffset(datetime(2026, 1, 15))
 
 
