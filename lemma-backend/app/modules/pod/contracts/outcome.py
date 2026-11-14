@@ -20,7 +20,6 @@ from app.core.authorization.context import Context
 from app.core.infrastructure.work import Fact, pod_namespace
 from app.core.ports.outcome_measures import MeasureReading, OutcomeMeasures
 from app.modules.pod.domain.pod_entities import (
-    PLAN_PATH,
     OutcomeInput,
     OutcomeKind,
     PodEntity,
@@ -157,7 +156,6 @@ async def set_starting_outcome(
 
 
 __all__ = [
-    "PLAN_PATH",
     "OutcomeInput",
     "OutcomeKind",
     "PodEntity",

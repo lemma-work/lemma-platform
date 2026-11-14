@@ -5,7 +5,7 @@ description: Keep the partners table true. Use when a company is added, moves, o
 
 # Keep the partners table true
 
-The number Partners owns counts `partners` where `signed` is true. Keep that column as it is.
+Partners's count counts `partners` where `signed` is true. Keep that column as it is.
 
 - Every company you talk to is a row, with its `link` where the conversation is kept, an `owner` and a `stage`. One row per `link`: update it, never add a second.
 - After every conversation, set `next_step` and `next_step_due`.

@@ -21,6 +21,7 @@ CURATED_SKILLS: tuple[str, ...] = (
     "lemma-app-design",
     "lemma-app-qa",
     "lemma-artifact-author",
+    "lemma-bring-in",
     "lemma-builder",
     "lemma-data-analysis",
     "lemma-evals",

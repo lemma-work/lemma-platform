@@ -62,7 +62,7 @@ const PARTS: readonly Part[] = [
         blurb: "What it works through" },
     { id: "schedules", label: "Standing work", icon: ClockIcon,
         note: () => "What it does without being asked, on a time or an event.", blurb: "What it does unasked" },
-    { id: "channels", label: "Where it answers", icon: ReachIcon, title: (name) => "Where " + name + " answers",
+    { id: "channels", label: "Where to reach it", icon: ReachIcon, title: (name) => "Where to reach " + name,
         note: (name) => "Pick one and " + name + " answers there, under its own name.", blurb: "WhatsApp, Slack, email and more" },
     { id: "ai-tools", label: "MCP", icon: PlugIcon, title: () => "Connect ChatGPT, Claude and others",
         note: (name) => "Add " + name + " to any AI app that speaks MCP, and use it from there.", blurb: "Use it from other AI apps" },

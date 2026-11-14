@@ -15,6 +15,7 @@ from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.schedule.contracts.pod_teardown import (
     create_pod_schedule_teardown,
 )
+from app.modules.pod.infrastructure.open_pods import OpenPods
 from app.modules.pod.infrastructure.owned_pods import OwnedPods
 from app.modules.pod.infrastructure.pod_repositories import (
     PodJoinRequestRepository,
@@ -45,6 +46,7 @@ def get_pod_service(
         uow=uow,
         plan_limits=plan_limits,
         owned_pods=OwnedPods(uow) if plan_limits is not None else None,
+        open_pods=OpenPods(uow),
     )
 
 
@@ -103,6 +105,7 @@ def get_pod_join_request_service(
         pod_repository=PodRepository(uow),
         organization_repository=build_organization_membership(uow),
         pod_role_service=PodRoleService(uow),
+        open_pods=OpenPods(uow),
     )
 
 

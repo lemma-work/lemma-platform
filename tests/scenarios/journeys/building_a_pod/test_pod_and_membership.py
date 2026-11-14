@@ -277,6 +277,131 @@ class TestLettingPeopleAskToJoin:
 
         await bob.can_read(pod)
 
+    @scenario("A member finds the pods open to them, and joins one")
+    @proves("PS-POD-023")
+    @covers("pod.create", "pod.update", "pod.list_joinable", "pod.join", "pod.list")
+    async def test_a_member_finds_the_pods_open_to_them(self, world, run):
+        alice = await world.person("priya")
+        open_pod = await alice.creates_a_pod(named=run.name("open"))
+        await alice.opens_pod_to(open_pod, who="ORG_MEMBERS")
+        closed_pod = await alice.creates_a_pod(named=run.name("closed"))
+        bob = await world.person("sofia")
+
+        offered = {str(pod["id"]): pod for pod in await bob.pods_they_can_join()}
+
+        assert str(closed_pod["id"]) not in offered, "an invite-only pod is offered"
+        found = offered.get(str(open_pod["id"]))
+        assert found is not None, "the pod open to the organization is not offered"
+        assert found["member_count"] == 1, (
+            f"offered with {found['member_count']} members; its one member is "
+            f"the admin who made it: {found}"
+        )
+
+        await bob.joins(open_pod)
+
+        await bob.sees_pod(open_pod)
+        still_offered = {str(pod["id"]) for pod in await bob.pods_they_can_join()}
+        assert str(open_pod["id"]) not in still_offered, (
+            "a pod they are in is still offered to them"
+        )
+
+    @scenario("An owner is offered no pod to join, and an outsider is refused")
+    @proves("PS-POD-023")
+    @covers("pod.create", "pod.update", "pod.list_joinable", "pod.delete")
+    async def test_an_owner_is_offered_nothing_and_an_outsider_is_refused(
+        self, world, run
+    ):
+        alice = await world.person("priya")
+        open_pod = await alice.creates_a_pod(named=run.name("open"))
+        await alice.opens_pod_to(open_pod, who="ORG_MEMBERS")
+        outsider = await world.person("hannah")
+
+        # An owner already opens every pod, and joining one is refused to them.
+        assert await alice.pods_they_can_join() == []
+        refusal = await outsider.is_refused_the_pods_open_in(alice.organization)
+        assert refusal == 403, f"someone from another organization was answered {refusal}"
+
+        # Nobody joins it, so it would be offered to the cast on every run after.
+        await alice.deletes_pod(open_pod)
+
+    @scenario("A pod cannot take in new members while it is invite-only")
+    @proves("PS-POD-024")
+    @covers("pod.create", "pod.update")
+    async def test_an_invite_only_pod_cannot_take_in_new_members(self, world, run):
+        alice = await world.person("priya")
+        pod = await alice.creates_a_pod(named=run.name("closed"))
+
+        refusal = await alice.is_refused_making_new_members_join(pod)
+
+        assert refusal == "POD_AUTO_JOIN_NEEDS_OPEN_POLICY", refusal
+
+    @scenario("Only someone who decides who joins a pod may make new members join it")
+    @proves("PS-POD-024")
+    @covers("pod.create", "pod.update", "pod.member.add")
+    async def test_a_pod_editor_cannot_make_new_members_join(self, world, run):
+        alice = await world.person("priya")
+        pod = await alice.creates_a_pod(named=run.name("edited"))
+        await alice.opens_pod_to(pod, who="ORG_MEMBERS")
+        bob = await world.person("sofia")
+        await alice.adds(bob, to_pod=pod, as_role="POD_EDITOR")
+
+        refusal = await bob.is_refused_making_new_members_join(pod)
+
+        # Not the open-policy refusal -- the pod is open -- but the editor's
+        # authority: deciding who joins is managing the pod's members.
+        assert refusal == "INSUFFICIENT_PERMISSION", refusal
+        assert (await alice.opens_pod(pod))["config"]["auto_join_new_members"] is False
+
+    @scenario("Someone who joins the organization is put in the pods set to take them in")
+    @proves("PS-POD-024")
+    @covers(
+        "org.create",
+        "org.invitation.invite",
+        "org.invitation.accept",
+        "pod.create",
+        "pod.update",
+        "pod.list",
+        "pod.list_joinable",
+        "pod.member.list",
+    )
+    @open_signup
+    async def test_a_newcomer_joins_the_pods_set_to_take_them_in(self, world, run):
+        # A fresh organization: a pod that takes in everyone who arrives would
+        # otherwise sweep every later run's newcomers into it.
+        needs(OPEN_SIGNUP)
+        founder = await world.new_person("founder")
+        organization = await founder.creates_an_organization()
+        lobby = await founder.creates_a_pod(
+            named=run.name("lobby"),
+            settings={"join_policy": "ORG_MEMBERS", "auto_join_new_members": True},
+        )
+        early = await world.new_person("early")
+        await early.accepts(await founder.invites(early, to=organization))
+        # Being in the lobby is also how this knows their arrival has been
+        # dealt with, before the next pod starts taking people in.
+        await early.ends_up_in(lobby)
+
+        room = await founder.creates_a_pod(named=run.name("room"))
+        await founder.opens_pod_to(room, who="ORG_MEMBERS")
+        await founder.makes_new_members_join(room)
+        elsewhere = await founder.creates_a_pod(named=run.name("open"))
+        await founder.opens_pod_to(elsewhere, who="ORG_MEMBERS")
+        newcomer = await world.new_person("newcomer")
+        await newcomer.accepts(await founder.invites(newcomer, to=organization))
+
+        await newcomer.ends_up_in(lobby)
+        await newcomer.ends_up_in(room)
+        seat = await founder.membership_of(newcomer, in_pod=room)
+        assert seat["roles"] == ["POD_USER"], seat
+        offered = {
+            str(pod["id"]) for pod in await newcomer.pods_they_can_join(organization)
+        }
+        assert str(elsewhere["id"]) in offered, (
+            "an open pod that does not take people in is no longer theirs to choose"
+        )
+        # Already in the organization when the room started taking people in.
+        await early.does_not_see_pod(room)
+
 
 @scenario("Changing one pod setting leaves the others alone")
 @proves("PS-POD-003")

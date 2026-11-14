@@ -22,6 +22,7 @@ from app.modules.pod.domain.pod_entities import (
     PodRole,
 )
 from app.modules.pod.domain.ports import (
+    OpenPodsPort,
     OrganizationMembershipPort,
     PodJoinRequestRepositoryPort,
     PodMemberRepositoryPort,
@@ -30,6 +31,9 @@ from app.modules.pod.domain.ports import (
 from app.modules.pod.services.pod_role_service import PodRoleService
 from app.modules.pod.domain.visibility import normalize_role_list
 from app.core.authorization.permissions import Permissions
+
+#: Default pods read per statement while joining someone to them.
+_DEFAULT_POD_PAGE = 100
 
 
 class PodJoinRequestService:
@@ -40,12 +44,14 @@ class PodJoinRequestService:
         pod_repository: PodRepositoryPort,
         organization_repository: OrganizationMembershipPort,
         pod_role_service: PodRoleService | None = None,
+        open_pods: OpenPodsPort | None = None,
     ):
         self.pod_join_request_repository = pod_join_request_repository
         self.pod_member_repository = pod_member_repository
         self.pod_repository = pod_repository
         self.organization_repository = organization_repository
         self.pod_role_service = pod_role_service
+        self._open_pods = open_pods
 
     async def _require_manage_permission(
         self,
@@ -311,6 +317,47 @@ class PodJoinRequestService:
             requester_user_id=requester_user_id,
         )
         return created, created_org_member
+
+    async def join_default_pods(
+        self, *, organization_id: UUID, user_id: UUID
+    ) -> list[UUID]:
+        """Put someone who just joined the organization into its default pods.
+
+        A default pod is one set to take in everyone who joins the
+        organization (``auto_join_new_members``) and open to its members; each
+        makes them a pod user, the membership a self-join makes. Safe to run
+        again: a pod they are already in is not offered, and
+        ``_ensure_pod_membership`` would leave it alone if it were. Returns the
+        pods they were put in.
+        """
+        open_pods = self._open_pods
+        if open_pods is None:
+            # A wiring fault, said as one: a newcomer silently put in no pod
+            # would look exactly like an organization with no default pods.
+            raise RuntimeError("PodJoinRequestService was built without open_pods")
+        org_member = await self.organization_repository.get_member(
+            user_id, organization_id
+        )
+        # Gone again before this ran: there is nobody to put anywhere.
+        if org_member is None:
+            return []
+        # An owner opens every pod already, and `join_pod` refuses them; a
+        # membership would be a row that changes nothing they can reach.
+        if org_member.role == OrganizationRole.ORG_OWNER:
+            return []
+        joined: list[UUID] = []
+        cursor: str | None = None
+        while True:
+            pod_ids, cursor = await open_pods.list_auto_join_pod_ids(
+                organization_id, org_member.id, _DEFAULT_POD_PAGE, cursor
+            )
+            for pod_id in pod_ids:
+                await self._ensure_pod_membership(
+                    pod_id=pod_id, org_member=org_member, requester_user_id=user_id
+                )
+                joined.append(pod_id)
+            if cursor is None:
+                return joined
 
     async def get_my_join_request(
         self,

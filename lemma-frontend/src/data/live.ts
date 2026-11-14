@@ -1068,8 +1068,12 @@ export const liveSource: PodSource = {
     async setPodJoin(podId: string, policy: JoinPolicy): Promise<void> {
         /* Only this field goes up. The config is merged field-wise, so the
            runtime stored beside it survives — see `setPodRuntime`, which
-           relies on the same merge. */
-        await lemma(podId).pods.update(podId, { config: { join_policy: joinWire(policy) as JoinWire } });
+           relies on the same merge. Closing a pod also stops it taking in
+           everyone who joins the organization: a closed pod can't, and the
+           server refuses a closed one that still says it does. */
+        await lemma(podId).pods.update(podId, {
+            config: { join_policy: joinWire(policy) as JoinWire, ...(policy === "invited" ? { auto_join_new_members: false } : {}) },
+        });
         forgetPod(podId);
     },
 

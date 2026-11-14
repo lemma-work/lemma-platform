@@ -25,6 +25,9 @@ class PodConfig:
     """Typed pod-level configuration.
 
     Attributes:
+        auto_join_new_members (bool | Unset): Everyone who joins the organization from now on becomes a member of this
+            pod, as a pod user. Needs join_policy ORG_MEMBERS or PUBLIC, and the authority to change the join policy. People
+            already in the organization are not added. Default: False.
         contacts (None | PodContactSettings | Unset):
         default_profile_id (None | str | Unset):
         default_runtime (AgentRuntimeConfig | None | Unset):
@@ -34,6 +37,7 @@ class PodConfig:
         triggers (None | PodTriggerSettings | Unset):
     """
 
+    auto_join_new_members: bool | Unset = False
     contacts: None | PodContactSettings | Unset = UNSET
     default_profile_id: None | str | Unset = UNSET
     default_runtime: AgentRuntimeConfig | None | Unset = UNSET
@@ -48,6 +52,8 @@ class PodConfig:
         from ..models.pod_contact_settings import PodContactSettings
         from ..models.pod_outcome import PodOutcome
         from ..models.pod_trigger_settings import PodTriggerSettings
+
+        auto_join_new_members = self.auto_join_new_members
 
         contacts: dict[str, Any] | None | Unset
         if isinstance(self.contacts, Unset):
@@ -101,6 +107,8 @@ class PodConfig:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if auto_join_new_members is not UNSET:
+            field_dict["auto_join_new_members"] = auto_join_new_members
         if contacts is not UNSET:
             field_dict["contacts"] = contacts
         if default_profile_id is not UNSET:
@@ -127,6 +135,7 @@ class PodConfig:
         from ..models.pod_trigger_settings import PodTriggerSettings
 
         d = dict(src_dict)
+        auto_join_new_members = d.pop("auto_join_new_members", UNSET)
 
         def _parse_contacts(data: object) -> None | PodContactSettings | Unset:
             if data is None:
@@ -224,6 +233,7 @@ class PodConfig:
         triggers = _parse_triggers(d.pop("triggers", UNSET))
 
         pod_config = cls(
+            auto_join_new_members=auto_join_new_members,
             contacts=contacts,
             default_profile_id=default_profile_id,
             default_runtime=default_runtime,

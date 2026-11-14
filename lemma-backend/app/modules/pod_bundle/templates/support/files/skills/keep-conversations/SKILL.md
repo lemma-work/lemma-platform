@@ -5,7 +5,7 @@ description: Keep the conversations table true. Use whenever a customer writes, 
 
 # Keep the conversations table true
 
-The number Support owns is counted from `conversations` by `opened_at` and `answered_in_time`, so the table has to match what really happened. Keep those columns as they are.
+Support's count is counted from `conversations` by `opened_at` and `answered_in_time`, so the table has to match what really happened. Keep those columns as they are.
 
 - A customer writes: add a row with `customer`, `about`, where they wrote in `channel`, `link` and `opened_at` (when they wrote).
 - Someone answers them: set `answered_at`, and set `answered_in_time` to true when that was within a day of `opened_at`, false when it was later.

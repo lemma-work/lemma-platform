@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.dependencies import CurrentUser, UoWDep
@@ -16,6 +16,8 @@ from app.modules.pod.api.dependencies import (
     PodAdminDep,
 )
 from app.modules.pod.api.schemas.pod_schemas import (
+    JoinablePodListResponse,
+    JoinablePodResponse,
     PodCreateRequest,
     PodUpdateRequest,
     PodResponse,
@@ -156,6 +158,42 @@ async def list_pods_by_organization(
 
     return PodListResponse(
         items=[PodResponse.model_validate(pod) for pod in pods],
+        limit=limit,
+        total=len(pods),
+        next_page_token=cursor,
+    )
+
+
+@organization_router.get(
+    "/joinable",
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.list_joinable",
+    summary="List Pods the Caller Can Join",
+    description=(
+        "The organization's pods the caller is not in and may join without "
+        "asking: those open to the organization (ORG_MEMBERS) or to everyone "
+        "(PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty for an "
+        "organization owner, who already opens every pod. 403 for someone "
+        "outside the organization."
+    ),
+    response_model=JoinablePodListResponse,
+)
+async def list_joinable_pods(
+    organization_id: UUID,
+    pod_service: PodServiceDep,
+    user: CurrentUser,
+    limit: int = Query(default=100, ge=1, le=1000),
+    page_token: str | None = None,
+) -> JoinablePodListResponse:
+    """List the pods the caller may join."""
+    parse_uuid_page_token(page_token)
+
+    pods, cursor = await pod_service.list_joinable_pods(
+        organization_id, user.id, limit, page_token
+    )
+
+    return JoinablePodListResponse(
+        items=[JoinablePodResponse.model_validate(pod) for pod in pods],
         limit=limit,
         total=len(pods),
         next_page_token=cursor,

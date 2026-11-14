@@ -19,7 +19,7 @@ const LABELS: Record<AutomationSection, string> = {
     history: "History",
     schedules: "Schedules",
     agents: "Agents",
-    xray: "X-ray",
+    xray: "Map",
 };
 
 /** The four views the workspace's Workflows page keeps, by this tab's names. */

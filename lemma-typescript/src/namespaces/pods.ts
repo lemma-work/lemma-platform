@@ -34,10 +34,30 @@ export class PodsNamespace {
     );
   }
 
+  /**
+   * The organization's pods you are not in and may join without asking: those
+   * open to the organization (`ORG_MEMBERS`) or to everyone (`PUBLIC`). Join
+   * one with `join(podId)`. Empty for an organization owner, who already opens
+   * every pod.
+   */
+  listJoinable(
+    organizationId: string,
+    options: { limit?: number; pageToken?: string; cursor?: string } = {},
+  ) {
+    return this.client.request(() =>
+      PodsService.podListJoinable(organizationId, options.limit ?? 100, options.pageToken ?? options.cursor),
+    );
+  }
+
   get(podId: string) {
     return this.client.request(() => PodsService.podGet(podId));
   }
 
+  /**
+   * Make a pod. `config.join_policy` says who may join it (invite-only unless
+   * set); `config.auto_join_new_members` makes everyone who joins the
+   * organization from now on a member, and needs `ORG_MEMBERS` or `PUBLIC`.
+   */
   create(payload: PodCreateRequest) {
     return this.client.request(() => PodsService.podCreate(payload));
   }

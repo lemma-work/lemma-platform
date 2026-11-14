@@ -16,7 +16,8 @@ import { acknowledge, readComposeRequest } from "@/thread/compose-bridge";
 import { gather } from "@/workflow/waiting-inbox";
 import { useConversationAsks } from "@/thread/use-conversation-asks";
 import { byAge, CONVERSATION_ASKS } from "@/thread/waiting-on-you";
-import { channelTitle } from "@/channels/model";
+import { channelTitle, type Channel } from "@/channels/model";
+import { listStamp } from "@/data/stamp";
 import { SettingsModal, type SettingsSection } from "@/settings/settings-modal";
 import { NewOrgDialog } from "@/org/new-org-dialog";
 import { ReachSheet } from "@/shell/reach";
@@ -29,12 +30,12 @@ import { FirstProfileStep } from "@/session/first-profile-step";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import {
     NEW_CHAT,
-    HOME, chatOpenOfView, chatView, outcomeView, podOfView, queueFromNeeds, queueItems, readTrialView, readView, refreshKept, viewOfAddress, withOwned, writeView,
+    HOME, activityOfRecents, chatOpenOfView, chatView, daysOfRecents, outcomeView, podOfView, queueFromNeeds, queueItems, readTrialView, readView, refreshKept, viewOfAddress, writeView,
     type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type KeptApp, type View,
 } from "./model";
-import { useNeedsYou, useOwned, usePlans, usePodActivity, usePodDetails } from "./data";
-import { FrameArrival } from "./arrival";
-import { Shelf } from "./shelf";
+import { useNeedsYou, usePodActivity, usePodDetails, useRecents } from "./data";
+import { FrameArrival, firstLemma } from "./arrival";
+import { NewLemmaDialog } from "./new-lemma";
 import { Bars, Icon, Empty } from "./parts";
 import { Sidebar } from "./sidebar";
 import { Today } from "./today";
@@ -42,6 +43,7 @@ import { AppsPage } from "./apps";
 import { ConnectorsPage } from "./connectors";
 import { OutcomesList } from "./list";
 import { NeedsYou } from "./needs";
+import { History } from "./history";
 import { People } from "./people";
 import { OutcomePage } from "./outcome";
 import { ChatPane, useContactsWaiting } from "./chats";
@@ -53,6 +55,9 @@ import { CallDock, CallStage, useCalls } from "./calls";
 /** The organization the workspace last opened, shared with the classic
  *  workspace (`/l`) so the two agree on where you are. */
 const ORG_KEY = key("org");
+/** No Lemmas: for a read that is made per Lemma only where the organization
+ *  has no one read for it. */
+const NO_PODS: readonly Pod[] = [];
 /** Whether the reader put the sidebar away: theirs, on this browser. */
 const SIDE_KEY = key("outcomes-side-closed");
 
@@ -115,7 +120,7 @@ export function nameOf(me: Me | undefined): string {
  *  anything inside a Lemma that the workspace draws as its own pane. */
 function fills(view: View): boolean {
     return view.name === "chats" || view.name === "run" || view.name === "workflow" || view.name === "app" || view.name === "file"
-        || view.name === "table" || view.name === "record" || view.name === "agent" || view.name === "computer" || view.name === "hire";
+        || view.name === "table" || view.name === "record" || view.name === "agent" || view.name === "computer";
 }
 
 /** The outcome-first frame: a sidebar of places and of every outcome with
@@ -230,23 +235,31 @@ export function OutcomesShell() {
     });
     const list = useMemo(() => pods.data ?? [], [pods.data]);
 
-    const waits = useQuery({
-        queryKey: ["workflow-waiting", list.map((one) => one.id).join(",")],
-        queryFn: () => gather(list, source.label === "sample", queryClient),
-        enabled: list.length > 0,
-        staleTime: 60_000,
-    });
     /* What waits on you is the organization's one list (#1045's needs-you):
        pauses, forms, decisions, contacts and the questions a Lemma asked in
        your chat with it, in one read. The sample source has no such read, so
        it keeps the per-Lemma ones. */
     const sampled = source.label !== "live";
     const needs = useNeedsYou(sampled ? null : orgId);
+    /* A form is filled in from Needs you, and its wait carries the form, so
+       the waits are read -- but only in the Lemmas the one list says have a
+       form waiting, which is usually none of them. */
+    const owing = useMemo(() => {
+        if (sampled) return list;
+        const withForm = new Set((needs.data ?? []).flatMap((need) => (need.kind === "FORM" ? [need.podId] : [])));
+        return list.filter((one) => withForm.has(one.id));
+    }, [sampled, list, needs.data]);
+    const waits = useQuery({
+        queryKey: ["workflow-waiting", owing.map((one) => one.id).join(",")],
+        queryFn: () => gather(owing, source.label === "sample", queryClient),
+        enabled: owing.length > 0,
+        staleTime: 60_000,
+    });
     const asked = useConversationAsks(list, { enabled: sampled });
     /* People outside a Lemma who wrote in and wait on a person: answered
        from Needs you like any other question, not listed in the sidebar.
        Their live feeds are still what notices one arriving first. */
-    const [contactsWaiting, contactFeeds] = useContactsWaiting(list);
+    const [contactsWaiting, contactFeeds] = useContactsWaiting(sampled ? list : NO_PODS);
     const contactsSaid = useMemo(() => [...contactsWaiting.values()].flat().map((channel) => channel.id).sort().join(","), [contactsWaiting]);
     useEffect(() => {
         if (!sampled) void queryClient.invalidateQueries({ queryKey: [CONVERSATION_ASKS, "organization"] });
@@ -272,13 +285,36 @@ export function OutcomesShell() {
     const queueFailed = !sampled && needs.isError && needs.data === undefined;
     const { refetch: refetchNeeds } = needs;
     const retryQueue = useCallback(() => void refetchNeeds(), [refetchNeeds]);
-    const { byPod: activity } = usePodActivity(list);
-    /* The plan's lines are the file's; what a Lemma owns and its number are
-       the Lemma's own, kept on the server, and shown over the file's. */
-    const planFiles = usePlans(list);
-    const owned = useOwned(list);
-    const plans = useMemo(() => new Map(list.map((pod) => [pod.id, withOwned(planFiles.get(pod.id), owned.get(pod.id))])), [list, planFiles, owned]);
-
+    /* Every Lemma's recent chats and runs come from the organization's one
+       overview read. The Lemma in view also reads its own list: longer, and
+       patched as its chats are renamed or put away, so the place the reader
+       is working in stays exact. If the overview fails or is too slow, each
+       Lemma is read on its own, as before it existed. */
+    const recents = useRecents(sampled ? null : orgId);
+    const overviewDown = !sampled && recents.isError && recents.data === undefined;
+    const inView = podOfView(view);
+    const readAlone = useMemo(
+        () => (sampled || overviewDown ? list : list.filter((one) => one.id === inView)),
+        [sampled, overviewDown, list, inView],
+    );
+    const alone = usePodActivity(readAlone);
+    const activity = useMemo(() => {
+        if (sampled || overviewDown) return alone.byPod;
+        const all = activityOfRecents(recents.data?.pods ?? [], (iso) => listStamp(iso));
+        if (!alone.pending) for (const [podId, rows] of alone.byPod) all.set(podId, rows);
+        return all;
+    }, [sampled, overviewDown, alone.byPod, alone.pending, recents.data]);
+    /* The board's bars: the overview counts every conversation by day,
+       where a Lemma's own list holds only its latest. */
+    const days = useMemo(() => (sampled || overviewDown ? null : daysOfRecents(recents.data?.pods ?? [])), [sampled, overviewDown, recents.data]);
+    /* What waits on the reader in each Lemma, for the dot on a folded one. */
+    const waitingIn = useMemo(() => {
+        const count = new Map<string, number>();
+        for (const item of queue) count.set(item.podId, (count.get(item.podId) ?? 0) + 1);
+        return count;
+    }, [queue]);
+    /* The shared chats the sidebar has read, for Home's list of recent ones. */
+    const [sideChannels, setSideChannels] = useState<ReadonlyMap<string, readonly Channel[]>>(() => new Map());
     /* Asking -- from Home, ⌘K or an outcome -- starts a chat in the outcome
        named and opens it. The pane that shows it sends the words, so the
        reply streams into the thread on screen; without a live session the
@@ -344,6 +380,13 @@ export function OutcomesShell() {
         return section ? { section, focus: null, request: 1 } : null;
     });
     const [makingOrg, setMakingOrg] = useState(false);
+    /* A new Lemma is made in a dialog over wherever the reader is, as a chat
+       app makes a channel; its old address (`/l/new`) opens the same dialog
+       over the list of Lemmas. */
+    const [makingLemma, setMakingLemma] = useState(view.name === "hire");
+    useEffect(() => {
+        if (view.name === "hire") setMakingLemma(true);
+    }, [view.name]);
     const [reaching, setReaching] = useState<string | null>(() => (arrival.get("reach") === "1" ? podOfView(view) : null));
     const [shared, setShared] = useState<{ podId: string; subject: ShareSubject } | null>(null);
     const sharing = shared?.podId ?? null;
@@ -357,6 +400,7 @@ export function OutcomesShell() {
         connect: setReaching,
         share: (podId, subject = { kind: "space" }) => setShared({ podId, subject }),
         addPeople: setAddingPeople,
+        newLemma: () => setMakingLemma(true),
         prompt: (podId, text) => prompt(podId, text),
         fill: (podId, text) => prompt(podId, text, false),
         ask: (podId, text, createWith, files) => ask(podId, text, { createWith, files }),
@@ -438,13 +482,14 @@ export function OutcomesShell() {
 
     /* Somebody who belongs nowhere yet: in, without a decision they cannot
        make well yet -- an invitation accepted, or an organization made for
-       them -- landing on what they were invited to, or the shelf. */
+       them with its own Lemma -- landing on what they were invited to, or in
+       that Lemma. */
     if (orgs.isSuccess && orgs.data.length === 0) {
         return (
             <FrameArrival
                 email={me.data?.email ?? null}
                 name={[me.data?.first_name, me.data?.last_name].filter(Boolean).join(" ") || null}
-                onEntered={(podId) => { void queryClient.invalidateQueries({ queryKey: ["orgs"] }); go(podId ? outcomeView(podId) : { name: "hire" }); }}
+                onEntered={(podId) => { void queryClient.invalidateQueries({ queryKey: ["orgs"] }); go(podId ? outcomeView(podId) : { name: "outcomes" }); }}
             />
         );
     }
@@ -469,19 +514,19 @@ export function OutcomesShell() {
     } else if (!org || pods.isPending) {
         page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
     } else if (view.name === "today") {
-        page = <Today org={org} pods={withPeople} activity={activity} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} />;
+        page = <Today org={org} pods={withPeople} activity={activity} channels={sideChannels} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} />;
     } else if (view.name === "apps") {
         page = <AppsPage pods={withPeople} go={go} />;
     } else if (view.name === "connectors") {
         page = <ConnectorsPage org={org} />;
-    } else if (view.name === "outcomes") {
-        page = <OutcomesList org={org} pods={withPeople} activity={activity} plans={plans} queue={queue} go={go} />;
+    } else if (view.name === "outcomes" || view.name === "hire") {
+        page = <OutcomesList org={org} pods={withPeople} activity={activity} days={days} queue={queue} go={go} actions={actions} />;
     } else if (view.name === "needs") {
         page = <NeedsYou pods={withPeople} queue={queue} loading={queueLoading} failed={queueFailed} onRetry={retryQueue} go={go} />;
     } else if (view.name === "people") {
         page = <People pods={withPeople} go={go} />;
-    } else if (view.name === "hire") {
-        page = <Shelf org={org} go={go} />;
+    } else if (view.name === "history") {
+        page = <History org={org} pods={withPeople} podId={view.podId} go={go} />;
     } else if (stranger) {
         page = (
             <div className="settings-view ox-hire">
@@ -497,7 +542,7 @@ export function OutcomesShell() {
     } else if (view.name === "outcome" && view.tab === "settings") {
         page = <SettingsView key={pod.id} pod={pod} org={org} section={view.section ?? null} go={go} actions={actions} />;
     } else if (view.name === "outcome") {
-        page = <OutcomePage pod={pod} pods={list} tab={view.tab} section={view.section ?? null} plan={plans.get(pod.id)} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
+        page = <OutcomePage pod={pod} pods={list} orgName={org.name} tab={view.tab} section={view.section ?? null} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
     } else if (view.name === "run") {
         page = <RunView key={view.runId} pod={pod} runId={view.runId} go={go} back={back} />;
     } else if (view.name === "workflow") {
@@ -529,11 +574,14 @@ export function OutcomesShell() {
                 go={go}
                 activity={activity}
                 needs={queue.length}
+                waitingIn={waitingIn}
+                onChannels={setSideChannels}
                 me={myName}
                 onFind={() => openPalette(podOfView(view))}
                 onSettings={() => openSettings("account")}
                 onPlan={() => openSettings("plan")}
                 onNewOrg={() => setMakingOrg(true)}
+                onNewLemma={() => setMakingLemma(true)}
                 open={navOpen}
                 closed={sideClosed}
                 onToggle={toggleSide}
@@ -579,11 +627,38 @@ export function OutcomesShell() {
                     onClose={() => setSettings(null)}
                 />
             )}
+            {makingLemma && org && (
+                <NewLemmaDialog
+                    org={org}
+                    pods={withPeople}
+                    onClose={() => { setMakingLemma(false); if (view.name === "hire") go({ name: "outcomes" }); }}
+                    onCreated={(podId, missed) => {
+                        setMakingLemma(false);
+                        /* It opens on its home, which says how to start it:
+                           ask it, bring things in, or add a template. */
+                        go(outcomeView(podId));
+                        /* Someone could not be added: who has access opens,
+                           to try again, rather than a line nobody reads. */
+                        if (missed > 0) setAddingPeople(podId);
+                    }}
+                />
+            )}
             {makingOrg && (
                 <NewOrgDialog
                     taken={(orgs.data ?? []).map((one) => one.name)}
                     onClose={() => setMakingOrg(false)}
-                    onCreated={(made) => { setMakingOrg(false); setSettings(null); pickOrg(made.id); }}
+                    onCreated={(made) => {
+                        setMakingOrg(false);
+                        setSettings(null);
+                        pickOrg(made.id);
+                        /* A new organization opens in its own Lemma, as the
+                           first one does, not on an empty list. */
+                        void firstLemma(made.id, made.name).then((podId) => {
+                            if (!podId) return;
+                            void queryClient.invalidateQueries({ queryKey: ["pods", made.id] });
+                            go(outcomeView(podId));
+                        });
+                    }}
                 />
             )}
             {reaching && withPeople.some((one) => one.id === reaching) && <ReachSheet pod={withPeople.find((one) => one.id === reaching)!} onClose={() => setReaching(null)} />}

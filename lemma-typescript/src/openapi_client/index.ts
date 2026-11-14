@@ -285,6 +285,8 @@ export type { InstallationOption } from './models/InstallationOption.js';
 export type { InstalledAppSummary } from './models/InstalledAppSummary.js';
 export type { InstallRequestInitiateSchema } from './models/InstallRequestInitiateSchema.js';
 export type { InstallRequestResponseSchema } from './models/InstallRequestResponseSchema.js';
+export type { JoinablePodListResponse } from './models/JoinablePodListResponse.js';
+export type { JoinablePodResponse } from './models/JoinablePodResponse.js';
 export type { JsonObject } from './models/JsonObject.js';
 export type { JsonValue } from './models/JsonValue.js';
 export type { LineDelivery } from './models/LineDelivery.js';

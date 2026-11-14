@@ -5,7 +5,7 @@ description: Keep the posts table true. Use when a post is drafted, approved or 
 
 # Keep the posts table true
 
-The number Content owns counts `posts` by `published_at` this week. Keep that column as it is.
+Content's count counts `posts` by `published_at` this week. Keep that column as it is.
 
 - A draft exists: add a row with `title`, `author` and `status` "draft".
 - It is approved: `status` "approved".

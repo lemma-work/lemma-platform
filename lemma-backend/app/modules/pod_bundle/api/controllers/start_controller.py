@@ -26,7 +26,8 @@ router = APIRouter(prefix="/pods", tags=["Pod Bundle"], redirect_slashes=False)
     summary="Start a Lemma",
     description=(
         "Make a pod that owns something, in one transaction: the pod, what it "
-        "owns, a first /plan.md, and the chat where its agent sets itself up, "
+        "owns, a template's own rules in its shared memory, and the chat where "
+        "its agent sets itself up, "
         "opened with the caller's first message. From a template (`template`, "
         "with `due` for a finish line) it also brings the template's tables, "
         "skill and schedules, applied by a worker, and its agent starts once "

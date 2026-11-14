@@ -1,7 +1,8 @@
 """E2E: a Lemma starts in one call, whole or not at all.
 
-``POST /pods/start`` makes the pod, sets what it owns, writes its first
-``/plan.md`` and opens the chat its agent sets itself up in. From the person's
+``POST /pods/start`` makes the pod, sets what it owns, keeps a template's own
+rules in the pod's shared memory and opens the chat its agent sets itself up
+in. From the person's
 own words the agent's turn is queued at once. From a template the chat is held
 until a worker has applied the template's tables, skill and schedules, and the
 job that applied them starts the turn. A failure part way leaves no pod.
@@ -21,6 +22,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.agent.events.work_kinds import turn_key
+from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.events.template_setup import SET_UP_LEMMA
 from app.modules.pod_bundle.events.work import plan_key
 from app.modules.pod_bundle.tests.e2e.bundle_e2e_helpers import wait_import
@@ -39,10 +41,12 @@ async def _start(client, body: dict[str, object], expected: int) -> dict:
     return res.json()
 
 
-async def _plan(client, pod_id: str) -> str:
+async def _file(client, pod_id: str, path: str) -> str | None:
     res = await client.get(
-        f"/pods/{pod_id}/datastore/files/download", params={"path": "/plan.md"}
+        f"/pods/{pod_id}/datastore/files/download", params={"path": path}
     )
+    if res.status_code == status.HTTP_404_NOT_FOUND:
+        return None
     assert res.status_code == status.HTTP_200_OK, res.text
     return res.text
 
@@ -110,12 +114,14 @@ async def test_from_its_own_words_everything_is_there_and_the_agent_is_asked(
     assert pod["config"]["outcome"]["sentence"].startswith("Every invoice")
     assert pod["config"]["outcome"]["since"] == started["pod"]["outcome"]["since"]
 
-    plan = await _plan(authenticated_client, pod_id)
-    assert "## What must be true\n- Every invoice over 10000" in plan
-    assert "## Never" in plan
+    # Its own words bring no rules, so nothing is written for it: no plan
+    # file, and no memory note it was never taught.
+    assert await _file(authenticated_client, pod_id, "/plan.md") is None
+    assert await _file(authenticated_client, pod_id, "/memory/how-we-work.md") is None
 
     said = await _first_message(authenticated_client, pod_id, conversation_id)
-    assert "Set yourself up to own this" in said and "set_what_you_own" in said
+    assert "Set yourself up for this" in said and "lemma-setup" in said
+    assert "set_what_you_own" not in said
     # A template's setup chat, as the agent's typed state says.
     assert (
         await scalar(
@@ -181,8 +187,11 @@ async def test_from_a_template_the_agent_starts_once_the_template_is_in(
     await run_until_idle(async_session_maker, classes=[WorkClass.ADMIN])
     await wait_import(authenticated_client, pod_id, import_id, until={"COMPLETED"})
     assert "steps" in await table_names(pod_id)
-    plan = await _plan(authenticated_client, pod_id)
-    assert "## How we work\n- Every step to the launch is a row in steps" in plan
+    taught = await _file(authenticated_client, pod_id, "/memory/how-we-work.md")
+    assert taught and "- Every step to the launch is a row in steps" in taught
+    index = await _file(authenticated_client, pod_id, "/memory/AGENTS.md")
+    assert index and "(how-we-work.md)" in index, "every run loads the index"
+    assert await _file(authenticated_client, pod_id, "/plan.md") is None
 
     after = await _items(*keys)
     finished = await scalar(
@@ -220,8 +229,10 @@ async def test_a_template_finish_line_needs_its_date_and_an_unknown_one_is_404(
 async def test_a_failure_part_way_leaves_no_pod_behind(
     authenticated_client, fixed_test_org, tmp_path: Path, monkeypatch
 ):
-    """The plan file is written after the pod and what it owns; with storage
-    unwritable that write fails, and the pod goes with it."""
+    """A template's rules are written to memory after the pod and what it owns;
+    with the pod's storage unwritable that write fails, and the pod goes with
+    it. The template's archive is staged first, somewhere still writable, so
+    the failure is the one part way through."""
     locked = tmp_path / "locked"
     locked.mkdir()
     locked.chmod(0o500)
@@ -229,6 +240,10 @@ async def test_a_failure_part_way_leaves_no_pod_behind(
         monkeypatch.setattr(settings, "storage_bucket", f"{locked}/store")
     else:
         monkeypatch.setattr(settings, "local_object_storage_root", f"{locked}/store")
+    # An absolute prefix stands in for the storage root it is joined to.
+    monkeypatch.setattr(
+        pod_bundle_settings, "pod_bundle_staging_prefix", str(tmp_path / "staging")
+    )
     name = f"Nothing {uuid4().hex[:6]}"
     try:
         # The in-process client re-raises what a server answers 500 with.
@@ -237,11 +252,8 @@ async def test_a_failure_part_way_leaves_no_pod_behind(
                 "/pods/start",
                 json={
                     "organization_id": fixed_test_org["id"],
+                    "template": "support",
                     "name": name,
-                    "outcome": {
-                        "sentence": "Every bill is paid on time.",
-                        "kind": "week",
-                    },
                 },
             )
     finally:

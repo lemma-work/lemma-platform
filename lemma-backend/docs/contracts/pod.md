@@ -21,6 +21,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `pod.join_request.list` | GET | `/pods/{pod_id}/join-requests` | List Pod Join Requests |
 | `pod.join_request.me` | GET | `/pods/{pod_id}/join-requests/me` | Get My Pod Join Request |
 | `pod.list` | GET | `/organizations/{organization_id}/pods` | List Pods by Organization |
+| `pod.list_joinable` | GET | `/organizations/{organization_id}/pods/joinable` | List Pods the Caller Can Join |
 | `pod.member.add` | POST | `/pods/{pod_id}/members` | Add Pod Member |
 | `pod.member.get` | GET | `/pods/{pod_id}/members/{pod_member_id}` | Get Pod Member |
 | `pod.member.list` | GET | `/pods/{pod_id}/members` | List Pod Members |
@@ -43,3 +44,37 @@ The table below is generated from the committed OpenAPI specification by `script
 | `pod.update` | PUT | `/pods/{pod_id}` | Update Pod |
 
 <!-- /generated:operations -->
+
+## `pod.list_joinable`
+
+The organization's pods the caller is not in and may join without asking: the
+list to browse before `pod.join`.
+
+- **Authorization:** membership of the organization; 403 `POD_ACCESS_DENIED`
+  otherwise. An organization owner gets an empty list: they open every pod
+  already, and `pod.join` refuses them.
+- **Effect:** none; read-only.
+- **Shape:** `items[]` of `id`, `name`, `description`, `icon_url`,
+  `join_policy` (`ORG_MEMBERS` or `PUBLIC`) and `member_count`, in pod id
+  order. `limit` (1-1000, default 100) and `page_token` page through them;
+  `next_page_token` is set while more remain. Invite-only pods, deleted pods
+  and pods the caller is already in are never listed.
+- **Errors:** 403 not a member; 400 an unreadable `page_token`; 422 `limit` out
+  of range.
+
+## `pod.create` and `pod.update`: `config.auto_join_new_members`
+
+Makes everyone who joins the organization from then on a member of the pod, as
+a pod user -- the membership `pod.join` makes. People already in the
+organization are not added.
+
+- **Authorization:** on update, changing it needs `pod.member.manage`, as
+  changing `join_policy` does; `pod.update` alone is refused with 403.
+- **Errors:** 422 `POD_AUTO_JOIN_NEEDS_OPEN_POLICY` when the pod would be
+  invite-only with it on. Judged on the merged config, so closing a pod that
+  takes in new members means turning this off in the same request.
+- **Emits:** nothing when it is set. When someone joins the organization,
+  identity's `OrganizationMemberAdded` fact queues
+  `pod.auto_join.org_member_added` under the organization (FAST, one per
+  organization and person), which adds them to every such pod still open to
+  members. Organization owners are not added.

@@ -2,10 +2,10 @@
 its agent sets itself up.
 
 From a template or from a sentence in the person's own words, one transaction
-writes all of it: the pod, what it owns, a first ``/plan.md``, and the setup
-chat with the person's first message in it. Done as separate calls, a failure
-part way left a pod that owned nothing, or owned something with no plan and no
-agent working on it; now a failure leaves nothing.
+writes all of it: the pod, what it owns, a template's own rules in the pod's
+shared memory, and the setup chat with the person's first message in it. Done
+as separate calls, a failure part way left a pod that owned nothing, or owned
+something with no agent working on it; now a failure leaves nothing.
 
 A template also brings tables, a skill and schedules, which only a worker can
 apply. Its archive is staged first, before anything is written, and the
@@ -24,13 +24,16 @@ from app.core.authorization.scope import context_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.contracts.memory_paths import (
+    POD_MEMORY_FOLDER,
+    POD_MEMORY_INDEX,
+)
 from app.modules.agent.contracts.setup_conversations import (
     SetupConversation,
     open_setup_conversation,
 )
 from app.modules.datastore.contracts.pod_files import write_pod_file
 from app.modules.pod.contracts.outcome import (
-    PLAN_PATH,
     OutcomeInput,
     OutcomeKind,
     PodEntity,
@@ -59,13 +62,8 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     get_pod_bundle_state_store,
 )
 
-#: Said at the top of a new plan, so whoever opens it knows what it is for.
-PLAN_PREAMBLE = (
-    "<!-- How this Lemma gets to what it owns. What it owns, its target and the "
-    "measure that counts it are kept with the Lemma itself; this file is the "
-    "plan. People and the Lemma both edit it, and a line they add ends with who "
-    "added it and when. -->"
-)
+#: The note a template's own rules are kept in, in the pod's shared memory.
+TAUGHT_NOTE = "how-we-work.md"
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,15 +139,25 @@ class StartUseCases:
             kept = await set_starting_outcome(
                 uow, pod_id=pod.id, outcome=owning.outcome, ctx=ctx
             )
-            directory, name = PLAN_PATH.rsplit("/", 1)
-            await write_pod_file(
-                uow,
-                pod_id=pod.id,
-                directory=directory or "/",
-                name=name,
-                content=starter_plan(kept, owning.card).encode(),
-                ctx=ctx,
-            )
+            taught = template_note(owning.card)
+            if taught is not None:
+                await write_pod_file(
+                    uow,
+                    pod_id=pod.id,
+                    directory=POD_MEMORY_FOLDER,
+                    name=TAUGHT_NOTE,
+                    content=taught.encode(),
+                    ctx=ctx,
+                )
+                folder, index = POD_MEMORY_INDEX.rsplit("/", 1)
+                await write_pod_file(
+                    uow,
+                    pod_id=pod.id,
+                    directory=folder,
+                    name=index,
+                    content=template_index_line(owning.card).encode(),
+                    ctx=ctx,
+                )
             setup = await open_setup_conversation(
                 uow,
                 pod_id=pod.id,
@@ -242,20 +250,31 @@ def _what_it_owns(request: StartRequest) -> _Owning:
     )
 
 
-def starter_plan(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
-    """The first ``/plan.md``: the four sections the workspace reads, with what
-    it owns as the first thing that must be true and a template's own lines."""
-    sections = (
-        ("What must be true", [outcome.sentence]),
-        ("How we work", card.plan.how if card else []),
-        ("Who holds what", []),
-        ("Never", card.plan.never if card else []),
+def template_note(card: OutcomeTemplateCard | None) -> str | None:
+    """A template's own rules, as the first note in the pod's shared memory:
+    how the work is done here, and what never happens. None when there is no
+    template, or it brings no rules: a pod is not handed an empty note."""
+    if card is None or not (card.plan.how or card.plan.never):
+        return None
+    parts = [
+        f"# How we work\n\nFrom the {card.name} template. Change it as the team teaches otherwise."
+    ]
+    if card.plan.how:
+        parts.append("\n".join(f"- {line}" for line in card.plan.how))
+    if card.plan.never:
+        parts.append(
+            "## Never\n\n" + "\n".join(f"- {line}" for line in card.plan.never)
+        )
+    return "\n\n".join(parts) + "\n"
+
+
+def template_index_line(card: OutcomeTemplateCard) -> str:
+    """The pod-shared memory index, pointing at the template's note: the index
+    is what every run loads, and the note is read from it."""
+    return (
+        f"- [How we work]({TAUGHT_NOTE}) — from the {card.name} template: how "
+        "the work is done here, and what never happens\n"
     )
-    body = "\n\n".join(
-        "\n".join([f"## {title}", *(f"- {line}" for line in lines)])
-        for title, lines in sections
-    )
-    return f"{PLAN_PREAMBLE}\n\n{body}\n"
 
 
 def setup_request(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
@@ -267,31 +286,31 @@ def setup_request(outcome: PodOutcome, card: OutcomeTemplateCard | None) -> str:
     """
     sentence = outcome.sentence.strip()
     stop = "" if sentence.endswith((".", "!", "?")) else "."
-    start = f'Set yourself up to own this: "{sentence}{stop}"'
+    start = f'Set yourself up for this: "{sentence}{stop}"'
     rest = (
-        " Fill in the plan in /plan.md as you go: how we work, who holds what, "
-        "and what you never do. Ask me whatever you need."
+        " As I tell you how we work, who holds what and what you never do, keep "
+        "it in the pod's shared memory. Ask me whatever you need."
     )
     if card is not None:
         return (
             f"{start} You start from the {card.name} template, which brings its "
-            "tables, skills and schedules, and what you own is counted from its "
-            "tables. Follow its set-up skill: ask me where this work happens, "
-            "connect it, fill your tables from what is already there, keep them "
-            "filling, then show me where we stand and ask me for the bar." + rest
+            "tables, skills and schedules. Follow its set-up skill: ask me where "
+            "this work happens, connect it, fill your tables from what is already "
+            "there, and keep them filling." + rest
         )
     return (
         f"{start} Nothing is built yet. Use the lemma-setup skill: ask me where "
         "this work happens, build what holds it, bring in the last few weeks of "
-        "it, keep it coming in, and set how it is counted with set_what_you_own." + rest
+        "it, and keep it coming in." + rest
     )
 
 
 __all__ = [
-    "PLAN_PREAMBLE",
+    "TAUGHT_NOTE",
     "StartRequest",
     "StartUseCases",
     "StartedLemma",
     "setup_request",
-    "starter_plan",
+    "template_index_line",
+    "template_note",
 ]

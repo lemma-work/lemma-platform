@@ -13146,6 +13146,96 @@
         "title": "InstalledAppSummary",
         "type": "object"
       },
+      "JoinablePodListResponse": {
+        "description": "Pods the caller may join, a page at a time.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JoinablePodResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "total"
+        ],
+        "title": "JoinablePodListResponse",
+        "type": "object"
+      },
+      "JoinablePodResponse": {
+        "description": "A pod the caller may join and is not in: what to show before they do.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "join_policy": {
+            "$ref": "#/components/schemas/PodJoinPolicy"
+          },
+          "member_count": {
+            "description": "How many people are in the pod now.",
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "join_policy",
+          "member_count"
+        ],
+        "title": "JoinablePodResponse",
+        "type": "object"
+      },
       "JsonObject": {
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
@@ -15807,7 +15897,7 @@
         "type": "object"
       },
       "OutcomeInput": {
-        "description": "What the pod owns, as a person or its agent sets it.\n\nThe fields are the front matter of the plan file the workspace keeps at\n``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,\n``unit``, ``due`` and ``measure`` -- held here so there is one copy of\nthem. The plan's prose (what must be true, how the work is done, who holds\nwhat, what never happens) stays in the file.",
+        "description": "What the pod owns, as a person or its agent sets it.\n\nKept on the pod's config, the one copy of it. How the work is done, who\nholds what and what never happens are what the pod has been taught, kept\nin its shared memory.",
         "properties": {
           "due": {
             "anyOf": [
@@ -15880,7 +15970,7 @@
         "type": "object"
       },
       "OutcomeKind": {
-        "description": "The two shapes of what a pod owns.\n\n``week`` is a bar held every week, which never finishes (\"Every customer\nhears back within a day\"). ``date`` is a finish line, reached once by its\n``due`` date (\"The launch ships by the date it is due\"). The values are the plan\nfile's own (``kind: week`` in ``/plan.md``), so a plan a person or the\npod's agent wrote reads straight across.",
+        "description": "The two shapes of what a pod owns.\n\n``week`` is a bar held every week, which never finishes (\"Every customer\nhears back within a day\"). ``date`` is a finish line, reached once by its\n``due`` date (\"The launch ships by the date it is due\").",
         "enum": [
           "week",
           "date"
@@ -16881,6 +16971,12 @@
       "PodConfig": {
         "description": "Typed pod-level configuration.",
         "properties": {
+          "auto_join_new_members": {
+            "default": false,
+            "description": "Everyone who joins the organization from now on becomes a member of this pod, as a pod user. Needs join_policy ORG_MEMBERS or PUBLIC, and the authority to change the join policy. People already in the organization are not added.",
+            "title": "Auto Join New Members",
+            "type": "boolean"
+          },
           "contacts": {
             "anyOf": [
               {
@@ -32797,6 +32893,85 @@
         }
       }
     },
+    "/organizations/{organization_id}/pods/joinable": {
+      "get": {
+        "description": "The organization's pods the caller is not in and may join without asking: those open to the organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty for an organization owner, who already opens every pod. 403 for someone outside the organization.",
+        "operationId": "pod.list_joinable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinablePodListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pods the Caller Can Join",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "pod",
+          "result": "entity",
+          "verb": "list_joinable"
+        }
+      }
+    },
     "/organizations/{organization_id}/recents": {
       "get": {
         "description": "For every pod the current user may open in the organization, quiet ones included: their latest chats (conversations of no channel that they talk in, or that wait on them), the workflows and schedules that ran in the window -- one each, with the newest run and a count -- and a count per day of their conversations by the day each was last active, split into started by an agent (a schedule, a workflow, a notification, a task or another pod's ask) and by a person. Days are calendar days in `timezone`, the window ending today.",
@@ -33018,7 +33193,7 @@
     },
     "/pods/start": {
       "post": {
-        "description": "Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.",
+        "description": "Make a pod that owns something, in one transaction: the pod, what it owns, a template's own rules in its shared memory, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.",
         "operationId": "pod.start",
         "requestBody": {
           "content": {

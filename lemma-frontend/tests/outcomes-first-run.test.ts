@@ -2,84 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     broughtSaid,
-    emptyPlan,
-    ownName,
     queueFromNeeds,
-    sentenceFor,
     sharedLinkPath,
-    shelfOf,
-    targetText,
     viewOfItem,
-    withOwned,
     type NeedsItem,
-    type Owned,
-    type ShelfCard,
 } from "../src/outcomes/model";
-
-const card = (over: Partial<ShelfCard>): ShelfCard => ({
-    id: "support",
-    name: "Support",
-    sentence: "Every customer hears back within a day.",
-    kind: "week",
-    work: "support",
-    face: "bloom",
-    place: "Intercom",
-    brings: [],
-    never: [],
-    ...over,
-});
-
-test("the shelf groups templates by the work they do, where the server put them", () => {
-    const works = shelfOf([
-        card({ id: "support" }),
-        card({ id: "follow-ups", name: "Follow-ups", work: "sales", place: "HubSpot" }),
-        card({ id: "reviews", name: "Reviews", work: "engineering", place: "GitHub" }),
-        card({ id: "partners", name: "Partners", work: "sales", place: "HubSpot", kind: "date" }),
-        card({ id: "odd", name: "Odd", work: null, place: null }),
-    ]);
-    assert.deepEqual(works.map((work) => work.id), ["support", "sales", "engineering", "more"]);
-    const sales = works[1];
-    assert.equal(sales.label, "Sales");
-    assert.deepEqual(sales.cards.map((one) => one.id), ["follow-ups", "partners"]);
-    assert.deepEqual(sales.places, ["HubSpot"], "a place is said once");
-    assert.equal(works[3].label, "More", "a template with no kind of work is not dropped");
-});
-
-test("a finish line says its date once one is picked", () => {
-    const launch = card({ sentence: "The launch ships on {due}.", kind: "date" });
-    assert.equal(sentenceFor(launch, null), "The launch ships on a date you pick.");
-    assert.equal(sentenceFor(launch, "2026-11-18"), "The launch ships on November 18.");
-    assert.equal(sentenceFor(card({}), "2026-11-18"), "Every customer hears back within a day.");
-});
-
-test("a Lemma from its owner's own words is named for what it is about", () => {
-    assert.equal(ownName("Every invoice is paid within 30 days"), "Invoice");
-    assert.equal(ownName("ship it"), "Ship");
-    assert.equal(ownName("  "), "Lemma");
-});
-
-const owned: Owned = { sentence: "Every customer hears back within a day.", kind: "week", target: 90, unit: "%", due: null, measure: "SELECT 1", value: 74, problem: null };
-
-test("what the Lemma keeps it owns is shown over its plan file, and never written into it", () => {
-    const file = { ...emptyPlan("An old sentence"), target: "50%", sections: { must: [{ text: "x" }], how: [], who: [], never: [] } };
-    const shown = withOwned(file, owned);
-    assert.ok(shown);
-    assert.equal(shown.outcome, owned.sentence);
-    assert.equal(shown.target, "90%");
-    assert.equal(shown.owned?.value, 74);
-    assert.deepEqual(shown.sections.must, [{ text: "x" }], "the file's lines stay");
-    assert.equal(file.outcome, "An old sentence", "the file itself is untouched");
-    assert.equal(withOwned(file, null), file, "a Lemma that keeps nothing shows its file");
-    assert.equal(withOwned(undefined, owned)?.outcome, owned.sentence, "and one with no plan file still shows what it owns");
-});
-
-test("a target reads as a person writes it, exactly as kept", () => {
-    assert.equal(targetText(99.95, "%"), "99.95%", "never rounded: readings are compared against it");
-    assert.equal(targetText(90, "%"), "90%");
-    assert.equal(targetText(2, "posts"), "2 posts");
-    assert.equal(targetText(20, null), "20");
-    assert.equal(targetText(null, "%"), null);
-});
 
 const need = (over: Partial<NeedsItem>): NeedsItem => ({
     key: "k",

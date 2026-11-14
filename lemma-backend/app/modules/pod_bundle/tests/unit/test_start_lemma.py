@@ -11,8 +11,10 @@ from pydantic import ValidationError
 from app.modules.pod.contracts.outcome import OutcomeInput, PodOutcome
 from app.modules.pod_bundle.api.start_schemas import StartLemmaRequest
 from app.modules.pod_bundle.application.start_use_cases import (
+    TAUGHT_NOTE,
     setup_request,
-    starter_plan,
+    template_index_line,
+    template_note,
 )
 from app.modules.pod_bundle.domain.state import (
     BundleSource,
@@ -65,45 +67,39 @@ def test_a_template_name_cannot_reach_outside_the_templates():
         )
 
 
-def _sections(plan: str) -> dict[str, list[str]]:
-    sections: dict[str, list[str]] = {}
-    current = None
-    for line in plan.splitlines():
-        if line.startswith("## "):
-            current = line[3:]
-            sections[current] = []
-        elif line.startswith("- ") and current is not None:
-            sections[current].append(line[2:])
-    return sections
+def test_a_lemma_from_its_own_words_is_given_no_note_it_was_never_taught():
+    assert template_note(None) is None
 
 
-def test_a_first_plan_has_the_four_sections_the_workspace_reads():
-    outcome = PodOutcome.model_validate(OWN_WORDS)
-    sections = _sections(starter_plan(outcome, None))
-    assert list(sections) == [
-        "What must be true",
-        "How we work",
-        "Who holds what",
-        "Never",
-    ]
-    assert sections["What must be true"] == [outcome.sentence]
-
-
-def test_a_templates_plan_starts_with_its_own_lines():
+def test_a_templates_rules_are_its_first_memory_note():
     card = shipped_card("support")
     assert card is not None
-    outcome = PodOutcome.model_validate(card.outcome.for_due(None).model_dump())
-    sections = _sections(starter_plan(outcome, card))
-    assert sections["How we work"] == card.plan.how
-    assert sections["Never"] == card.plan.never
-    assert "---" not in starter_plan(outcome, card), (
-        "no front matter: that is on the pod"
+    note = template_note(card)
+    assert note is not None
+    for line in [*card.plan.how, *card.plan.never]:
+        assert f"- {line}" in note
+    assert "## Never" in note
+    assert "---" not in note, "no front matter: what it owns is on the pod"
+    assert f"({TAUGHT_NOTE})" in template_index_line(card), (
+        "the index every run loads points at the note"
     )
+
+
+def test_a_template_with_no_rules_writes_no_note():
+    card = shipped_card("support")
+    assert card is not None
+    bare = card.model_copy(
+        update={"plan": card.plan.model_copy(update={"how": [], "never": []})}
+    )
+    assert template_note(bare) is None
 
 
 def test_the_first_message_asks_the_agent_to_set_itself_up():
     own = PodOutcome.model_validate(OWN_WORDS)
-    assert "set_what_you_own" in setup_request(own, None)
+    assert "set_what_you_own" not in setup_request(own, None)
+    assert "own this" not in setup_request(own, None), (
+        "a Lemma is not asked to own a result"
+    )
     card = shipped_card("launch")
     assert card is not None
     started = PodOutcome.model_validate(
@@ -113,6 +109,8 @@ def test_the_first_message_asks_the_agent_to_set_itself_up():
     assert "Launch template" in said and "November 18" in said
     assert "set-up skill" in said
     assert "lemma-setup" in setup_request(own, None)
+    assert "plan.md" not in said and "plan.md" not in setup_request(own, None)
+    assert "memory" in said, "what it is taught is kept in its memory"
     # The sentence keeps its own full stop; the quote does not add a second.
     assert '.".' not in said and '."' in said
 

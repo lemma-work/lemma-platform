@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from secrets import token_hex
 from uuid import UUID
 from typing import Optional
@@ -15,12 +16,16 @@ from app.modules.icon.contracts import IconCleanupPort
 from app.modules.pod.contracts.trigger_settings import PodTriggerDefaultsChanged
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
+    PodAutoJoinNeedsOpenPolicyError,
     PodLimitReachedError,
     PodNotFoundError,
     PodValidationError,
 )
 from app.modules.pod.domain.pod_names import normalize_pod_name
 from app.modules.pod.domain.pod_entities import (
+    OPEN_JOIN_POLICIES,
+    JoinablePod,
+    PodConfig,
     PodCreationSource,
     PodEntity,
     PodJoinPolicy,
@@ -29,6 +34,7 @@ from app.modules.pod.domain.pod_entities import (
     PodUpdateEntity,
 )
 from app.modules.pod.domain.ports import (
+    OpenPodsPort,
     OrganizationMembershipPort,
     OwnedPodsPort,
     PodMemberRepositoryPort,
@@ -52,6 +58,7 @@ class PodService:
         uow: object | None = None,
         plan_limits: PlanLimits | None = None,
         owned_pods: OwnedPodsPort | None = None,
+        open_pods: OpenPodsPort | None = None,
     ):
         self.pod_repository = pod_repository
         self.pod_member_repository = pod_member_repository
@@ -67,6 +74,7 @@ class PodService:
             raise ValueError("plan_limits and owned_pods are given together")
         self._plan_limits = plan_limits
         self._owned_pods = owned_pods
+        self._open_pods = open_pods
 
     async def create_pod(
         self,
@@ -88,6 +96,7 @@ class PodService:
         # which checks a measure before keeping it; a config arriving with one
         # would skip that check.
         entity.config = entity.config.model_copy(update={"outcome": None})
+        _refuse_auto_join_while_closed(entity.config)
         await self._refuse_past_pod_allowance(
             owner_user_id=entity.user_id, organization_id=entity.organization_id
         )
@@ -290,10 +299,16 @@ class PodService:
                 ctx=ctx,
                 pod=pod_entity,
                 requested=merged_config.get("join_policy"),
+                requested_auto_join=merged_config.get("auto_join_new_members"),
             )
         merged_dict.update(update_data)
 
         updated_entity = PodEntity(**merged_dict)
+        if update_data.get("config") is not None:
+            # On the merged config, not the request's: closing a pod that takes
+            # in new members, without turning that off, is the same conflict as
+            # turning it on for a closed one.
+            _refuse_auto_join_while_closed(updated_entity.config)
         updated = await self.pod_repository.update(updated_entity)
         await self._announce_trigger_defaults_change(pod_entity, updated)
 
@@ -321,8 +336,9 @@ class PodService:
         ctx: Context,
         pod: PodEntity,
         requested: object,
+        requested_auto_join: object = None,
     ) -> None:
-        """Who may change a pod's join policy, and how far they may open it.
+        """Who may change who joins a pod, and how far they may open it.
 
         Two separate rules, because the join policy is the one pod setting whose
         effect leaves the pod.
@@ -330,7 +346,9 @@ class PodService:
         Changing it at all needs ``pod.member.manage``, not ``pod.update``.
         Deciding who may join is membership management wearing a config field's
         clothes, and ``PUT /pods/{id}`` merges the config field-wise -- so an
-        editor could set it in the same request that renamed the pod.
+        editor could set it in the same request that renamed the pod. The same
+        goes for ``auto_join_new_members``, which decides who joins without
+        anyone asking: it is the join policy's to change, by the same people.
 
         Opening it to PUBLIC additionally needs the *organization* to be public.
         A PUBLIC pod mints an ORG_MEMBER row for any signed-in account that
@@ -339,19 +357,19 @@ class PodService:
         hands out organization membership -- and PS-POD-010 makes the
         organization the outer boundary, owned by the org owner.
         """
-        if requested is None:
-            return
-        try:
-            new_policy = PodJoinPolicy(requested)
-        except ValueError as exc:
-            raise PodValidationError(f"Unknown pod join policy: {requested}") from exc
-        if new_policy == pod.config.join_policy:
+        new_policy = _requested_join_policy(requested)
+        policy_changed = new_policy is not None and new_policy != pod.config.join_policy
+        auto_join_changed = (
+            requested_auto_join is not None
+            and bool(requested_auto_join) != pod.config.auto_join_new_members
+        )
+        if not (policy_changed or auto_join_changed):
             return
         await ctx.require(
             Permissions.POD_MEMBER_MANAGE,
             ResourceRef.pod(pod.id, pod.organization_id),
         )
-        if new_policy != PodJoinPolicy.PUBLIC:
+        if not policy_changed or new_policy != PodJoinPolicy.PUBLIC:
             return
         organization = await self.organization_repository.get(pod.organization_id)
         org_policy = organization.join_policy if organization else None
@@ -486,10 +504,60 @@ class PodService:
             cursor,
         )
 
+    async def list_joinable_pods(
+        self,
+        organization_id: UUID,
+        requester_user_id: UUID,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[Sequence[JoinablePod], str | None]:
+        """The organization's pods the requester could walk into and is not in.
+
+        The other half of ``list_pods_by_organization``: that one shows a member
+        only the pods they are in, so a pod open to the organization was one
+        nobody could find. An organization owner is offered none -- they open
+        every pod already, and ``join_pod`` refuses them, so every pod offered
+        would be a refusal.
+        """
+        open_pods = self._open_pods
+        if open_pods is None:
+            # A wiring fault, said as one: answering "nothing to join" would be
+            # a wrong answer that looks like a right one.
+            raise RuntimeError("PodService was built without open_pods")
+        org_member = await self.organization_repository.get_member(
+            requester_user_id, organization_id
+        )
+        if not org_member:
+            raise PodAccessDeniedError()
+        if org_member.role == OrganizationRole.ORG_OWNER:
+            return [], None
+        return await open_pods.list_joinable(
+            organization_id, org_member.id, limit, cursor
+        )
+
     def _build_deleted_pod_name(self, name: str) -> str:
         suffix = token_hex(4)
         deleted_name = f"deleted-{suffix}-{name}"
         return deleted_name[:255]
+
+
+def _requested_join_policy(requested: object) -> PodJoinPolicy | None:
+    if requested is None:
+        return None
+    try:
+        return PodJoinPolicy(requested)
+    except ValueError as exc:
+        raise PodValidationError(f"Unknown pod join policy: {requested}") from exc
+
+
+def _refuse_auto_join_while_closed(config: PodConfig) -> None:
+    """A pod cannot take in everyone who joins the organization and be invite-only.
+
+    Refused rather than resolved either way: opening the pod or switching the
+    flag off are both changes to who gets in, and neither is ours to pick.
+    """
+    if config.auto_join_new_members and config.join_policy not in OPEN_JOIN_POLICIES:
+        raise PodAutoJoinNeedsOpenPolicyError()
 
 
 def _trigger_defaults(pod: PodEntity) -> object:

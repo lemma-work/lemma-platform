@@ -43,7 +43,10 @@ function fieldsOf(declared: { name: string; system?: boolean; type?: string; opt
 
 const isInternal = (item: LibraryItem) => item.path.split("/").some(part => part.startsWith(".") || ["node_modules", "__pycache__", "system"].includes(part));
 
-export function Library({ podId, onFile, onTable }: { podId: string; onFile: (path: string) => void; onTable: (name: string) => void }) {
+/** `bare` is the list inside a Lemma's Files tab, beside a Tables tab that
+ *  holds the tables, so it offers no Tables filter of its own. (The frame
+ *  hides the title, as it does on every section.) */
+export function Library({ podId, onFile, onTable, bare = false }: { podId: string; onFile: (path: string) => void; onTable: (name: string) => void; bare?: boolean }) {
     const [filter, setFilter] = useState<FileLocation | "tables">("shared");
     const location: FileLocation = filter === "tables" ? "shared" : filter;
     const currentLocation = fileLocations[location];
@@ -71,7 +74,7 @@ export function Library({ podId, onFile, onTable }: { podId: string; onFile: (pa
                 <button className="btn" onClick={() => picker.current?.click()} disabled={Boolean(writes.busy)}><AttachIcon size={16}/>Upload</button>
                 <button className="btn" onClick={() => { setNewFolder(""); writes.clearProblem(); }} disabled={Boolean(writes.busy)}><PlusIcon size={16}/>New folder</button>
             </div> : <span className="library-readonly">Read only</span>}</header>
-        <div className="library-controls"><div className="library-filters" aria-label="Resource type">{(["shared", "personal", "skills", "tables"] as const).map(type => <button key={type} aria-pressed={filter === type} onClick={() => { setFilter(type); setDirectory(type === "tables" ? "/" : fileLocations[type].root); setSearch(""); }}>{type === "tables" ? "Tables" : fileLocations[type].label}</button>)}</div><label className="library-search"><SearchIcon size={17}/><input aria-label="Search loaded items" placeholder="Search loaded items…" value={search} onChange={e => setSearch(e.target.value)}/></label></div>
+        <div className="library-controls"><div className="library-filters" aria-label="Resource type">{(bare ? (["shared", "personal", "skills"] as const) : (["shared", "personal", "skills", "tables"] as const)).map(type => <button key={type} aria-pressed={filter === type} onClick={() => { setFilter(type); setDirectory(type === "tables" ? "/" : fileLocations[type].root); setSearch(""); }}>{type === "tables" ? "Tables" : fileLocations[type].label}</button>)}</div><label className="library-search"><SearchIcon size={17}/><input aria-label="Search loaded items" placeholder="Search loaded items…" value={search} onChange={e => setSearch(e.target.value)}/></label></div>
         <p className="library-location-description">{filter === "tables" ? "Tables you can access here." : currentLocation.description}</p>
         <div className="library-context"><div>{filter !== "tables" && <><button disabled={directory === currentLocation.root} aria-label="Parent folder" onClick={() => setDirectory(parentFolder(directory, location))}><BackIcon size={16}/></button><span>{directory === currentLocation.root ? currentLocation.label : currentLocation.label + " / " + directory.slice(currentLocation.root === "/" ? 1 : currentLocation.root.length + 1)}</span></>}</div><label><input type="checkbox" checked={internal} onChange={e => setInternal(e.target.checked)}/> Include internal items</label></div>
         {newFolder !== null && <form className="library-new" onSubmit={async e => {

@@ -1,15 +1,13 @@
 # This Lemma
 
 A Lemma is where people and agents work on the same records, files, apps and
-automations, and it owns one result for them: a bar held every week ("every
-customer hears back within a day") or a finish line by a date. The runtime
-context says what it owns and how that is counted. In code and in the CLI a
+automations. The runtime context says what it is for. In code and in the CLI a
 Lemma is a pod.
 
 | Resource | Purpose |
 | --- | --- |
-| Tables | The work, a row per unit of it, and the number counted from it |
-| Files | Documents, deliverables, the plan, memory |
+| Tables | The work, a row per unit of it |
+| Files | Documents, deliverables, memory |
 | Functions | Code that runs the same way every time |
 | Agents | Work that needs judgment |
 | Workflows | Durable steps, branches, retries, waits on people |

@@ -9,20 +9,23 @@ import { Icon, to, type IconName } from "./parts";
 
 export type LemmaSection = Exclude<OutcomeTab, "home">;
 
-/** A Lemma's sections, each a page of its own under its summary. They were
- *  tabs under a tall header, and each one drew its own title and its own
- *  tabs again under those: three rows of navigation before anything to read.
- *  Now the summary lists them, and a section's page names itself once, in
- *  the bar every page of a Lemma shares. */
+/** A Lemma's pages. Its row of tabs holds what is in it, each named for the
+ *  tool it stands in for -- a chat app, an app, a base, a doc app, a drive --
+ *  and then About, which says what the Lemma is. The rest are parts of
+ *  About: reached from it, and each still a page with an address of its own. */
 export const LEMMA_SECTIONS: readonly { tab: LemmaSection; label: string; icon: IconName }[] = [
-    { tab: "plan", label: "Plan", icon: "skill" },
     { tab: "chats", label: "Chats", icon: "chat" },
     { tab: "apps", label: "Apps", icon: "app" },
-    { tab: "made", label: "Files", icon: "file" },
-    { tab: "contacts", label: "Contacts", icon: "people" },
+    { tab: "tables", label: "Tables", icon: "table" },
+    { tab: "pages", label: "Pages", icon: "page" },
+    { tab: "files", label: "Files", icon: "file" },
+    { tab: "about", label: "About", icon: "about" },
+    { tab: "people", label: "People", icon: "people" },
+    { tab: "contacts", label: "Contacts", icon: "inbox" },
     { tab: "automations", label: "Automations", icon: "flow" },
     { tab: "settings", label: "Settings", icon: "gear" },
 ];
+
 
 export function sectionLabel(tab: LemmaSection): string {
     return LEMMA_SECTIONS.find((one) => one.tab === tab)?.label ?? "";
@@ -39,9 +42,8 @@ export function closeMenu(event: { currentTarget: Element }) {
     event.currentTarget.closest("details")?.removeAttribute("open");
 }
 
-/** The last step of the crumb on a section's page: which section this is,
- *  and a menu of the others, so moving between them is one click rather than
- *  a trip back through the summary. */
+/** The last step of the crumb on a page drawn under the Lemma's own bar
+ *  (Settings): which section this is, and a menu of the others. */
 export function SectionSwitch({ pod, here, go }: { pod: Pod; here: LemmaSection; go: Go }) {
     const sections = useLemmaSections(pod.id);
     return (
@@ -67,7 +69,7 @@ export function SectionSwitch({ pod, here, go }: { pod: Pod; here: LemmaSection;
 
 /** What every page of a Lemma offers at its top right: its inbox, a new
  *  chat with it, and the rest -- who has access, where people reach it,
- *  sharing it, its computer -- in a menu. */
+ *  its plan, sharing it, its computer, its settings -- in a menu. */
 export function LemmaActions({ pod, go, actions, newChat = true }: {
     pod: Pod;
     go: Go;
@@ -76,6 +78,10 @@ export function LemmaActions({ pod, go, actions, newChat = true }: {
      *  page itself. */
     newChat?: boolean;
 }) {
+    const link = (view: Parameters<typeof to>[0]) => {
+        const at = to(view, go);
+        return { href: at.href, onClick: (event: Parameters<typeof at.onClick>[0]) => { closeMenu(event); at.onClick(event); } };
+    };
     return (
         <>
             {/* Its inbox, as the workspace has it over a pod: the reader's
@@ -86,10 +92,12 @@ export function LemmaActions({ pod, go, actions, newChat = true }: {
             <details className="ox-more">
                 <summary aria-label={`More for ${pod.name}`} title="More"><Icon name="more" size={16} /></summary>
                 <div className="ox-more__menu" role="menu">
+                    <a role="menuitem" {...link(outcomeView(pod.id, "about"))}>About {pod.name}</a>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.addPeople(pod.id); }}>Who has access</button>
-                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where it answers</button>
+                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where to reach it</button>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.share(pod.id); }}>Share or export</button>
-                    <a role="menuitem" {...to({ name: "computer", podId: pod.id, conversationId: null }, go)} onClick={(event) => { closeMenu(event); to({ name: "computer", podId: pod.id, conversationId: null }, go).onClick(event); }}>Its computer</a>
+                    <a role="menuitem" {...link({ name: "computer", podId: pod.id, conversationId: null })}>Its computer</a>
+                    <a role="menuitem" {...link(outcomeView(pod.id, "settings"))}>Settings</a>
                 </div>
             </details>
             {newChat && <a className="ox-btn ox-btn--primary ox-btn--small" {...to(outcomeView(pod.id), go)}>New chat</a>}
