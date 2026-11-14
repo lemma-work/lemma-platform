@@ -84,11 +84,9 @@ def sync_detailed(
         pod_id (UUID):
         body (OutcomeInput): What the pod owns, as a person or its agent sets it.
 
-            The fields are the front matter of the plan file the workspace keeps at
-            ``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,
-            ``unit``, ``due`` and ``measure`` -- held here so there is one copy of
-            them. The plan's prose (what must be true, how the work is done, who holds
-            what, what never happens) stays in the file.
+            Kept on the pod's config, the one copy of it. How the work is done, who
+            holds what and what never happens are what the pod has been taught, kept
+            in its shared memory.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -129,11 +127,9 @@ def sync(
         pod_id (UUID):
         body (OutcomeInput): What the pod owns, as a person or its agent sets it.
 
-            The fields are the front matter of the plan file the workspace keeps at
-            ``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,
-            ``unit``, ``due`` and ``measure`` -- held here so there is one copy of
-            them. The plan's prose (what must be true, how the work is done, who holds
-            what, what never happens) stays in the file.
+            Kept on the pod's config, the one copy of it. How the work is done, who
+            holds what and what never happens are what the pod has been taught, kept
+            in its shared memory.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -169,11 +165,9 @@ async def asyncio_detailed(
         pod_id (UUID):
         body (OutcomeInput): What the pod owns, as a person or its agent sets it.
 
-            The fields are the front matter of the plan file the workspace keeps at
-            ``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,
-            ``unit``, ``due`` and ``measure`` -- held here so there is one copy of
-            them. The plan's prose (what must be true, how the work is done, who holds
-            what, what never happens) stays in the file.
+            Kept on the pod's config, the one copy of it. How the work is done, who
+            holds what and what never happens are what the pod has been taught, kept
+            in its shared memory.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -212,11 +206,9 @@ async def asyncio(
         pod_id (UUID):
         body (OutcomeInput): What the pod owns, as a person or its agent sets it.
 
-            The fields are the front matter of the plan file the workspace keeps at
-            ``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,
-            ``unit``, ``due`` and ``measure`` -- held here so there is one copy of
-            them. The plan's prose (what must be true, how the work is done, who holds
-            what, what never happens) stays in the file.
+            Kept on the pod's config, the one copy of it. How the work is done, who
+            holds what and what never happens are what the pod has been taught, kept
+            in its shared memory.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

@@ -23,7 +23,6 @@ export const LEMMA_SECTIONS: readonly { tab: LemmaSection; label: string; icon: 
     { tab: "people", label: "People", icon: "people" },
     { tab: "contacts", label: "Contacts", icon: "inbox" },
     { tab: "automations", label: "Automations", icon: "flow" },
-    { tab: "plan", label: "Plan", icon: "skill" },
     { tab: "settings", label: "Settings", icon: "gear" },
 ];
 
@@ -96,7 +95,6 @@ export function LemmaActions({ pod, go, actions, newChat = true }: {
                     <a role="menuitem" {...link(outcomeView(pod.id, "about"))}>About {pod.name}</a>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.addPeople(pod.id); }}>Who has access</button>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where to reach it</button>
-                    <a role="menuitem" {...link(outcomeView(pod.id, "plan"))}>Its plan</a>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.share(pod.id); }}>Share or export</button>
                     <a role="menuitem" {...link({ name: "computer", podId: pod.id, conversationId: null })}>Its computer</a>
                     <a role="menuitem" {...link(outcomeView(pod.id, "settings"))}>Settings</a>

@@ -30,10 +30,10 @@ import { FirstProfileStep } from "@/session/first-profile-step";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
 import {
     NEW_CHAT,
-    HOME, activityOfRecents, chatOpenOfView, chatView, daysOfRecents, outcomeView, podOfView, queueFromNeeds, queueItems, readTrialView, readView, refreshKept, viewOfAddress, withOwned, writeView,
+    HOME, activityOfRecents, chatOpenOfView, chatView, daysOfRecents, outcomeView, podOfView, queueFromNeeds, queueItems, readTrialView, readView, refreshKept, viewOfAddress, writeView,
     type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type KeptApp, type View,
 } from "./model";
-import { useNeedsYou, useOwned, usePlans, usePodActivity, usePodDetails, useRecents } from "./data";
+import { useNeedsYou, usePodActivity, usePodDetails, useRecents } from "./data";
 import { FrameArrival, firstLemma } from "./arrival";
 import { NewLemmaDialog } from "./new-lemma";
 import { Bars, Icon, Empty } from "./parts";
@@ -315,20 +315,6 @@ export function OutcomesShell() {
     }, [queue]);
     /* The shared chats the sidebar has read, for Home's list of recent ones. */
     const [sideChannels, setSideChannels] = useState<ReadonlyMap<string, readonly Channel[]>>(() => new Map());
-    /* The plan's lines are the file's; what a Lemma owns and its number are
-       the Lemma's own, kept on the server, and shown over the file's. */
-    /* Two reads a Lemma, so they are asked only for the Lemmas a page shows
-       them for: every one on the board of Lemmas, otherwise just the Lemma
-       whose own page is open. Asked for every Lemma on every page, they were
-       fifty requests nothing on screen read. */
-    const planned = useMemo(() => {
-        if (view.name === "outcomes" || view.name === "hire") return list;
-        return view.name === "outcome" ? list.filter((one) => one.id === view.podId) : [];
-    }, [list, view]);
-    const planFiles = usePlans(planned);
-    const owned = useOwned(planned);
-    const plans = useMemo(() => new Map(planned.map((pod) => [pod.id, withOwned(planFiles.get(pod.id), owned.get(pod.id))])), [planned, planFiles, owned]);
-
     /* Asking -- from Home, ⌘K or an outcome -- starts a chat in the outcome
        named and opens it. The pane that shows it sends the words, so the
        reply streams into the thread on screen; without a live session the
@@ -534,7 +520,7 @@ export function OutcomesShell() {
     } else if (view.name === "connectors") {
         page = <ConnectorsPage org={org} />;
     } else if (view.name === "outcomes" || view.name === "hire") {
-        page = <OutcomesList org={org} pods={withPeople} activity={activity} days={days} plans={plans} queue={queue} go={go} actions={actions} />;
+        page = <OutcomesList org={org} pods={withPeople} activity={activity} days={days} queue={queue} go={go} actions={actions} />;
     } else if (view.name === "needs") {
         page = <NeedsYou pods={withPeople} queue={queue} loading={queueLoading} failed={queueFailed} onRetry={retryQueue} go={go} />;
     } else if (view.name === "people") {
@@ -556,7 +542,7 @@ export function OutcomesShell() {
     } else if (view.name === "outcome" && view.tab === "settings") {
         page = <SettingsView key={pod.id} pod={pod} org={org} section={view.section ?? null} go={go} actions={actions} />;
     } else if (view.name === "outcome") {
-        page = <OutcomePage pod={pod} pods={list} orgName={org.name} tab={view.tab} section={view.section ?? null} plan={plans.get(pod.id)} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
+        page = <OutcomePage pod={pod} pods={list} orgName={org.name} tab={view.tab} section={view.section ?? null} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
     } else if (view.name === "run") {
         page = <RunView key={view.runId} pod={pod} runId={view.runId} go={go} back={back} />;
     } else if (view.name === "workflow") {
@@ -646,14 +632,11 @@ export function OutcomesShell() {
                     org={org}
                     pods={withPeople}
                     onClose={() => { setMakingLemma(false); if (view.name === "hire") go({ name: "outcomes" }); }}
-                    onCreated={(podId, missed, first) => {
+                    onCreated={(podId, missed) => {
                         setMakingLemma(false);
-                        /* Given a job, it opens in the chat where it sets the
-                           job up; when what it was to own could not be kept,
-                           on its plan, where it is given one; otherwise on its
-                           home. */
-                        if (first.ask) ask(podId, first.ask);
-                        else go(outcomeView(podId, first.plan ? "plan" : "home"));
+                        /* It opens on its home, which says how to start it:
+                           ask it, bring things in, or add a template. */
+                        go(outcomeView(podId));
                         /* Someone could not be added: who has access opens,
                            to try again, rather than a line nobody reads. */
                         if (missed > 0) setAddingPeople(podId);

@@ -2,13 +2,12 @@
 
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { source, type ConversationRef, type Pod } from "@/data";
+import { source, type Pod } from "@/data";
 import { useMaySeeContacts } from "@/space/contact-queries";
+import { useMemoryNotes } from "@/space/what-it-remembers";
 import type { FrameActions } from "./actions";
-import { CanDo } from "./can-do";
-import { useLemmaOpenness, useMeasure } from "./data";
-import { useMe } from "@/session/use-me";
-import { PLAN_SECTIONS, formatMeasure, looksAfter, outcomeView, reachSaid, standingOf, type Go, type Plan } from "./model";
+import { useLemmaOpenness } from "./data";
+import { outcomeView, reachSaid, type Go } from "./model";
 import { Avatar, to } from "./parts";
 
 /** How many of anything a part of About lists before it points at the page
@@ -28,27 +27,24 @@ function Part({ question, children }: { question: string; children: ReactNode })
  *  for, who is in it, who can talk to it, what it does by itself, what it
  *  has been taught, what it is connected to. Each answer is short and read
  *  from what the Lemma already keeps, and ends at the page where the whole of
- *  it is kept and changed -- its plan, its people, what it runs, its
- *  settings -- so nothing is said in two places. */
-export function AboutTab({ pod, orgName, plan, activity, go, actions }: {
+ *  it is kept and changed -- its people, what it runs, what it remembers,
+ *  its settings -- so nothing is said in two places. */
+export function AboutTab({ pod, orgName, go, actions }: {
     pod: Pod;
     orgName: string;
-    plan: Plan | null | undefined;
-    /** The reader's chats with it, for whether it has been asked anything. */
-    activity: readonly ConversationRef[];
     go: Go;
     actions: FrameActions;
 }) {
     const contacts = useMaySeeContacts(pod.id);
-    const mine = looksAfter(pod, useMe());
     const { openness } = useLemmaOpenness(pod.id);
-    const measure = useMeasure(pod.id, plan);
-    const value = measure.data ?? null;
-    const standing = standingOf(plan, value);
     const schedules = useQuery({ queryKey: ["outcome-schedules", pod.id], queryFn: () => source.listSchedules(pod.id), staleTime: 5 * 60_000 });
     const jobs = schedules.data ?? [];
     const people = pod.members.filter((member) => member.kind === "person");
-    const taught = plan ? PLAN_SECTIONS.flatMap((section) => plan.sections[section]) : [];
+    /* What it has been taught is what it wrote down when it was: its
+       memory, which every run of it reads. What it keeps for one person
+       alone is theirs, so only what everyone in it shares is listed. */
+    const notes = useMemoryNotes(pod);
+    const taught = (notes.data ?? []).filter((note) => !note.private);
     const reach = reachSaid(openness?.reach ?? null, orgName);
     const at = (tab: Parameters<typeof outcomeView>[1], section: string | null = null) => to(outcomeView(pod.id, tab, section), go);
 
@@ -56,22 +52,7 @@ export function AboutTab({ pod, orgName, plan, activity, go, actions }: {
         <div className="ox-about">
             <Part question="What’s it for?">
                 <p className="ox-about__lead">{pod.description || "Nobody has said yet."}</p>
-                {plan?.outcome ? (
-                    <p className="ox-about__owns">
-                        <span className="ox-vs">It owns</span>
-                        <span>{plan.outcome}</span>
-                        {value !== null && <span className="ox-num">{formatMeasure(value, plan.unit)}{plan.target ? ` of ${plan.target}` : ""}</span>}
-                        {standing && <span className={"ox-pill" + (standing === "behind" ? " ox-pill--behind" : "")}>{standing === "behind" ? "Behind" : "On track"}</span>}
-                    </p>
-                ) : <p className="ox-vs">It doesn’t own a result yet. It helps when asked, and nothing is counted.</p>}
-                <p className="ox-about__more"><a className="ox-link" {...at("plan")}>{plan?.outcome ? "Its plan, and how that is counted" : "Give it something to own"}</a></p>
             </Part>
-
-            {mine && (
-                <Part question="What can it do so far?">
-                    <CanDo pod={pod} plan={plan} activity={activity} go={go} actions={actions} always />
-                </Part>
-            )}
 
             <Part question="Who’s in it?">
                 {people.length === 0 ? <p className="ox-vs">Nobody yet.</p> : (
@@ -116,20 +97,23 @@ export function AboutTab({ pod, orgName, plan, activity, go, actions }: {
             </Part>
 
             <Part question="What has it been taught?">
-                {plan === undefined ? <p className="ox-loading">Reading its plan…</p>
-                    : taught.length === 0 ? <p className="ox-vs">Nothing yet. Tell it how you do something and it writes that down, with your name beside it.</p>
+                {notes.isPending ? <p className="ox-loading">Reading what it remembers…</p>
+                    : notes.isError ? <p className="ox-vs">Couldn’t read what it remembers. <button type="button" className="ox-link" onClick={() => void notes.refetch()}>Try again</button></p>
+                    : taught.length === 0 ? <p className="ox-vs">Nothing yet. Tell it how you do something and it writes that down.</p>
                     : (
                         <ul className="ox-about__rows">
-                            {taught.slice(0, SHOWN).map((said, index) => (
-                                <li key={index}><span>{said.text}</span><span className="ox-vs">{[said.by, said.on].filter(Boolean).join(", ")}</span></li>
+                            {taught.slice(0, SHOWN).map((note) => (
+                                <li key={note.path}>
+                                    <a className="ox-link" {...to({ name: "file", podId: pod.id, path: note.path }, go)}>{note.topic}</a>
+                                    {note.gloss && <span className="ox-vs">{note.gloss}</span>}
+                                </li>
                             ))}
                             {taught.length > SHOWN && <li className="ox-vs">and {taught.length - SHOWN} more</li>}
                         </ul>
                     )}
                 <p className="ox-about__more">
-                    <a className="ox-link" {...at("plan")}>Its plan</a>
+                    <a className="ox-link" {...at("settings", "memory")}>Everything it remembers</a>
                     <a className="ox-link" {...at("settings", "skills")}>Its skills</a>
-                    <a className="ox-link" {...at("settings", "memory")}>What it remembers</a>
                 </p>
             </Part>
 

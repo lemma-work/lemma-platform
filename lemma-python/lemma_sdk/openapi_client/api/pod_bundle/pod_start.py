@@ -67,13 +67,13 @@ def sync_detailed(
 ) -> Response[ErrorResponse | StartLemmaResponse]:
     """Start a Lemma
 
-     Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the
-    chat where its agent sets itself up, opened with the caller's first message. From a template
-    (`template`, with `due` for a finish line) it also brings the template's tables, skill and
-    schedules, applied by a worker, and its agent starts once they are in; from the caller's own words
-    (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template
-    that is not here; 403 outside the organization; 409 when its name collides with one made at the same
-    moment.
+     Make a pod that owns something, in one transaction: the pod, what it owns, a template's own rules in
+    its shared memory, and the chat where its agent sets itself up, opened with the caller's first
+    message. From a template (`template`, with `due` for a finish line) it also brings the template's
+    tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the
+    caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind.
+    404 for a template that is not here; 403 outside the organization; 409 when its name collides with
+    one made at the same moment.
 
     Args:
         body (StartLemmaRequest): Body for starting a Lemma: from a template, or from its own
@@ -105,13 +105,13 @@ def sync(
 ) -> ErrorResponse | StartLemmaResponse | None:
     """Start a Lemma
 
-     Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the
-    chat where its agent sets itself up, opened with the caller's first message. From a template
-    (`template`, with `due` for a finish line) it also brings the template's tables, skill and
-    schedules, applied by a worker, and its agent starts once they are in; from the caller's own words
-    (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template
-    that is not here; 403 outside the organization; 409 when its name collides with one made at the same
-    moment.
+     Make a pod that owns something, in one transaction: the pod, what it owns, a template's own rules in
+    its shared memory, and the chat where its agent sets itself up, opened with the caller's first
+    message. From a template (`template`, with `due` for a finish line) it also brings the template's
+    tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the
+    caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind.
+    404 for a template that is not here; 403 outside the organization; 409 when its name collides with
+    one made at the same moment.
 
     Args:
         body (StartLemmaRequest): Body for starting a Lemma: from a template, or from its own
@@ -138,13 +138,13 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | StartLemmaResponse]:
     """Start a Lemma
 
-     Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the
-    chat where its agent sets itself up, opened with the caller's first message. From a template
-    (`template`, with `due` for a finish line) it also brings the template's tables, skill and
-    schedules, applied by a worker, and its agent starts once they are in; from the caller's own words
-    (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template
-    that is not here; 403 outside the organization; 409 when its name collides with one made at the same
-    moment.
+     Make a pod that owns something, in one transaction: the pod, what it owns, a template's own rules in
+    its shared memory, and the chat where its agent sets itself up, opened with the caller's first
+    message. From a template (`template`, with `due` for a finish line) it also brings the template's
+    tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the
+    caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind.
+    404 for a template that is not here; 403 outside the organization; 409 when its name collides with
+    one made at the same moment.
 
     Args:
         body (StartLemmaRequest): Body for starting a Lemma: from a template, or from its own
@@ -174,13 +174,13 @@ async def asyncio(
 ) -> ErrorResponse | StartLemmaResponse | None:
     """Start a Lemma
 
-     Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the
-    chat where its agent sets itself up, opened with the caller's first message. From a template
-    (`template`, with `due` for a finish line) it also brings the template's tables, skill and
-    schedules, applied by a worker, and its agent starts once they are in; from the caller's own words
-    (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template
-    that is not here; 403 outside the organization; 409 when its name collides with one made at the same
-    moment.
+     Make a pod that owns something, in one transaction: the pod, what it owns, a template's own rules in
+    its shared memory, and the chat where its agent sets itself up, opened with the caller's first
+    message. From a template (`template`, with `due` for a finish line) it also brings the template's
+    tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the
+    caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind.
+    404 for a template that is not here; 403 outside the organization; 409 when its name collides with
+    one made at the same moment.
 
     Args:
         body (StartLemmaRequest): Body for starting a Lemma: from a template, or from its own

@@ -145,7 +145,7 @@ function Templates({ pod, onAsk }: { pod: Pod; onAsk: Ask }) {
                         {shown.map((card) => (
                             <li key={card.id}>
                                 <KitFace face={card.face} name={card.name} />
-                                <span className="ox-kits__t"><span>{card.name}</span><span className="ox-vs">{card.brings.join(" · ") || card.sentence}</span></span>
+                                <span className="ox-kits__t"><span>{card.name}</span><span className="ox-vs">{card.brings.join(" · ") || card.work}</span></span>
                                 <button type="button" className="ox-btn ox-btn--small" disabled={Boolean(adding)} onClick={() => void add(card)}>
                                     {adding?.id === card.id ? adding.said : "Add"}
                                 </button>

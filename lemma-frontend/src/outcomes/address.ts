@@ -8,7 +8,7 @@
  *  its apps, its tables, its pages, its files, and About. The rest are parts
  *  of About -- what it runs, who is in it, who writes in from outside, its
  *  plan, its settings -- each still a page of its own with its own address. */
-export type OutcomeTab = "home" | "chats" | "apps" | "tables" | "pages" | "files" | "about" | "automations" | "people" | "contacts" | "plan" | "settings";
+export type OutcomeTab = "home" | "chats" | "apps" | "tables" | "pages" | "files" | "about" | "automations" | "people" | "contacts" | "settings";
 
 /** What a Lemma runs, in one place: its workflows and their runs, its
  *  schedules, its agents, and the X-ray of all of it. The workspace keeps
@@ -65,7 +65,7 @@ export type View =
     /** Starting a Lemma from scratch, the workspace's own way. */
     | { name: "hire" };
 
-export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "people", "contacts", "plan", "settings"];
+export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "people", "contacts", "settings"];
 
 /** The tabs a Lemma's row shows, in order. */
 export const ROW_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about"];
@@ -190,7 +190,10 @@ export function readView(pathname: string): View | null {
     const [one, two] = rest;
     switch (section) {
         case undefined: return outcomeView(podId);
-        case "plan": return rest.length === 0 ? outcomeView(podId, "plan") : null;
+        /* The plan a Lemma kept for a result it owned, before what it is
+           taught lived in its memory: an old link opens About, which says
+           what it has been taught. */
+        case "plan": return rest.length === 0 ? outcomeView(podId, "about") : null;
         case "chats":
             if (rest.length === 0) return outcomeView(podId, "chats");
             return rest.length === 1 ? chatView({ kind: "chat", podId, id: one }) : null;
@@ -251,7 +254,6 @@ const SECTION_WORDS: Readonly<Record<OutcomeTab, string>> = {
     automations: "automations",
     people: "people",
     contacts: "contacts",
-    plan: "plan",
     settings: "settings",
 };
 

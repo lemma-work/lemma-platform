@@ -315,9 +315,9 @@ def test_a_renamed_zone_is_read_as_its_current_name():
             before = ZoneInfo(old)
         except ZoneInfoNotFoundError:
             continue
-        assert before.utcoffset(datetime(2026, 1, 15)) == ZoneInfo(
-            current
-        ).utcoffset(datetime(2026, 1, 15))
+        assert before.utcoffset(datetime(2026, 1, 15)) == ZoneInfo(current).utcoffset(
+            datetime(2026, 1, 15)
+        )
 
 
 def test_the_days_are_the_readers_calendar_days():

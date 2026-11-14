@@ -5,7 +5,7 @@ description: Keep the leads table true. Use when a lead comes in or is followed 
 
 # Keep the leads table true
 
-The number Follow-ups owns is counted from `leads` by `came_in_at` and `followed_up_in_time`. Keep those columns as they are.
+Follow-ups's count is counted from `leads` by `came_in_at` and `followed_up_in_time`. Keep those columns as they are.
 
 - A lead comes in: add a row with `name`, `company`, `link` and `came_in_at`.
 - Someone follows up: set `followed_up_at`, and `followed_up_in_time` to true when that was within two days of `came_in_at`.

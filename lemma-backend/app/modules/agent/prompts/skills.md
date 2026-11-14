@@ -6,15 +6,15 @@ skill says how its work is kept -- so prefer a relevant one.
 
 Doing the work:
 
-- `lemma-setup`: set a Lemma up to own its result: its source, past weeks,
-  feed, measure and plan.
+- `lemma-setup`: set a Lemma up on its work: its source, past weeks, feed, and
+  what it was taught.
 - `lemma-bring-in`: bring a team's stuff in from Notion, Google Drive,
   Airtable, Google Sheets, Slack, or a file or export.
 - `lemma-user`: day-to-day operation: what needs people, approvals, grants,
   chats and groups, RLS troubleshooting.
 - `lemma-widget`: inline HTML views.
 - `lemma-research`: source-backed investigations.
-- `lemma-data-analysis`: quantitative analysis, charts, and writing a measure.
+- `lemma-data-analysis`: quantitative analysis and charts.
 - `lemma-artifact-author`: documents, spreadsheets, decks, PDFs, HTML.
 - `lemma-form`: forms and sign-ups for people outside; responses are table rows.
 - `browser`: the workspace browser the person sees, driven with `agent-browser`;

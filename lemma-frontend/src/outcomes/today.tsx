@@ -58,7 +58,7 @@ export function Today({ org, pods, activity, channels, queue, queueFailed, onRet
         return (
             <div className="ox-page ox-home">
                 <Empty title={`No Lemmas at ${org.name} yet.`}>
-                    <p>Give one something to own, and it builds and runs what it takes.</p>
+                    <p>Each one holds a team’s chats, pages, tables, files and apps, with an assistant that works in all of them.</p>
                     <a className="ox-btn ox-btn--primary" {...to({ name: "hire" }, go)}>Start a Lemma</a>
                 </Empty>
             </div>

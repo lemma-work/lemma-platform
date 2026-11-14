@@ -96,12 +96,14 @@ not added; they find it in the joinable list.
 `PodConfig.outcome` is the one thing a pod owns: a sentence, its kind (`week`, a
 bar held every week, or `date`, a finish line by `due`), a target with its unit
 (`%` makes it a share from 0 to 100), and a measure -- one read-only SQL query
-over the pod's tables that answers a single number. These are the front matter
-fields of the plan the workspace keeps at `/plan.md`; the plan's prose stays in
-that file, and the agent's brief points at it.
+over the pod's tables that answers a single number. How the work is done, who
+holds what and what never happens are not kept here: they are what the pod has
+been taught, in its shared memory (`/memory`) and its skills. Nothing tells
+the pod's agent what the pod owns, and the agent has no tool to set it: the
+outcome is kept for each product line's own numbers later.
 
-It changes only through `PodOutcomeService`. `PUT /pods/{pod_id}/outcome` and
-the agent's `set_what_you_own` tool both go through `set_outcome`, which needs
+It changes only through `PodOutcomeService`. `PUT /pods/{pod_id}/outcome` goes
+through `set_outcome`, which needs
 `POD_UPDATE` and checks a new or changed measure through the `OutcomeMeasures`
 port (`app/core/ports/outcome_measures.py`, implemented by datastore) before
 keeping it. A measure is read for the whole pod, so the check refuses anyone who

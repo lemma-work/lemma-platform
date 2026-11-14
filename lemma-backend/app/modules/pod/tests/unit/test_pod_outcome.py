@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.ports.outcome_measures import CheckedMeasure, MeasureReading
-from app.modules.pod.contracts.members import say_what_it_owns
 from app.modules.pod.domain.errors import PodConflictError
 from app.modules.pod.domain.pod_entities import (
     OutcomeInput,
@@ -91,18 +90,6 @@ def test_an_outcome_stored_in_an_older_shape_reads_as_none_not_a_reset_config():
     )
     assert config.outcome is None
     assert config.join_policy.value == "ORG_MEMBERS"
-
-
-def test_the_agent_is_told_what_it_owns_and_where_the_plan_is():
-    said = say_what_it_owns({"outcome": BAR})
-    assert said is not None
-    assert said.startswith("Every customer hears back within a day.")
-    assert "every week" in said and "90%" in said and "/plan.md" in said
-    finish = say_what_it_owns({"outcome": FINISH})
-    assert finish is not None and "due 2026-11-18" in finish and "12 steps" in finish
-    unmeasured = say_what_it_owns({"outcome": {**BAR, "measure": None}})
-    assert unmeasured is not None and "set_what_you_own" in unmeasured
-    assert say_what_it_owns({}) is None
 
 
 def test_any_edit_to_a_measure_is_a_new_measure():

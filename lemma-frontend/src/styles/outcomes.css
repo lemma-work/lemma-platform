@@ -49,8 +49,7 @@
     white-space: nowrap;
 }
 
-.ox-num,
-.ox-big {
+.ox-num {
     font-family: var(--ui);
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.01em;
@@ -893,7 +892,6 @@
     margin: 0 0 14px;
 }
 
-.ox-pill,
 .ox-tag,
 .ox-kind {
     display: inline-flex;
@@ -905,11 +903,6 @@
     color: var(--ink);
     font-size: 12px;
     white-space: nowrap;
-}
-
-.ox-pill--behind {
-    background: var(--behind-wash);
-    color: var(--behind-ink);
 }
 
 .ox-kind--decide {
@@ -954,7 +947,7 @@
 .ox-board__head,
 .ox-lane {
     display: grid;
-    grid-template-columns: 240px minmax(0, 1fr) 140px 220px 110px;
+    grid-template-columns: 240px minmax(0, 1fr) 220px 110px;
     gap: 24px;
     align-items: center;
     padding: 0 22px;
@@ -1003,7 +996,7 @@
     font-weight: 400;
 }
 
-.ox-lane__owns {
+.ox-lane__for {
     color: var(--ink-2);
     font-size: 13px;
     line-height: 1.35;
@@ -1011,10 +1004,6 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-}
-
-.ox-lane__owns--none {
-    font-style: italic;
 }
 
 .ox-chart {
@@ -1035,18 +1024,6 @@
 
 .ox-chart__none {
     fill: var(--line-2);
-}
-
-.ox-lane__num {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-}
-
-.ox-big {
-    font-size: 26px;
-    line-height: 1;
 }
 
 .ox-now,
@@ -1174,210 +1151,6 @@
 
 .ox-mini--recent {
     margin-top: 10px;
-}
-
-/* the plan */
-
-.ox-plan {
-    border: 1px solid var(--line-2);
-    border-radius: 16px;
-    background: var(--paper);
-    padding: 6px 0 12px;
-}
-
-.ox-plan__intro {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    flex-wrap: wrap;
-    padding: 12px 18px 14px;
-    border-bottom: 1px solid var(--line);
-}
-
-.ox-plan__lead {
-    margin: 0;
-    font-size: 15px;
-}
-
-.ox-plan__acts {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.ox-plan--draft .ox-line__t {
-    color: var(--ink-2);
-}
-
-.ox-plan__sec {
-    padding: 12px 18px 2px;
-}
-
-.ox-plan__sec ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-
-.ox-plan__h {
-    margin: 0 0 4px;
-    color: var(--ink-2);
-    font-size: 12.5px;
-}
-
-.ox-plan__none {
-    margin: 4px 0 8px;
-    color: var(--ink-2);
-    font-size: 13px;
-}
-
-.ox-line {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 38px;
-    border-bottom: 1px solid var(--line);
-}
-
-.ox-line__dot {
-    flex: none;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--line-2);
-}
-
-.ox-line__dot--lemma {
-    background: var(--lemma);
-}
-
-.ox-line__t {
-    flex: 1;
-    min-width: 0;
-    padding: 6px 0;
-    border: 0;
-    background: none;
-    color: var(--ink);
-    font: inherit;
-    font-size: 14.5px;
-    text-align: left;
-    cursor: text;
-}
-
-.ox-line__input {
-    flex: 1;
-    min-width: 0;
-    height: 32px;
-    padding: 0 8px;
-    border: 1px solid var(--line-2);
-    border-radius: 6px;
-    background: var(--paper);
-    color: var(--ink);
-    font: inherit;
-    font-size: 14.5px;
-}
-
-.ox-line__by {
-    color: var(--ink-2);
-    font-size: 12.5px;
-    white-space: nowrap;
-}
-
-.ox-line__x {
-    width: 24px;
-    height: 24px;
-    border: 0;
-    border-radius: 6px;
-    background: none;
-    color: var(--ink-2);
-    font-size: 16px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0;
-}
-
-.ox-line:hover .ox-line__x,
-.ox-line__x:focus-visible {
-    opacity: 1;
-}
-
-.ox-add {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 0 10px;
-    color: var(--ink-2);
-}
-
-.ox-add input {
-    flex: 1;
-    min-width: 0;
-    height: 30px;
-    border: 0;
-    background: none;
-    color: var(--ink);
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-}
-
-.ox-add input::placeholder {
-    color: var(--ink-2);
-}
-
-/* The inputs drop their own outline, so the row around each shows focus. */
-.ox-add:focus-within {
-    outline: 2px solid var(--ink-2);
-    outline-offset: 2px;
-    border-radius: 8px;
-}
-
-.ox-measure {
-    display: flex;
-    gap: 16px;
-    padding: 14px 18px 4px;
-}
-
-.ox-measure__form {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin: 6px 18px 4px;
-    padding: 14px;
-    border-radius: 12px;
-    background: var(--wash-b);
-}
-
-.ox-measure__form label {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    color: var(--ink-2);
-    font-size: 12.5px;
-}
-
-.ox-measure__form input,
-.ox-measure__form select,
-.ox-measure__form textarea {
-    padding: 7px 9px;
-    border: 1px solid var(--line-2);
-    border-radius: 8px;
-    background: var(--paper);
-    color: var(--ink);
-    font: inherit;
-    font-size: 14px;
-}
-
-.ox-measure__form textarea {
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 13px;
-}
-
-.ox-measure__row {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
 }
 
 /* apps, made, x-ray */
@@ -2056,30 +1829,6 @@ a.ox-piece:hover .ox-piece__t {
     overflow-wrap: anywhere;
 }
 
-/* ── a Lemma's weeks against what it owns ────────────────────────────── */
-
-.ox-weeks {
-    display: flex;
-    align-items: flex-end;
-    gap: 4px;
-    height: 28px;
-}
-
-.ox-weeks__b {
-    width: 10px;
-    min-height: 2px;
-    border-radius: 3px 3px 1px 1px;
-    background: var(--lemma-wash);
-}
-
-.ox-weeks__b--now {
-    background: var(--lemma);
-}
-
-.ox-weeks__b--none {
-    background: var(--line);
-}
-
 /* ── palette ─────────────────────────────────────────────────────────── */
 
 .ox-scrim {
@@ -2450,21 +2199,6 @@ a.ox-piece:hover .ox-piece__t {
     padding: 0;
 }
 
-.ox-plan__more {
-    margin: 2px 0 8px 17px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-}
-
-.ox-plan__more:hover {
-    color: var(--ink);
-}
-
 .ox-sec__side {
     display: inline-flex;
     align-items: baseline;
@@ -2780,24 +2514,6 @@ a.ox-piece:hover .ox-piece__t {
     margin-top: 0;
 }
 
-/* What it owns, or the way to give it something to own: one line under
-   its name, not a card of its own. */
-.ox-lsum__owns {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 4px 10px;
-    margin: 0;
-    color: var(--ink);
-    font-size: 15px;
-    line-height: 1.45;
-}
-
-/* The word before the sentence: a caption, set apart from it. */
-.ox-lsum__owns > .ox-vs:first-child {
-    font-size: 13px;
-}
-
 /* A button that reads as a link in a sentence. */
 .ox-textbtn {
     padding: 0;
@@ -3091,7 +2807,6 @@ a.ox-piece:hover .ox-piece__t {
     background: var(--wash-b);
 }
 
-
 /* Starting a Lemma from scratch, the workspace's way, in the main area. */
 .ox-hire {
     flex: 1;
@@ -3372,13 +3087,12 @@ a.ox-piece:hover .ox-piece__t {
 
     .ox-lane {
         grid-template-columns: minmax(0, 1fr) 130px;
-        grid-template-areas: "who num" "chart chart" "now wait";
+        grid-template-areas: "who wait" "chart chart" "now now";
         row-gap: 10px;
     }
 
     .ox-lane__who { grid-area: who; }
     .ox-lane__chart { grid-area: chart; }
-    .ox-lane__num { grid-area: num; }
     .ox-now { grid-area: now; }
     .ox-wait { grid-area: wait; }
 
@@ -3516,7 +3230,7 @@ a.ox-piece:hover .ox-piece__t {
 
     .ox-lane {
         grid-template-columns: minmax(0, 1fr);
-        grid-template-areas: "who" "num" "chart" "now" "wait";
+        grid-template-areas: "who" "chart" "now" "wait";
         padding: 14px 16px;
     }
 
@@ -3934,55 +3648,6 @@ a.ox-piece:hover .ox-piece__t {
     }
 }
 
-/* What it can do so far: four things, ticked as each becomes true, and the
-   one step that would add the next. */
-.ox-cando__steps {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 22px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-
-.ox-cando__step {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--ink-2);
-    font-size: 14px;
-}
-
-.ox-cando__step--done {
-    color: var(--ink);
-}
-
-.ox-cando__mark {
-    display: grid;
-    place-items: center;
-    flex: none;
-    width: 16px;
-    height: 16px;
-    border: 1.5px solid var(--line);
-    border-radius: 50%;
-}
-
-.ox-cando__step--done .ox-cando__mark {
-    border-color: var(--ink);
-    background: var(--ink);
-    color: var(--paper);
-}
-
-.ox-cando__next {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 12px;
-    margin: 12px 0 0;
-    color: var(--ink-2);
-    font-size: 13.5px;
-}
-
 /* A Lemma saying hello to someone new to it: its face, and a few sentences
    in its own voice. Once, and then gone. */
 .ox-meet {
@@ -4071,13 +3736,6 @@ a.ox-piece:hover .ox-piece__t {
 
 .ox-about__lead {
     font-size: 15.5px;
-}
-
-.ox-about__owns {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 6px 10px;
 }
 
 .ox-about__more {
@@ -4405,38 +4063,6 @@ a.ox-piece:hover .ox-piece__t {
     border-radius: 12px;
     background: none;
     cursor: pointer;
-}
-
-/* A choice among a few, as words: a job to start with, a goal or none. */
-.ox-newl__jobs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.ox-newl__job {
-    height: 30px;
-    padding: 0 12px;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    background: var(--paper);
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-}
-
-.ox-newl__job:hover {
-    color: var(--ink);
-}
-
-.ox-newl__job[aria-pressed="true"] {
-    border-color: var(--ink);
-    color: var(--ink);
-}
-
-.ox-newl__said {
-    margin: 8px 0 0;
 }
 
 .ox-newl__pick:hover {

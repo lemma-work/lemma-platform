@@ -22,9 +22,7 @@ class TemplateOutcome:
 
                 ``week`` is a bar held every week, which never finishes ("Every customer
                 hears back within a day"). ``date`` is a finish line, reached once by its
-                ``due`` date ("The launch ships by the date it is due"). The values are the plan
-                file's own (``kind: week`` in ``/plan.md``), so a plan a person or the
-                pod's agent wrote reads straight across.
+                ``due`` date ("The launch ships by the date it is due").
             sentence (str):
             measure (None | str | Unset): Counts rows of the tables the template brings.
             target (float | None | Unset):

@@ -82,22 +82,19 @@ Existing apps shall remain reachable in their own tabs.
 
 - When a member makes a pod in the web app, the system shall require only its
   name. It shall also offer, and never require: what it is for, who can find
-  it (everyone in the organization, or only the people added), people to add,
-  one sentence the pod should own, and a template to start it with.
-- When the member gives a sentence to own, the system shall keep it as what
-  the pod owns, with no target or measure. If it cannot be kept, then the
-  system shall still make the pod and shall open the pod's plan.
-- When the member picks a template, the system shall bring it into the new
-  pod and open the chat in which the pod sets it up (PS-POD-061). If the
-  template cannot be added, then the system shall still make the pod, which
-  opens on its empty page.
+  it (everyone in the organization, or only the people added), and people to
+  add.
+- The system shall not ask, when a pod is made, for anything the pod should
+  own, a target, a measure, or a template. A template is added afterwards,
+  from the pod's empty page (PS-POD-061).
+- When the pod is made, the system shall open it on its home.
 - The system shall give the new pod a face no other pod in the organization
   wears, while one is left, and shall show every face so the person can pick
   another before making it.
 - If a person chosen cannot be added, then the system shall still make the pod,
   and shall open who has access so the person can try again.
 
-**Contracts:** `pod.create`, `pod.member.add`, `outcome.set`, `pod.bundle.templates`, `pod.bundle.import.start`
+**Contracts:** `pod.create`, `pod.member.add`
 
 ---
 
@@ -470,7 +467,7 @@ Existing apps shall remain reachable in their own tabs.
 
 > **Verified by:** opening each tab of a pod on a stack running this build:
 > one header with the pod's face, its name, one sentence in the pod's own
-> voice about how it is doing and whether anything needs the reader, its
+> voice about what it is doing and whether anything needs the reader, its
 > people, and the tabs Home, Chats, Apps, Tables, Pages, Files and About.
 > `npm test` in `lemma-frontend` checks the row, that each tab has an address
 > that reads back to it, and the sentence (`tests/lemma-space.test.ts`).
@@ -478,10 +475,11 @@ Existing apps shall remain reachable in their own tabs.
 - Every page a pod is itself shall carry one header: the pod's face and name,
   one sentence in the pod's own voice, the people in it, and seven tabs in
   this order: Home, Chats, Apps, Tables, Pages, Files, About.
-- The sentence shall say how the pod is doing and whether anything is waiting
-  on the reader, counting only chats running now, things waiting on the
-  reader, and its number against what it owns. For a pod that holds nothing
-  it shall say that the pod is new.
+- The sentence shall say what the pod is doing and whether anything is waiting
+  on the reader, counting only chats running now and things waiting on the
+  reader. For a pod that holds nothing it shall say that the pod is new.
+- No page of a pod shall ask for, or show, a result the pod owns, a target,
+  a measure, or whether it is on track.
 - A pod's home shall show its apps first, then what is waiting on the reader,
   then what it has been doing.
 - No tab shall repeat the pod's name or its own name under that header.
@@ -497,48 +495,37 @@ Existing apps shall remain reachable in their own tabs.
 > it answers what the pod is for, who is in it, who can talk to it, what it
 > does by itself, what it has been taught and what it is connected to, each in
 > a few lines, and each answer links to the page that holds the rest. Opening
-> the plan from there shows "About" lit in the header and a link back. An old
-> link to `/l/{pod}/about/connections` still opens the pod's connections.
+> its people from there shows "About" lit in the header and a link back. An old
+> link to `/l/{pod}/about/connections` still opens the pod's connections, and
+> one to `/l/{pod}/plan` opens About.
 > `npm test` in `lemma-frontend` checks which pages are parts of About and how
 > old links are read (`tests/lemma-space.test.ts`).
 
-- A pod's About tab shall answer, in this order: what the pod is for and what
-  it owns, who is in it and who can find it, who can talk to it, what it does
-  by itself, what it has been taught, and what it is connected to.
+- A pod's About tab shall answer, in this order: what the pod is for, who is
+  in it and who can find it, who can talk to it, what it does by itself, what
+  it has been taught, and what it is connected to.
+- What the pod is for shall be its description, and nothing else.
+- What it has been taught shall be the notes in its memory that everyone in
+  the pod shares, each opening its file, and shall link to everything it
+  remembers and to its skills. Notes it keeps for one person shall not be
+  listed there.
 - Each answer shall be read from what the pod already keeps, shall list at
   most five things, and shall link to the page where the rest is kept and
   changed.
-- The pod's plan, its people, its contacts, what it runs and its settings
-  shall be parts of About: each shall keep an address of its own, shall keep
+- The pod's people, its contacts, what it runs and its settings shall be
+  parts of About: each shall keep an address of its own, shall keep
   About lit in the header, and shall offer the way back to About.
 - A link to a part of the workspace's old About page shall open that part of
   the pod's settings.
 
-**Contracts:** `pod.get`, `pod.member.list`, `schedule.list`
+**Contracts:** `pod.get`, `pod.member.list`, `schedule.list`, `file.list`
 
 ### PS-POD-064 — A pod says what it can do so far, and the one next step
-**Status:** manual
+**Status:** withdrawn
 
-> **Verified by:** opening, as its maker, a pod that holds a table and a chat,
-> on a stack running this build: its home lists "Knows your stuff" and "Answers
-> questions" as done, "Works by itself" and "Owns a result" as not yet, and
-> one next step with a button for it; its About tab shows the same four.
-> `npm test` in `lemma-frontend` checks the four and which comes next
-> (`tests/lemma-space.test.ts`).
-
-- To whoever made a pod or is an admin of it, the pod's home shall show four
-  things the pod can do, each marked done only when the thing itself is
-  there: it holds a table or a page; the reader has a chat with it; it has a
-  schedule; it owns a result. It shall not show them to anyone else, who may
-  not be able to see what the pod runs.
-- It shall name one next step, for the first of the four not yet done, and
-  offer the way to do it.
-- Once all four are done, the pod's home shall stop showing them. Its About
-  tab shall always show them.
-- The system shall not show a step as not done before what it reads has
-  answered.
-
-**Contracts:** `schedule.list`, `outcome.standing`
+> Withdrawn: a checklist ending in "owns a result" made owning a result look
+> like a step every pod had to reach. A pod's home and About no longer show
+> it; the empty page's ways in (PS-POD-061) stand where it did.
 
 ### PS-POD-065 — A pod says hello to someone new to it, once
 **Status:** manual
@@ -573,6 +560,11 @@ design partners signed by the end of the quarter"). It is held to a target and c
 read-only query over the pod's own tables that answers a single number. The
 plan for getting there is a file in the pod that people and its agent both
 edit.
+
+These are promises about the server, which keeps what a pod owns and its
+weeks. Neither the web app nor the pod's agent asks for any of it or shows it
+(PS-POD-062, PS-POD-073): a number will come with each kind of work, counted
+from that work's own data.
 
 ### PS-POD-070 — A person starts a pod that owns something, in one step
 **Status:** planned
@@ -628,14 +620,11 @@ edit.
 **Contracts:** `outcome.set`, `outcome.clear`
 
 ### PS-POD-073 — A pod's agent knows what the pod owns and can set its measure
-**Status:** planned
+**Status:** withdrawn
 
-- While a pod owns something, the system shall tell the pod's agent what it
-  owns, how it is counted, and where its plan is, in every conversation.
-- When the pod's agent sets what the pod owns, the system shall apply the same
-  checks it applies to a person, with the agent's own authority.
-- If an agent without the right to change the pod tries to set what it owns,
-  then the system shall have it ask for approval.
+> Withdrawn: a pod's agent is no longer told what the pod owns and has no tool
+> to set it, so it never asks people to name a result or a target. What the
+> pod has been taught is in its memory, which every conversation loads.
 
 **Contracts:** `outcome.set`
 

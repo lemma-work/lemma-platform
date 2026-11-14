@@ -4,7 +4,6 @@
  *  Nothing here reaches the network or the page, so all of it is tested
  *  directly (`tests/outcomes.test.ts`). */
 
-import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
 import type { ChatItem, ChatKind } from "@/channels/chat-list";
 import type { Channel } from "@/channels/model";
@@ -224,368 +223,6 @@ export function isRunning(conversation: Pick<ConversationRef, "status">): boolea
     return (conversation.status ?? "").toUpperCase() === "RUNNING";
 }
 
-/* ── the plan ─────────────────────────────────────────────────────────── */
-
-/** Where an outcome's plan lives: a pod file people and Lemma both edit. */
-export const PLAN_PATH = "/plan.md";
-
-export type PlanSection = "must" | "how" | "who" | "never";
-
-export const PLAN_SECTIONS: readonly PlanSection[] = ["must", "how", "who", "never"];
-
-export const SECTION_TITLES: Record<PlanSection, string> = {
-    must: "What must be true",
-    how: "How we work",
-    who: "Who holds what",
-    never: "Never",
-};
-
-export interface PlanLine {
-    text: string;
-    /** Who added the line, as written after it. */
-    by?: string;
-    /** When, as written: "Oct 14". */
-    on?: string;
-}
-
-export interface Plan {
-    /** The sentence Lemma owns: "Every customer hears back within a day". */
-    outcome: string;
-    /** A bar held every week, or a finish line by a date. */
-    kind: "week" | "date" | null;
-    /** As written: "90%", "22 steps". */
-    target: string | null;
-    /** `YYYY-MM-DD`, for a finish line. */
-    due: string | null;
-    /** A read-only SQL query over this pod's tables that answers one number. */
-    measure: string | null;
-    /** `%` when the measure is a share. */
-    unit: string | null;
-    sections: Record<PlanSection, PlanLine[]>;
-    /** The file's text as it was read, when it was: a save edits that text
-     *  rather than replacing it, and refuses when the file has moved on. */
-    file?: string;
-    /** What the Lemma itself keeps it owns, with the number its measure
-     *  answers now -- shown in place of the file's front matter, which only
-     *  Lemmas from before it was kept on the Lemma still carry. */
-    owned?: Owned;
-}
-
-/** What a Lemma owns as the server keeps it (`GET .../outcome/standing`),
- *  and what its measure answers now: one number, the same for everyone. */
-export interface Owned {
-    sentence: string;
-    kind: "week" | "date";
-    target: number | null;
-    unit: string | null;
-    /** `YYYY-MM-DD`, for a finish line. */
-    due: string | null;
-    measure: string | null;
-    value: number | null;
-    /** Why the measure could not be read, when it could not. */
-    problem: string | null;
-}
-
-/** A target as a person reads it: "90%", "2 posts", "99.95%". Exactly the
- *  number kept, never rounded: it is what readings are compared against, and
- *  what the plan editor writes back. */
-export function targetText(target: number | null, unit: string | null): string | null {
-    if (target === null || !Number.isFinite(target)) return null;
-    const said = String(target);
-    if (unit === "%") return said + "%";
-    return unit ? `${said} ${unit}` : said;
-}
-
-/** The plan as the frame shows it: the file's lines, with what the Lemma
- *  owns taken from the Lemma when it keeps one. The file itself is never
- *  given these fields, so saving its lines does not write them back into it. */
-export function withOwned(plan: Plan | null | undefined, owned: Owned | null | undefined): Plan | null | undefined {
-    if (!owned) return plan;
-    const base = plan ?? emptyPlan();
-    return {
-        ...base,
-        outcome: owned.sentence,
-        kind: owned.kind,
-        target: targetText(owned.target, owned.unit),
-        due: owned.due,
-        unit: owned.unit,
-        measure: owned.measure,
-        owned,
-    };
-}
-
-export function emptyPlan(outcome = ""): Plan {
-    return { outcome, kind: null, target: null, due: null, measure: null, unit: null, sections: { must: [], how: [], who: [], never: [] } };
-}
-
-function sectionOf(heading: string): PlanSection | null {
-    const said = heading.toLowerCase();
-    if (said.includes("never")) return "never";
-    if (said.includes("who")) return "who";
-    if (said.includes("how")) return "how";
-    if (said.includes("must") || said.includes("true") || said.includes("outcome")) return "must";
-    return null;
-}
-
-/** "Refunds over $200 need Dev — Priya, Oct 14" → the line and who/when. */
-function lineOf(raw: string): PlanLine {
-    const said = raw.trim();
-    const match = /^(.*\S)\s+(?:—|--)\s+([^,—]+),\s*([^,—]+)$/.exec(said);
-    if (!match) return { text: said };
-    return { text: match[1].trim(), by: match[2].trim(), on: match[3].trim() };
-}
-
-function text(value: unknown): string | null {
-    if (typeof value === "number") return String(value);
-    return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-const HEADING = /^#{2,3}\s+(.*)$/;
-const ITEM = /^(\s*[-*]\s+)(.*)$/;
-const META_KEYS = ["outcome", "kind", "target", "due", "unit", "measure"] as const;
-
-/** A plan file cut at its front matter: the raw block with its fences, what
- *  is inside them, and the rest. A file with no closed block is all body. */
-function splitFront(source: string): { head: string; front: string | null; body: string } {
-    const all = source.replace(/\r\n/g, "\n");
-    if (!all.startsWith("---\n")) return { head: "", front: null, body: all };
-    const end = all.indexOf("\n---", 4);
-    if (end <= 0) return { head: "", front: null, body: all };
-    return { head: all.slice(0, end + 4), front: all.slice(4, end), body: all.slice(end + 4) };
-}
-
-/** The front matter as a map, or null when it will not parse. The core
- *  schema keeps an unquoted `due: 2026-10-30` the string it was written as,
- *  where the default one would read a Date and the plan would lose it. */
-function loadFront(front: string): Record<string, unknown> | null {
-    try {
-        const loaded = load(front, { schema: CORE_SCHEMA });
-        if (loaded === null || loaded === undefined) return {};
-        return typeof loaded === "object" && !Array.isArray(loaded) ? (loaded as Record<string, unknown>) : null;
-    } catch {
-        return null;
-    }
-}
-
-/** Reads a plan written by a person, by Lemma, or by this frame. Forgiving on
- *  purpose: an unknown heading is skipped, not fatal, and front matter that
- *  will not parse leaves the lines readable. */
-export function parsePlan(source: string): Plan {
-    const plan = emptyPlan();
-    const { front, body } = splitFront(source);
-    if (front !== null) {
-        const meta = loadFront(front) ?? {};
-        plan.outcome = text(meta.outcome) ?? "";
-        const kind = text(meta.kind);
-        plan.kind = kind === "week" || kind === "date" ? kind : null;
-        plan.target = text(meta.target);
-        plan.due = text(meta.due);
-        plan.measure = text(meta.measure);
-        plan.unit = text(meta.unit);
-    }
-    let current: PlanSection | null = null;
-    for (const raw of body.split("\n")) {
-        const heading = HEADING.exec(raw);
-        if (heading) {
-            current = sectionOf(heading[1]);
-            continue;
-        }
-        const item = ITEM.exec(raw);
-        if (item && current && item[2].trim()) plan.sections[current].push(lineOf(item[2]));
-    }
-    if (!plan.outcome && plan.sections.must[0]) plan.outcome = plan.sections.must[0].text;
-    return plan;
-}
-
-const PREAMBLE = "<!-- The plan for what this Lemma owns. People and the Lemma both edit it: every line ends with who added it and when. The measure is one read-only SQL query that answers a single number. -->";
-
-function metaOf(plan: Plan): Record<string, string> {
-    const meta: Record<string, string> = {};
-    for (const key of META_KEYS) {
-        const value = plan[key];
-        if (value) meta[key] = value;
-    }
-    return meta;
-}
-
-function written(line: PlanLine): string {
-    const by = line.by && line.on ? ` — ${line.by}, ${line.on}` : "";
-    return `${line.text}${by}`;
-}
-
-function sameLine(a: PlanLine, b: PlanLine): boolean {
-    return a.text === b.text && a.by === b.by && a.on === b.on;
-}
-
-/** The steps from a section's old lines to its new ones, as the longest run
- *  they share: each old line kept or dropped, and the new lines that follow
- *  each (-1: before the first). An edited line is a drop and an add in the
- *  same place, so it stays where it was. */
-function alignLines(old: readonly PlanLine[], next: readonly PlanLine[]): { kept: boolean[]; after: Map<number, PlanLine[]> } {
-    const shared = Array.from({ length: old.length + 1 }, () => new Array<number>(next.length + 1).fill(0));
-    for (let i = old.length - 1; i >= 0; i -= 1) {
-        for (let j = next.length - 1; j >= 0; j -= 1) {
-            shared[i][j] = sameLine(old[i], next[j]) ? shared[i + 1][j + 1] + 1 : Math.max(shared[i + 1][j], shared[i][j + 1]);
-        }
-    }
-    const kept = new Array<boolean>(old.length).fill(false);
-    const after = new Map<number, PlanLine[]>();
-    const add = (at: number, line: PlanLine) => after.set(at, [...(after.get(at) ?? []), line]);
-    let i = 0;
-    let j = 0;
-    while (i < old.length || j < next.length) {
-        if (i < old.length && j < next.length && sameLine(old[i], next[j])) {
-            kept[i] = true;
-            i += 1;
-            j += 1;
-        } else if (i < old.length && (j >= next.length || shared[i + 1][j] >= shared[i][j + 1])) {
-            i += 1;
-        } else {
-            add(i - 1, next[j]);
-            j += 1;
-        }
-    }
-    return { kept, after };
-}
-
-/** The new front matter block, or the old one untouched when the plan's
- *  own keys did not change, so a line edit never reformats it. */
-function mergedHead(plan: Plan, before: Plan, head: string, front: string | null): string {
-    const meta = metaOf(plan);
-    const was = metaOf(before);
-    if (META_KEYS.every((key) => meta[key] === was[key])) return head;
-    if (front === null) return Object.keys(meta).length ? "---\n" + dump(meta, { lineWidth: -1 }) + "---\n\n" : "";
-    const kept = loadFront(front);
-    if (kept === null) throw new Error("plan.md's front matter doesn't parse, so saving the measure would lose it. Fix it in plan.md first.");
-    for (const key of META_KEYS) {
-        if (meta[key]) kept[key] = meta[key];
-        else delete kept[key];
-    }
-    /* Nothing left once what it owns moved onto the Lemma: no empty block. */
-    if (!Object.keys(kept).length) return "";
-    return "---\n" + dump(kept, { lineWidth: -1 }) + "---";
-}
-
-/** Writes the plan. Given the file it was read from, it edits that file in
- *  place: only the lines and front matter keys the plan holds change, and
- *  everything the parser does not read -- a title, prose, another heading,
- *  another key -- stays as it was written. */
-export function serializePlan(plan: Plan, onto?: string | null): string {
-    if (onto) return mergePlan(plan, onto);
-    const meta = metaOf(plan);
-    const front = Object.keys(meta).length ? "---\n" + dump(meta, { lineWidth: -1 }) + "---\n\n" : "";
-    const sections = PLAN_SECTIONS.map((section) => {
-        const lines = plan.sections[section].map((line) => `- ${written(line)}`);
-        return `## ${SECTION_TITLES[section]}\n${lines.join("\n")}`;
-    });
-    return `${front}${PREAMBLE}\n\n${sections.join("\n\n")}\n`;
-}
-
-function mergePlan(plan: Plan, onto: string): string {
-    const before = parsePlan(onto);
-    const { head, front, body } = splitFront(onto);
-    const aligned = Object.fromEntries(PLAN_SECTIONS.map((section) => [section, alignLines(before.sections[section], plan.sections[section])])) as Record<PlanSection, ReturnType<typeof alignLines>>;
-    const seen: Record<PlanSection, number> = { must: 0, how: 0, who: 0, never: 0 };
-    const headingAt: Partial<Record<PlanSection, number>> = {};
-    const out: string[] = [];
-    let current: PlanSection | null = null;
-    for (const raw of body.split("\n")) {
-        const heading = HEADING.exec(raw);
-        if (heading) {
-            current = sectionOf(heading[1]);
-            out.push(raw);
-            if (current && headingAt[current] === undefined) headingAt[current] = out.length - 1;
-            continue;
-        }
-        const item = ITEM.exec(raw);
-        if (!item || !current || !item[2].trim()) {
-            out.push(raw);
-            continue;
-        }
-        const { kept, after } = aligned[current];
-        const index = seen[current];
-        seen[current] += 1;
-        if (index === 0) out.push(...(after.get(-1) ?? []).map((line) => `- ${written(line)}`));
-        if (kept[index]) out.push(raw);
-        /* A replaced line keeps the bullet and indent it was written with. */
-        out.push(...(after.get(index) ?? []).map((line, at) => `${at === 0 && !kept[index] ? item[1] : "- "}${written(line)}`));
-    }
-    /* Lines for a section that had none: under its heading when the file has
-       one, else under a new heading at the end. Inserted from the bottom up,
-       so earlier positions hold. */
-    const empty = PLAN_SECTIONS.filter((section) => before.sections[section].length === 0 && (aligned[section].after.get(-1) ?? []).length > 0);
-    const under = empty.filter((section) => headingAt[section] !== undefined).sort((a, b) => (headingAt[b] as number) - (headingAt[a] as number));
-    for (const section of under) {
-        out.splice((headingAt[section] as number) + 1, 0, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`));
-    }
-    for (const section of empty.filter((one) => headingAt[one] === undefined)) {
-        while (out.length && !out[out.length - 1].trim()) out.pop();
-        out.push("", `## ${SECTION_TITLES[section]}`, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`), "");
-    }
-    const top = mergedHead(plan, before, head, front);
-    /* A block that was taken away leaves the blank line after it behind. */
-    return top || !head ? top + out.join("\n") : out.join("\n").replace(/^\n+/, "");
-}
-
-export interface DraftInput {
-    description?: string | null;
-    schedules: readonly { title: string; trigger: string; active: boolean; internal: boolean }[];
-    agents: readonly { label: string; blurb: string; front: boolean }[];
-    skills: readonly string[];
-}
-
-function lowerFirst(value: string): string {
-    return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
-}
-
-/** A first plan, read off what the pod already runs, for a pod with no plan
- *  file yet. Nothing invented: every line names something that exists. */
-export function draftPlan(input: DraftInput): Plan {
-    const plan = emptyPlan(input.description?.trim() ?? "");
-    if (plan.outcome) plan.sections.must.push({ text: plan.outcome });
-    for (const name of input.skills.slice(0, 6)) plan.sections.how.push({ text: `Follows the ${name} skill` });
-    for (const job of input.schedules) {
-        if (!job.active || job.internal) continue;
-        plan.sections.who.push({ text: `${job.title} · ${lowerFirst(job.trigger)}` });
-    }
-    for (const agent of input.agents) {
-        if (agent.front) continue;
-        plan.sections.who.push({ text: agent.blurb ? `${agent.label}: ${lowerFirst(agent.blurb)}` : agent.label });
-    }
-    return plan;
-}
-
-/** The number a measure answered: the first finite value in its first row. */
-export function readMeasure(rows: readonly Record<string, unknown>[]): number | null {
-    const first = rows[0];
-    if (!first) return null;
-    for (const value of Object.values(first)) {
-        const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
-        if (Number.isFinite(number)) return number;
-    }
-    return null;
-}
-
-export function formatMeasure(value: number, unit: string | null): string {
-    const rounded = Math.abs(value) >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-    return unit === "%" ? `${rounded}%` : String(rounded);
-}
-
-/** Whether an outcome is holding its bar: only for a weekly outcome whose
- *  plan names a target and whose measure answered. A finish line has no pace
- *  to compare against yet, so it says nothing rather than guess. */
-export function standingOf(plan: Plan | null | undefined, value: number | null | undefined): "on" | "behind" | null {
-    if (!plan || value === null || value === undefined || !plan.target || plan.kind === "date") return null;
-    const target = Number.parseFloat(plan.target);
-    if (!Number.isFinite(target)) return null;
-    return value >= target ? "on" : "behind";
-}
-
-/** "Oct 14", the stamp a line is written with. */
-export function stampOf(at: Date): string {
-    return at.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
 /* ── the queue ────────────────────────────────────────────────────────── */
 
 export type QueueKind = "decide" | "answer" | "do";
@@ -763,16 +400,12 @@ export function queueFromNeeds(needs: readonly NeedsItem[], waits: readonly Wait
 export interface ShelfCard {
     id: string;
     name: string;
-    /** What it owns. A finish line's carries `{due}` until a date is picked. */
-    sentence: string;
-    kind: "week" | "date";
     /** The kind of work it does: support, sales, engineering… */
     work: string | null;
     face: string | null;
     /** Where its work usually happens, as a label. */
     place: string | null;
     brings: readonly string[];
-    never: readonly string[];
 }
 
 /** "40 min", "26 h", "3 d". */
@@ -1169,16 +802,14 @@ export function reachSaid(reach: "invited" | "org" | "anyone" | null, orgName: s
     return "Only the people in it can find it";
 }
 
-/** What a Lemma says at the top of its pages, in its own voice: how it is
+/** What a Lemma says at the top of its pages, in its own voice: what it is
  *  doing, then whether it needs the reader. It counts only what the frame
- *  can show -- chats running now, things waiting on the reader, the number
- *  against what it owns -- so it never claims work nobody can open. */
-export function lemmaSays(now: { empty: boolean; running: number; needs: number; standing: "on" | "behind" | null }): string {
+ *  can show -- chats running now, things waiting on the reader -- so it
+ *  never claims work nobody can open. */
+export function lemmaSays(now: { empty: boolean; running: number; needs: number }): string {
     if (now.empty) return "I’m new here. I don’t have anything to work with yet.";
     const doing = now.running > 0
         ? `I’m working on ${now.running} ${now.running === 1 ? "thing" : "things"} right now.`
-        : now.standing === "behind" ? "I’m behind on what I own."
-        : now.standing === "on" ? "I’m on track."
         : "All quiet.";
     const needs = now.needs > 0
         ? `${now.needs} ${now.needs === 1 ? "thing needs" : "things need"} you.`
@@ -1410,36 +1041,6 @@ export function historySaid(rows: readonly HistoryRow[], days: number): string {
     return `${parts} in the last ${days} days.` + (wrong ? ` ${wrong} went wrong.` : "");
 }
 
-export interface CanDoStep {
-    key: "knows" | "answers" | "works" | "owns";
-    label: string;
-    done: boolean;
-    /** What would make it true, said as the one next thing to do. */
-    next: string;
-}
-
-/** What a Lemma can do so far: four things a person can check for
- *  themselves, in the order they usually come. Nothing here is a setting or
- *  a score -- each is true once the thing itself is there. */
-export function canDo(has: { stuff: boolean; chats: boolean; runs: boolean; owns: boolean }): CanDoStep[] {
-    return [
-        { key: "knows", label: "Knows your stuff", done: has.stuff, next: "bring in what it should know: your pages, tables or files." },
-        { key: "answers", label: "Answers questions", done: has.chats, next: "ask it something in the box below. It answers from what it holds." },
-        { key: "works", label: "Works by itself", done: has.runs, next: "give it something to do regularly, like a check every morning." },
-        { key: "owns", label: "Owns a result", done: has.owns, next: "give it one thing to own, so you can see how it is doing each week." },
-    ];
-}
-
-/** Whether the reader looks after a Lemma: made it, or is an admin of it.
- *  What it can do so far, and the next step, are theirs to see -- the steps
- *  are theirs to take, and what a Lemma runs is listed only to whoever may
- *  read it, so anyone else would be told it runs nothing. */
-export function looksAfter(pod: { hiredBy?: string | null; members: readonly { userId?: string; role: string }[] }, me: string | null): boolean {
-    if (!me) return false;
-    if (pod.hiredBy === me) return true;
-    return pod.members.some((member) => member.userId === me && /admin/i.test(member.role));
-}
-
 /** Whether the reader is new to a Lemma somebody else made: in it, and not
  *  yet in a chat with it. That is who it introduces itself to, once. Its
  *  maker met it by making it, and anyone with a chat has met it already. */
@@ -1468,7 +1069,8 @@ export function pageTitle(name: string): string {
 }
 
 /** What a Lemma's root holds before anyone puts anything there: dot-names,
- *  its plan, its skills, and each person's own folder (`me`), made for them. */
+ *  the plan file Lemmas started before memory held what they were taught,
+ *  its skills, and each person's own folder (`me`), made for them. */
 const KEPT_FOR_ITSELF = new Set(["plan.md", "skills", "system", "me"]);
 
 /** Whether a Lemma's root, by name, holds nothing a person would call theirs. */

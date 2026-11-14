@@ -6,20 +6,19 @@ import type { ConversationRef, Org, Pod } from "@/data";
 import { TeammateFace } from "@/space/teammate-face";
 import type { FrameActions } from "./actions";
 import { joinLemma, useJoinable, type JoinableLemma } from "./data";
-import { outcomeView, type Go, type Plan, type QueueItem, type DayCount } from "./model";
+import { outcomeView, type Go, type QueueItem, type DayCount } from "./model";
 import { to } from "./parts";
 import { Board } from "./board";
 
 /** Every Lemma at the organization: the ones the reader is in, as lanes, and
  *  under them the ones open to everyone here that they could join -- the way
  *  a chat app lists the channels you are in and lets you browse the rest. */
-export function OutcomesList({ org, pods, activity, days, plans, queue, go, actions }: {
+export function OutcomesList({ org, pods, activity, days, queue, go, actions }: {
     org: Org;
     pods: readonly Pod[];
     activity: Map<string, ConversationRef[]>;
     /** Each Lemma's work a day, where the organization counted it. */
     days: Map<string, DayCount[]> | null;
-    plans: Map<string, Plan | null | undefined>;
     queue: readonly QueueItem[];
     go: Go;
     actions: FrameActions;
@@ -38,7 +37,7 @@ export function OutcomesList({ org, pods, activity, days, plans, queue, go, acti
             </div>
             {pods.length === 0
                 ? <p className="ox-vs">None yet. <button type="button" className="ox-textbtn" onClick={actions.newLemma}>Make the first one</button>.</p>
-                : <Board pods={pods} activity={activity} days={days} plans={plans} queue={queue} go={go} />}
+                : <Board pods={pods} activity={activity} days={days} queue={queue} go={go} />}
             <Joinable org={org} go={go} />
         </div>
     );

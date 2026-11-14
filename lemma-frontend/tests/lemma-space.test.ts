@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bringInRequest, canDo, holdsNothing, isNewcomer, lemmaSays, looksAfter, pageTitle, reachSaid, templateSetupRequest, viewOfAddress, welcomeSaid } from "../src/outcomes/model.ts";
+import { bringInRequest, holdsNothing, isNewcomer, lemmaSays, pageTitle, reachSaid, templateSetupRequest, viewOfAddress, welcomeSaid } from "../src/outcomes/model.ts";
 import { ROW_TABS, outcomeView, partOfAbout, readView, writeView } from "../src/outcomes/address.ts";
 
 test("bringing things in names the places the way a person lists them", () => {
@@ -35,7 +35,7 @@ test("what the system keeps at a Lemma's root does not make it hold something", 
 });
 
 test("each of a Lemma's tabs has an address of its own, and reads back to the same tab", () => {
-    for (const tab of ["chats", "apps", "tables", "pages", "files", "about", "automations", "people", "contacts", "plan"] as const) {
+    for (const tab of ["chats", "apps", "tables", "pages", "files", "about", "automations", "people", "contacts"] as const) {
         const view = outcomeView("p1", tab);
         assert.deepEqual(readView(writeView(view)), view, tab);
     }
@@ -43,32 +43,24 @@ test("each of a Lemma's tabs has an address of its own, and reads back to the sa
 
 test("a Lemma's row is its home, what is in it, and About; the rest are parts of About", () => {
     assert.deepEqual(ROW_TABS, ["home", "chats", "apps", "tables", "pages", "files", "about"]);
-    for (const tab of ["plan", "people", "contacts", "automations", "settings"] as const) assert.equal(partOfAbout(tab), true, tab);
+    for (const tab of ["people", "contacts", "automations", "settings"] as const) assert.equal(partOfAbout(tab), true, tab);
     for (const tab of ROW_TABS) assert.equal(partOfAbout(tab), false, tab);
 });
 
 test("About alone is this app's page; an old link to a part of it is still read the old way", () => {
     assert.deepEqual(readView("/l/p1/about"), outcomeView("p1", "about"));
     assert.equal(readView("/l/p1/about/connections"), null);
+    assert.deepEqual(readView("/l/p1/plan"), outcomeView("p1", "about"), "the old plan page opens About, where what it was taught is");
     assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null }), outcomeView("p1", "about"));
     assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "people" }), outcomeView("p1", "settings", "people"));
 });
 
-test("a Lemma says how it is doing in its own voice, from what the frame can show", () => {
-    assert.equal(lemmaSays({ empty: true, running: 0, needs: 0, standing: null }), "I’m new here. I don’t have anything to work with yet.");
-    assert.equal(lemmaSays({ empty: false, running: 0, needs: 0, standing: null }), "All quiet. Nothing needs you.");
-    assert.equal(lemmaSays({ empty: false, running: 1, needs: 1, standing: "behind" }), "I’m working on 1 thing right now. 1 thing needs you.");
-    assert.equal(lemmaSays({ empty: false, running: 3, needs: 0, standing: "on" }), "I’m working on 3 things right now. Nothing needs you.");
-    assert.equal(lemmaSays({ empty: false, running: 0, needs: 4, standing: "behind" }), "I’m behind on what I own. 4 things need you.");
-    assert.equal(lemmaSays({ empty: false, running: 0, needs: 0, standing: "on" }), "I’m on track. Nothing needs you.");
-});
-
-test("what a Lemma can do so far is four things a person can check, each with the step that adds it", () => {
-    const none = canDo({ stuff: false, chats: false, runs: false, owns: false });
-    assert.deepEqual(none.map((step) => [step.label, step.done]), [["Knows your stuff", false], ["Answers questions", false], ["Works by itself", false], ["Owns a result", false]]);
-    const some = canDo({ stuff: true, chats: true, runs: false, owns: false });
-    assert.equal(some.find((step) => !step.done)?.key, "works", "the next step is the first thing not yet true");
-    assert.equal(canDo({ stuff: true, chats: true, runs: true, owns: true }).every((step) => step.done), true);
+test("a Lemma says what it is doing in its own voice, from what the frame can show", () => {
+    assert.equal(lemmaSays({ empty: true, running: 0, needs: 0 }), "I’m new here. I don’t have anything to work with yet.");
+    assert.equal(lemmaSays({ empty: false, running: 0, needs: 0 }), "All quiet. Nothing needs you.");
+    assert.equal(lemmaSays({ empty: false, running: 1, needs: 1 }), "I’m working on 1 thing right now. 1 thing needs you.");
+    assert.equal(lemmaSays({ empty: false, running: 3, needs: 0 }), "I’m working on 3 things right now. Nothing needs you.");
+    assert.equal(lemmaSays({ empty: false, running: 0, needs: 4 }), "All quiet. 4 things need you.");
 });
 
 test("a Lemma says hello only to someone new to it, who did not make it", () => {
@@ -96,10 +88,3 @@ test("someone with no profile yet is not greeted by the start of their address",
     assert.equal(welcomeSaid({ name: "Support" }, "José Ruiz", 1).startsWith("Hi José. I’m Support."), true);
 });
 
-test("whoever made a Lemma, or is an admin of it, looks after it", () => {
-    const members = [{ userId: "u2", role: "POD_ADMIN" }, { userId: "u3", role: "POD_USER" }];
-    assert.equal(looksAfter({ hiredBy: "u1", members }, "u1"), true, "its maker");
-    assert.equal(looksAfter({ hiredBy: "u1", members }, "u2"), true, "an admin");
-    assert.equal(looksAfter({ hiredBy: "u1", members }, "u3"), false);
-    assert.equal(looksAfter({ hiredBy: "u1", members }, null), false);
-});

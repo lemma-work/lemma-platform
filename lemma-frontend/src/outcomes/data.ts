@@ -1,22 +1,21 @@
 "use client";
 
 /** What the outcome frame reads. Most of it goes through the existing data
- *  source; what a Lemma owns, its number, the templates a new one starts from
- *  and what waits on you across the organization come from the server's own
- *  reads of them, on a live session only. The plan's lines are a pod file. */
+ *  source; the templates a Lemma can be given and what waits on you across
+ *  the organization come from the server's own reads of them, on a live
+ *  session only. */
 
 import { useCallback } from "react";
 import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { readerZone } from "@/data/time-zone";
-import { OutcomeKind, type ImportStatusResponse, type NeedsYouItemResponse, type OutcomeStandingResponse, type OutcomeTemplateCard } from "lemma-sdk";
+import type { ImportStatusResponse, NeedsYouItemResponse, OutcomeTemplateCard } from "lemma-sdk";
 import { source, NEW_CONVERSATION, type ConversationRef, type Pod, type PodDetail } from "@/data";
 import { characterUrl, CHARACTERS, type CharacterName } from "@/shell/character";
-import { isMissing } from "@/session/auth-state";
 import { lemma } from "@/session/client";
 import { configuredApiUrl } from "@/session/origins";
 import { CONVERSATION_ASKS, ASKS_REFETCH_MS } from "@/thread/waiting-on-you";
 import { joinWire, type JoinPolicy } from "@/data/joining";
-import { PLAN_PATH, broughtSaid, parsePlan, readMeasure, serializePlan, type NeedsItem, type Owned, type Plan, type ShelfCard } from "./model";
+import { broughtSaid, type NeedsItem, type ShelfCard } from "./model";
 
 const live = () => source.label === "live";
 
@@ -60,152 +59,16 @@ export function usePodDetails(pods: readonly Pod[]): Map<string, PodDetail | und
     });
 }
 
-/** The plan file, or null when the pod has none yet. Only a missing file is
- *  "no plan": any other failure is thrown, so the query retries a transient
- *  one and shows the rest as a read that failed, never as a draft to save
- *  over a file that is there. */
-export async function readPlan(podId: string): Promise<Plan | null> {
-    let file;
-    try {
-        file = await source.readFile(podId, PLAN_PATH);
-    } catch (error) {
-        if (isMissing(error)) return null;
-        throw error;
-    }
-    /* There, but not as text: a read that failed, not a pod with no plan. */
-    if (typeof file.text !== "string") throw new Error("plan.md could not be read as text");
-    return { ...parsePlan(file.text), file: file.text };
-}
-
-/** Thrown when plan.md changed between reading it and saving over it. */
-export class PlanMovedOn extends Error {
-    constructor() {
-        super("plan.md changed since it was read. It has been read again; make the change once more.");
-        this.name = "PlanMovedOn";
-    }
-}
-
-/** Saves the plan and answers it as now written. An existing file is read
- *  again first: when it still says what the plan was read from, the plan's
- *  changes are written into it, keeping everything the parser does not
- *  read; when someone -- often the Lemma -- wrote it since, nothing is
- *  saved, so their lines are not lost. */
-export async function savePlan(podId: string, plan: Plan, exists: boolean): Promise<Plan> {
-    if (!exists) {
-        const text = serializePlan(plan);
-        await source.createFile(podId, PLAN_PATH, text);
-        return { ...plan, file: text };
-    }
-    const now = await source.readFile(podId, PLAN_PATH);
-    const current = typeof now.text === "string" ? now.text : null;
-    if (plan.file !== undefined && current !== plan.file) throw new PlanMovedOn();
-    const text = serializePlan(plan, current);
-    await source.writeFile(podId, PLAN_PATH, text);
-    return { ...plan, file: text };
-}
-
-export function usePlans(pods: readonly Pod[]): Map<string, Plan | null | undefined> {
-    return useQueries({
-        queries: pods.map((pod) => ({
-            queryKey: ["outcome-plan", pod.id],
-            queryFn: () => readPlan(pod.id),
-            staleTime: 5 * 60_000,
-        })),
-        combine: useByPod<Plan | null>(pods),
-    });
-}
-
-/** The number a plan's measure answers, when it has one: the server's
- *  reading when the Lemma keeps what it owns, else -- for a Lemma from
- *  before it did, whose plan file carries the measure -- the query run here. */
-export function useMeasure(podId: string, plan: Plan | null | undefined) {
-    const sql = plan?.owned ? null : plan?.measure ?? null;
-    const asked = useQuery({
-        queryKey: ["outcome-measure", podId, sql],
-        queryFn: async () => readMeasure((await source.runQuery(podId, sql as string)).items),
-        enabled: Boolean(sql),
-        staleTime: 5 * 60_000,
-        retry: false,
-    });
-    if (plan?.owned) return { data: plan.owned.value, isError: Boolean(plan.owned.problem) };
-    return { data: asked.data, isError: asked.isError };
-}
-
-/** What a standing read says, in the frame's names; null when the Lemma owns
- *  nothing on the server. */
-export function ownedOf(standing: OutcomeStandingResponse | undefined): Owned | null {
-    const outcome = standing?.outcome;
-    if (!outcome) return null;
-    return {
-        sentence: outcome.sentence,
-        kind: outcome.kind === "date" ? "date" : "week",
-        target: outcome.target ?? null,
-        unit: outcome.unit ?? null,
-        due: outcome.due ?? null,
-        measure: outcome.measure ?? null,
-        value: standing?.value ?? null,
-        problem: standing?.problem ?? null,
-    };
-}
-
-export const standingKey = (podId: string) => ["outcome-standing", podId];
-
-/** What each Lemma owns and where it stands, as the server keeps it: one
- *  number, the same for every member. */
-export function useOwned(pods: readonly Pod[]): Map<string, Owned | null | undefined> {
-    return useQueries({
-        queries: pods.map((pod) => ({
-            queryKey: standingKey(pod.id),
-            queryFn: async () => ownedOf(await lemma(pod.id).pods.outcome.standing(pod.id)),
-            enabled: live(),
-            staleTime: 60_000,
-            retry: false,
-        })),
-        combine: useByPod<Owned | null>(pods),
-    });
-}
-
-/** The Lemma's last weeks against what it owns, oldest first. */
-export function useWeeks(podId: string, enabled: boolean) {
-    return useQuery({
-        queryKey: ["outcome-weeks", podId],
-        queryFn: async () => (await lemma(podId).pods.outcome.history(podId, 8)).weeks,
-        enabled: enabled && live(),
-        staleTime: 5 * 60_000,
-        retry: false,
-    });
-}
-
-/** A bar every week or a finish line by a date, as the server names it. */
-export function kindOf(kind: "week" | "date"): OutcomeKind {
-    return kind === "date" ? OutcomeKind.DATE : OutcomeKind.WEEK;
-}
-
-/** Set what a Lemma owns on the server. */
-export async function saveOwned(podId: string, owned: Pick<Owned, "sentence" | "kind" | "target" | "unit" | "due" | "measure">): Promise<void> {
-    await lemma(podId).pods.outcome.set(podId, {
-        sentence: owned.sentence,
-        kind: kindOf(owned.kind),
-        target: owned.target,
-        unit: owned.unit,
-        due: owned.kind === "date" ? owned.due : null,
-        measure: owned.measure,
-    });
-}
-
 /* ── starting a Lemma ─────────────────────────────────────────────────── */
 
 function shelfCardOf(card: OutcomeTemplateCard): ShelfCard {
     return {
         id: card.id,
         name: card.name,
-        sentence: card.sentence,
-        kind: card.kind === "date" ? "date" : "week",
         work: card.function ?? null,
         face: card.face ?? null,
         place: card.place ?? null,
         brings: card.brings ?? [],
-        never: card.plan?.never ?? [],
     };
 }
 
@@ -472,16 +335,3 @@ export async function addTemplate(podId: string, template: string, progress: (sa
     return true;
 }
 
-/** What "Write it with {name}" sends, for a Lemma that owns nothing yet.
- *  `purpose` is what it is for, its description, which is not yet a result
- *  it owns. What it owns is kept with `set_what_you_own`, on the Lemma; the
- *  file holds the plan's prose, in the sections this frame reads back line
- *  for line. */
-export function planRequest(purpose: string): string {
-    const why = purpose.trim();
-    return [
-        `${why ? `You are here for: "${why}". ` : ""}Work out with me one result you should own, a bar held every week or a finish line by a date, and keep it with set_what_you_own, with a measure once what it counts exists.`,
-        `Then write the plan in ${PLAN_PATH} under ## What must be true, ## How we work, ## Who holds what and ## Never: one line per bullet, each ending with who said it and when. No front matter: what you own is kept on the Lemma.`,
-        "Only write lines that name something that exists here or that you are about to set up, and say what you built.",
-    ].join(" ");
-}

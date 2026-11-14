@@ -13,9 +13,9 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 178 |
 | `gap` | 4 |
-| `manual` | 33 |
-| `planned` | 36 |
-| `withdrawn` | 0 |
+| `manual` | 32 |
+| `planned` | 35 |
+| `withdrawn` | 2 |
 | **total** | **251** |
 
 Scenario tests declaring a promise: 459.
@@ -137,12 +137,12 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-061` An empty pod offers ways in, and a template is one of them | `manual` | — |
 | `PS-POD-062` Every page of a pod carries one header: its face, what it says, and seven tabs | `manual` | — |
 | `PS-POD-063` About says what a pod is, and leads to each part of it | `manual` | — |
-| `PS-POD-064` A pod says what it can do so far, and the one next step | `manual` | — |
+| `PS-POD-064` A pod says what it can do so far, and the one next step | `withdrawn` | — |
 | `PS-POD-065` A pod says hello to someone new to it, once | `manual` | — |
 | `PS-POD-070` A person starts a pod that owns something, in one step | `planned` | — |
 | `PS-POD-071` Everyone in a pod sees the same number, week by week | `planned` | — |
 | `PS-POD-072` Only someone who can read every row a measure counts may set it | `planned` | — |
-| `PS-POD-073` A pod's agent knows what the pod owns and can set its measure | `planned` | — |
+| `PS-POD-073` A pod's agent knows what the pod owns and can set its measure | `withdrawn` | — |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
 

@@ -13,7 +13,6 @@ Reach pod tables and files with the `pod_*` tools, not the `lemma` CLI.
 | Find a file by meaning | `pod_search_files` |
 | See a document's pages | `pod_view_document_pages` |
 | Share a link or embed an image | `pod_get_file_url` |
-| Set what the pod owns, and the measure that counts it | `set_what_you_own` |
 
 They return structured results, page through large ones, and report permission
 failures as errors you can act on. The CLI returns text you then have to parse,

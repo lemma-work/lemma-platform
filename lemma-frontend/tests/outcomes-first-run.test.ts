@@ -2,38 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     broughtSaid,
-    emptyPlan,
     queueFromNeeds,
     sharedLinkPath,
-    targetText,
     viewOfItem,
-    withOwned,
     type NeedsItem,
-    type Owned,
 } from "../src/outcomes/model";
-
-const owned: Owned = { sentence: "Every customer hears back within a day.", kind: "week", target: 90, unit: "%", due: null, measure: "SELECT 1", value: 74, problem: null };
-
-test("what the Lemma keeps it owns is shown over its plan file, and never written into it", () => {
-    const file = { ...emptyPlan("An old sentence"), target: "50%", sections: { must: [{ text: "x" }], how: [], who: [], never: [] } };
-    const shown = withOwned(file, owned);
-    assert.ok(shown);
-    assert.equal(shown.outcome, owned.sentence);
-    assert.equal(shown.target, "90%");
-    assert.equal(shown.owned?.value, 74);
-    assert.deepEqual(shown.sections.must, [{ text: "x" }], "the file's lines stay");
-    assert.equal(file.outcome, "An old sentence", "the file itself is untouched");
-    assert.equal(withOwned(file, null), file, "a Lemma that keeps nothing shows its file");
-    assert.equal(withOwned(undefined, owned)?.outcome, owned.sentence, "and one with no plan file still shows what it owns");
-});
-
-test("a target reads as a person writes it, exactly as kept", () => {
-    assert.equal(targetText(99.95, "%"), "99.95%", "never rounded: readings are compared against it");
-    assert.equal(targetText(90, "%"), "90%");
-    assert.equal(targetText(2, "posts"), "2 posts");
-    assert.equal(targetText(20, null), "20");
-    assert.equal(targetText(null, "%"), null);
-});
 
 const need = (over: Partial<NeedsItem>): NeedsItem => ({
     key: "k",

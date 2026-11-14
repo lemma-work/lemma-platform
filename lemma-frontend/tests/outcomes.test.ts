@@ -9,7 +9,6 @@ import {
     chatItems,
     chatView,
     dailyActivity,
-    draftPlan,
     foldSection,
     sectionRows,
     workRows,
@@ -20,22 +19,17 @@ import {
     QUIET_AFTER_MS,
     isChat,
     outcomeView,
-    parsePlan,
     queueItems,
-    readMeasure,
     readSideSettings,
     readTrialView,
     readView,
     refreshKept,
     sameOpen,
-    serializePlan,
-    standingOf,
     viewOfAddress,
     verbOf,
     viewOfItem,
     workSince,
     writeView,
-    type Plan,
     type View,
 } from "../src/outcomes/model.ts";
 import type { ConversationRef } from "../src/data/types.ts";
@@ -74,7 +68,6 @@ test("every view writes an address that reads back as itself, and is told apart 
         outcomeView("abc", "automations"),
         outcomeView("abc", "automations", "schedules"),
         outcomeView("abc", "apps"),
-        outcomeView("abc", "plan"),
         outcomeView("abc", "settings"),
         outcomeView("abc", "settings", "schedules"),
         { name: "agent", podId: "abc", agent: "researcher" },
@@ -215,199 +208,6 @@ test("work since a moment ignores what came before it", () => {
         conversation("c", "2026-10-26T10:00:00Z", "channel"),
     ], since);
     assert.deepEqual(counts, { lemma: 1, people: 1 });
-});
-
-const WRITTEN = `---
-outcome: Every customer hears back within a day
-kind: week
-target: 90%
-unit: "%"
-measure: SELECT 70 AS share
----
-
-## What must be true
-- Every customer hears back within a day — Priya, Oct 9
-
-## How we work
-- Refunds over $200 need Dev's approval — Priya, Oct 14
-- Replies are two lines
-
-## Who holds what
-* Lemma drafts every reply waiting over 20 hours — Lemma, Oct 13
-
-## A heading nobody planned
-- this line belongs to no section
-
-## Never
-- Never promise a refund date — Priya, Oct 14
-`;
-
-test("a plan file reads into its outcome, measure and lines, with who added each", () => {
-    const plan = parsePlan(WRITTEN);
-    assert.equal(plan.outcome, "Every customer hears back within a day");
-    assert.equal(plan.kind, "week");
-    assert.equal(plan.target, "90%");
-    assert.equal(plan.unit, "%");
-    assert.equal(plan.measure, "SELECT 70 AS share");
-    assert.deepEqual(plan.sections.how, [
-        { text: "Refunds over $200 need Dev's approval", by: "Priya", on: "Oct 14" },
-        { text: "Replies are two lines" },
-    ]);
-    assert.equal(plan.sections.who[0].by, "Lemma");
-    assert.equal(plan.sections.never.length, 1);
-    assert.equal(plan.sections.must.length, 1);
-});
-
-test("a plan survives being written and read back", () => {
-    const plan = parsePlan(WRITTEN);
-    assert.deepEqual(parsePlan(serializePlan(plan)), plan);
-});
-
-test("saving an unchanged plan onto its file writes the file back as it was", () => {
-    assert.equal(serializePlan(parsePlan(WRITTEN), WRITTEN), WRITTEN);
-});
-
-test("a plan with nothing left for its front matter saves with no empty block, and keeps every line", () => {
-    const plan = parsePlan(WRITTEN);
-    const prose = { ...plan, outcome: "", kind: null, target: null, due: null, measure: null, unit: null };
-    const saved = serializePlan(prose, WRITTEN);
-    assert.ok(!saved.startsWith("---"), saved);
-    assert.ok(!saved.includes("measure:"), saved);
-    assert.ok(saved.startsWith("## What must be true"), saved);
-    assert.deepEqual(parsePlan(saved).sections, plan.sections);
-});
-
-test("editing a line keeps what the parser does not read, and changes only that line", () => {
-    const plan = parsePlan(WRITTEN);
-    const how = [...plan.sections.how];
-    how[1] = { ...how[1], text: "Replies are three lines at most" };
-    const saved = serializePlan({ ...plan, sections: { ...plan.sections, how } }, WRITTEN);
-    assert.equal(saved, WRITTEN.replace("- Replies are two lines", "- Replies are three lines at most"));
-});
-
-test("adding and removing lines leaves prose, other headings, nested bullets and extra keys in place", () => {
-    const file = `---
-outcome: "Two posts go out every week"
-owner: priya
-kind: week
----
-
-# Content
-
-Some words about why this matters.
-
-## How we work
-- Drafts go to Priya first — Priya, Oct 2
-  - Unless it is a reshare
-- Posts go out on Tuesdays
-
-## Notes
-- not a plan line
-`;
-    const plan = parsePlan(file);
-    assert.equal(plan.sections.how.length, 3);
-    const how = plan.sections.how.filter((line) => line.text !== "Posts go out on Tuesdays");
-    how.push({ text: "Every post has an image", by: "Dev", on: "Oct 20" });
-    const saved = serializePlan({ ...plan, sections: { ...plan.sections, how, never: [{ text: "Never post on weekends" }] } }, file);
-    assert.equal(saved, `---
-outcome: "Two posts go out every week"
-owner: priya
-kind: week
----
-
-# Content
-
-Some words about why this matters.
-
-## How we work
-- Drafts go to Priya first — Priya, Oct 2
-  - Unless it is a reshare
-- Every post has an image — Dev, Oct 20
-
-## Notes
-- not a plan line
-
-## Never
-- Never post on weekends
-`);
-});
-
-test("a line added to an empty section goes under its heading", () => {
-    const file = "## What must be true\n- One thing\n\n## Never\n\n## Later\nprose\n";
-    const plan = parsePlan(file);
-    const saved = serializePlan({ ...plan, sections: { ...plan.sections, never: [{ text: "Never two" }] } }, file);
-    assert.equal(saved, "## What must be true\n- One thing\n\n## Never\n- Never two\n\n## Later\nprose\n");
-});
-
-test("changing the measure rewrites only the plan's own front matter keys", () => {
-    const file = "---\noutcome: Ship it\nkind: date\ndue: 2026-10-30\nowner: priya\n---\n\n## Never\n- Never skip review\n";
-    const plan = parsePlan(file);
-    assert.equal(plan.due, "2026-10-30");
-    const saved = serializePlan({ ...plan, target: "22 steps", measure: "SELECT count(*) FROM steps" }, file);
-    const again = parsePlan(saved);
-    assert.equal(again.due, "2026-10-30");
-    assert.equal(again.target, "22 steps");
-    assert.equal(again.measure, "SELECT count(*) FROM steps");
-    assert.match(saved, /^owner: priya$/m);
-    assert.match(saved, /\n---\n\n## Never\n- Never skip review\n$/);
-});
-
-test("front matter that will not parse is kept on a line edit, and refuses a measure edit", () => {
-    const file = "---\noutcome: [unclosed\n---\n## Never\n- Never email anyone twice\n";
-    const plan = parsePlan(file);
-    const saved = serializePlan({ ...plan, sections: { ...plan.sections, never: [{ text: "Never email anyone three times" }] } }, file);
-    assert.equal(saved, "---\noutcome: [unclosed\n---\n## Never\n- Never email anyone three times\n");
-    assert.throws(() => serializePlan({ ...plan, target: "90%" }, file), /front matter/);
-});
-
-test("front matter that will not parse leaves the lines readable", () => {
-    const plan = parsePlan("---\noutcome: [unclosed\n---\n## Never\n- Never email anyone twice\n");
-    assert.equal(plan.outcome, "");
-    assert.deepEqual(plan.sections.never, [{ text: "Never email anyone twice" }]);
-});
-
-test("a plan with no outcome line takes its outcome from what must be true", () => {
-    assert.equal(parsePlan("## What must be true\n- Two posts go out every week\n").outcome, "Two posts go out every week");
-});
-
-test("a draft names only what the pod already runs", () => {
-    const plan: Plan = draftPlan({
-        description: "Every lead gets a follow-up within two days",
-        schedules: [
-            { title: "Drafts follow-ups for quiet leads", trigger: "Weekdays at 08:30", active: true, internal: false },
-            { title: "Workflow timeout", trigger: "In 2 hours", active: true, internal: true },
-            { title: "Old digest", trigger: "Mondays", active: false, internal: false },
-        ],
-        agents: [
-            { label: "Lemma", blurb: "Answers here", front: true },
-            { label: "Researcher", blurb: "Finds who a lead is", front: false },
-        ],
-        skills: ["follow-up-style"],
-    });
-    assert.deepEqual(plan.sections.must, [{ text: "Every lead gets a follow-up within two days" }]);
-    assert.deepEqual(plan.sections.how, [{ text: "Follows the follow-up-style skill" }]);
-    assert.deepEqual(plan.sections.who.map((line) => line.text), [
-        "Drafts follow-ups for quiet leads · weekdays at 08:30",
-        "Researcher: finds who a lead is",
-    ]);
-    assert.deepEqual(plan.sections.never, []);
-});
-
-test("a measure answers with the first number in its first row", () => {
-    assert.equal(readMeasure([{ label: "share", value: "72.5" }]), 72.5);
-    assert.equal(readMeasure([{ n: 31 }, { n: 99 }]), 31);
-    assert.equal(readMeasure([{ label: "none" }]), null);
-    assert.equal(readMeasure([]), null);
-});
-
-test("only a weekly outcome with a target and a number says whether it is on track", () => {
-    const plan = parsePlan(WRITTEN);
-    assert.equal(standingOf(plan, 92), "on");
-    assert.equal(standingOf(plan, 70), "behind");
-    assert.equal(standingOf(plan, null), null);
-    assert.equal(standingOf({ ...plan, kind: "date" }, 70), null);
-    assert.equal(standingOf({ ...plan, target: "most of them" }, 70), null);
-    assert.equal(standingOf(null, 70), null);
 });
 
 test("the queue is one list, oldest first, sorted into decide, answer and do", () => {
