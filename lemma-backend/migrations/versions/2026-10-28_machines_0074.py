@@ -85,7 +85,7 @@ TABLES: dict[str, tuple[str, ...]] = {
     ),
     "machine_sessions": (
         "CREATE TABLE machine_sessions ( sandbox_id UUID NOT NULL, size VARCHAR(16) NOT NULL, compute_units_per_hour FLOAT NOT NULL, billing_scope VARCHAR(8) NOT NULL, user_id UUID, organization_id UUID, pod_id UUID, started_at TIMESTAMP WITH TIME ZONE NOT NULL, metered_until TIMESTAMP WITH TIME ZONE NOT NULL, ended_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_sessions_billing_scope CHECK (billing_scope IN ('user', 'org')), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
-        "CREATE INDEX ix_machine_sessions_open ON machine_sessions (sandbox_id) WHERE ended_at IS NULL",
+        "CREATE UNIQUE INDEX ix_machine_sessions_open ON machine_sessions (sandbox_id) WHERE ended_at IS NULL",
     ),
     "machine_login_backups": (
         "CREATE TABLE machine_login_backups ( sandbox_id UUID NOT NULL, object_key VARCHAR(512) NOT NULL, wrapped_key TEXT NOT NULL, size_bytes BIGINT NOT NULL, sha256 VARCHAR(64) NOT NULL, reason VARCHAR(32) NOT NULL, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
@@ -119,12 +119,52 @@ def _downgrade_machines() -> None:
         op.execute(f"ALTER TABLE sandboxes DROP COLUMN {column.split()[0]}")
 
 
+# --- lifecycle ----------------------------------------------------------------
+#
+# What keeps a machine's operations resumable and durable: a size move's
+# state and the object key of the home it carries, on the machine row, written
+# before anything is destroyed; and `machine_services`, a service's definition
+# (its environment encrypted, the claims its token was minted for -- never the
+# token), so a restart after a pause finds it whatever Redis has forgotten.
+
+LIFECYCLE_SANDBOX_COLUMNS = (
+    "size_migration_state VARCHAR(16)",
+    "size_migration_target VARCHAR(16)",
+    "size_migration_carry_key VARCHAR(512)",
+    "size_migration_attempts INTEGER DEFAULT 0 NOT NULL",
+    "size_migration_started_at TIMESTAMP WITH TIME ZONE",
+)
+
+LIFECYCLE_TABLES: dict[str, tuple[str, ...]] = {
+    "machine_services": (
+        "CREATE TABLE machine_services ( sandbox_id UUID NOT NULL, name VARCHAR(64) NOT NULL, command TEXT NOT NULL, cwd TEXT NOT NULL, env_ciphertext TEXT, token_claims JSONB DEFAULT '{}'::jsonb NOT NULL, started_by UUID, restart_on_resume BOOLEAN DEFAULT false NOT NULL, process_id VARCHAR(64), output_sequence BIGINT DEFAULT 0 NOT NULL, last_active_at TIMESTAMP WITH TIME ZONE, stopped_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_machine_services_name UNIQUE (sandbox_id, name), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
+    ),
+}
+
+
+def _upgrade_lifecycle() -> None:
+    for column in LIFECYCLE_SANDBOX_COLUMNS:
+        op.execute(f"ALTER TABLE sandboxes ADD COLUMN {column}")
+    for statements in LIFECYCLE_TABLES.values():
+        for statement in statements:
+            op.execute(statement)
+
+
+def _downgrade_lifecycle() -> None:
+    for table in reversed(LIFECYCLE_TABLES):
+        op.execute(f"DROP TABLE {table}")
+    for column in LIFECYCLE_SANDBOX_COLUMNS:
+        op.execute(f"ALTER TABLE sandboxes DROP COLUMN {column.split()[0]}")
+
+
 # --- every part ---------------------------------------------------------------
 
 
 def upgrade() -> None:
     _upgrade_machines()
+    _upgrade_lifecycle()
 
 
 def downgrade() -> None:
+    _downgrade_lifecycle()
     _downgrade_machines()

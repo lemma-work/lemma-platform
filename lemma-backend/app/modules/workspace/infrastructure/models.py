@@ -134,6 +134,21 @@ class SandboxModel(UUIDAuditBase):
         Integer, nullable=False, server_default=text("1")
     )
     created_by: Mapped[UUID | None] = mapped_column(nullable=True)
+    # A size move in flight, written before anything is destroyed so every
+    # step can be resumed by the job that owns it (`size_migration`). NULL
+    # state means none. The carry key names the packed home in object
+    # storage: lose it and a destroyed disk's files are unreachable.
+    size_migration_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    size_migration_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    size_migration_carry_key: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+    size_migration_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    size_migration_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     def to_entity(self) -> Sandbox:
         return Sandbox(
@@ -229,6 +244,7 @@ from app.modules.workspace.infrastructure.machine_models import (  # noqa: E402
     MachineConnectionModel,
     MachineLoginBackupModel,
     MachinePreviewModel,
+    MachineServiceModel,
     MachineSessionModel,
 )
 
@@ -237,6 +253,7 @@ __all__ = [
     "MachineConnectionModel",
     "MachineLoginBackupModel",
     "MachinePreviewModel",
+    "MachineServiceModel",
     "MachineSessionModel",
     "SandboxInstanceModel",
     "SandboxModel",

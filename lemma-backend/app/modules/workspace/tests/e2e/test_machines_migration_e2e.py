@@ -29,6 +29,7 @@ TABLES = (
     "app_machine_consents",
     "machine_sessions",
     "machine_login_backups",
+    "machine_services",
 )
 
 
