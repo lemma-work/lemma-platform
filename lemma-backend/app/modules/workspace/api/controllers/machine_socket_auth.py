@@ -101,17 +101,38 @@ async def authorize_socket(
 
 
 async def _caller(websocket: WebSocket, user_id: UUID) -> MachineCaller:
-    """A socket's caller: the person, or -- from an app's page -- the app,
-    recognised the way ``core/app_pin`` recognises a request."""
-    from app.core.app_pin import UnknownAppHost, app_of_connection
+    """A socket's caller, built exactly as an HTTP request's is.
 
+    The token's delegation was resolved when its session was read
+    (``browser_view_session``); an agent's or function's token is that
+    workload here too, never the person it acts for. A socket whose principal
+    was not resolved is refused rather than read as the person. A person's
+    own session from an app's page is the app, recognised the way
+    ``core/app_pin`` recognises a request.
+    """
+    from app.core.app_pin import UnknownAppHost, app_of_connection
+    from app.modules.workspace.api.controllers.browser_view_session import (
+        socket_principal,
+    )
+    from app.modules.workspace.api.controllers.machine_dependencies import (
+        caller_from_principal,
+    )
+
+    principal = socket_principal(websocket, user_id)
+    if principal is None:
+        raise MachineNotFound("me")
+    caller = caller_from_principal(
+        user_id=principal.user_id, delegation_claims=principal.delegation_claims
+    )
+    if caller.kind is not CallerKind.USER:
+        return caller
     try:
         app = await app_of_connection(websocket)
     except UnknownAppHost:
         # An app host naming no app keeps nothing of its viewer's.
         return MachineCaller(CallerKind.APP, user_id=user_id)
     if app is None:
-        return MachineCaller(CallerKind.USER, user_id=user_id)
+        return caller
     return MachineCaller(
         CallerKind.APP,
         user_id=user_id,

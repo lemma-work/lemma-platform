@@ -33,7 +33,6 @@ from app.core.request_context import create_inherited_task
 from app.modules.workspace.api.controllers.machine_dependencies import (
     UowFactoryDep,
     UseMachine,
-    acting_user,
 )
 from app.modules.workspace.api.controllers.machines_controller import machines_enabled
 from app.modules.workspace.domain.machine import Machine
@@ -187,17 +186,27 @@ def _cwd(machine: Machine, cwd: str | None) -> str:
 
 
 async def _ready_machine_for(
-    machine: Machine, user_id: UUID, cwd: str
+    request: Request, machine: Machine, cwd: str
 ) -> dict[str, str]:
-    """The machine up, the directory there, and the caller's credentials."""
+    """The machine up, the directory there, and the caller's credentials --
+    never wider than the caller's own (``machine_process_credentials``)."""
+    from app.core.authorization.function_run import (
+        NOBODY_USER_ID,
+        function_run_bearer,
+    )
+    from app.core.config import settings
+    from app.modules.workspace.services.machine_process_credentials import (
+        process_env_for,
+    )
     from app.modules.workspace.services.workspace_sandbox_service import (
         WorkspaceSandboxService,
     )
 
+    caller = request.state.machine_caller
     service = WorkspaceSandboxService()
     try:
         session = await service.get_session(
-            user_id,
+            caller.user_id or NOBODY_USER_ID,
             pod_id=machine.pod_id,
             initial_cwd=cwd,
             close_on_exit=True,
@@ -205,7 +214,15 @@ async def _ready_machine_for(
             machine_id=machine.id,
         )
         await session.close()
-        return await service.get_env_vars(user_id, machine.pod_id)
+        return await process_env_for(
+            caller,
+            machine_pod_id=machine.pod_id,
+            get_env_vars=service.get_env_vars,
+            delegation_claims=getattr(request.state, "delegation_claims", None),
+            function_run_claims=getattr(request.state, "function_run_claims", None),
+            function_run_token=function_run_bearer(request),
+            delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+        )
     finally:
         await service.close()
 
@@ -243,10 +260,11 @@ async def start_process(
     uow_factory: UowFactoryDep,
 ) -> ProcessResponse:
     machine = resolved.machine
-    user_id = acting_user(request, resolved)
+    # Who started it, for the record: nobody, for a person-less function run.
+    user_id = request.state.machine_caller.user_id
     cwd = _cwd(machine, body.cwd)
     await _refuse_when_out_of_compute(uow_factory, machine)
-    base_env = await _ready_machine_for(machine, user_id, cwd)
+    base_env = await _ready_machine_for(request, machine, cwd)
     record = await processes.start_process(
         machine.id,
         StartProcess(
