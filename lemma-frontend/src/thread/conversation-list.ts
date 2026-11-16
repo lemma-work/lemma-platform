@@ -191,5 +191,8 @@ export function refreshConversationLists(
             cache.setQueryData<Pages>(key, { pages: all.pages.slice(0, 1), pageParams: all.pageParams.slice(0, 1) });
         }
     }
+    /* The organization's overview lists the same chats for every Lemma at
+       once, where an app reads them that way; it is stale when these are. */
+    void cache.invalidateQueries({ queryKey: ["org-recents"] });
     return cache.invalidateQueries({ queryKey: ["conversations", podId] });
 }

@@ -554,8 +554,8 @@ async def test_an_answer_asked_in_lemma_is_not_sent_to_the_platform(
     monkeypatch,
 ):
     """The member wrote to the bot on Telegram, then named it in Lemma, in
-    their own channel: one conversation, since it is one person and one
-    agent. The answer to the line in Lemma is said in Lemma -- the Telegram
+    their own channel: a conversation of its own, since Lemma is not
+    Telegram. The answer to the line in Lemma is said in Lemma -- the Telegram
     chat, which never saw the question, is sent nothing."""
     monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", False)
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
@@ -601,7 +601,8 @@ async def test_an_answer_asked_in_lemma_is_not_sent_to_the_platform(
         "SELECT conversation_id FROM channel_line_answers WHERE message_id = :m",
         m=line.id,
     )
-    assert asked_in == conversation_id, "the member's one conversation with it"
+    assert asked_in is not None
+    assert asked_in != conversation_id, "Lemma is a conversation of its own"
     run_id = await scalar(
         "SELECT agent_run_id FROM channel_line_answers WHERE message_id = :m",
         m=line.id,
@@ -616,7 +617,7 @@ async def test_an_answer_asked_in_lemma_is_not_sent_to_the_platform(
             {"r": run_id, "a": ANSWER},
         )
         await session.commit()
-    await _finished(run_id, conversation_id, UUID(test_pod["id"]))
+    await _finished(run_id, asked_in, UUID(test_pod["id"]))
     await drain(surface_registry(), due=True)
 
     assert len(_telegram_answers(message_store)) == 1, message_store.get_all("TELEGRAM")

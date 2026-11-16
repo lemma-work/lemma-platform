@@ -27,9 +27,7 @@ class OutcomeTemplateCard:
 
             ``week`` is a bar held every week, which never finishes ("Every customer
             hears back within a day"). ``date`` is a finish line, reached once by its
-            ``due`` date ("The launch ships by the date it is due"). The values are the plan
-            file's own (``kind: week`` in ``/plan.md``), so a plan a person or the
-            pod's agent wrote reads straight across.
+            ``due`` date ("The launch ships by the date it is due").
         name (str): The short name a Lemma made from it starts with.
         outcome (TemplateOutcome): What a template's Lemma owns, before its date is known: a finish
             line's sentence still carries ``{due}``.

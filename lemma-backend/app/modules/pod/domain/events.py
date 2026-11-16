@@ -34,6 +34,9 @@ class PodMemberAddedEvent(DomainEvent):
     email: str
     first_name: str | None = None
     last_name: str | None = None
+    #: Who put them in, when it was somebody else adding them by hand. None
+    #: for an accepted invitation, which they already said yes to.
+    added_by_user_id: UUID | None = None
 
     @classmethod
     def stream_name(cls) -> str:
@@ -74,6 +77,27 @@ class PodJoinRequestedEvent(DomainEvent):
     organization_id: UUID
     requester_user_id: UUID
     join_request_id: UUID
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return POD_EVENTS_STREAM
+
+
+class PodJoinRequestDecidedEvent(DomainEvent):
+    """Somebody who manages the pod answered a request to join it.
+
+    Raised only for a decision made by another person: a request an open door
+    approves on the spot was answered by the asker's own click, and needs no
+    letter telling them so.
+    """
+
+    event_type: str = "pod.join_request.decided"
+    pod_id: UUID
+    organization_id: UUID
+    requester_user_id: UUID
+    join_request_id: UUID
+    approved: bool
+    decided_by_user_id: UUID
 
     @classmethod
     def stream_name(cls) -> str:

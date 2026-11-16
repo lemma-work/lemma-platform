@@ -97,35 +97,6 @@ to `/me/analysis/<slug>/` by default. Use a shared folder only when the user ask
 for pod-wide access. Verify uploads with `lemma files stat` and provide a member
 link only when useful.
 
-## Write a Lemma's measure
-
-What a Lemma owns is counted by one SQL query, set with `set_what_you_own` and
-read again on a regular sweep into its weekly history. It is the same analysis, held to
-stricter rules because everyone sees the number it gives:
-
-- One read-only query that answers one row and one column.
-- Over shared tables (`enable_rls: false`). It is read for everyone alike, so
-  `set_what_you_own` refuses a measure over rows the person setting it cannot
-  read in full; a per-person table can be counted only when someone who
-  administers it sets the measure. Never turn row security off to measure.
-- The unit of work is a row. Count rows, not something worked out in chat.
-- A weekly bar with a deadline per item (a reply within a day, a review the
-  same day) counts each item in the week its deadline falls, once it is
-  decided: done (in time or late), or past its deadline and not done. An item
-  still inside its window and not done is neither a hit nor a miss. A bar with no per-item deadline (posts published) counts what
-  happened this week; a finish line counts everything up to its due date.
-- Never a rolling window ("the last 7 days"): the number is kept as each
-  week's value, and rolling weeks overlap.
-- A share with `unit` "%" answers 0 to 100, as the target is written.
-- A week with nothing due answers null, never `coalesce(…, 0)` (everyone
-  missed) or `case … then 100` (nobody missed).
-
-Before setting it, run the query with `pod_query` over each of the last few
-weeks and check the numbers against the rows. When `set_what_you_own` answers,
-`measured_at` null means it did not read the measure, because it did not
-change; `measured_at` set with `value` null means nothing was due; a
-`problem` means the query is wrong.
-
 ## Apply non-negotiable quality gates
 
 - Never describe an identity- or RLS-scoped result as pod-wide.

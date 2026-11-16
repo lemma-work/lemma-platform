@@ -4,13 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UserResponse } from "lemma-sdk";
 import { source } from "@/data";
-import { MATE } from "@/copy";
+import { MATE, MATES } from "@/copy";
 import { isLandingPreview } from "@/marketing/preview-mode";
 import { Modal } from "@/shell/modal";
 import { CheckCircleIcon, RefreshIcon } from "@/ui/icons";
 import { lemma } from "./client";
 import { asksFirstProfile, canDismissFirstProfile, firstProfileNeeds, needsTimezoneSync, settledKey, syncDetectedTimezone } from "./first-profile";
 import { Code, Countdown, OpenWhatsApp } from "./mobile-verification";
+import { currentZoneName } from "@/data/time-zone";
 import { changes, draftOf, localTimezone, timezones } from "./profile-edit";
 import { useWhatsAppMobileVerification, useWhatsAppVerificationConfig } from "./use-mobile-verification";
 import { arrivedFromInstall } from "@/site/import/pending-install";
@@ -124,7 +125,7 @@ function FirstProfileDialog({
     const zones = useMemo(() => timezones(), []);
     const [first, setFirst] = useState(() => (user.first_name ?? "").trim());
     const [last, setLast] = useState(() => (user.last_name ?? "").trim());
-    const [timezone, setTimezone] = useState(() => (user.timezone ?? "").trim() || localTimezone());
+    const [timezone, setTimezone] = useState(() => currentZoneName((user.timezone ?? "").trim()) || localTimezone());
 
     const save = useMutation({
         mutationFn: async () => {
@@ -151,7 +152,7 @@ function FirstProfileDialog({
     return (
         <Modal
             title="Before you start"
-            subtitle={`Your ${MATE}s call you by this name.`}
+            subtitle={`Your ${MATES} call you by this name.`}
             onClose={() => { if (canDismiss) onDone(); }}
         >
             <form

@@ -75,7 +75,7 @@ export function originOf(metadata: Record<string, unknown> | null | undefined, t
     }
     if (source === "pod_ask") {
         const ask = meta.ask && typeof meta.ask === "object" ? (meta.ask as Record<string, unknown>) : {};
-        return { kind: "ask", label: "From " + (text(ask.from_pod_name) ?? "another teammate") };
+        return { kind: "ask", label: "From " + (text(ask.from_pod_name) ?? "another Lemma") };
     }
     if (source === "WORKFLOW_RUN") {
         return { kind: "workflow", label: "Workflow run", runId: text(meta.workflow_run_id) ?? undefined };

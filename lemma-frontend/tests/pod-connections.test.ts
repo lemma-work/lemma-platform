@@ -88,7 +88,7 @@ test("an editor reads who a required connector is waiting on, by name and never 
     // Counted only part of the pod: never "Everyone", and said in words.
     const part = readCoverage({ ...GMAIL_COVERAGE, eligible: 3, connected: 3, waiting_on: [], truncated: true });
     assert.equal(coverageLine(part), "3/3 connected");
-    assert.match(truncatedLine(part), /Only some of the pod’s members were counted/);
+    assert.match(truncatedLine(part), /Only some of the people here were counted/);
     assert.deepEqual(readCoverage(null), { eligible: 0, connected: 0, waitingOn: [], truncated: false });
 });
 
@@ -223,7 +223,7 @@ test("where an account is used, and what removing an installation stops, are sai
     ] });
     const names = (id: string) => ({ p1: "Kit" } as Record<string, string>)[id] ?? "";
     assert.equal(usageLine(usage[0], names), "Kit · shared with everyone · runs support-inbox");
-    assert.equal(usageLine(usage[1], names), "A teammate you cannot open · your own calls");
+    assert.equal(usageLine(usage[1], names), "A Lemma you cannot open · your own calls");
     const impact = readImpact({ auth_config_id: "ac", account_count: 3, pod_account_count: 2,
         pod_connectors: [{ pod_id: "p1", slug: "gmail", mode: "PER_MEMBER" }, { pod_id: "p1", slug: "support-inbox", mode: "SHARED" }] });
     assert.deepEqual(impactLines(impact, names), ["3 connected accounts are removed with it.", "Kit loses gmail, support-inbox."]);
@@ -241,7 +241,7 @@ test("the impact preview names the surfaces, schedules and subscriptions that st
         "1 connected account is removed with it.",
         "1 surface stops answering, 3 schedules stop firing and 1 MCP event subscription ends.",
         "Kit loses crm: 1 surface, 2 schedules, 1 subscription.",
-        "A teammate you cannot open loses crm.",
+        "A Lemma you cannot open loses crm.",
     ], "the pod's name comes with the preview; one the reader cannot open stays unnamed");
 });
 
@@ -257,15 +257,15 @@ test("a preview that could not read everything never says nobody loses anything"
 test("pods I cannot open are counted, not named, in the impact preview", () => {
     const one = readImpact({ auth_config_id: "ac", account_count: 0, pod_account_count: 1, pod_connectors: [],
         unnamed_pod_count: 1, unnamed_pod_connector_count: 1 });
-    assert.deepEqual(impactLines(one, () => ""), ["1 teammate you cannot open loses a connector."]);
+    assert.deepEqual(impactLines(one, () => ""), ["1 Lemma you cannot open loses a connector."]);
     const many = readImpact({ auth_config_id: "ac", account_count: 0, pod_account_count: 0,
         pod_connectors: [{ pod_id: "p1", slug: "crm", mode: "SHARED" }],
         pods: [{ pod_id: "p1", name: "Kit", pod_connectors: ["crm"] }],
         unnamed_pod_count: 2, unnamed_pod_connector_count: 3 });
-    assert.deepEqual(impactLines(many, () => ""), ["Kit loses crm.", "2 teammates you cannot open lose 3 connectors."]);
+    assert.deepEqual(impactLines(many, () => ""), ["Kit loses crm.", "2 Lemmas you cannot open lose 3 connectors."]);
     const unchecked = readImpact({ auth_config_id: "ac", account_count: 0, pod_account_count: 0, pod_connectors: [],
         unnamed_pod_count: 1, unnamed_pod_connector_count: 2, complete: false });
-    assert.deepEqual(impactLines(unchecked, () => ""), ["1 more teammate loses 2 connectors.", "Couldn’t read everything this affects."],
+    assert.deepEqual(impactLines(unchecked, () => ""), ["1 more Lemma loses 2 connectors.", "Couldn’t read everything this affects."],
         "an unfinished check says nothing about who can open what");
 });
 
@@ -548,7 +548,7 @@ test("the Connections page draws each connector's badge and my standing, and edi
     assert.match(text, /5\/7 connected/);
     assert.match(text, /Waiting on Bob, and carol@acme\.com to reconnect/);
     assert.ok(buttons.includes("Ask members to connect"));
-    assert.match(text, /Only some of the pod’s members were counted/, "github's count stopped short, and says so");
+    assert.match(text, /Only some of the people here were counted/, "github's count stopped short, and says so");
     assert.equal(editor.holder.querySelector("[data-focused] b")?.textContent ?? "", "support-inbox", "the linked connector is the one picked out");
     /* My accounts here: only mine, with the owner's acts. */
     assert.match(text, /Your accounts in Kit/);
